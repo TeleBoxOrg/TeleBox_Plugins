@@ -27,33 +27,6 @@
       "mask": "https://github.com/FoKit/PagerMaid_Plugins/raw/modify/eat/maskada.png"
     }
   },
-  "tlg": {
-    "name": "偷撸狗",
-    "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/eat/eattlg.png?raw=true",
-    "you": {
-      "x": 0,
-      "y": 256,
-      "mask": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/eat/masktlg.png?raw=true"
-    }
-  },
-  "wyz": {
-    "name": "我有罪",
-    "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/eat/eatwyz.png?raw=true",
-    "you": {
-      "x": 153,
-      "y": 0,
-      "mask": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/eat/maskwyz.png?raw=true"
-    }
-  },
-  "fk": {
-    "name": "国际友好手势",
-    "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/eat/eatfk.png?raw=true",
-    "you": {
-      "x": 184,
-      "y": 143,
-      "mask": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/eat/maskfk.png?raw=true"
-    }
-  },    
   "ko": {
     "name": "升龙拳",
     "url": "https://github.com/FoKit/PagerMaid_Plugins/blob/modify/eat/eatko.png?raw=true",
