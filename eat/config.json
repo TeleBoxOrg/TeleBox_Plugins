@@ -15,16 +15,16 @@
   },
   "bc": {
     "name": "鞭笞",
-    "url": "https://github.com/FoKit/PagerMaid_Plugins/raw/modify/eat/eatbc.png",
+    "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/eat/eatbc.png?raw=true",
     "me": {
       "x": 331,
       "y": 76,
-      "mask": "https://github.com/FoKit/PagerMaid_Plugins/raw/modify/eat/maskbc1.png"
+      "mask": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/eat/maskbc1.png?raw=true"
     },
     "you": {
       "x": 23,
       "y": 292,
-      "mask": "https://github.com/FoKit/PagerMaid_Plugins/raw/modify/eat/maskbc2.png"
+      "mask": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/eat/maskbc2.png?raw=true"
     }
   },
   "fk": {
