@@ -27,6 +27,15 @@
       "mask": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/eat/maskbc2.png?raw=true"
     }
   },
+  "dd": {
+    "name": "逗逗你呀~",
+    "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/eat/eatdd.png?raw=true",
+    "you": {
+      "x": 175,
+      "y": 62,
+      "mask": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/eat/maskdd.png?raw=true"
+    }
+  },  
   "fk": {
     "name": "国际友好手势",
     "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/eat/eatfk.png?raw=true",
