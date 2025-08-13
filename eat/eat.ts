@@ -1,5 +1,5 @@
 import { NewMessageEvent } from "telegram/events";
-import { Plugin } from "@utils/pluginInterface";
+import { Plugin } from "@utils/pluginBase";
 import sharp from "sharp";
 import path from "path";
 import fs from "fs";
@@ -30,17 +30,25 @@ interface EatConfig {
 
 let config: EatConfig;
 
-async function loadConfigResource(url:string) {
-  const filePath = await assetPathFor(url)
-  const content = fs.readFileSync(filePath, "utf-8")
-  config = JSON.parse(content)
+let baseConfigURL =
+  "https://github.com/TeleBoxDev/TeleBox_Plugins/raw/main/eat/config.json";
+
+async function loadConfigResource(url: string, update = false) {
+  if (update) {
+    await download(url, EAT_ASSET_PATH);
+  }
+  const filePath = await assetPathFor(url);
+  const content = fs.readFileSync(filePath, "utf-8");
+  config = JSON.parse(content);
 }
 
-loadConfigResource("https://github.com/TeleBoxDev/TeleBox_Plugins/raw/main/eat/config.json")
+loadConfigResource(baseConfigURL);
 
 // 取出表情包列表
 async function sendStickerList(event: NewMessageEvent) {
-  const keysText = Object.keys(config).join(",");
+  const keysText = Object.keys(config)
+    .sort((a, b) => a.localeCompare(b))
+    .join(",");
   await event.message.edit({
     text: `当前表情包：\n${keysText}`,
   });
@@ -97,15 +105,22 @@ async function compositeWithEntryConfig(parmas: {
 }) {
   const { entry, event } = parmas;
 
+  const msg = event.message;
+
   const basePath = await assetPathFor(entry.url);
 
-  const replied = await event.message.getReplyMessage();
+  const replied = await msg.getReplyMessage();
   const fromId = replied?.fromId;
 
   if (!fromId) {
-    await event.message.edit({ text: "无法获取头像" });
+    await event.message.edit({ text: "无法获取对方头像" });
     return;
   }
+
+  if (!fs.existsSync(EAT_TEMP_PATH)) {
+    fs.mkdirSync(EAT_TEMP_PATH, { recursive: true });
+  }
+
   await event.client?.downloadProfilePhoto(fromId, {
     outputFile: YOU_AVATAR_PATH,
   });
@@ -116,7 +131,12 @@ async function compositeWithEntryConfig(parmas: {
 
   // 如果有两人互动
   if (entry.me) {
-    await event.client?.downloadProfilePhoto("me", {
+    const meId = msg.fromId;
+    if (!meId) {
+      await event.message.edit({ text: "无法获取自己的头像" });
+      return;
+    }
+    await event.client?.downloadProfilePhoto(meId, {
       outputFile: ME_AVATAR_PATH,
     });
     let iconMasked = await iconMaskedFor({
@@ -130,6 +150,11 @@ async function compositeWithEntryConfig(parmas: {
     .composite(composite)
     .webp({ quality: 100 })
     .toFile(OUT_STICKER_PATH);
+
+  await event.client?.sendFile(msg.peerId, {
+    file: OUT_STICKER_PATH,
+    replyTo: await msg.getReplyMessage(),
+  });
 }
 
 async function sendSticker(params: {
@@ -141,42 +166,55 @@ async function sendSticker(params: {
   const msg = event.message;
   await msg.edit({ text: `正在生成 ${entry.name} 表情包···` });
   await compositeWithEntryConfig({ entry, event });
-  await msg.delete()
-  await event.client?.sendFile(msg.peerId, {
-    file: OUT_STICKER_PATH,
-    replyTo: await msg.getReplyMessage(),
-  });
+  await msg.delete();
 }
 
 const eatPlugin: Plugin = {
   command: "eat",
+  description: `
+  表情包插件，回复 eat 来获取表情包列表
+  回复 eat set [url] 来更新表情包配置，默认配置在 ${baseConfigURL}。
+  回复 eat <表情包名称> 来发送对应的表情包，或者直接回复 eat 来随机发送一个表情包。
+  `,
   commandHandler: async (event: NewMessageEvent) => {
     const msg = event.message;
+    const [, ...args] = msg.message.slice(1).split(" ");
     if (!msg.isReply) {
+      if (args[0] == "set") {
+        let url = args[1] || baseConfigURL;
+        await msg.edit({
+          text: "更新表情包配置中，请稍等···",
+        });
+        await loadConfigResource(url, true);
+        await msg.edit({
+          text: `已更新表情包配置，当前表情包：\n${Object.keys(config)
+            .sort((a, b) => a.localeCompare(b))
+            .join(",")}`,
+        });
+        return;
+      }
+
       await sendStickerList(event);
       return;
     }
 
-    const [, ...args] = msg.message.slice(1).split(" ");
     if (args.length == 0) {
       // 说明随机情况
       const entry = getRandomEntry();
       await sendSticker({ entry, event });
     } else {
-      if (args[0] == "set") {
-        // 设置 config.json 可能会做
-      } else {
-        const stickerName = args[0]
-        const entrys = Object.keys(config);
-        if (!entrys.includes(stickerName)) {
-          await msg.edit({
-            text: `找不到 ${stickerName} 该表情包，目前可用表情包如下:\n${entrys.join(",")}`
-          })
-          return
-        }
-        let entry = config[stickerName];
-        await sendSticker({ entry, event });
+      const stickerName = args[0];
+      const entrys = Object.keys(config);
+      if (!entrys.includes(stickerName)) {
+        await msg.edit({
+          text: `找不到 ${stickerName} 该表情包，目前可用表情包如下:\n${entrys.join(
+            ","
+          )}`,
+        });
+        return;
       }
+      let entry = config[stickerName];
+      await sendSticker({ entry, event });
     }
   },
 };

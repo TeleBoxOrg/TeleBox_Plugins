@@ -1,6 +1,10 @@
 {
-    "eat": {
-        "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/eat/eat.ts?raw=true",
-        "author": "TeleBoxDev"
-    }
+  "eat": {
+    "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/eat/eat.ts?raw=true",
+    "author": "TeleBoxDev"
+  },
+  "speedtest": {
+    "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/speedtest/speedtest.ts?raw=true",
+    "author": "BirdBird"
+  }
 }
