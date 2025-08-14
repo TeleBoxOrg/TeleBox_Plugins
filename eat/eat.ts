@@ -169,6 +169,27 @@ async function sendSticker(params: {
   await msg.delete();
 }
 
+async function handleSetCommand(params: {
+  event: NewMessageEvent;
+  url: string;
+}) {
+  const { event, url } = params;
+  const msg = event.message;
+  fs.rmSync(EAT_ASSET_PATH, { recursive: true, force: true });
+  await msg.edit({
+    text: `✅ 删除旧的表情包配置文件成功！`,
+  });
+  await msg.edit({
+    text: "更新表情包配置中，请稍等···",
+  });
+  await loadConfigResource(url, true);
+  await msg.edit({
+    text: `已更新表情包配置，当前表情包：\n${Object.keys(config)
+      .sort((a, b) => a.localeCompare(b))
+      .join(",")}`,
+  });
+}
+
 const eatPlugin: Plugin = {
   command: "eat",
   description: `
@@ -182,15 +203,7 @@ const eatPlugin: Plugin = {
     if (!msg.isReply) {
       if (args[0] == "set") {
         let url = args[1] || baseConfigURL;
-        await msg.edit({
-          text: "更新表情包配置中，请稍等···",
-        });
-        await loadConfigResource(url, true);
-        await msg.edit({
-          text: `已更新表情包配置，当前表情包：\n${Object.keys(config)
-            .sort((a, b) => a.localeCompare(b))
-            .join(",")}`,
-        });
+        await handleSetCommand({ event, url });
         return;
       }
 
