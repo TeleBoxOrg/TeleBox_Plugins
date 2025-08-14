@@ -6,5 +6,9 @@
   "speedtest": {
     "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/speedtest/speedtest.ts?raw=true",
     "author": "BirdBird"
+  },
+  "q": {
+    "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/q/q.ts?raw=true",
+    "author": "TeleBoxDev"
   }
 }
