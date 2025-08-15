@@ -5,21 +5,6 @@ import { Api } from "telegram";
 
 const botName = "QuotLyBot";
 
-async function quotLyBotStart(event: NewMessageEvent): Promise<void> {
-  const client = event.client;
-  try {
-    await event.client?.sendMessage(botName, { message: "/start" });
-  } catch (error: any) {
-    if (error.errorMessage === "YOU_BLOCKED_USER") {
-      await client?.invoke(
-        new Api.contacts.Unblock({
-          id: botName,
-        })
-      );
-    }
-  }
-}
-
 async function quoteMsgs(event: NewMessageEvent): Promise<void> {
   const message = event.message;
   const [, ...args] = message.message.slice(1).split(" ");
@@ -46,6 +31,17 @@ async function quoteMsgs(event: NewMessageEvent): Promise<void> {
   });
 }
 
+async function handleQutoe(event:NewMessageEvent) {
+  try {
+    await quoteMsgs(event);
+  } catch (error: any) {
+    console.log(error);
+    await event.message.edit({
+      text: `生成语录表情包错误：${error.errorMessage}`
+    })
+  }
+}
+
 const qPlugin: Plugin = {
   command: "q",
   description: `
@@ -59,9 +55,7 @@ const qPlugin: Plugin = {
       return;
     }
 
-    await quotLyBotStart(event);
-
-    await quoteMsgs(event);
+    await handleQutoe(event);
   },
 };
 
