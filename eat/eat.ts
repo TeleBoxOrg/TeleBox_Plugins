@@ -1,9 +1,9 @@
-import { NewMessageEvent } from "telegram/events";
 import { Plugin } from "@utils/pluginBase";
 import sharp from "sharp";
 import path from "path";
 import fs from "fs";
 import download from "download";
+import { Api } from "telegram";
 
 const EAT_ASSET_PATH = path.join(process.cwd(), "assets", "eat");
 const EAT_TEMP_PATH = path.join(process.cwd(), "temp", "eat");
@@ -45,11 +45,11 @@ async function loadConfigResource(url: string, update = false) {
 loadConfigResource(baseConfigURL);
 
 // 取出表情包列表
-async function sendStickerList(event: NewMessageEvent) {
+async function sendStickerList(msg: Api.Message) {
   const keysText = Object.keys(config)
     .sort((a, b) => a.localeCompare(b))
     .join(",");
-  await event.message.edit({
+  await msg.edit({
     text: `当前表情包：\n${keysText}`,
   });
 }
@@ -101,11 +101,9 @@ async function iconMaskedFor(params: {
 
 async function compositeWithEntryConfig(parmas: {
   entry: EntryConfig;
-  event: NewMessageEvent;
+  msg: Api.Message;
 }) {
-  const { entry, event } = parmas;
-
-  const msg = event.message;
+  const { entry, msg } = parmas;
 
   const basePath = await assetPathFor(entry.url);
 
@@ -113,7 +111,7 @@ async function compositeWithEntryConfig(parmas: {
   const fromId = replied?.fromId;
 
   if (!fromId) {
-    await event.message.edit({ text: "无法获取对方头像" });
+    await msg.edit({ text: "无法获取对方头像" });
     return;
   }
 
@@ -121,7 +119,7 @@ async function compositeWithEntryConfig(parmas: {
     fs.mkdirSync(EAT_TEMP_PATH, { recursive: true });
   }
 
-  await event.client?.downloadProfilePhoto(fromId, {
+  await msg.client?.downloadProfilePhoto(fromId, {
     outputFile: YOU_AVATAR_PATH,
   });
 
@@ -133,10 +131,10 @@ async function compositeWithEntryConfig(parmas: {
   if (entry.me) {
     const meId = msg.fromId;
     if (!meId) {
-      await event.message.edit({ text: "无法获取自己的头像" });
+      await msg.edit({ text: "无法获取自己的头像" });
       return;
     }
-    await event.client?.downloadProfilePhoto(meId, {
+    await msg.client?.downloadProfilePhoto(meId, {
       outputFile: ME_AVATAR_PATH,
     });
     let iconMasked = await iconMaskedFor({
@@ -151,30 +149,22 @@ async function compositeWithEntryConfig(parmas: {
     .webp({ quality: 100 })
     .toFile(OUT_STICKER_PATH);
 
-  await event.client?.sendFile(msg.peerId, {
+  await msg.client?.sendFile(msg.peerId, {
     file: OUT_STICKER_PATH,
     replyTo: await msg.getReplyMessage(),
   });
 }
 
-async function sendSticker(params: {
-  entry: EntryConfig;
-  event: NewMessageEvent;
-}) {
-  const { entry, event } = params;
+async function sendSticker(params: { entry: EntryConfig; msg: Api.Message }) {
+  const { entry, msg } = params;
 
-  const msg = event.message;
   await msg.edit({ text: `正在生成 ${entry.name} 表情包···` });
-  await compositeWithEntryConfig({ entry, event });
+  await compositeWithEntryConfig({ entry, msg });
   await msg.delete();
 }
 
-async function handleSetCommand(params: {
-  event: NewMessageEvent;
-  url: string;
-}) {
-  const { event, url } = params;
-  const msg = event.message;
+async function handleSetCommand(params: { msg: Api.Message; url: string }) {
+  const { msg, url } = params;
   fs.rmSync(EAT_ASSET_PATH, { recursive: true, force: true });
   await msg.edit({
     text: `✅ 删除旧的表情包配置文件成功！`,
@@ -193,28 +183,27 @@ async function handleSetCommand(params: {
 const eatPlugin: Plugin = {
   command: "eat",
   description: `
-  表情包插件，回复 eat 来获取表情包列表
-  回复 eat set [url] 来更新表情包配置，默认配置在 ${baseConfigURL}。
-  回复 eat <表情包名称> 来发送对应的表情包，或者直接回复 eat 来随机发送一个表情包。
+表情包插件，回复 eat 来获取表情包列表
+回复 eat set [url] 来更新表情包配置，默认配置在 ${baseConfigURL}。
+回复 eat <表情包名称> 来发送对应的表情包，或者直接回复 eat 来随机发送一个表情包。
   `,
-  commandHandler: async (event: NewMessageEvent) => {
-    const msg = event.message;
+  cmdHandler: async (msg) => {
     const [, ...args] = msg.message.slice(1).split(" ");
     if (!msg.isReply) {
       if (args[0] == "set") {
         let url = args[1] || baseConfigURL;
-        await handleSetCommand({ event, url });
+        await handleSetCommand({ msg, url });
         return;
       }
 
-      await sendStickerList(event);
+      await sendStickerList(msg);
       return;
     }
 
     if (args.length == 0) {
       // 说明随机情况
       const entry = getRandomEntry();
-      await sendSticker({ entry, event });
+      await sendSticker({ entry, msg });
     } else {
       const stickerName = args[0];
       const entrys = Object.keys(config);
@@ -227,7 +216,7 @@ const eatPlugin: Plugin = {
         return;
       }
       let entry = config[stickerName];
-      await sendSticker({ entry, event });
+      await sendSticker({ entry, msg });
     }
   },
 };

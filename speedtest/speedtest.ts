@@ -1,4 +1,3 @@
-import { NewMessageEvent } from "telegram/events";
 import { Plugin } from "@utils/pluginBase";
 import { exec } from "child_process";
 import util from "util";
@@ -6,6 +5,7 @@ import fs from "fs";
 import path from "path";
 import os from "os";
 import download from "download";
+import { Api } from "telegram";
 
 const execPromise = util.promisify(exec);
 
@@ -40,13 +40,9 @@ async function ensureOoklaCliExists(msg: any): Promise<void> {
   await msg.edit({ text: "安装成功！" });
 }
 
-async function sendResultAsImageWithCaption(
-  event: NewMessageEvent,
-  result: any,
-  originalMsg: any
-) {
+async function sendResultAsImageWithCaption(msg: Api.Message, result: any) {
   const resultUrl = result.result.url;
-  await originalMsg.edit({ text: "■■■■ 测速完成！正在抓取分享图片..." });
+  await msg.edit({ text: "■■■■ 测速完成！正在抓取分享图片..." });
 
   // 1. 获取图片 URL
   const imageUrl = resultUrl + ".png";
@@ -81,26 +77,22 @@ async function sendResultAsImageWithCaption(
     `;
 
   // 5. 将图片和文字一同发送
-  await event.client?.sendFile(event.message.peerId, {
+  await msg.client?.sendFile(msg.peerId, {
     file: imagePath,
     caption: captionText,
-    replyTo: event.message,
+    replyTo: msg,
   });
 
   // 6. 清理工作
-  await originalMsg.delete();
+  await msg.delete();
   fs.unlinkSync(imagePath);
 }
 
 const speedtestPlugin: Plugin = {
   command: "speedtest",
   description: "运行 Speedtest by Ookla 并以图片形式发送结果。",
-  commandHandler: async (event: NewMessageEvent) => {
-    const msg = await event.message.edit({ text: "初始化测速环境..." });
-    if (!msg) {
-      console.error("无法编辑消息。");
-      return;
-    }
+  cmdHandler: async (msg) => {
+    await msg.edit({ text: "初始化测速环境..." });
 
     try {
       await ensureOoklaCliExists(msg);
@@ -125,7 +117,7 @@ const speedtestPlugin: Plugin = {
 
       console.log("Speedtest Result:", result);
 
-      await sendResultAsImageWithCaption(event, result, msg);
+      await sendResultAsImageWithCaption(msg, result);
     } catch (error: any) {
       let errorMessage = `❌ **测速失败。**`;
       if (error.message) {
