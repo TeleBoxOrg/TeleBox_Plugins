@@ -35,7 +35,7 @@
       "y": 62,
       "mask": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/eat/maskdd.png?raw=true"
     }
-  },  
+  },
   "fk": {
     "name": "国际友好手势",
     "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/eat/eatfk.png?raw=true",
@@ -45,6 +45,15 @@
       "mask": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/eat/maskfk.png?raw=true"
     }
   },
+  "fl": {
+    "name": "翻脸",
+    "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/eat/eatfl.png?raw=true",
+    "you": {
+      "x": 7,
+      "y": 19,
+      "mask": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/eat/maskfl.png?raw=true"
+    }
+  },     
   "ko": {
     "name": "升龙拳",
     "url": "https://github.com/FoKit/PagerMaid_Plugins/blob/modify/eat/eatko.png?raw=true",
@@ -71,7 +80,16 @@
       "y": 87,
       "mask": "https://github.com/FoKit/PagerMaid_Plugins/blob/modify/eat/maskri.png?raw=true"
     }
-  },      
+  },
+  "sj": {
+    "name": "我会一直视奸你",
+    "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/eat/eatsj.png?raw=true",
+    "you": {
+      "x": 138,
+      "y": 63,
+      "mask": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/eat/masksj.png?raw=true"
+    }
+  },          
   "tc": {
     "name": "老汉推车",
     "url": "https://github.com/FoKit/PagerMaid_Plugins/raw/modify/eat/eattc.png",
