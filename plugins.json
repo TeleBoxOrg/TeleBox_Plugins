@@ -13,5 +13,9 @@
   },
   "yt-dlp": {
     "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/yt-dlp/yt-dlp.ts?raw=true"
+  },
+    "gt": {
+    "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/yt-dlp/gt.ts?raw=true"
+    "author": "EALyce"
   }
 }
