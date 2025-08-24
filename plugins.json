@@ -10,5 +10,8 @@
   "q": {
     "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/q/q.ts?raw=true",
     "author": "TeleBoxDev"
+  },
+  "yt-dlp": {
+    "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/yt-dlp/yt-dlp.ts?raw=true"
   }
 }
