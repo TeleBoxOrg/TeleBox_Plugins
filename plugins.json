@@ -13,5 +13,17 @@
   },
   "yt-dlp": {
     "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/yt-dlp/yt-dlp.ts?raw=true"
+  },
+    "gt": {
+    "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/gt/gt.ts?raw=true"
+    "author": "EALyce"
+  },
+    "ip": {
+    "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/ip/ip.ts?raw=true"
+    "author": "EALyce"
+  },
+    "send_cron": {
+    "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/send_cron/send_cron.ts?raw=true"
+    "author": "EALyce"
   }
 }
