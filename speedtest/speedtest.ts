@@ -89,7 +89,7 @@ async function sendResultAsImageWithCaption(msg: Api.Message, result: any) {
 }
 
 const speedtestPlugin: Plugin = {
-  command: "speedtest",
+  command: ["speedtest"],
   description: "运行 Speedtest by Ookla 并以图片形式发送结果。",
   cmdHandler: async (msg) => {
     await msg.edit({ text: "初始化测速环境..." });

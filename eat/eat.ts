@@ -15,6 +15,7 @@ interface RoleConfig {
   x: number;
   y: number;
   mask: string;
+  brightness?: number;
 }
 
 interface EntryConfig {
@@ -87,10 +88,12 @@ async function iconMaskedFor(params: {
     maskSharp.clone().extractChannel("alpha").toBuffer(),
   ]);
 
-  const iconMasked = await sharp(iconBuffer)
-    .joinChannel(alphaMask)
-    .png()
-    .toBuffer();
+  const pipeline = sharp(iconBuffer).joinChannel(alphaMask);
+  if (role.brightness) {
+    pipeline.modulate({ brightness: role.brightness });
+  }
+
+  const iconMasked = await pipeline.png().toBuffer();
 
   return {
     input: iconMasked,
@@ -163,7 +166,10 @@ async function sendSticker(params: { entry: EntryConfig; msg: Api.Message }) {
   await msg.delete();
 }
 
-async function handleSetCommand(params: { msg: Api.Message; url: string }) {
+async function handleSetCommand(params: {
+  msg: Api.Message;
+  url: string;
+}): Promise<void> {
   const { msg, url } = params;
   fs.rmSync(EAT_ASSET_PATH, { recursive: true, force: true });
   await msg.edit({
@@ -181,12 +187,11 @@ async function handleSetCommand(params: { msg: Api.Message; url: string }) {
 }
 
 const eatPlugin: Plugin = {
-  command: "eat",
-  description: `
-表情包插件，回复 eat 来获取表情包列表
-回复 eat set [url] 来更新表情包配置，默认配置在 ${baseConfigURL}。
-回复 eat <表情包名称> 来发送对应的表情包，或者直接回复 eat 来随机发送一个表情包。
-  `,
+  command: ["eat"],
+  description:
+    `表情包插件，回复 eat 来获取表情包列表\n` +
+    `回复 eat set [url] 来更新表情包配置，默认配置在 ${baseConfigURL}。\n` +
+    `回复 eat <表情包名称> 来发送对应的表情包，或者直接回复 eat 来随机发送一个表情包。`,
   cmdHandler: async (msg) => {
     const [, ...args] = msg.message.slice(1).split(" ");
     if (!msg.isReply) {

@@ -40,7 +40,7 @@ async function handleQutoe(msg: Api.Message): Promise<void> {
 }
 
 const qPlugin: Plugin = {
-  command: "q",
+  command: ["q"],
   description:
     ".q [count] - 制作语录表情包, count: 可选，默认为 1, 表示消息的数量",
   cmdHandler: async (msg) => {

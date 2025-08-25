@@ -293,7 +293,7 @@ async function downloadAndUploadSong(
 }
 
 const ytMusicPlugin: Plugin = {
-  command: "yt",
+  command: ["yt"],
   description:
     "从 YouTube 下载音乐并发送（支持封面获取）。用法：.yt <歌曲名称>-<歌手> 或 .yt <搜索关键词>",
   cmdHandler: async (msg) => {

@@ -26,5 +26,8 @@
   "send_cron": {
     "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/send_cron/send_cron.ts?raw=true",
     "author": "EALyce"
+  },
+  "netease": {
+    "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/netease/netease.ts?raw=true"
   }
 }

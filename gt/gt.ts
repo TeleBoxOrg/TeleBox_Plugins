@@ -1,20 +1,9 @@
 import { Plugin } from "@utils/pluginBase";
 import { Api } from "telegram";
-import { npm_install } from "@utils/npm_install";
-
-// Install and import the proper Node.js Google Translate library
-npm_install("@vitalets/google-translate-api");
-
-let translate: any;
-try {
-  const googleTranslateApi = require("@vitalets/google-translate-api");
-  translate = googleTranslateApi.translate;
-} catch (error) {
-  console.error("Failed to import @vitalets/google-translate-api:", error);
-}
+import { translate } from "@vitalets/google-translate-api";
 
 const gtPlugin: Plugin = {
-  command: "gt",
+  command: ["gt"],
   description: `
 谷歌翻译插件：
 - gt [文本] - 翻译为中文（默认）
@@ -54,7 +43,7 @@ gt 或 gt en
 示例：
 1. gt Hello world
 2. gt en 你好，世界
-3. 回复英文消息后 gt`
+3. 回复英文消息后 gt`,
         });
         return;
       }
@@ -89,9 +78,8 @@ gt 或 gt en
       await msg.edit({
         text: `🌐 翻译（→ \`${target}\`）：
 
-${translated}`
+${translated}`,
       });
-
     } catch (error: any) {
       console.error("Translation error:", error);
       await msg.edit({ text: `❌ 翻译失败：${error.message || error}` });
