@@ -85,8 +85,9 @@
     "name": "我会一直视奸你",
     "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/eat/eatsj.png?raw=true",
     "you": {
-      "x": 138,
-      "y": 63,
+      "x": 118,
+      "y": 42,
+      "brightness": 0.6,
       "mask": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/eat/masksj.png?raw=true"
     }
   },          
@@ -108,7 +109,7 @@
     "name": "偷撸狗",
     "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/eat/eattlg.png?raw=true",
     "you": {
-      "x": 17,
+      "x": 16,
       "y": 280,
       "mask": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/eat/masktlg.png?raw=true"
     }
