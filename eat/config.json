@@ -108,8 +108,8 @@
     "name": "偷撸狗",
     "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/eat/eattlg.png?raw=true",
     "you": {
-      "x": 0,
-      "y": 256,
+      "x": 17,
+      "y": 280,
       "mask": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/eat/masktlg.png?raw=true"
     }
   },

@@ -1,6 +1,8 @@
 import { Plugin } from "@utils/pluginBase";
 import { Api } from "telegram";
-import { translate } from "@vitalets/google-translate-api";
+import { npm_install } from "@utils/npm_install";
+
+npm_install("@vitalets/google-translate-api");
 
 const gtPlugin: Plugin = {
   command: ["gt"],
@@ -20,12 +22,13 @@ const gtPlugin: Plugin = {
   `,
   cmdHandler: async (msg: Api.Message) => {
     try {
+      const { translate } = await import("@vitalets/google-translate-api");
       if (!translate) {
         await msg.edit({ text: "❌ 翻译服务未正确加载，请重启程序" });
         return;
       }
 
-      const args = msg.message.slice(1).split(" ").slice(1); // Remove command part
+      const args = msg.message.split(" ").slice(1); // Remove command part
       let text = "";
       let target = "zh-CN";
 

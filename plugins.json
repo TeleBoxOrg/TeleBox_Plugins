@@ -3,6 +3,9 @@
     "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/eat/eat.ts?raw=true",
     "author": "TeleBoxDev"
   },
+  "eat2": {
+    "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/eat2/eat2.ts?raw=true"
+  },
   "speedtest": {
     "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/speedtest/speedtest.ts?raw=true",
     "author": "BirdBird"
@@ -29,5 +32,8 @@
   },
   "netease": {
     "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/netease/netease.ts?raw=true"
+  },
+  "bulk_delete": {
+    "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/bulk_delete/bulk_delete.ts?raw=true"
   }
 }
