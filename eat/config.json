@@ -27,6 +27,20 @@
       "mask": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/eat/maskbc2.png?raw=true"
     }
   },
+  "dl": {
+    "name": "大佬~可靠",
+    "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/eat/eatdl.png?raw=true",
+    "me": {
+      "x": 350,
+      "y": 197,
+      "mask": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/eat/maskdl1.png?raw=true"
+    },
+    "you": {
+      "x": 91,
+      "y": 16,
+      "mask": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/eat/maskdl2.png?raw=true"
+    }
+  },  
   "dd": {
     "name": "逗逗你呀~",
     "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/eat/eatdd.png?raw=true",
@@ -114,6 +128,15 @@
       "mask": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/eat/masktlg.png?raw=true"
     }
   },
+  "wyy": {
+    "name": "网抑云时间",
+    "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/eat/eatwyy.png?raw=true",
+    "you": {
+      "x": 135,
+      "y": 160,
+      "mask": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/eat/maskwyy.png?raw=true"
+    }
+  },  
   "wyz": {
     "name": "我有罪",
     "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/eat/eatwyz.png?raw=true",
