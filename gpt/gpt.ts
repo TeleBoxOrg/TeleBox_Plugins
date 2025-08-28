@@ -53,6 +53,64 @@ function htmlEscape(text: string): string {
     .replace(/'/g, "&#x27;");
 }
 
+// 简单的Markdown到HTML转换函数
+function markdownToHtml(text: string): string {
+  // 首先对特殊HTML字符进行转义，但要保护已经存在的HTML标签
+  let result = text;
+  
+  // 临时替换现有的HTML标签
+  const htmlTags: string[] = [];
+  let tagIndex = 0;
+  result = result.replace(/<\/?[a-zA-Z][^>]*>/g, (match) => {
+    htmlTags.push(match);
+    return `__HTML_TAG_${tagIndex++}__`;
+  });
+  
+  // 转义其他HTML字符
+  result = result
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+  
+  // 恢复HTML标签
+  htmlTags.forEach((tag, index) => {
+    result = result.replace(`__HTML_TAG_${index}__`, tag);
+  });
+  
+  // 应用markdown转换
+  result = result
+    // 代码块 (```) - 先处理，避免内部内容被其他规则影响
+    .replace(/```(\w+)?\n([\s\S]*?)```/g, (match, lang, code) => {
+      const escapedCode = code.replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&');
+      return `<pre><code>${htmlEscape(escapedCode)}</code></pre>`;
+    })
+    // 行内代码 (`)
+    .replace(/`([^`]+)`/g, (match, code) => {
+      const escapedCode = code.replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&');
+      return `<code>${htmlEscape(escapedCode)}</code>`;
+    })
+    // 粗体 (**)
+    .replace(/\*\*([^*]+)\*\*/g, '<b>$1</b>')
+    // 斜体 (*) - 简化版本，避免与粗体冲突
+    .replace(/\*([^*\n]+)\*/g, '<i>$1</i>')
+    // 粗体 (__)
+    .replace(/__([^_]+)__/g, '<b>$1</b>')
+    // 斜体 (_) - 简化版本，避免与粗体冲突
+    .replace(/_([^_\n]+)_/g, '<i>$1</i>')
+    // 删除线 (~~)
+    .replace(/~~([^~]+)~~/g, '<s>$1</s>')
+    // 链接 [text](url)
+    .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2">$1</a>')
+    // 标题 (# ## ###)
+    .replace(/^### (.+)$/gm, '<b>$1</b>')
+    .replace(/^## (.+)$/gm, '<b>$1</b>')
+    .replace(/^# (.+)$/gm, '<b>$1</b>')
+    // 引用 (>)
+    .replace(/^> (.+)$/gm, '<blockquote>$1</blockquote>');
+  
+  return result;
+}
+
 // 睡眠函数
 function sleep(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms));
@@ -383,7 +441,8 @@ function formatResponse(question: string, answer: string): string {
 
   // 添加回答部分
   finalText += "<b>A:</b>\n";
-  finalText += `<blockquote>${htmlEscape(answer)}</blockquote>`;
+  const htmlAnswer = markdownToHtml(answer);
+  finalText += `<blockquote>${htmlAnswer}</blockquote>`;
 
   return finalText;
 }
