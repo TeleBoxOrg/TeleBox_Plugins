@@ -39,5 +39,8 @@
   "aban": {
     "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/aban/aban.ts?raw=true"
     "author": "EALyce"
+  },
+  "search": {
+    "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/search/search.ts?raw=true"
   }
 }
