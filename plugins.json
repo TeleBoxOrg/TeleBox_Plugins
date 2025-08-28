@@ -42,5 +42,9 @@
   },
   "search": {
     "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/search/search.ts?raw=true"
+  },
+  "gpt": {
+    "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/gpt/gpt.ts?raw=true",
+    "author": "JohnsonRan"
   }
 }
