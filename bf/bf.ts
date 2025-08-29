@@ -4,8 +4,9 @@
  */
 
 import { Plugin } from "@utils/pluginBase";
-import { Api } from "telegram";
+import { Api, TelegramClient } from "telegram";
 import { getGlobalClient } from "@utils/globalClient";
+import { createDirectoryInAssets } from "@utils/pathHelpers";
 import * as fs from "fs";
 import * as path from "path";
 import * as zlib from "zlib";
@@ -321,7 +322,7 @@ function sanitizeFilename(filename: string): string {
 // 统一配置管理
 class Config {
   private static getFile(): string {
-    return path.join(getProgramDir(), "assets", "bf_config.json");
+    return path.join(createDirectoryInAssets("bf"), "bf_config.json");
   }
 
   static load(): BackupConfig {
@@ -597,13 +598,19 @@ async function uploadToTargets(
 ): Promise<void> {
   
   const progress = { last: 0 };
-  const progressCallback = showProgress && message ? (sent: number, total: number) => {
+  const progressCallback = showProgress && message ? async (sent: number, total: number) => {
     if (!total) return;
     try {
       const pct = Math.floor((sent * 100) / total);
       if (pct >= progress.last + 10) {
         progress.last = pct;
-        message.edit({ text: `📤 上传中... ${pct}%` }).catch(() => {});
+        const client = await getGlobalClient();
+        if (client) {
+          client.editMessage(message.peerId, {
+            message: message.id,
+            text: `📤 上传中... ${pct}%`
+          }).catch(() => {});
+        }
       }
     } catch {}
   } : undefined;
@@ -672,7 +679,8 @@ async function uploadToTargets(
       if (failedTargets.length > 0) {
         // 更新收藏夹中的消息，添加失败信息
         const failedInfo = `\n\n⚠️ 发送失败的目标: ${failedTargets.join(', ')}`;
-        await client.editMessage('me', sentMsg.id, {
+        await client.editMessage('me', {
+          message: sentMsg.id,
           text: caption + failedInfo
         }).catch(() => {}); // 忽略编辑失败
       }
@@ -715,6 +723,15 @@ async function sendAndCleanup(
 const bfPlugin: Plugin = {
   command: ["bf"],
   description: "📦 备份主命令，支持多种备份模式",
+  listenMessageHandler: async (msg: Api.Message) => {
+    // 备份插件不需要监听所有消息，仅响应命令
+    // 但为了接口合规性需要包含此属性
+    try {
+      // 无需处理普通消息
+    } catch (error) {
+      console.error('[BF Plugin] Message listening error:', error);
+    }
+  },
   cmdHandler: async (msg: Api.Message) => {
     const args = msg.message.slice(1).split(' ').slice(1);
     const param = args[0] || '';
@@ -732,17 +749,27 @@ const bfPlugin: Plugin = {
           "• 定时: `bf cron help`\n" +
           "• 恢复: 回复备份用 `hf` → `hf confirm`"
         );
-        await msg.edit({ text: helpText });
+        const client = await getGlobalClient();
+        if (client) {
+          await client.editMessage(msg.peerId, {
+            message: msg.id,
+            text: helpText
+          });
+        }
         return;
       }
 
       // 设置目标聊天ID
       if (param === "set") {
         if (args.length < 2 || ["help", "-h", "--help", "?"].includes(args[1])) {
-          await msg.edit({
-            text: "🎯 目标聊天\n用法: `bf set <ID...>` (空格/逗号分隔)\n" +
-                  "例: `bf set 123,456` 或 `bf set 123 456`\n未设置则发到收藏夹"
-          });
+          const client = await getGlobalClient();
+          if (client) {
+            await client.editMessage(msg.peerId, {
+              message: msg.id,
+              text: "🎯 目标聊天\n用法: `bf set <ID...>` (空格/逗号分隔)\n" +
+                    "例: `bf set 123,456` 或 `bf set 123 456`\n未设置则发到收藏夹"
+            });
+          }
           return;
         }
 
@@ -755,20 +782,44 @@ const bfPlugin: Plugin = {
             if (/^-?\d+$/.test(part)) {
               valid.push(part);
             } else {
-              await msg.edit({ text: `无效的聊天ID: ${part}\n仅支持数字ID，例如 123456 或 -1001234567890` });
+              const client = await getGlobalClient();
+              if (client) {
+                await client.editMessage(msg.peerId, {
+                  message: msg.id,
+                  text: `无效的聊天ID: ${part}\n仅支持数字ID，例如 123456 或 -1001234567890`
+                });
+              }
               return;
             }
           }
 
           if (valid.length === 0) {
-            await msg.edit({ text: "聊天ID不能为空" });
+            const client = await getGlobalClient();
+            if (client) {
+              await client.editMessage(msg.peerId, {
+                message: msg.id,
+                text: "聊天ID不能为空"
+              });
+            }
             return;
           }
 
           const newList = TargetManager.addTargets(valid);
-          await msg.edit({ text: `目标聊天ID已更新：${newList.length > 0 ? newList.join(', ') : '（已清空）'}` });
+          const client = await getGlobalClient();
+          if (client) {
+            await client.editMessage(msg.peerId, {
+              message: msg.id,
+              text: `目标聊天ID已更新：${newList.length > 0 ? newList.join(', ') : '（已清空）'}`
+            });
+          }
         } catch (e) {
-          await msg.edit({ text: `设置失败：${String(e)}` });
+          const client = await getGlobalClient();
+          if (client) {
+            await client.editMessage(msg.peerId, {
+              message: msg.id,
+              text: `设置失败：${String(e)}`
+            });
+          }
         }
         return;
       }
@@ -780,45 +831,59 @@ const bfPlugin: Plugin = {
         if (!subCmd || subCmd === "status") {
           const status = ScheduledBackupManager.getStatus();
           if (!status.enabled) {
-            await msg.edit({ text: "⏰ 定时备份未启用\n\n使用 `bf cron help` 查看帮助" });
+            const client = await getGlobalClient();
+            if (client) {
+              await client.editMessage(msg.peerId, {
+                message: msg.id,
+                text: "⏰ 定时备份未启用\n\n使用 `bf cron help` 查看帮助"
+              });
+            }
           } else {
             const lastBackup = status.last_backup ? new Date(status.last_backup).toLocaleString('zh-CN') : '从未执行';
             const nextBackup = status.next_backup ? new Date(status.next_backup).toLocaleString('zh-CN') : '未知';
-            await msg.edit({
-              text: `⏰ **定时备份状态**\n\n` +
-                    `• 状态: ${status.enabled ? '✅ 已启用' : '❌ 已禁用'}\n` +
-                    `• Cron表达式: \`${status.cron_expression}\`\n` +
-                    `• 备份类型: 标准备份 (assets + plugins)\n` +
-                    `• 上次备份: ${lastBackup}\n` +
-                    `• 下次备份: ${nextBackup}\n` +
-                    `• 运行状态: ${status.is_running ? '🟢 运行中' : '🔴 已停止'}`
-            });
+            const client = await getGlobalClient();
+            if (client) {
+              await client.editMessage(msg.peerId, {
+                message: msg.id,
+                text: `⏰ **定时备份状态**\n\n` +
+                      `• 状态: ${status.enabled ? '✅ 已启用' : '❌ 已禁用'}\n` +
+                      `• Cron表达式: \`${status.cron_expression}\`\n` +
+                      `• 备份类型: 标准备份 (assets + plugins)\n` +
+                      `• 上次备份: ${lastBackup}\n` +
+                      `• 下次备份: ${nextBackup}\n` +
+                      `• 运行状态: ${status.is_running ? '🟢 运行中' : '🔴 已停止'}`
+              });
+            }
           }
           return;
         }
         
         if (subCmd === "help") {
-          await msg.edit({
-            text: "⏰ **Cron定时备份命令**\n\n" +
-                  "• `bf cron` - 查看状态\n" +
-                  "• `bf cron <cron表达式>` - 启动定时标准备份\n" +
-                  "• `bf cron stop` - 停止定时备份\n" +
-                  "• `bf cron now` - 立即执行一次备份\n\n" +
-                  "**Cron表达式格式 (6字段):**\n" +
-                  "`秒 分 时 日 月 周`\n\n" +
-                  "**支持格式:**\n" +
-                  "• `*` - 匹配所有值\n" +
-                  "• `*/N` - 每N个单位执行一次\n" +
-                  "• `N` - 指定具体值\n\n" +
-                  "**备份类型:**\n" +
-                  "• 定时备份: 仅标准备份 (assets + plugins)\n" +
-                  "• 其他备份: 请使用手动命令 `bf p` 或 `bf all`\n\n" +
-                  "**示例:**\n" +
-                  "`bf cron */5 * * * * *` - 每5秒标准备份\n" +
-                  "`bf cron 0 */30 * * * *` - 每30分钟标准备份\n" +
-                  "`bf cron 0 0 */6 * * *` - 每6小时标准备份\n" +
-                  "`bf cron 0 0 2 * * *` - 每天凌晨2点标准备份"
-          });
+          const client = await getGlobalClient();
+          if (client) {
+            await client.editMessage(msg.peerId, {
+              message: msg.id,
+              text: "⏰ **Cron定时备份命令**\n\n" +
+                    "• `bf cron` - 查看状态\n" +
+                    "• `bf cron <cron表达式>` - 启动定时标准备份\n" +
+                    "• `bf cron stop` - 停止定时备份\n" +
+                    "• `bf cron now` - 立即执行一次备份\n\n" +
+                    "**Cron表达式格式 (6字段):**\n" +
+                    "`秒 分 时 日 月 周`\n\n" +
+                    "**支持格式:**\n" +
+                    "• `*` - 匹配所有值\n" +
+                    "• `*/N` - 每N个单位执行一次\n" +
+                    "• `N` - 指定具体值\n\n" +
+                    "**备份类型:**\n" +
+                    "• 定时备份: 仅标准备份 (assets + plugins)\n" +
+                    "• 其他备份: 请使用手动命令 `bf p` 或 `bf all`\n\n" +
+                    "**示例:**\n" +
+                    "`bf cron */5 * * * * *` - 每5秒标准备份\n" +
+                    "`bf cron 0 */30 * * * *` - 每30分钟标准备份\n" +
+                    "`bf cron 0 0 */6 * * *` - 每6小时标准备份\n" +
+                    "`bf cron 0 0 2 * * *` - 每天凌晨2点标准备份"
+            });
+          }
           return;
         }
         
@@ -828,20 +893,38 @@ const bfPlugin: Plugin = {
           const cronExpression = args.slice(1).join(' ');
           
           if (!cronExpression) {
-            await msg.edit({ text: "❌ 请指定cron表达式\n例: `bf cron */5 * * * * *`" });
+            const client = await getGlobalClient();
+            if (client) {
+              await client.editMessage(msg.peerId, {
+                message: msg.id,
+                text: "❌ 请指定cron表达式\n例: `bf cron */5 * * * * *`"
+              });
+            }
             return;
           }
           
           // 验证cron表达式
           const validation = CronParser.validateCron(cronExpression);
           if (!validation.valid) {
-            await msg.edit({ text: `❌ 无效的cron表达式: ${validation.error}` });
+            const client = await getGlobalClient();
+            if (client) {
+              await client.editMessage(msg.peerId, {
+                message: msg.id,
+                text: `❌ 无效的cron表达式: ${validation.error}`
+              });
+            }
             return;
           }
           
           const nextBackup = CronParser.getNextRunTime(cronExpression);
           if (!nextBackup) {
-            await msg.edit({ text: "❌ 无法计算下次执行时间" });
+            const client = await getGlobalClient();
+            if (client) {
+              await client.editMessage(msg.peerId, {
+                message: msg.id,
+                text: "❌ 无法计算下次执行时间"
+              });
+            }
             return;
           }
           
@@ -854,12 +937,16 @@ const bfPlugin: Plugin = {
           
           ScheduledBackupManager.start();
           
-          await msg.edit({
-            text: `✅ **定时标准备份已启动**\n\n` +
-                  `• Cron表达式: \`${cronExpression}\`\n` +
-                  `• 备份类型: 标准备份 (assets + plugins)\n` +
-                  `• 下次备份: ${nextBackup.toLocaleString('zh-CN')}`
-          });
+          const client = await getGlobalClient();
+          if (client) {
+            await client.editMessage(msg.peerId, {
+              message: msg.id,
+              text: `✅ **定时标准备份已启动**\n\n` +
+                    `• Cron表达式: \`${cronExpression}\`\n` +
+                    `• 备份类型: 标准备份 (assets + plugins)\n` +
+                    `• 下次备份: ${nextBackup.toLocaleString('zh-CN')}`
+            });
+          }
           return;
         }
         
@@ -873,36 +960,78 @@ const bfPlugin: Plugin = {
           
           ScheduledBackupManager.stop();
           
-          await msg.edit({ text: "⏹️ 定时备份已停止" });
+          const client = await getGlobalClient();
+          if (client) {
+            await client.editMessage(msg.peerId, {
+              message: msg.id,
+              text: "⏹️ 定时备份已停止"
+            });
+          }
           return;
         }
         
         if (subCmd === "now") {
           const config = Config.get<BackupConfig['scheduled_backup']>('scheduled_backup');
           if (!config?.enabled) {
-            await msg.edit({ text: "❌ 定时备份未启用，请先使用 `bf cron <表达式>` 启动" });
+            const client = await getGlobalClient();
+            if (client) {
+              await client.editMessage(msg.peerId, {
+                message: msg.id,
+                text: "❌ 定时备份未启用，请先使用 `bf cron <表达式>` 启动"
+              });
+            }
             return;
           }
           
-          await msg.edit({ text: "🔄 正在执行定时标准备份..." });
+          const client = await getGlobalClient();
+          if (client) {
+            await client.editMessage(msg.peerId, {
+              message: msg.id,
+              text: "🔄 正在执行定时标准备份..."
+            });
+          }
           
           try {
             await ScheduledBackupManager.executeBackup();
-            await msg.edit({ text: "✅ 定时标准备份执行完成" });
+            const client = await getGlobalClient();
+            if (client) {
+              await client.editMessage(msg.peerId, {
+                message: msg.id,
+                text: "✅ 定时标准备份执行完成"
+              });
+            }
           } catch (error) {
-            await msg.edit({ text: `❌ 定时备份执行失败: ${String(error)}` });
+            const client = await getGlobalClient();
+            if (client) {
+              await client.editMessage(msg.peerId, {
+                message: msg.id,
+                text: `❌ 定时备份执行失败: ${String(error)}`
+              });
+            }
           }
           return;
         }
         
-        await msg.edit({ text: "❌ 未知的定时备份命令，使用 `bf cron help` 查看帮助" });
+        const client = await getGlobalClient();
+        if (client) {
+          await client.editMessage(msg.peerId, {
+            message: msg.id,
+            text: "❌ 未知的定时备份命令，使用 `bf cron help` 查看帮助"
+          });
+        }
         return;
       }
 
       // 删除目标聊天ID
       if (param === "del") {
         if (args.length < 2 || ["help", "-h", "--help", "?"].includes(args[1])) {
-          await msg.edit({ text: "🧹 删除目标: `bf del <ID>`，清空: `bf del all`" });
+          const client = await getGlobalClient();
+          if (client) {
+            await client.editMessage(msg.peerId, {
+              message: msg.id,
+              text: "🧹 删除目标: `bf del <ID>`，清空: `bf del all`"
+            });
+          }
           return;
         }
 
@@ -910,22 +1039,44 @@ const bfPlugin: Plugin = {
         try {
           const newList = TargetManager.removeTarget(target);
           if (target === "all") {
-            await msg.edit({ text: "已清空全部目标聊天ID" });
+            const client = await getGlobalClient();
+            if (client) {
+              await client.editMessage(msg.peerId, {
+                message: msg.id,
+                text: "已清空全部目标聊天ID"
+              });
+            }
           } else {
-            await msg.edit({ 
-              text: `已删除：${target}，当前目标列表：${newList.length > 0 ? newList.join(', ') : '（空）'}` 
-            });
+            const client = await getGlobalClient();
+            if (client) {
+              await client.editMessage(msg.peerId, {
+                message: msg.id,
+                text: `已删除：${target}，当前目标列表：${newList.length > 0 ? newList.join(', ') : '（空）'}`
+              });
+            }
           }
         } catch (e) {
-          await msg.edit({ text: `删除失败：${String(e)}` });
+          const client = await getGlobalClient();
+          if (client) {
+            await client.editMessage(msg.peerId, {
+              message: msg.id,
+              text: `删除失败：${String(e)}`
+            });
+          }
         }
         return;
       }
 
       // 全量备份
       if (param === "all") {
+        const client = await getGlobalClient();
         try {
-          await msg.edit({ text: "🔄 正在创建完整程序备份..." });
+          if (client) {
+            await client.editMessage(msg.peerId, {
+              message: msg.id,
+              text: "🔄 正在创建完整程序备份..."
+            });
+          }
           const packageName = generatePackageName("full");
           const slimMode = args.length > 1 && ["slim", "fast"].includes(args[1].toLowerCase());
           
@@ -956,7 +1107,12 @@ const bfPlugin: Plugin = {
             compressLevel
           });
 
-          await msg.edit({ text: "📤 正在上传完整备份..." });
+          if (client) {
+            await client.editMessage(msg.peerId, {
+              message: msg.id,
+              text: "📤 正在上传完整备份..."
+            });
+          }
 
           const caption = (
             `🎯 **完整程序备份${slimMode ? '（瘦身）' : ''}**\n\n` +
@@ -967,27 +1123,46 @@ const bfPlugin: Plugin = {
           );
 
           const targets = TargetManager.getTargets();
-          await sendAndCleanup(msg.client, packageName, caption, msg, true);
+          await sendAndCleanup(client, packageName, caption, msg, true);
           
-          await msg.edit({
-            text: `✅ 完整备份已完成\n\n📦 \`${packageName}\`\n` +
-                  `🎯 发送到: ${targets.length > 0 ? targets.join(', ') : '收藏夹'}`
-          });
+          if (client) {
+            await client.editMessage(msg.peerId, {
+              message: msg.id,
+              text: `✅ 完整备份已完成\n\n📦 \`${packageName}\`\n` +
+                    `🎯 发送到: ${targets.length > 0 ? targets.join(', ') : '收藏夹'}`
+            });
+          }
         } catch (e) {
-          await msg.edit({ text: `❌ 完整备份失败: ${String(e)}` });
+          if (client) {
+            await client.editMessage(msg.peerId, {
+              message: msg.id,
+              text: `❌ 完整备份失败: ${String(e)}`
+            });
+          }
         }
         return;
       }
 
       // 插件备份
       if (param === "p") {
+        const client = await getGlobalClient();
         try {
-          await msg.edit({ text: "🔌 正在创建插件备份..." });
+          if (client) {
+            await client.editMessage(msg.peerId, {
+              message: msg.id,
+              text: "🔌 正在创建插件备份..."
+            });
+          }
           const packageName = generatePackageName("plugins");
           
           const pluginsDir = path.join(programDir, "plugins");
           if (!fs.existsSync(pluginsDir)) {
-            await msg.edit({ text: "❌ plugins目录不存在" });
+            if (client) {
+              await client.editMessage(msg.peerId, {
+                message: msg.id,
+                text: "❌ plugins目录不存在"
+              });
+            }
             return;
           }
 
@@ -1018,14 +1193,24 @@ const bfPlugin: Plugin = {
 
           if (tsCount === 0) {
             fs.rmSync(tempRoot, { recursive: true, force: true });
-            await msg.edit({ text: "❌ 未找到任何TypeScript插件文件" });
+            if (client) {
+              await client.editMessage(msg.peerId, {
+                message: msg.id,
+                text: "❌ 未找到任何TypeScript插件文件"
+              });
+            }
             return;
           }
 
           await createTarGz([tempPluginsDir], packageName);
           fs.rmSync(tempRoot, { recursive: true, force: true });
 
-          await msg.edit({ text: "📤 正在分享插件备份..." });
+          if (client) {
+            await client.editMessage(msg.peerId, {
+              message: msg.id,
+              text: "📤 正在分享插件备份..."
+            });
+          }
 
           const caption = (
             `🔌 **TypeScript插件备份**\n\n` +
@@ -1036,26 +1221,40 @@ const bfPlugin: Plugin = {
             `• 适合: 插件分享和迁移`
           );
 
-          await sendAndCleanup(msg.client, packageName, caption);
+          await sendAndCleanup(client, packageName, caption);
           const targets = TargetManager.getTargets();
           
-          await msg.edit({
-            text: `✅ 插件备份已完成\n\n📦 \`${packageName}\`\n🔌 数量: ${tsCount} 个\n` +
-                  `🎯 发送到: ${targets.length > 0 ? targets.join(', ') : '收藏夹'}`
-          });
+          if (client) {
+            await client.editMessage(msg.peerId, {
+              message: msg.id,
+              text: `✅ 插件备份已完成\n\n📦 \`${packageName}\`\n🔌 数量: ${tsCount} 个\n` +
+                    `🎯 发送到: ${targets.length > 0 ? targets.join(', ') : '收藏夹'}`
+            });
+          }
         } catch (e) {
-          await msg.edit({ text: `❌ 插件备份失败: ${String(e)}` });
+          if (client) {
+            await client.editMessage(msg.peerId, {
+              message: msg.id,
+              text: `❌ 插件备份失败: ${String(e)}`
+            });
+          }
         }
         return;
       }
 
       // 默认标准备份
+      const client = await getGlobalClient();
       try {
         const nowStr = nowBJ().toISOString().replace(/[-:]/g, "").replace(/\..+/, "").replace("T", "_");
         const tmpdir = os.tmpdir();
         const backupPath = path.join(tmpdir, `telebox_backup_${nowStr}.tar.gz`);
 
-        await msg.edit({ text: "🔄 正在创建标准备份..." });
+        if (client) {
+          await client.editMessage(msg.peerId, {
+            message: msg.id,
+            text: "🔄 正在创建标准备份..."
+          });
+        }
         
         await createTarGz(
           [path.join(programDir, "assets"), path.join(programDir, "plugins")],
@@ -1063,7 +1262,12 @@ const bfPlugin: Plugin = {
           { excludeExts: [".ttf"], compressLevel: 5 }
         );
 
-        await msg.edit({ text: "📤 正在上传备份..." });
+        if (client) {
+          await client.editMessage(msg.peerId, {
+            message: msg.id,
+            text: "📤 正在上传备份..."
+          });
+        }
         
         const caption = (
           `📦 **TeleBox标准备份**\n\n` +
@@ -1073,18 +1277,32 @@ const bfPlugin: Plugin = {
         );
 
         const targets = TargetManager.getTargets();
-        await sendAndCleanup(msg.client, backupPath, caption, msg, targets.length <= 1);
+        await sendAndCleanup(client, backupPath, caption, msg, targets.length <= 1);
 
-        await msg.edit({
-          text: `✅ 标准备份已完成\n\n🎯 发送到: ${targets.length > 0 ? targets.join(', ') : '收藏夹'}\n` +
-                "📦 包含: 配置 + 插件"
-        });
+        if (client) {
+          await client.editMessage(msg.peerId, {
+            message: msg.id,
+            text: `✅ 标准备份已完成\n\n🎯 发送到: ${targets.length > 0 ? targets.join(', ') : '收藏夹'}\n` +
+                  "📦 包含: 配置 + 插件"
+          });
+        }
       } catch (e) {
-        await msg.edit({ text: `❌ 备份失败: ${String(e)}` });
+        if (client) {
+          await client.editMessage(msg.peerId, {
+            message: msg.id,
+            text: `❌ 备份失败: ${String(e)}`
+          });
+        }
       }
 
     } catch (e) {
-      await msg.edit({ text: `❌ 命令执行失败: ${String(e)}` });
+      const client = await getGlobalClient();
+      if (client) {
+        await client.editMessage(msg.peerId, {
+          message: msg.id,
+          text: `❌ 命令执行失败: ${String(e)}`
+        });
+      }
     }
   }
 };
