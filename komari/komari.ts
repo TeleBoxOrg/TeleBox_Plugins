@@ -173,6 +173,37 @@ function formatUptime(seconds: number): string {
   return `${days} 天 ${hours} 时 ${minutes} 分 ${secs} 秒`;
 }
 
+// 格式化过期时间
+function formatExpiredDate(dateStr: string): string {
+  try {
+    const date = new Date(dateStr);
+    // 检查是否是无效的默认日期（0001年）
+    if (date.getFullYear() <= 1) {
+      return "未设置";
+    }
+    
+    const now = new Date();
+    const diffTime = date.getTime() - now.getTime();
+    const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+    
+    const dateString = date.toLocaleDateString('zh-CN', {
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit'
+    });
+    
+    if (diffDays > 0) {
+      return `${dateString} (还有 ${diffDays} 天)`;
+    } else if (diffDays === 0) {
+      return `${dateString} (今天到期)`;
+    } else {
+      return `${dateString} (已过期 ${Math.abs(diffDays)} 天)`;
+    }
+  } catch {
+    return "未知";
+  }
+}
+
 // HTTP 请求封装
 async function makeRequest(url: string, endpoint: string): Promise<any> {
   try {
@@ -420,6 +451,24 @@ async function getNodeDetails(baseUrl: string, nodeName: string): Promise<string
     const uptime = formatUptime(realtime.uptime || 0);
     const updateTime = realtime.updated_at || "未知";
     
+    // 构建付费信息部分
+    let billingInfo = "";
+    const price = node.price || 0;
+    const billingCycle = node.billing_cycle || 0;
+    
+    if (price !== 0 && price !== -1 && billingCycle !== 0) {
+      const currency = node.currency || "$";
+      const autoRenewal = node.auto_renewal ? "是" : "否";
+      const expiredDate = formatExpiredDate(node.expired_at);
+      
+      billingInfo = `
+
+**💰 账单信息**
+• **价格**: \`${currency}${price} / ${billingCycle} 天\`
+• **自动续费**: \`${autoRenewal}\`
+• **过期时间**: \`${expiredDate}\``;
+    }
+    
     return `🖥️ **${nodeName}** ${node.region || "🇺🇳"}
 > 🌐 **${siteName}**
 
@@ -432,7 +481,7 @@ async function getNodeDetails(baseUrl: string, nodeName: string): Promise<string
 **🖥️ 系统信息**
 • **操作系统**: \`${node.os || "未知"}\`
 • **内核版本**: \`${node.kernel_version || "未知"}\`
-• **运行时间**: \`${uptime}\`
+• **运行时间**: \`${uptime}\`${billingInfo}
 
 **📊 资源使用**
 • **CPU**: \`${cpuUsage}%\`
