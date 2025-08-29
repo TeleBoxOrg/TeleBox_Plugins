@@ -1,5 +1,6 @@
 import { Plugin } from "@utils/pluginBase";
 import { getGlobalClient } from "@utils/globalClient";
+import { createDirectoryInAssets } from "@utils/pathHelpers";
 import { Api, TelegramClient } from "telegram";
 import Database from "better-sqlite3";
 import path from "path";
@@ -12,12 +13,7 @@ const USE_GET_PARTICIPANT_FIRST = true;
 const PER_GROUP_SCAN_LIMIT = 2000;
 
 // Database path for permanent cache - use telebox's assets directory
-const CACHE_DB_PATH = path.join(process.cwd(), "assets", "aban_cache.db");
-
-// Ensure assets directory exists
-if (!fs.existsSync(path.dirname(CACHE_DB_PATH))) {
-  fs.mkdirSync(path.dirname(CACHE_DB_PATH), { recursive: true });
-}
+const CACHE_DB_PATH = path.join(createDirectoryInAssets("aban"), "aban_cache.db");
 
 /**
  * Permanent cache system using SQLite database
@@ -127,7 +123,14 @@ async function smartEdit(
   parseMode: "html" | "md" = "html"
 ): Promise<Api.Message> {
   try {
-    await message.edit({
+    const client = await getGlobalClient();
+    if (!client) {
+      console.log('[BanManager] Client not available for message editing');
+      return message;
+    }
+
+    await client.editMessage(message.peerId, {
+      message: message.id,
       text: text,
       parseMode: parseMode,
       linkPreview: false
@@ -136,7 +139,7 @@ async function smartEdit(
     if (deleteAfter > 0) {
       setTimeout(async () => {
         try {
-          await message.delete({ revoke: true });
+          await client.deleteMessages(message.peerId, [message.id], { revoke: true });
         } catch (e) {
           console.log(`Failed to delete message: ${e}`);
         }
@@ -1299,6 +1302,15 @@ const abanPlugin: Plugin = {
 • .aban <子命令> - 使用子命令方式
 
 使用方式：回复消息、@用户名、用户ID`,
+  listenMessageHandler: async (msg: Api.Message) => {
+    // This plugin doesn't need to listen to all messages, only responds to commands
+    // But we include this for interface compliance
+    try {
+      // No action needed for general message listening
+    } catch (error) {
+      console.error('[BanManager] Message listening error:', error);
+    }
+  },
   cmdHandler: async (msg: Api.Message) => {
     const client = await getGlobalClient();
     if (!client) {
