@@ -46,5 +46,9 @@
   "gpt": {
     "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/gpt/gpt.ts?raw=true",
     "author": "JohnsonRan"
+  },
+  "komari": {
+    "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/komari/komari.ts?raw=true",
+    "author": "JohnsonRan"
   }
 }
