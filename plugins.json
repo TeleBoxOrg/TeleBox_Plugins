@@ -50,5 +50,9 @@
   "clean_member": {
     "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/clean_member/clean_member.ts?raw=true",
     "author": "EALyce"
+  },
+  "speednext": {
+    "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/speednext/speednext.ts?raw=true",
+    "author": "EALyce"
   }
 }
