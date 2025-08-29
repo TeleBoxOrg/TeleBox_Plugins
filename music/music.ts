@@ -5,12 +5,11 @@
  */
 
 import { Plugin } from "@utils/pluginBase";
-import { Api } from "telegram";
+import { Api, TelegramClient } from "telegram";
 import * as fs from "fs";
 import * as path from "path";
 import { spawn, exec } from "child_process";
 import { promisify } from "util";
-import download from "download";
 
 const execAsync = promisify(exec);
 
@@ -121,7 +120,7 @@ class MusicDownloader {
       const searchQuery = `ytsearch${maxResults}:${query}`;
       const command = `yt-dlp --quiet --no-warnings --flat-playlist --skip-download --print "%(id)s|%(title)s|%(webpage_url)s" "${searchQuery}"`;
       
-      const { stdout } = await execAsync(command);
+      const { stdout } = await execAsync(command, { timeout: 30000 });
       const lines = stdout.trim().split('\n').filter(line => line.trim());
       
       if (lines.length === 0) return null;
@@ -146,15 +145,18 @@ class MusicDownloader {
       );
 
       const bestEntry = entries[0];
-      if (bestEntry.id) {
+      if (bestEntry && bestEntry.id) {
         return `https://www.youtube.com/watch?v=${bestEntry.id}`;
-      } else if (bestEntry.webpage_url) {
+      } else if (bestEntry && bestEntry.webpage_url) {
         return bestEntry.webpage_url;
       }
 
       return null;
-    } catch (error) {
+    } catch (error: any) {
       console.error(`YouTube search failed for '${query}':`, error);
+      if (error.code === 'TIMEOUT') {
+        console.error('Search timeout - network may be slow');
+      }
       return null;
     }
   }
@@ -181,17 +183,20 @@ class MusicDownloader {
 
       const command = `yt-dlp --quiet --no-warnings ${cookieOption} --format "${format}" ${postprocessor} --output "${outputPath}" "${url}"`;
       
-      await execAsync(command);
+      await execAsync(command, { timeout: 300000 }); // 5 minutes timeout
       return true;
-    } catch (error) {
+    } catch (error: any) {
       console.warn('Primary download method failed, trying fallback:', error);
       try {
         // Fallback to simple bestaudio
         const command = `yt-dlp --quiet --no-warnings --format "bestaudio/best" --output "${outputPath}" "${url}"`;
-        await execAsync(command);
+        await execAsync(command, { timeout: 300000 });
         return true;
-      } catch (error2) {
+      } catch (error2: any) {
         console.error('All download methods failed:', error2);
+        if (error2.code === 'TIMEOUT') {
+          console.error('Download timeout - file may be too large or network too slow');
+        }
         return false;
       }
     }
@@ -253,34 +258,34 @@ class MusicDownloader {
 const downloader = new MusicDownloader();
 
 async function showHelp(msg: Api.Message): Promise<void> {
-  const helpText = `**音乐下载器使用说明**
+  const helpText = `🎵 <b>音乐下载器使用说明</b>
 
-**基本用法：**
-• \`music <关键词>\` - 搜索并下载音乐
-• \`music <YouTube链接>\` - 直接下载指定视频
+<b>📥 基本用法：</b>
+• <code>music &lt;关键词&gt;</code> - 搜索并下载音乐
+• <code>music &lt;YouTube链接&gt;</code> - 直接下载指定视频
 
-**辅助功能：**
-• \`music save\` - 回复音频消息保存到本地
-• \`music cookie <内容>\` - 设置访问受限内容的Cookie
-• \`music clear\` - 清理临时文件缓存
-• \`music help\` - 显示此帮助信息
+<b>🔧 辅助功能：</b>
+• <code>music save</code> - 回复音频消息保存到本地
+• <code>music cookie &lt;内容&gt;</code> - 设置访问受限内容的Cookie
+• <code>music clear</code> - 清理临时文件缓存
+• <code>music help</code> - 显示此帮助信息
 
-**示例：**
-• \`music 周杰伦 晴天\`
-• \`music Taylor Swift Love Story\`
-• \`music https://youtu.be/xxxxx\`
+<b>💡 示例：</b>
+• <code>music 周杰伦 晴天</code>
+• <code>music Taylor Swift Love Story</code>
+• <code>music https://youtu.be/xxxxx</code>
 
-**注意事项：**
+<b>⚠️ 注意事项：</b>
 • 优先选择包含"歌词版"的视频
 • 支持 FFmpeg 自动转换为 MP3 格式
 • 临时文件会在发送后自动清理
 • 需要安装 yt-dlp 和 FFmpeg (可选)`;
 
-  await msg.edit({ text: helpText });
+  await msg.edit({ text: helpText, parseMode: "html" });
 }
 
 async function handleMusicDownload(msg: Api.Message, query: string): Promise<void> {
-  await msg.edit({ text: "🔍 正在搜索音乐..." });
+  await msg.edit({ text: "🔍 正在搜索音乐...", parseMode: "html" });
   
   // Check if it's a direct link
   const urlPattern = /https?:\/\/(www\.)?(youtube\.com|youtu\.be|music\.youtube\.com)/;
@@ -292,13 +297,16 @@ async function handleMusicDownload(msg: Api.Message, query: string): Promise<voi
     // Search YouTube
     const searchResult = await downloader.searchYoutube(query);
     if (!searchResult) {
-      await msg.edit({ text: `❌ 未找到与 \`${query}\` 相关的音乐` });
+      await msg.edit({ 
+        text: `❌ <b>搜索失败</b>\n\n<b>查询内容:</b> <code>${query}</code>\n\n💡 <b>建议:</b>\n• 尝试使用不同的关键词\n• 检查网络连接\n• 使用完整的歌手和歌曲名称`, 
+        parseMode: "html" 
+      });
       return;
     }
     url = searchResult;
   }
   
-  await msg.edit({ text: "📥 正在分析并下载最佳音质..." });
+  await msg.edit({ text: "📥 正在分析并下载最佳音质...", parseMode: "html" });
   
   // Generate temp file path
   const safeQuery = downloader['safeFilename'](query);
@@ -307,7 +315,10 @@ async function handleMusicDownload(msg: Api.Message, query: string): Promise<voi
   // Download audio
   const success = await downloader.downloadAudio(url, tempFile);
   if (!success) {
-    await msg.edit({ text: "❌ 下载失败，请检查链接或稍后重试" });
+    await msg.edit({ 
+      text: "❌ <b>下载失败</b>\n\n💡 <b>可能原因:</b>\n• 网络连接问题\n• 视频不可用或受限\n• yt-dlp 需要更新\n\n🔄 请稍后重试或使用其他链接", 
+      parseMode: "html" 
+    });
     return;
   }
   
@@ -317,14 +328,17 @@ async function handleMusicDownload(msg: Api.Message, query: string): Promise<voi
   const downloadedFiles = files.filter(file => file.startsWith(safeQuery));
   
   if (downloadedFiles.length === 0) {
-    await msg.edit({ text: "❌ 下载的文件未找到，请重试" });
+    await msg.edit({ 
+      text: "❌ <b>文件处理失败</b>\n\n下载的文件未找到，可能是格式转换问题\n\n🔄 请重试或联系管理员", 
+      parseMode: "html" 
+    });
     return;
   }
   
   const audioFile = path.join(tempDir, downloadedFiles[0]);
   
   try {
-    await msg.edit({ text: "📤 正在发送音频文件..." });
+    await msg.edit({ text: "📤 正在发送音频文件...", parseMode: "html" });
     
     // Send audio file
     await msg.client?.sendFile(msg.peerId, {
@@ -343,9 +357,14 @@ async function handleMusicDownload(msg: Api.Message, query: string): Promise<voi
     await msg.delete();
     console.log(`Successfully sent audio: ${query}`);
     
-  } catch (error) {
+  } catch (error: any) {
     console.error('Failed to send audio:', error);
-    await msg.edit({ text: `❌ 发送音频失败: ${error}` });
+    const errorMessage = error.message || String(error);
+    const displayError = errorMessage.length > 100 ? errorMessage.substring(0, 100) + '...' : errorMessage;
+    await msg.edit({ 
+      text: `❌ <b>发送音频失败</b>\n\n<b>错误信息:</b> ${displayError}\n\n💡 <b>建议:</b> 文件可能过大或格式不支持`, 
+      parseMode: "html" 
+    });
   } finally {
     // Cleanup temp files
     downloader.cleanupTempFiles(safeQuery);
@@ -355,7 +374,10 @@ async function handleMusicDownload(msg: Api.Message, query: string): Promise<voi
 async function handleSaveCommand(msg: Api.Message): Promise<void> {
   const reply = await msg.getReplyMessage();
   if (!reply || !reply.document) {
-    await msg.edit({ text: "❌ 请回复一个音频文件使用此命令" });
+    await msg.edit({ 
+      text: "❌ <b>使用错误</b>\n\n请回复一个音频文件使用此命令\n\n💡 <b>使用方法:</b> 回复音频消息后发送 <code>music save</code>", 
+      parseMode: "html" 
+    });
     return;
   }
   
@@ -374,7 +396,7 @@ async function handleSaveCommand(msg: Api.Message): Promise<void> {
       }
     }
     
-    await msg.edit({ text: "💾 正在保存音频到本地..." });
+    await msg.edit({ text: "💾 正在保存音频到本地...", parseMode: "html" });
     
     // Create temp file
     const tempFile = path.join(downloader['tempDir'], `temp_save_${msg.id}.mp3`);
@@ -385,12 +407,20 @@ async function handleSaveCommand(msg: Api.Message): Promise<void> {
     // Save to local storage
     const savedPath = await downloader.saveAudioLocally(tempFile, title, artist);
     
-    await msg.edit({ text: `✅ 已保存: \`${path.basename(savedPath)}\`` });
+    await msg.edit({ 
+      text: `✅ <b>保存成功</b>\n\n<b>文件名:</b> <code>${path.basename(savedPath)}</code>\n<b>位置:</b> <code>${path.dirname(savedPath)}</code>`, 
+      parseMode: "html" 
+    });
     console.log(`Audio saved to: ${savedPath}`);
     
-  } catch (error) {
+  } catch (error: any) {
     console.error('Save command failed:', error);
-    await msg.edit({ text: `❌ 保存失败: ${error}` });
+    const errorMessage = error.message || String(error);
+    const displayError = errorMessage.length > 100 ? errorMessage.substring(0, 100) + '...' : errorMessage;
+    await msg.edit({ 
+      text: `❌ <b>保存失败</b>\n\n<b>错误信息:</b> ${displayError}\n\n💡 <b>建议:</b> 检查磁盘空间和文件权限`, 
+      parseMode: "html" 
+    });
   } finally {
     // Cleanup temp file
     try {
@@ -406,36 +436,58 @@ async function handleSaveCommand(msg: Api.Message): Promise<void> {
 
 async function handleCookieCommand(msg: Api.Message, cookieContent: string): Promise<void> {
   if (!cookieContent) {
-    await msg.edit({ text: "❌ 请提供 Cookie 内容\n\n使用方法: `music cookie <cookie内容>`" });
+    await msg.edit({ 
+      text: "❌ <b>参数缺失</b>\n\n请提供 Cookie 内容\n\n<b>使用方法:</b> <code>music cookie &lt;cookie内容&gt;</code>", 
+      parseMode: "html" 
+    });
     return;
   }
   
   try {
     const success = downloader.setCookie(cookieContent);
     if (success) {
-      await msg.edit({ text: "✅ Cookie 已设置，现在可以访问受限制的内容" });
+      await msg.edit({ 
+        text: "✅ <b>Cookie 设置成功</b>\n\n现在可以访问受限制的内容\n\n⏰ Cookie 将在重启后失效", 
+        parseMode: "html" 
+      });
     } else {
-      await msg.edit({ text: "❌ Cookie 设置失败" });
+      await msg.edit({ 
+        text: "❌ <b>Cookie 设置失败</b>\n\n请检查 Cookie 格式是否正确", 
+        parseMode: "html" 
+      });
     }
-  } catch (error) {
+  } catch (error: any) {
     console.error('Cookie command failed:', error);
-    await msg.edit({ text: `❌ Cookie 设置失败: ${error}` });
+    const errorMessage = error.message || String(error);
+    const displayError = errorMessage.length > 100 ? errorMessage.substring(0, 100) + '...' : errorMessage;
+    await msg.edit({ 
+      text: `❌ <b>Cookie 设置失败</b>\n\n<b>错误信息:</b> ${displayError}`, 
+      parseMode: "html" 
+    });
   }
 }
 
 async function handleClearCommand(msg: Api.Message): Promise<void> {
   try {
-    await msg.edit({ text: "🧹 正在清理临时文件..." });
+    await msg.edit({ text: "🧹 正在清理临时文件...", parseMode: "html" });
     
     // Clear temp files (preserve cookies.txt)
     downloader.cleanupTempFiles();
     
-    await msg.edit({ text: "✅ 临时文件清理完成" });
+    await msg.edit({ 
+      text: "✅ <b>清理完成</b>\n\n临时文件已清理，Cookie 文件已保留", 
+      parseMode: "html" 
+    });
     console.log("Music downloader temp files cleaned");
     
-  } catch (error) {
+  } catch (error: any) {
     console.error('Clear command failed:', error);
-    await msg.edit({ text: `❌ 清理失败: ${error}` });
+    const errorMessage = error.message || String(error);
+    const displayError = errorMessage.length > 100 ? errorMessage.substring(0, 100) + '...' : errorMessage;
+    await msg.edit({ 
+      text: `❌ <b>清理失败</b>\n\n<b>错误信息:</b> ${displayError}`, 
+      parseMode: "html" 
+    });
   }
 }
 
@@ -467,9 +519,14 @@ const musicPlugin: Plugin = {
         await handleMusicDownload(msg, args);
       }
       
-    } catch (error) {
+    } catch (error: any) {
       console.error('Music command execution failed:', error);
-      await msg.edit({ text: `❌ 执行失败: ${error}` });
+      const errorMessage = error.message || String(error);
+      const displayError = errorMessage.length > 100 ? errorMessage.substring(0, 100) + '...' : errorMessage;
+      await msg.edit({ 
+        text: `❌ <b>命令执行失败</b>\n\n<b>错误信息:</b> ${displayError}\n\n💡 <b>建议:</b> 请检查命令格式或联系管理员`, 
+        parseMode: "html" 
+      });
     }
   },
 };
