@@ -118,23 +118,49 @@ class ConfigManager {
 function formatBytes(bytes: number): string {
   if (bytes === 0) return "0 B";
   const k = 1024;
-  const sizes = ["B", "KB", "MB", "GB", "TB"];
+  const sizes = ["B", "KB", "MB", "GB", "TB", "PB"];
   const i = Math.floor(Math.log(bytes) / Math.log(k));
-  return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + " " + sizes[i];
+  const value = bytes / Math.pow(k, i);
+  
+  // 根据值的大小决定小数位数
+  let decimals = 2;
+  if (value >= 100) decimals = 1;
+  if (value >= 1000) decimals = 0;
+  
+  return parseFloat(value.toFixed(decimals)) + " " + sizes[i];
 }
 
-function formatGiB(bytes: number): string {
-  return (bytes / (1024 * 1024 * 1024)).toFixed(2) + " GiB";
-}
-
-function formatGB(bytes: number): string {
-  return (bytes / (1024 * 1024 * 1024)).toFixed(2) + " GB";
-}
-
-// 格式化速度（字节/秒 转 Mbps）
+// 格式化网络速度
 function formatSpeed(bytesPerSecond: number): string {
-  const mbps = (bytesPerSecond * 8) / (1024 * 1024);
-  return mbps.toFixed(2) + " Mbps";
+  if (bytesPerSecond === 0) return "0 bps";
+  
+  // 转换为比特每秒
+  const bitsPerSecond = bytesPerSecond * 8;
+  
+  const units = [
+    { name: "bps", value: 1 },
+    { name: "Kbps", value: 1024 },
+    { name: "Mbps", value: 1024 * 1024 },
+    { name: "Gbps", value: 1024 * 1024 * 1024 }
+  ];
+  
+  // 找到最合适的单位
+  let unitIndex = 0;
+  for (let i = units.length - 1; i >= 0; i--) {
+    if (bitsPerSecond >= units[i].value) {
+      unitIndex = i;
+      break;
+    }
+  }
+  
+  const value = bitsPerSecond / units[unitIndex].value;
+  
+  // 根据值的大小决定小数位数
+  let decimals = 2;
+  if (value >= 100) decimals = 1;
+  if (value >= 1000) decimals = 0;
+  
+  return parseFloat(value.toFixed(decimals)) + " " + units[unitIndex].name;
 }
 
 // 格式化运行时间
@@ -213,9 +239,9 @@ async function getServerInfo(baseUrl: string): Promise<string> {
 
 **💾 资源统计**
 • **CPU 核心总数**: \`${totalCores}\`
-• **内存总量**: \`${formatGiB(totalMemory)}\`
-• **交换分区总量**: \`${formatGiB(totalSwap)}\`
-• **硬盘总量**: \`${formatGiB(totalDisk)}\``;
+• **内存总量**: \`${formatBytes(totalMemory)}\`
+• **交换分区总量**: \`${formatBytes(totalSwap)}\`
+• **硬盘总量**: \`${formatBytes(totalDisk)}\``;
 
   } catch (error: any) {
     throw new Error(`获取服务器信息失败: ${error.message}`);
@@ -323,13 +349,13 @@ async function getNodesOverview(baseUrl: string): Promise<string> {
 • **负载**: \`${avgLoad1.toFixed(2)} / ${avgLoad5.toFixed(2)} / ${avgLoad15.toFixed(2)}\`
 
 **💾 资源使用**
-• **内存**: \`${formatGB(totalMemUsed)} / ${formatGB(totalMemTotal)}\` (\`${memPercent}%\`)
-• **交换分区**: \`${formatGB(totalSwapUsed)} / ${formatGB(totalSwapTotal)}\` (\`${swapPercent}%\`)
-• **硬盘**: \`${formatGB(totalDiskUsed)} / ${formatGB(totalDiskTotal)}\` (\`${diskPercent}%\`)
+• **内存**: \`${formatBytes(totalMemUsed)} / ${formatBytes(totalMemTotal)}\` (\`${memPercent}%\`)
+• **交换分区**: \`${formatBytes(totalSwapUsed)} / ${formatBytes(totalSwapTotal)}\` (\`${swapPercent}%\`)
+• **硬盘**: \`${formatBytes(totalDiskUsed)} / ${formatBytes(totalDiskTotal)}\` (\`${diskPercent}%\`)
 
 **🌍 网络统计**
-• **总下载**: \`${formatGB(totalDownload)}\`
-• **总上传**: \`${formatGB(totalUpload)}\`
+• **总下载**: \`${formatBytes(totalDownload)}\`
+• **总上传**: \`${formatBytes(totalUpload)}\`
 • **下载速度**: \`${formatSpeed(totalDownSpeed)}\`
 • **上传速度**: \`${formatSpeed(totalUpSpeed)}\`
 • **连接数**: \`${totalTcpConnections} TCP / ${totalUdpConnections} UDP\``;
@@ -372,20 +398,21 @@ async function getNodeDetails(baseUrl: string, nodeName: string): Promise<string
     
     // 格式化数据
     const cpuUsage = (realtime.cpu?.usage || 0).toFixed(2);
-    const memUsed = (realtime.ram?.used || 0) / (1024 * 1024); // MB
-    const memTotal = (realtime.ram?.total || 0) / (1024 * 1024); // MB
+    
+    const memUsed = realtime.ram?.used || 0;
+    const memTotal = realtime.ram?.total || 0;
     const memPercent = memTotal > 0 ? ((memUsed / memTotal) * 100).toFixed(2) : "0.00";
     
-    const swapUsed = (realtime.swap?.used || 0) / (1024 * 1024); // MB
-    const swapTotal = (realtime.swap?.total || 0) / (1024 * 1024); // MB
+    const swapUsed = realtime.swap?.used || 0;
+    const swapTotal = realtime.swap?.total || 0;
     const swapPercent = swapTotal > 0 ? ((swapUsed / swapTotal) * 100).toFixed(2) : "0.00";
     
-    const diskUsed = (realtime.disk?.used || 0) / (1024 * 1024 * 1024); // GB
-    const diskTotal = (realtime.disk?.total || 0) / (1024 * 1024 * 1024); // GB
+    const diskUsed = realtime.disk?.used || 0;
+    const diskTotal = realtime.disk?.total || 0;
     const diskPercent = diskTotal > 0 ? ((diskUsed / diskTotal) * 100).toFixed(2) : "0.00";
     
-    const netDown = (realtime.network?.totalDown || 0) / (1024 * 1024 * 1024); // GB
-    const netUp = (realtime.network?.totalUp || 0) / (1024 * 1024 * 1024); // GB
+    const netDown = realtime.network?.totalDown || 0;
+    const netUp = realtime.network?.totalUp || 0;
     
     const upSpeed = formatSpeed(realtime.network?.up || 0);
     const downSpeed = formatSpeed(realtime.network?.down || 0);
@@ -409,16 +436,16 @@ async function getNodeDetails(baseUrl: string, nodeName: string): Promise<string
 
 **📊 资源使用**
 • **CPU**: \`${cpuUsage}%\`
-• **内存**: \`${memUsed.toFixed(2)} / ${memTotal.toFixed(2)} MB\` (\`${memPercent}%\`)
-• **交换分区**: \`${swapUsed.toFixed(2)} / ${swapTotal.toFixed(2)} MB\` (\`${swapPercent}%\`)
-• **硬盘**: \`${diskUsed.toFixed(2)} / ${diskTotal.toFixed(2)} GB\` (\`${diskPercent}%\`)
+• **内存**: \`${formatBytes(memUsed)} / ${formatBytes(memTotal)}\` (\`${memPercent}%\`)
+• **交换分区**: \`${formatBytes(swapUsed)} / ${formatBytes(swapTotal)}\` (\`${swapPercent}%\`)
+• **硬盘**: \`${formatBytes(diskUsed)} / ${formatBytes(diskTotal)}\` (\`${diskPercent}%\`)
 
 **📈 系统负载**
 • **负载**: \`${(realtime.load?.load1 || 0).toFixed(2)} / ${(realtime.load?.load5 || 0).toFixed(2)} / ${(realtime.load?.load15 || 0).toFixed(2)}\`
 • **进程数**: \`${realtime.process || 0}\`
 
 **🌐 网络状态**
-• **流量**: ↓ \`${netDown.toFixed(2)} GB\` / ↑ \`${netUp.toFixed(2)} GB\`
+• **流量**: ↓ \`${formatBytes(netDown)}\` / ↑ \`${formatBytes(netUp)}\`
 • **速度**: ↓ \`${downSpeed}\` / ↑ \`${upSpeed}\`
 • **连接数**: \`${realtime.connections?.tcp || 0} TCP / ${realtime.connections?.udp || 0} UDP\`
 
