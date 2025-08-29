@@ -4,6 +4,7 @@ import axios from "axios";
 import * as fs from "fs";
 import * as path from "path";
 import * as os from "os";
+import Database from "better-sqlite3";
 
 // 配置存储键名
 const CONFIG_KEYS = {
@@ -30,16 +31,106 @@ const DEFAULT_CONFIG = {
   [CONFIG_KEYS.GPT_COLLAPSE]: "false",
 };
 
-// 配置管理器
+// 数据库路径
+const CONFIG_DB_PATH = path.join((globalThis as any).process?.cwd?.() || ".", "assets", "gpt_config.db");
+
+// 确保assets目录存在
+if (!fs.existsSync(path.dirname(CONFIG_DB_PATH))) {
+  fs.mkdirSync(path.dirname(CONFIG_DB_PATH), { recursive: true });
+}
+
+// 配置管理器 - 使用SQLite数据库
 class ConfigManager {
-  private static storage: { [key: string]: string } = {};
+  private static db: Database.Database;
+  private static initialized = false;
+
+  // 初始化数据库
+  private static init(): void {
+    if (this.initialized) return;
+    
+    try {
+      this.db = new Database(CONFIG_DB_PATH);
+      this.db.exec(`
+        CREATE TABLE IF NOT EXISTS config (
+          key TEXT PRIMARY KEY,
+          value TEXT NOT NULL,
+          updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+      `);
+      this.initialized = true;
+    } catch (error) {
+      console.error("初始化配置数据库失败:", error);
+    }
+  }
 
   static get(key: string, defaultValue?: string): string {
-    return this.storage[key] || defaultValue || DEFAULT_CONFIG[key] || "";
+    this.init();
+    
+    try {
+      const stmt = this.db.prepare("SELECT value FROM config WHERE key = ?");
+      const row = stmt.get(key) as { value: string } | undefined;
+      
+      if (row) {
+        return row.value;
+      }
+    } catch (error) {
+      console.error("读取配置失败:", error);
+    }
+    
+    return defaultValue || DEFAULT_CONFIG[key] || "";
   }
 
   static set(key: string, value: string): void {
-    this.storage[key] = value;
+    this.init();
+    
+    try {
+      const stmt = this.db.prepare(`
+        INSERT OR REPLACE INTO config (key, value, updated_at) 
+        VALUES (?, ?, CURRENT_TIMESTAMP)
+      `);
+      stmt.run(key, value);
+    } catch (error) {
+      console.error("保存配置失败:", error);
+    }
+  }
+
+  // 获取所有配置
+  static getAll(): { [key: string]: string } {
+    this.init();
+    
+    try {
+      const stmt = this.db.prepare("SELECT key, value FROM config");
+      const rows = stmt.all() as { key: string; value: string }[];
+      
+      const config: { [key: string]: string } = {};
+      rows.forEach(row => {
+        config[row.key] = row.value;
+      });
+      
+      return config;
+    } catch (error) {
+      console.error("读取所有配置失败:", error);
+      return {};
+    }
+  }
+
+  // 删除配置
+  static delete(key: string): void {
+    this.init();
+    
+    try {
+      const stmt = this.db.prepare("DELETE FROM config WHERE key = ?");
+      stmt.run(key);
+    } catch (error) {
+      console.error("删除配置失败:", error);
+    }
+  }
+
+  // 关闭数据库连接
+  static close(): void {
+    if (this.db) {
+      this.db.close();
+    }
   }
 }
 
@@ -644,20 +735,15 @@ GPT 助手插件：
 直接提问或回复一条消息（自动识别图片）
 
 配置命令：
-• gpt _set_key <API密钥> - 设置API密钥
-• gpt _set_api <API地址> - 设置API地址（默认: https://api.openai.com）
-• gpt _set_model <模型名> - 设置文本模型（默认: gpt-4o）
-• gpt _set_vision_model <模型名> - 设置图像识别模型（默认: gpt-4o）
-• gpt _set_image_upload <true/false> - 启用图片上传（默认: false）
-• gpt _set_web_search <true/false> - 启用Web搜索（默认: false）
-• gpt _set_auto_remove <true/false> - 自动删除空提问（默认: false）
-• gpt _set_max_tokens <数量> - 设置最大Token数（-1表示不限制，默认: 888）
-• gpt _set_collapse <true/false> - 启用折叠引用（默认: false）
-
-使用示例：
-1. gpt 什么是人工智能？
-2. 回复一条消息后使用 gpt
-3. 发送图片并使用 gpt 描述图片内容
+• \`gpt _set_key <API密钥>\` - 设置API密钥
+• \`gpt _set_api <API地址>\` - 设置API地址（默认: https://api.openai.com）
+• \`gpt _set_model <模型名>\` - 设置文本模型（默认: gpt-4o）
+• \`gpt _set_vision_model <模型名>\` - 设置图像识别模型（默认: gpt-4o）
+• \`gpt _set_image_upload <true/false>\` - 启用图片上传（默认: false）
+• \`gpt _set_web_search <true/false>\` - 启用Web搜索（默认: false）
+• \`gpt _set_auto_remove <true/false>\` - 自动删除空提问（默认: false）
+• \`gpt _set_max_tokens <数量>\` - 设置最大Token数（-1表示不限制，默认: 888）
+• \`gpt _set_collapse <true/false>\` - 启用折叠引用（默认: false）
   `,
   cmdHandler: handleGptRequest,
 };

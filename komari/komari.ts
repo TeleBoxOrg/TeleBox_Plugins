@@ -1,6 +1,9 @@
 import { Plugin } from "@utils/pluginBase";
 import { Api } from "telegram";
 import axios from "axios";
+import Database from "better-sqlite3";
+import * as fs from "fs";
+import * as path from "path";
 
 // 配置存储键名
 const CONFIG_KEYS = {
@@ -8,16 +11,106 @@ const CONFIG_KEYS = {
   KOMARI_TOKEN: "komari_token",
 };
 
-// 配置管理器
+// 数据库路径
+const CONFIG_DB_PATH = path.join((globalThis as any).process?.cwd?.() || ".", "assets", "komari_config.db");
+
+// 确保assets目录存在
+if (!fs.existsSync(path.dirname(CONFIG_DB_PATH))) {
+  fs.mkdirSync(path.dirname(CONFIG_DB_PATH), { recursive: true });
+}
+
+// 配置管理器 - 使用SQLite数据库
 class ConfigManager {
-  private static storage: { [key: string]: string } = {};
+  private static db: Database.Database;
+  private static initialized = false;
+
+  // 初始化数据库
+  private static init(): void {
+    if (this.initialized) return;
+    
+    try {
+      this.db = new Database(CONFIG_DB_PATH);
+      this.db.exec(`
+        CREATE TABLE IF NOT EXISTS config (
+          key TEXT PRIMARY KEY,
+          value TEXT NOT NULL,
+          updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+      `);
+      this.initialized = true;
+    } catch (error) {
+      console.error("初始化Komari配置数据库失败:", error);
+    }
+  }
 
   static get(key: string, defaultValue?: string): string {
-    return this.storage[key] || defaultValue || "";
+    this.init();
+    
+    try {
+      const stmt = this.db.prepare("SELECT value FROM config WHERE key = ?");
+      const row = stmt.get(key) as { value: string } | undefined;
+      
+      if (row) {
+        return row.value;
+      }
+    } catch (error) {
+      console.error("读取Komari配置失败:", error);
+    }
+    
+    return defaultValue || "";
   }
 
   static set(key: string, value: string): void {
-    this.storage[key] = value;
+    this.init();
+    
+    try {
+      const stmt = this.db.prepare(`
+        INSERT OR REPLACE INTO config (key, value, updated_at) 
+        VALUES (?, ?, CURRENT_TIMESTAMP)
+      `);
+      stmt.run(key, value);
+    } catch (error) {
+      console.error("保存Komari配置失败:", error);
+    }
+  }
+
+  // 获取所有配置
+  static getAll(): { [key: string]: string } {
+    this.init();
+    
+    try {
+      const stmt = this.db.prepare("SELECT key, value FROM config");
+      const rows = stmt.all() as { key: string; value: string }[];
+      
+      const config: { [key: string]: string } = {};
+      rows.forEach(row => {
+        config[row.key] = row.value;
+      });
+      
+      return config;
+    } catch (error) {
+      console.error("读取所有Komari配置失败:", error);
+      return {};
+    }
+  }
+
+  // 删除配置
+  static delete(key: string): void {
+    this.init();
+    
+    try {
+      const stmt = this.db.prepare("DELETE FROM config WHERE key = ?");
+      stmt.run(key);
+    } catch (error) {
+      console.error("删除Komari配置失败:", error);
+    }
+  }
+
+  // 关闭数据库连接
+  static close(): void {
+    if (this.db) {
+      this.db.close();
+    }
   }
 }
 
