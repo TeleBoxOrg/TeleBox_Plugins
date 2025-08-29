@@ -43,6 +43,34 @@
   "search": {
     "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/search/search.ts?raw=true"
   },
+  "music": {
+    "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/music/music.ts?raw=true",
+    "author": "EALyce"
+  },
+  "clean_member": {
+    "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/clean_member/clean_member.ts?raw=true",
+    "author": "EALyce"
+  },
+  "speednext": {
+    "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/speednext/speednext.ts?raw=true",
+    "author": "EALyce"
+  },
+  "shift": {
+    "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/shift/shift.ts?raw=true",
+    "author": "EALyce"
+  },
+  "bf": {
+    "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/bf/bf.ts?raw=true",
+    "author": "EALyce"
+  },
+  "da": {
+    "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/da/da.ts?raw=true",
+    "author": "EALyce"
+  },
+  "dc": {
+    "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/dc/dc.ts?raw=true",
+    "author": "EALyce"
+  },
   "gpt": {
     "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/gpt/gpt.ts?raw=true",
     "author": "JohnsonRan"
