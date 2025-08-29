@@ -46,4 +46,9 @@
   "music": {
     "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/music/music.ts?raw=true",
     "author": "EALyce"
+  },
+  "clean_member": {
+    "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/clean_member/clean_member.ts?raw=true",
+    "author": "EALyce"
+  }
 }
