@@ -42,5 +42,8 @@
   },
   "search": {
     "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/search/search.ts?raw=true"
-  }
+  },
+  "music": {
+    "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/music/music.ts?raw=true",
+    "author": "EALyce"
 }
