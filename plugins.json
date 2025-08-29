@@ -66,5 +66,9 @@
   "da": {
     "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/da/da.ts?raw=true",
     "author": "EALyce"
+  },
+  "dc": {
+    "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/dc/dc.ts?raw=true",
+    "author": "EALyce"
   }
 }
