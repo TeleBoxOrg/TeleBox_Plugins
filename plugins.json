@@ -54,5 +54,9 @@
   "speednext": {
     "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/speednext/speednext.ts?raw=true",
     "author": "EALyce"
+  },
+  "shift": {
+    "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/shift/shift.ts?raw=true",
+    "author": "EALyce"
   }
 }
