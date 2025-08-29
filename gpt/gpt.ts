@@ -436,7 +436,8 @@ function formatResponse(question: string, answer: string): string {
   if (question.trim()) {
     // 添加问题部分
     finalText += "<b>Q:</b>\n";
-    finalText += `<blockquote>${htmlEscape(question)}</blockquote>\n\n`;
+    const htmlQuestion = markdownToHtml(question);
+    finalText += `<blockquote>${htmlQuestion}</blockquote>\n\n`;
   }
 
   // 添加回答部分
