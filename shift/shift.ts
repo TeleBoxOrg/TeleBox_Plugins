@@ -6,6 +6,8 @@
 import { Plugin } from "@utils/pluginBase";
 import { Api } from "telegram";
 import { getGlobalClient } from "@utils/globalClient";
+import { TelegramClient } from "telegram";
+import { createDirectoryInAssets } from "@utils/pathHelpers";
 import * as fs from "fs";
 import * as path from "path";
 const BigInteger = require("big-integer");
@@ -80,7 +82,7 @@ const HELP_TEXT = `📢 **智能转发助手使用说明**
 • \`shift filter 1 add 广告\``;
 
 // 数据存储路径
-const SHIFT_DATA_PATH = path.join(process.cwd(), "assets", "shift_rules.json");
+const SHIFT_DATA_PATH = path.join(createDirectoryInAssets("shift"), "shift_rules.json");
 
 class ShiftManager {
   private rules: Map<number, ForwardRule> = new Map();
@@ -93,10 +95,8 @@ class ShiftManager {
 
   // 确保数据目录存在
   private ensureDataDirectory(): void {
-    const dataDir = path.dirname(SHIFT_DATA_PATH);
-    if (!fs.existsSync(dataDir)) {
-      fs.mkdirSync(dataDir, { recursive: true });
-    }
+    // createDirectoryInAssets already ensures directory exists
+    // No additional action needed
   }
 
   // 加载规则数据
@@ -312,21 +312,33 @@ async function cacheDialogEntities(): Promise<void> {
 
   try {
     const client = await getGlobalClient();
-    const dialogs = await client.getDialogs({ limit: 100 });
+    const dialogs = await client.getDialogs({ limit: 200 }); // 增加获取数量
     
     for (const dialog of dialogs) {
       const entity = dialog.entity;
       if (entity && 'id' in entity) {
         let entityId = Number(entity.id);
+        let originalId = entityId;
         
-        // 处理频道ID格式转换
-        if ('megagroup' in entity || 'broadcast' in entity) {
-          entityId = -1000000000000 - entityId;
-        } else if ('id' in entity && entityId > 0 && !('firstName' in entity)) {
-          entityId = -entityId;
+        // 根据实体类型正确转换ID格式
+        if (entity.className === 'Channel') {
+          // 频道或超级群组
+          entityId = -1000000000000 - originalId;
+        } else if (entity.className === 'Chat') {
+          // 普通群组
+          entityId = -originalId;
+        } else if (entity.className === 'User') {
+          // 用户保持正数
+          entityId = originalId;
         }
         
+        // 同时缓存原始ID和转换后的ID
         entityInfoCache.set(entityId, entity);
+        entityInfoCache.set(originalId, entity);
+        
+        const username = ('username' in entity) ? entity.username : 'none';
+        const displayInfo = ('title' in entity) ? entity.title : (('firstName' in entity) ? entity.firstName : 'none');
+        console.log(`Cached entity: ${entity.className} ${originalId} -> ${entityId}, username: ${username || 'none'}, title: ${displayInfo || 'none'}`);
       }
     }
     
@@ -797,6 +809,7 @@ async function parseEntityId(entityArg: string, msg: Api.Message): Promise<numbe
   try {
     // 处理特殊关键词
     if (entityArg === 'me' || entityArg === 'here') {
+      if (!msg.peerId) return null;
       // 从 peerId 中提取数字ID
       if ('userId' in msg.peerId) {
         return Number(msg.peerId.userId);
@@ -867,12 +880,26 @@ async function getDisplayName(entityId: number): Promise<string> {
   // 先尝试预缓存对话实体
   await cacheDialogEntities();
 
-  // 检查是否在对话缓存中
-  const cachedEntity = entityInfoCache.get(entityId);
+  // 检查是否在对话缓存中（尝试多种ID格式）
+  let cachedEntity = entityInfoCache.get(entityId);
+  
+  // 如果直接查找失败，尝试其他ID格式
+  if (!cachedEntity) {
+    if (entityId < -1000000000000) {
+      // 频道格式，尝试原始ID
+      const originalId = Math.abs(entityId + 1000000000000);
+      cachedEntity = entityInfoCache.get(originalId);
+    } else if (entityId < 0) {
+      // 群组格式，尝试原始ID
+      const originalId = Math.abs(entityId);
+      cachedEntity = entityInfoCache.get(originalId);
+    }
+  }
+  
   if (cachedEntity) {
     let displayName = '';
     
-    // 有用户名就只显示用户名，没有就显示ID
+    // 优先显示用户名，其次标题，最后名字
     if ('username' in cachedEntity && cachedEntity.username) {
       displayName = `@${cachedEntity.username}`;
     } else if ('title' in cachedEntity && cachedEntity.title) {
@@ -883,6 +910,8 @@ async function getDisplayName(entityId: number): Promise<string> {
       displayName = `ID: ${entityId}`;
     }
     
+    console.log(`Display name resolved from cache: ${entityId} -> ${displayName}`);
+    
     // 缓存结果
     entityCache.set(entityId, { name: displayName, timestamp: Date.now() });
     return displayName;
@@ -892,20 +921,22 @@ async function getDisplayName(entityId: number): Promise<string> {
     const client = await getGlobalClient();
     let actualId = entityId;
     
-    // 转换ID格式
+    // 转换ID格式用于API调用
     if (entityId < -1000000000000) {
       actualId = Math.abs(entityId + 1000000000000);
     } else if (entityId < 0) {
       actualId = Math.abs(entityId);
     }
 
+    console.log(`Attempting to get entity: ${entityId} -> ${actualId}`);
+    
     // 尝试获取实体
     const entity = await client.getEntity(actualId);
     
     if (entity) {
       let displayName = '';
       
-      // 有用户名就只显示用户名，没有就显示ID
+      // 优先显示用户名，其次标题，最后名字
       if ('username' in entity && entity.username) {
         displayName = `@${entity.username}`;
       } else if ('title' in entity && entity.title) {
@@ -916,16 +947,20 @@ async function getDisplayName(entityId: number): Promise<string> {
         displayName = `ID: ${entityId}`;
       }
       
-      // 缓存结果
+      console.log(`Display name resolved from API: ${entityId} -> ${displayName}`);
+      
+      // 缓存结果和实体
       entityCache.set(entityId, { name: displayName, timestamp: Date.now() });
+      entityInfoCache.set(entityId, entity);
       return displayName;
     }
-  } catch (error) {
-    // 静默处理错误，不输出日志
+  } catch (error: any) {
+    console.warn(`Failed to get entity ${entityId}:`, error.message || error);
   }
 
-  // 降级方案：只显示ID
+  // 降级方案：显示ID
   const fallbackName = `ID: ${entityId}`;
+  console.log(`Using fallback name: ${entityId} -> ${fallbackName}`);
   entityCache.set(entityId, { name: fallbackName, timestamp: Date.now() });
   return fallbackName;
 }
@@ -936,6 +971,9 @@ async function handleMessageForwarding(msg: Api.Message): Promise<void> {
     // 获取消息来源ID
     const sourceId = getSourceId(msg);
     if (!sourceId) return;
+    
+    // 跳过自己发送的消息，避免循环
+    if (msg.out) return;
 
     // 获取转发规则
     const rule = shiftManager.getRule(sourceId);
@@ -969,6 +1007,8 @@ async function handleMessageForwarding(msg: Api.Message): Promise<void> {
 // 获取消息来源ID
 function getSourceId(msg: Api.Message): number | null {
   try {
+    if (!msg.peerId) return null;
+    
     if ('userId' in msg.peerId) {
       return Number(msg.peerId.userId);
     } else if ('chatId' in msg.peerId) {
@@ -992,10 +1032,10 @@ function shouldForwardMessage(msg: Api.Message, options: MessageType[]): boolean
 
   // 检查媒体类型
   if (msg.media) {
-    if (msg.photo && options.includes('photo')) return true;
-    if (msg.video && options.includes('video')) return true;
-    if (msg.document) {
-      const doc = msg.document;
+    if ('photo' in msg.media && options.includes('photo')) return true;
+    if ('video' in msg.media && options.includes('video')) return true;
+    if ('document' in msg.media && msg.media.document) {
+      const doc = msg.media.document;
       if ('mimeType' in doc && doc.mimeType) {
         if (doc.mimeType.startsWith('image/') && options.includes('photo')) return true;
         if (doc.mimeType.startsWith('video/') && options.includes('video')) return true;
@@ -1005,9 +1045,9 @@ function shouldForwardMessage(msg: Api.Message, options: MessageType[]): boolean
         if (options.includes('document')) return true;
       }
     }
-    if (msg.voice && options.includes('voice')) return true;
-    if (msg.audio && options.includes('audio')) return true;
-    if (msg.sticker && options.includes('sticker')) return true;
+    if ('voice' in msg.media && options.includes('voice')) return true;
+    if ('audio' in msg.media && options.includes('audio')) return true;
+    if ('sticker' in msg.media && options.includes('sticker')) return true;
   }
 
   // 检查文本消息
@@ -1088,7 +1128,7 @@ async function forwardMessage(msg: Api.Message, rule: ForwardRule): Promise<void
           sendOptions.file = msg.media;
           // 复制媒体标题
           if ('caption' in msg.media && msg.media.caption) {
-            sendOptions.caption = msg.media.caption;
+            sendOptions.caption = String(msg.media.caption);
           }
         }
         
