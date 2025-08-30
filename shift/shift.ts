@@ -1,70 +1,275 @@
-/**
- * Shift plugin for TeleBox - Smart Message Forwarding
- * Converted from PagerMaid-Modify shift.py
- */
-
 import { Plugin } from "@utils/pluginBase";
-import { Api } from "telegram";
+import path from "path";
+import Database from "better-sqlite3";
+import { createDirectoryInAssets } from "@utils/pathHelpers";
 import { getGlobalClient } from "@utils/globalClient";
 import { TelegramClient } from "telegram";
-import { createDirectoryInAssets } from "@utils/pathHelpers";
-import * as fs from "fs";
-import path from "path";
+import { NewMessage, NewMessageEvent } from "telegram/events";
+import { Api } from "telegram/tl";
 
-// HTML escape function
-function htmlEscape(text: string): string {
-  return text
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#x27;");
+// Available message types
+const AVAILABLE_OPTIONS = new Set(["silent", "text", "all", "photo", "document", "video", "sticker", "animation", "voice", "audio"]);
+
+// Initialize database
+let db = new Database(
+  path.join(createDirectoryInAssets("shift"), "shift.db")
+);
+
+// Initialize database tables
+if (db) {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS shift_rules (
+      source_id INTEGER PRIMARY KEY,
+      target_id INTEGER NOT NULL,
+      options TEXT NOT NULL,
+      target_type TEXT NOT NULL,
+      paused INTEGER DEFAULT 0,
+      created_at TEXT NOT NULL,
+      filters TEXT NOT NULL
+    )
+  `);
+  
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS shift_stats (
+      stats_key TEXT PRIMARY KEY,
+      stats_data TEXT NOT NULL
+    )
+  `);
 }
 
-// 基本类型定义
-type MessageType = "silent" | "text" | "all" | "photo" | "document" | "video" | "sticker" | "animation" | "voice" | "audio";
-
-interface ForwardRule {
+// Rule interface
+interface ShiftRule {
   target_id: number;
-  options: MessageType[];
+  options: string[];
   target_type: string;
   paused: boolean;
   created_at: string;
   filters: string[];
-  migrated?: boolean;
-  source_name?: string;  // 存储源的原始用户名
-  target_name?: string;  // 存储目标的原始用户名
 }
 
-interface ForwardStats {
-  total_forwarded: number;
-  last_forward_time: string;
-  error_count: number;
-  daily_stats: { [date: string]: number }; // 每日转发统计
+// Cache for rules
+const ruleCache = new Map<number, { rule: ShiftRule | null; timestamp: number }>();
+const RULE_CACHE_TTL = 5 * 60 * 1000;
+
+// Get shift rule from database
+async function getShiftRule(sourceId: number): Promise<ShiftRule | null> {
+  const now = Date.now();
+  const cached = ruleCache.get(sourceId);
+  
+  if (cached && (now - cached.timestamp) < RULE_CACHE_TTL) {
+    return cached.rule;
+  }
+  
+  if (!db) return null;
+  
+  try {
+    const stmt = db.prepare("SELECT * FROM shift_rules WHERE source_id = ?");
+    const row = stmt.get(sourceId) as any;
+    
+    if (!row) {
+      ruleCache.set(sourceId, { rule: null, timestamp: now });
+      return null;
+    }
+    
+    const rule: ShiftRule = {
+      target_id: row.target_id,
+      options: JSON.parse(row.options || "[]"),
+      target_type: row.target_type,
+      paused: row.paused === 1,
+      created_at: row.created_at,
+      filters: JSON.parse(row.filters || "[]")
+    };
+    
+    ruleCache.set(sourceId, { rule, timestamp: now });
+    return rule;
+  } catch (error) {
+    console.error(`[SHIFT] Error getting rule for ${sourceId}:`, error);
+    return null;
+  }
 }
 
-interface RuleStats {
-  [ruleKey: string]: ForwardStats; // 每个规则的独立统计
+// Save shift rule
+function saveShiftRule(sourceId: number, rule: ShiftRule): boolean {
+  if (!db) return false;
+  
+  try {
+    const stmt = db.prepare(`
+      INSERT OR REPLACE INTO shift_rules 
+      (source_id, target_id, options, target_type, paused, created_at, filters)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+    `);
+    
+    stmt.run(
+      sourceId,
+      rule.target_id,
+      JSON.stringify(rule.options),
+      rule.target_type,
+      rule.paused ? 1 : 0,
+      rule.created_at,
+      JSON.stringify(rule.filters)
+    );
+    
+    ruleCache.set(sourceId, { rule, timestamp: Date.now() });
+    return true;
+  } catch (error) {
+    console.error(`[SHIFT] Error saving rule:`, error);
+    return false;
+  }
 }
 
-// 配置常量
-const AVAILABLE_OPTIONS: Set<MessageType> = new Set([
-  "silent", "text", "all", "photo", "document", "video", 
-  "sticker", "animation", "voice", "audio"
-]);
+// Delete shift rule
+function deleteShiftRule(sourceId: number): boolean {
+  if (!db) return false;
+  
+  try {
+    const stmt = db.prepare("DELETE FROM shift_rules WHERE source_id = ?");
+    stmt.run(sourceId);
+    ruleCache.delete(sourceId);
+    return true;
+  } catch (error) {
+    console.error(`[SHIFT] Error deleting rule:`, error);
+    return false;
+  }
+}
 
-// 实体显示名称缓存
-const entityCache = new Map<number, { name: string; timestamp: number }>();
-const CACHE_DURATION = 5 * 60 * 1000; // 5分钟缓存
+// Get all rules
+function getAllShiftRules(): Array<{ sourceId: number; rule: ShiftRule }> {
+  if (!db) return [];
+  
+  try {
+    const stmt = db.prepare("SELECT * FROM shift_rules");
+    const rows = stmt.all() as any[];
+    
+    return rows.map(row => ({
+      sourceId: row.source_id,
+      rule: {
+        target_id: row.target_id,
+        options: JSON.parse(row.options || "[]"),
+        target_type: row.target_type,
+        paused: row.paused === 1,
+        created_at: row.created_at,
+        filters: JSON.parse(row.filters || "[]")
+      }
+    }));
+  } catch (error) {
+    console.error("[SHIFT] Error getting all rules:", error);
+    return [];
+  }
+}
 
-// 实体信息缓存 - 存储从 getDialogs 获取的实体
-const entityInfoCache = new Map<number, any>();
-let lastDialogsFetch = 0;
-const DIALOGS_CACHE_DURATION = 10 * 60 * 1000; // 10分钟缓存对话列表
+// Utility functions
+function getDisplayName(entity: any): string {
+  if (!entity) return "未知实体";
+  if (entity.username) return `@${entity.username}`;
+  if (entity.firstName) return entity.firstName;
+  if (entity.title) return entity.title;
+  return `ID: ${entity.id}`;
+}
 
+function normalizeChatId(entityOrId: any): number {
+  if (typeof entityOrId === 'object' && entityOrId.id) {
+    const chatId = Number(entityOrId.id);
+    if (entityOrId.className === 'Channel') {
+      return chatId > 0 ? -1000000000000 - chatId : chatId;
+    } else if (entityOrId.className === 'Chat' && chatId > 0) {
+      return -chatId;
+    }
+    return chatId;
+  } else {
+    const chatId = Number(entityOrId);
+    if (chatId > 1000000000) {
+      return -1000000000000 - chatId;
+    }
+    return chatId;
+  }
+}
+
+function getTargetTypeEmoji(entity: any): string {
+  if (!entity) return "❓";
+  if (entity.className === 'User') return entity.bot ? "🤖" : "👤";
+  if (entity.className === 'Channel') return entity.broadcast ? "📢" : "👥";
+  if (entity.className === 'Chat') return "👥";
+  return "❓";
+}
+
+function parseIndices(indicesStr: string, total: number): { indices: number[]; invalid: string[] } {
+  const indices: number[] = [];
+  const invalid: string[] = [];
+  
+  for (const i of indicesStr.split(',')) {
+    try {
+      const idx = parseInt(i.trim()) - 1;
+      if (idx >= 0 && idx < total) {
+        indices.push(idx);
+      } else {
+        invalid.push(i.trim());
+      }
+    } catch (error) {
+      invalid.push(i.trim());
+    }
+  }
+  
+  return { indices, invalid };
+}
+
+function getMediaType(message: any): string {
+  if (message.photo) return "photo";
+  if (message.document) return "document";
+  if (message.video) return "video";
+  if (message.sticker) return "sticker";
+  if (message.animation) return "animation";
+  if (message.voice) return "voice";
+  if (message.audio) return "audio";
+  return "text";
+}
+
+async function resolveTarget(client: TelegramClient, targetInput: string, currentChatId: number): Promise<any> {
+  if (targetInput.toLowerCase() === "me" || targetInput.toLowerCase() === "here") {
+    return await client.getEntity(currentChatId);
+  }
+  
+  try {
+    const numericId = parseInt(targetInput);
+    if (!isNaN(numericId)) {
+      return await client.getEntity(numericId);
+    }
+  } catch (error) {
+    // Fall through to username
+  }
+  
+  return await client.getEntity(targetInput);
+}
+
+async function isCircularForward(sourceId: number, targetId: number): Promise<{ isCircular: boolean; message: string }> {
+  if (sourceId === targetId) {
+    return { isCircular: true, message: "不能设置自己到自己的转发规则" };
+  }
+  
+  const visited = new Set([sourceId]);
+  let currentId = targetId;
+  
+  for (let i = 0; i < 20; i++) {
+    if (visited.has(currentId)) {
+      return { isCircular: true, message: `检测到间接循环：${currentId}` };
+    }
+    
+    const rule = await getShiftRule(currentId);
+    if (!rule) break;
+    
+    const nextId = rule.target_id;
+    if (nextId === -1) break;
+    
+    visited.add(currentId);
+    currentId = nextId;
+  }
+  
+  return { isCircular: false, message: "" };
+}
+
+// Help text
 const HELP_TEXT = `📢 <b>智能转发助手使用说明</b>
 
-<b>🔧 基础命令：</b>
+🔧 <b>基础命令：</b>
 • <code>shift set [源] [目标] [选项...]</code> - 设置自动转发
 • <code>shift del [序号]</code> - 删除转发规则
 • <code>shift list</code> - 显示当前转发规则
@@ -72,1247 +277,602 @@ const HELP_TEXT = `📢 <b>智能转发助手使用说明</b>
 • <code>shift pause [序号]</code> - 暂停转发
 • <code>shift resume [序号]</code> - 恢复转发
 
-<b>🔍 过滤命令：</b>
+🔍 <b>过滤命令：</b>
 • <code>shift filter [序号] add [关键词]</code> - 添加过滤关键词
 • <code>shift filter [序号] del [关键词]</code> - 删除过滤关键词
 • <code>shift filter [序号] list</code> - 查看过滤列表
 
-<b>🎯 支持的目标类型：</b>
-• 频道/群组 - @username 或 -100...ID
-• 个人用户 - @username 或 user_id
-• 当前对话 - 使用 "me" 或 "here"
+🎯 <b>支持的目标类型：</b>
+• 频道/群组 - <code>@username</code> 或 <code>-100...ID</code>
+• 个人用户 - <code>@username</code> 或 <code>user_id</code>
+• 当前对话 - 使用 <code>"me"</code> 或 <code>"here"</code>
 
-<b>📝 消息类型选项：</b>
-• silent, text, photo, document, video, sticker, animation, voice, audio, all
+📝 <b>消息类型选项：</b>
+<code>silent</code>, <code>text</code>, <code>photo</code>, <code>document</code>, <code>video</code>, <code>sticker</code>, <code>animation</code>, <code>voice</code>, <code>audio</code>, <code>all</code>
 
-<b>💡 示例：</b>
+💡 <b>示例：</b>
 • <code>shift set @channel1 @channel2 silent photo</code>
 • <code>shift del 1</code>
 • <code>shift filter 1 add 广告</code>`;
 
-// 数据存储路径
-const SHIFT_DATA_PATH = path.join(createDirectoryInAssets("shift"), "shift_rules.json");
-
-class ShiftManager {
-  private rules: Map<number, ForwardRule> = new Map();
-  private stats: Map<string, ForwardStats> = new Map(); // 改为按规则键存储
-
-  constructor() {
-    this.ensureDataDirectory();
-    this.loadRules();
-  }
-
-  // 确保数据目录存在
-  private ensureDataDirectory(): void {
-    // createDirectoryInAssets already ensures directory exists
-    // No additional action needed
-  }
-
-  // 加载规则数据
-  private loadRules(): void {
-    try {
-      if (fs.existsSync(SHIFT_DATA_PATH)) {
-        const data = fs.readFileSync(SHIFT_DATA_PATH, 'utf-8');
-        const parsed = JSON.parse(data);
-        
-        // 加载规则
-        if (parsed.rules) {
-          for (const [sourceId, rule] of Object.entries(parsed.rules)) {
-            this.rules.set(parseInt(sourceId), rule as ForwardRule);
-          }
-        }
-        
-        // 加载统计
-        if (parsed.stats) {
-          for (const [ruleKey, stat] of Object.entries(parsed.stats)) {
-            this.stats.set(ruleKey, stat as ForwardStats);
-          }
-        }
-      }
-    } catch (error: any) {
-      console.error('Failed to load shift rules:', error);
-    }
-  }
-
-  // 保存规则数据
-  private saveRules(): void {
-    try {
-      const data = {
-        rules: Object.fromEntries(this.rules),
-        stats: Object.fromEntries(this.stats),
-        updated_at: new Date().toISOString()
-      };
-      fs.writeFileSync(SHIFT_DATA_PATH, JSON.stringify(data, null, 2));
-    } catch (error: any) {
-      console.error('Failed to save shift rules:', error);
-    }
-  }
-
-  // 获取转发规则
-  getRule(sourceId: number): ForwardRule | null {
-    return this.rules.get(sourceId) || null;
-  }
-
-  // 设置转发规则
-  setRule(sourceId: number, rule: ForwardRule): void {
-    this.rules.set(sourceId, rule);
-    
-    // 初始化统计数据
-    const ruleKey = `${sourceId}_${rule.target_id}`;
-    if (!this.stats.has(ruleKey)) {
-      this.stats.set(ruleKey, {
-        total_forwarded: 0,
-        last_forward_time: new Date().toISOString(),
-        error_count: 0,
-        daily_stats: {}
-      });
-    }
-    
-    this.saveRules();
-  }
-
-  // 删除转发规则
-  deleteRule(sourceId: number): boolean {
-    const rule = this.rules.get(sourceId);
-    const deleted = this.rules.delete(sourceId);
-    if (deleted && rule) {
-      const ruleKey = `${sourceId}_${rule.target_id}`;
-      this.stats.delete(ruleKey);
-      this.saveRules();
-    }
-    return deleted;
-  }
-
-  // 获取所有规则
-  getAllRules(): Array<{ sourceId: number; rule: ForwardRule }> {
-    return Array.from(this.rules.entries()).map(([sourceId, rule]) => ({
-      sourceId,
-      rule
-    }));
-  }
-
-  // 检查循环转发
-  checkCircularForward(sourceId: number, targetId: number): { isCircular: boolean; reason: string } {
-    if (sourceId === targetId) {
-      return { isCircular: true, reason: "不能设置自己到自己的转发规则" };
-    }
-
-    const visited = new Set<number>([sourceId]);
-    let currentId = targetId;
-    
-    // 最多检查20层深度，防止无限循环
-    for (let i = 0; i < 20; i++) {
-      if (visited.has(currentId)) {
-        return { isCircular: true, reason: `检测到间接循环：${currentId}` };
-      }
-      
-      const rule = this.getRule(currentId);
-      if (!rule) {
-        break;
-      }
-      
-      const nextId = rule.target_id;
-      if (nextId === -1) {
-        break;
-      }
-      
-      visited.add(currentId);
-      currentId = nextId;
-    }
-    
-    return { isCircular: false, reason: "" };
-  }
-
-  // 暂停/恢复转发
-  toggleRule(sourceId: number, paused: boolean): boolean {
-    const rule = this.getRule(sourceId);
-    if (!rule) {
-      return false;
-    }
-    
-    rule.paused = paused;
-    this.setRule(sourceId, rule);
-    return true;
-  }
-
-  // 获取统计信息
-  getStats(sourceId: number, targetId: number): ForwardStats | null {
-    const ruleKey = `${sourceId}_${targetId}`;
-    return this.stats.get(ruleKey) || null;
-  }
-  
-  // 获取所有统计信息
-  getAllStats(): Array<{ ruleKey: string; stats: ForwardStats }> {
-    return Array.from(this.stats.entries()).map(([ruleKey, stats]) => ({
-      ruleKey,
-      stats
-    }));
-  }
-
-  // 添加过滤关键词
-  addFilter(sourceId: number, keyword: string): boolean {
-    const rule = this.rules.get(sourceId);
-    if (!rule) return false;
-    
-    if (!rule.filters.includes(keyword)) {
-      rule.filters.push(keyword);
-      this.setRule(sourceId, rule);
-    }
-    return true;
-  }
-
-  // 删除过滤关键词
-  removeFilter(sourceId: number, keyword: string): boolean {
-    const rule = this.rules.get(sourceId);
-    if (!rule) return false;
-    
-    const index = rule.filters.indexOf(keyword);
-    if (index > -1) {
-      rule.filters.splice(index, 1);
-      this.setRule(sourceId, rule);
-      return true;
-    }
-    return false;
-  }
-
-  // 获取过滤关键词列表
-  getFilters(sourceId: number): string[] {
-    const rule = this.rules.get(sourceId);
-    return rule ? rule.filters : [];
-  }
-
-  // 更新转发统计
-  updateStats(sourceId: number, targetId: number, success: boolean = true): void {
-    const ruleKey = `${sourceId}_${targetId}`;
-    let stats = this.stats.get(ruleKey);
-    
-    if (!stats) {
-      stats = {
-        total_forwarded: 0,
-        last_forward_time: new Date().toISOString(),
-        error_count: 0,
-        daily_stats: {}
-      };
-      this.stats.set(ruleKey, stats);
-    }
-    
-    if (success) {
-      stats.total_forwarded++;
-      stats.last_forward_time = new Date().toISOString();
-      
-      // 更新每日统计
-      const today = new Date().toISOString().split('T')[0];
-      stats.daily_stats[today] = (stats.daily_stats[today] || 0) + 1;
-      
-      console.log(`Stats updated for ${ruleKey}: total=${stats.total_forwarded}, today=${stats.daily_stats[today]}`);
-    } else {
-      stats.error_count++;
-      console.log(`Error stats updated for ${ruleKey}: errors=${stats.error_count}`);
-    }
-  }
-}
-
-// 预缓存对话实体信息
-async function cacheDialogEntities(): Promise<void> {
-  const now = Date.now();
-  if (now - lastDialogsFetch < DIALOGS_CACHE_DURATION) {
-    return; // 缓存仍然有效
-  }
-
-  try {
-    const client = await getGlobalClient();
-    const dialogs = await client.getDialogs({ limit: 200 }); // 增加获取数量
-    
-    for (const dialog of dialogs) {
-      const entity = dialog.entity;
-      if (entity && 'id' in entity) {
-        let entityId = Number(entity.id);
-        let originalId = entityId;
-        
-        // 根据实体类型正确转换ID格式
-        if (entity.className === 'Channel') {
-          // 频道或超级群组
-          entityId = -1000000000000 - originalId;
-        } else if (entity.className === 'Chat') {
-          // 普通群组
-          entityId = -originalId;
-        } else if (entity.className === 'User') {
-          // 用户保持正数
-          entityId = originalId;
-        }
-        
-        // 同时缓存原始ID和转换后的ID
-        entityInfoCache.set(entityId, entity);
-        entityInfoCache.set(originalId, entity);
-        
-        const username = ('username' in entity) ? entity.username : 'none';
-        const displayInfo = ('title' in entity) ? entity.title : (('firstName' in entity) ? entity.firstName : 'none');
-        console.log(`Cached entity: ${entity.className} ${originalId} -> ${entityId}, username: ${username || 'none'}, title: ${displayInfo || 'none'}`);
-      }
-    }
-    
-    lastDialogsFetch = now;
-    console.log(`Cached ${entityInfoCache.size} dialog entities`);
-  } catch (error: any) {
-    console.warn('Failed to cache dialog entities:', error);
-  }
-}
-
-// 全局管理器实例
-const shiftManager = new ShiftManager();
-
 const shiftPlugin: Plugin = {
   command: ["shift"],
-  description: "📢 智能转发助手 - 自动转发消息到指定频道/群组",
-  cmdHandler: async (msg: Api.Message) => {
-    const args = msg.message.slice(1).split(' ').slice(1);
-    const command = args[0] || '';
-
+  description: "智能转发助手 - 自动转发消息到指定目标",
+  listenMessageHandler: shiftMessageListener,
+  cmdHandler: async (msg) => {
     try {
-      switch (command) {
-        case 'set':
-          await handleSetCommand(msg, args);
-          break;
-        case 'del':
-        case 'delete':
-          await handleDeleteCommand(msg, args);
-          break;
-        case 'list':
-          await handleListCommand(msg);
-          break;
-        case 'stats':
-          await handleStatsCommand(msg);
-          break;
-        case 'pause':
-          await handlePauseCommand(msg, args);
-          break;
-        case 'resume':
-          await handleResumeCommand(msg, args);
-          break;
-        case 'filter':
-          await handleFilterCommand(msg, args);
-          break;
-        case 'help':
-        case '':
-          await msg.edit({ text: HELP_TEXT, parseMode: "html" });
-          break;
-        default:
-          await msg.edit({ text: "❌ <b>未知命令</b>\n\n使用 <code>shift help</code> 查看帮助", parseMode: "html" });
+      const args = msg.message.slice(1).split(" ").slice(1);
+      
+      if (args.length === 0) {
+        await msg.edit({
+          text: HELP_TEXT,
+          parseMode: "html",
+          linkPreview: false,
+        });
+        return;
       }
+      
+      const cmd = args[0];
+      
+      // Set command - create forwarding rule
+      if (cmd === "set") {
+        const params = args.slice(1);
+        if (params.length < 1) {
+          await msg.edit({
+            text: "参数不足\n\n用法: shift set <目标> [选项...]\n或: shift set <源> <目标> [选项...]"
+          });
+          return;
+        }
+        
+        let sourceInput: string;
+        let targetInput: string;
+        let options: Set<string>;
+        
+        if (params.length === 1) {
+          sourceInput = "here";
+          targetInput = params[0];
+          options = new Set();
+        } else {
+          sourceInput = params[0];
+          targetInput = params[1];
+          options = new Set(params.slice(2).filter(opt => AVAILABLE_OPTIONS.has(opt)));
+        }
+        
+        // Resolve source
+        let source: any;
+        try {
+          if (!msg.client) {
+            await msg.edit({ text: "客户端未初始化" });
+            return;
+          }
+          
+          if (sourceInput.toLowerCase() === "here" || sourceInput.toLowerCase() === "me") {
+            const chatId = msg.chatId ? Number(msg.chatId.toString()) : 0;
+            source = await msg.client.getEntity(chatId);
+          } else {
+            const chatId = msg.chatId ? Number(msg.chatId.toString()) : 0;
+            source = await resolveTarget(msg.client, sourceInput, chatId);
+          }
+        } catch (error) {
+          await msg.edit({ text: `源对话无效: ${error}` });
+          return;
+        }
+        
+        // Resolve target
+        let target: any;
+        try {
+          if (!msg.client) {
+            await msg.edit({ text: "客户端未初始化" });
+            return;
+          }
+          const chatId = msg.chatId ? Number(msg.chatId.toString()) : 0;
+          target = await resolveTarget(msg.client, targetInput, chatId);
+        } catch (error) {
+          await msg.edit({ text: `目标对话无效: ${error}` });
+          return;
+        }
+        
+        const sourceId = normalizeChatId(source);
+        const targetId = normalizeChatId(target);
+        
+        // Check for circular forwarding
+        const { isCircular, message: circularMsg } = await isCircularForward(sourceId, targetId);
+        if (isCircular) {
+          await msg.edit({ text: `循环转发: ${circularMsg}` });
+          return;
+        }
+        
+        const rule: ShiftRule = {
+          target_id: targetId,
+          options: Array.from(options),
+          target_type: source.className === 'User' ? 'user' : 'chat',
+          paused: false,
+          created_at: new Date().toISOString(),
+          filters: []
+        };
+        
+        if (saveShiftRule(sourceId, rule)) {
+          await msg.edit({
+            text: `成功设置转发: ${getDisplayName(source)} -> ${getDisplayName(target)}`
+          });
+        } else {
+          await msg.edit({ text: "保存转发规则失败" });
+        }
+        return;
+      }
+      
+      // List command
+      if (cmd === "list") {
+        const allRules = getAllShiftRules();
+        if (allRules.length === 0) {
+          await msg.edit({
+            text: "🚫 暂无转发规则\n\n💡 使用 `shift set` 命令创建新的转发规则"
+          });
+          return;
+        }
+        
+        let output = `✨ 智能转发规则管理\n━━━━━━━━━━━━━━━━━━━━━━\n`;
+        
+        for (let i = 0; i < allRules.length; i++) {
+          const { sourceId, rule } = allRules[i];
+          const status = rule.paused ? "⏸️ 已暂停" : "▶️ 运行中";
+          
+          try {
+            if (!msg.client) continue;
+            const sourceEntity = await msg.client.getEntity(Number(sourceId));
+            const targetEntity = await msg.client.getEntity(Number(rule.target_id));
+            
+            output += `${i + 1}. ${status}\n`;
+            output += `   📤 源: ${getDisplayName(sourceEntity)}\n`;
+            output += `   📥 目标: ${getDisplayName(targetEntity)}\n`;
+            output += `   🎯 类型: ${rule.options.join(", ") || "all"}\n`;
+            output += `   🛡️ 过滤: ${rule.filters.length} 个关键词\n\n`;
+          } catch (error) {
+            output += `${i + 1}. ⚠️ 规则损坏 (${sourceId})\n\n`;
+          }
+        }
+        
+        await msg.edit({ text: output });
+        return;
+      }
+      
+      // Delete command
+      if (cmd === "del") {
+        if (args.length < 2) {
+          await msg.edit({ text: "请提供序号" });
+          return;
+        }
+        
+        const allRules = getAllShiftRules();
+        const { indices } = parseIndices(args[1], allRules.length);
+        
+        let deletedCount = 0;
+        for (const index of indices.sort((a, b) => b - a)) {
+          const { sourceId } = allRules[index];
+          if (deleteShiftRule(sourceId)) {
+            deletedCount++;
+          }
+        }
+        
+        await msg.edit({ text: `成功删除 ${deletedCount} 条规则。` });
+        return;
+      }
+      
+      // Pause/Resume commands
+      if (cmd === "pause" || cmd === "resume") {
+        if (args.length < 2) {
+          await msg.edit({ text: "请提供序号" });
+          return;
+        }
+        
+        const allRules = getAllShiftRules();
+        const { indices } = parseIndices(args[1], allRules.length);
+        const pause = cmd === "pause";
+        
+        let count = 0;
+        for (const index of indices) {
+          const { sourceId, rule } = allRules[index];
+          rule.paused = pause;
+          if (saveShiftRule(sourceId, rule)) {
+            count++;
+          }
+        }
+        
+        const action = pause ? "暂停" : "恢复";
+        await msg.edit({ text: `成功${action} ${count} 条规则。` });
+        return;
+      }
+      
+      // Stats command
+      if (cmd === "stats") {
+        if (!db) {
+          await msg.edit({ text: "数据库未初始化" });
+          return;
+        }
+        
+        try {
+          const stmt = db.prepare("SELECT * FROM shift_stats");
+          const rows = stmt.all() as any[];
+          
+          if (rows.length === 0) {
+            await msg.edit({ text: "📊 暂无转发统计数据" });
+            return;
+          }
+          
+          const channelStats: { [key: number]: { total: number; dates: { [key: string]: number } } } = {};
+          
+          for (const row of rows) {
+            try {
+              const parts = row.stats_key.split(".");
+              const sourceId = parseInt(parts[2]);
+              const date = parts[3];
+              
+              if (!channelStats[sourceId]) {
+                channelStats[sourceId] = { total: 0, dates: {} };
+              }
+              
+              const dailyStats = JSON.parse(row.stats_data);
+              const dailyTotal = dailyStats.total || 0;
+              channelStats[sourceId].total += dailyTotal;
+              channelStats[sourceId].dates[date] = dailyTotal;
+            } catch (error) {
+              continue;
+            }
+          }
+          
+          let output = "📊 转发统计报告\n\n";
+          for (const [sourceId, stats] of Object.entries(channelStats)) {
+            try {
+              if (!msg.client) continue;
+              const sourceEntity = await msg.client.getEntity(parseInt(sourceId));
+              output += `📤 源: ${getDisplayName(sourceEntity)}\n`;
+              output += `📈 总转发: ${stats.total} 条\n`;
+              
+              const recentDates = Object.keys(stats.dates).sort().reverse().slice(0, 7);
+              if (recentDates.length > 0) {
+                output += "📅 最近7天:\n";
+                for (const date of recentDates) {
+                  output += `  - ${date}: ${stats.dates[date]} 条\n`;
+                }
+              }
+              output += "\n";
+            } catch (error) {
+              output += `📤 源: ID ${sourceId}\n📈 总转发: ${stats.total} 条\n\n`;
+            }
+          }
+          
+          await msg.edit({ text: output });
+        } catch (error) {
+          await msg.edit({ text: `获取统计数据失败: ${error}` });
+        }
+        return;
+      }
+      
+      // Filter command
+      if (cmd === "filter") {
+        if (args.length < 3) {
+          await msg.edit({ text: "参数不足" });
+          return;
+        }
+        
+        const indicesStr = args[1];
+        const action = args[2];
+        const keywords = args.slice(3);
+        
+        const allRules = getAllShiftRules();
+        const { indices } = parseIndices(indicesStr, allRules.length);
+        
+        if (indices.length === 0) {
+          await msg.edit({ text: `无效的序号: ${indicesStr}` });
+          return;
+        }
+        
+        let updatedCount = 0;
+        for (const index of indices) {
+          const { sourceId, rule } = allRules[index];
+          const filters = new Set(rule.filters);
+          
+          if (action === 'add') {
+            keywords.forEach(keyword => filters.add(keyword));
+            rule.filters = Array.from(filters);
+            if (saveShiftRule(sourceId, rule)) {
+              updatedCount++;
+            }
+          } else if (action === 'del') {
+            keywords.forEach(keyword => filters.delete(keyword));
+            rule.filters = Array.from(filters);
+            if (saveShiftRule(sourceId, rule)) {
+              updatedCount++;
+            }
+          } else if (action === 'list') {
+            const filterList = rule.filters.length > 0 ? rule.filters : ["无过滤词"];
+            await msg.edit({
+              text: `规则 ${index + 1} 的过滤词：\n${filterList.map(f => `• ${f}`).join("\n")}`
+            });
+            return;
+          } else {
+            await msg.edit({ text: `无效的操作: ${action}，支持: add, del, list` });
+            return;
+          }
+        }
+        
+        if (action === 'add' || action === 'del') {
+          await msg.edit({ text: `已为 ${updatedCount} 条规则更新过滤词。` });
+        }
+        return;
+      }
+      
+      // Backup command
+      if (cmd === "backup") {
+        if (args.length < 3) {
+          await msg.edit({ text: "❌ 参数不足，请提供源和目标。" });
+          return;
+        }
+        
+        const sourceInput = args[1];
+        const targetInput = args[2];
+        
+        let source: any;
+        let target: any;
+        
+        try {
+          if (!msg.client) {
+            await msg.edit({ text: "客户端未初始化" });
+            return;
+          }
+          const chatId = msg.chatId ? Number(msg.chatId.toString()) : 0;
+          source = await resolveTarget(msg.client, sourceInput, chatId);
+          target = await resolveTarget(msg.client, targetInput, chatId);
+        } catch (error) {
+          await msg.edit({ text: `❌ 解析对话失败: ${error}` });
+          return;
+        }
+        
+        await msg.edit({
+          text: `🔄 开始备份从 ${getDisplayName(source)} 到 ${getDisplayName(target)} 的历史消息...`
+        });
+        
+        let count = 0;
+        let errorCount = 0;
+        
+        try {
+          if (!msg.client) {
+            await msg.edit({ text: "客户端未初始化" });
+            return;
+          }
+          const messages = await msg.client.getMessages(Number(source.id), { limit: 1000 });
+          
+          for (const message of messages) {
+            try {
+              await new Promise(resolve => setTimeout(resolve, Math.random() * 500 + 500));
+              if (msg.client) {
+                await msg.client.forwardMessages(Number(target.id), {
+                  messages: [Number(message.id)],
+                  fromPeer: Number(source.id)
+                });
+              }
+              count++;
+              
+              if (count % 50 === 0) {
+                await msg.edit({
+                  text: `🔄 备份进行中... 已处理 ${count} 条消息。`
+                });
+              }
+            } catch (error) {
+              errorCount++;
+              console.error("备份消息失败:", error);
+            }
+          }
+        } catch (error) {
+          await msg.edit({ text: `❌ 备份失败: ${error}` });
+          return;
+        }
+        
+        await msg.edit({
+          text: `✅ 备份完成！共处理 ${count} 条消息，失败 ${errorCount} 条。`
+        });
+        return;
+      }
+      
+      await msg.edit({ text: `未知命令: ${cmd}` });
+      
     } catch (error: any) {
-      console.error('Shift plugin error:', error);
-      const errorMessage = error.message || String(error);
-      const displayError = errorMessage.length > 100 ? errorMessage.substring(0, 100) + '...' : errorMessage;
-      await msg.edit({ 
-        text: `❌ <b>插件错误</b>\n\n<b>错误信息:</b> ${displayError}\n\n💡 <b>建议:</b> 请检查命令格式或联系管理员`, 
-        parseMode: "html" 
+      console.error("Shift plugin error:", error);
+      await msg.edit({
+        text: `❌ 操作失败：${error.message || error}`,
       });
-    }
-  },
-  
-  // 消息监听处理器 - 实现自动转发功能
-  listenMessageHandler: async (msg: Api.Message) => {
-    try {
-      await handleMessageForwarding(msg);
-    } catch (error: any) {
-      console.error('Message forwarding error:', error);
     }
   },
 };
 
-// 命令处理函数
-async function handleSetCommand(msg: Api.Message, args: string[]): Promise<void> {
-  if (args.length < 3) {
-    await msg.edit({ 
-      text: "❌ <b>参数不足</b>\n\n<b>用法:</b> <code>shift set [源] [目标] [选项...]</code>\n\n<b>示例:</b> <code>shift set @channel1 @channel2 silent photo</code>", 
-      parseMode: "html" 
-    });
-    return;
-  }
-
-  const sourceArg = args[1];
-  const targetArg = args[2];
-  const options = args.slice(3);
-
-  try {
-    // 解析源和目标
-    const sourceId = await parseEntityId(sourceArg, msg);
-    const targetId = await parseEntityId(targetArg, msg);
-
-    if (!sourceId || !targetId) {
-      await msg.edit({ 
-        text: "❌ <b>无法解析源或目标</b>\n\n请检查用户名或ID是否正确\n\n💡 <b>支持格式:</b>\n• @username\n• 数字ID\n• 'me' 或 'here' (当前对话)", 
-        parseMode: "html" 
-      });
-      return;
-    }
-
-    // 验证选项
-    const validOptions: MessageType[] = [];
-    for (const option of options) {
-      if (AVAILABLE_OPTIONS.has(option as MessageType)) {
-        validOptions.push(option as MessageType);
-      } else {
-        await msg.edit({ 
-          text: `❌ <b>无效选项:</b> <code>${option}</code>\n\n<b>可用选项:</b>\n${Array.from(AVAILABLE_OPTIONS).map(opt => `• <code>${opt}</code>`).join('\n')}`, 
-          parseMode: "html" 
-        });
-        return;
-      }
-    }
-
-    if (validOptions.length === 0) {
-      validOptions.push('all'); // 默认转发所有类型
-    }
-
-    // 检查循环转发
-    const circularCheck = shiftManager.checkCircularForward(sourceId, targetId);
-    if (circularCheck.isCircular) {
-      await msg.edit({ 
-        text: `❌ <b>循环转发检测</b>\n\n<b>错误原因:</b> ${circularCheck.reason}\n\n💡 <b>建议:</b> 请检查转发链路径`, 
-        parseMode: "html" 
-      });
-      return;
-    }
-
-    // 创建转发规则
-    const rule: ForwardRule = {
-      target_id: targetId,
-      options: validOptions,
-      target_type: 'chat',
-      paused: false,
-      created_at: new Date().toISOString(),
-      filters: [],
-      source_name: sourceArg,
-      target_name: targetArg
-    };
-
-    shiftManager.setRule(sourceId, rule);
-
-    // 构建显示名称，包含原始参数和ID
-    const sourceDisplay = `${sourceArg} (ID: ${sourceId})`;
-    const targetDisplay = `${targetArg} (ID: ${targetId})`;
-
-    await msg.edit({ 
-      text: `✅ <b>转发规则已设置</b>\n\n` +
-            `📤 <b>源:</b> ${sourceDisplay}\n` +
-            `📥 <b>目标:</b> ${targetDisplay}\n` +
-            `🎯 <b>类型:</b> ${validOptions.join(', ')}\n` +
-            `📅 <b>创建时间:</b> ${new Date().toLocaleString('zh-CN')}`,
-      parseMode: "html"
-    });
-
-  } catch (error: any) {
-    console.error('Set command error:', error);
-    const errorMessage = error.message || String(error);
-    const displayError = errorMessage.length > 100 ? errorMessage.substring(0, 100) + '...' : errorMessage;
-    await msg.edit({ 
-      text: `❌ <b>设置失败</b>\n\n<b>错误信息:</b> ${displayError}\n\n💡 <b>建议:</b> 请检查参数格式和权限`, 
-      parseMode: "html" 
-    });
-  }
-}
-
-async function handleDeleteCommand(msg: Api.Message, args: string[]): Promise<void> {
-  if (args.length < 2) {
-    await msg.edit({ 
-      text: "❌ <b>参数不足</b>\n\n<b>用法:</b> <code>shift del [序号]</code>\n\n使用 <code>shift list</code> 查看规则序号", 
-      parseMode: "html" 
-    });
-    return;
-  }
-
-  const indexArg = args[1];
-  const index = parseInt(indexArg) - 1; // 用户输入从1开始，数组从0开始
-
-  try {
-    const allRules = shiftManager.getAllRules();
-    
-    if (index < 0 || index >= allRules.length) {
-      await msg.edit({ 
-        text: `❌ <b>序号无效</b>\n\n请输入 1-${allRules.length} 之间的序号`,
-        parseMode: "html"
-      });
-      return;
-    }
-
-    const { sourceId, rule } = allRules[index];
-    const sourceDisplay = await getDisplayName(sourceId);
-    const targetDisplay = await getDisplayName(rule.target_id);
-
-    const deleted = shiftManager.deleteRule(sourceId);
-    
-    if (deleted) {
-      await msg.edit({ 
-        text: `✅ <b>转发规则已删除</b>\n\n` +
-              `📤 <b>源:</b> ${sourceDisplay}\n` +
-              `📥 <b>目标:</b> ${targetDisplay}`,
-        parseMode: "html"
-      });
-    } else {
-      await msg.edit({ 
-        text: "❌ <b>删除失败</b>\n\n规则可能已被删除", 
-        parseMode: "html" 
-      });
-    }
-
-  } catch (error: any) {
-    console.error('Delete command error:', error);
-    const errorMessage = error.message || String(error);
-    const displayError = errorMessage.length > 100 ? errorMessage.substring(0, 100) + '...' : errorMessage;
-    await msg.edit({ 
-      text: `❌ <b>删除失败</b>\n\n<b>错误信息:</b> ${displayError}`, 
-      parseMode: "html" 
-    });
-  }
-}
-
-async function handleListCommand(msg: Api.Message): Promise<void> {
-  try {
-    const allRules = shiftManager.getAllRules();
-    
-    if (allRules.length === 0) {
-      await msg.edit({ 
-        text: "📋 <b>转发规则列表</b>\n\n暂无转发规则\n\n使用 <code>shift set</code> 添加规则", 
-        parseMode: "html" 
-      });
-      return;
-    }
-
-    let listText = "📋 <b>转发规则列表</b>\n\n";
-    
-    for (let i = 0; i < allRules.length; i++) {
-      const { sourceId, rule } = allRules[i];
-      const sourceDisplay = await getDisplayName(sourceId);
-      const targetDisplay = await getDisplayName(rule.target_id);
-      const status = rule.paused ? "⏸️ 已暂停" : "▶️ 运行中";
-      const stats = shiftManager.getStats(sourceId, rule.target_id);
-      const forwardCount = stats ? stats.total_forwarded : 0;
-      const filterCount = rule.filters ? rule.filters.length : 0;
-      
-      listText += `<b>${i + 1}.</b> ${status}\n`;
-      listText += `📤 <b>源:</b> ${sourceDisplay}\n`;
-      listText += `📥 <b>目标:</b> ${targetDisplay}\n`;
-      listText += `🎯 <b>类型:</b> ${rule.options.join(', ')}\n`;
-      listText += `📊 <b>已转发:</b> ${forwardCount} 条\n`;
-      if (filterCount > 0) {
-        listText += `🔍 <b>过滤规则:</b> ${filterCount} 条\n`;
-      }
-      listText += `📅 <b>创建:</b> ${new Date(rule.created_at).toLocaleString('zh-CN')}\n\n`;
-    }
-
-    await msg.edit({ text: listText, parseMode: "html" });
-
-  } catch (error: any) {
-    console.error('List command error:', error);
-    const errorMessage = error.message || String(error);
-    const displayError = errorMessage.length > 100 ? errorMessage.substring(0, 100) + '...' : errorMessage;
-    await msg.edit({ 
-      text: `❌ <b>获取列表失败</b>\n\n<b>错误信息:</b> ${displayError}`, 
-      parseMode: "html" 
-    });
-  }
-}
-
-async function handleStatsCommand(msg: Api.Message): Promise<void> {
-  try {
-    const allRules = shiftManager.getAllRules();
-    
-    if (allRules.length === 0) {
-      await msg.edit({ 
-        text: "📊 <b>转发统计</b>\n\n暂无转发规则", 
-        parseMode: "html" 
-      });
-      return;
-    }
-
-    let totalForwarded = 0;
-    let totalErrors = 0;
-    let activeRules = 0;
-    let pausedRules = 0;
-
-    for (const { sourceId, rule } of allRules) {
-      const stats = shiftManager.getStats(sourceId, rule.target_id);
-      if (stats) {
-        totalForwarded += stats.total_forwarded;
-        totalErrors += stats.error_count;
-      }
-      
-      if (rule.paused) {
-        pausedRules++;
-      } else {
-        activeRules++;
-      }
-    }
-
-    // 总体统计概览
-    let statsText = `📊 <b>转发统计报告</b>\n\n`;
-    statsText += `📈 <b>总体概览</b>\n`;
-    statsText += `• 总规则数: ${allRules.length} 条\n`;
-    statsText += `• 运行中: ${activeRules} 条\n`;
-    statsText += `• 已暂停: ${pausedRules} 条\n`;
-    statsText += `• 总转发: ${totalForwarded} 条\n`;
-    statsText += `• 总错误: ${totalErrors} 条\n\n`;
-    
-    // 按规则显示详细统计
-    statsText += `📋 <b>详细统计</b>\n\n`;
-    
-    for (let i = 0; i < allRules.length; i++) {
-      const { sourceId, rule } = allRules[i];
-      const sourceDisplay = await getDisplayName(sourceId);
-      const targetDisplay = await getDisplayName(rule.target_id);
-      const stats = shiftManager.getStats(sourceId, rule.target_id);
-      const status = rule.paused ? "⏸️ 已暂停" : "▶️ 运行中";
-      
-      statsText += `<b>${i + 1}.</b> ${status}\n`;
-      statsText += `📤 <b>源:</b> ${sourceDisplay}\n`;
-      statsText += `📥 <b>目标:</b> ${targetDisplay}\n`;
-      
-      if (stats && stats.total_forwarded > 0) {
-        statsText += `📈 <b>总转发:</b> ${stats.total_forwarded} 条\n`;
-        if (stats.error_count > 0) {
-          statsText += `❌ <b>错误:</b> ${stats.error_count} 条\n`;
-        }
-        
-        // 显示最近7天的统计
-        if (stats.daily_stats && Object.keys(stats.daily_stats).length > 0) {
-          const sortedDates = Object.keys(stats.daily_stats)
-            .sort((a, b) => b.localeCompare(a))
-            .slice(0, 7);
-          
-          if (sortedDates.length > 0) {
-            statsText += `📅 <b>最近7天:</b>\n`;
-            for (const date of sortedDates) {
-              const count = stats.daily_stats[date];
-              statsText += `  • ${date}: ${count} 条\n`;
-            }
-          }
-        }
-      } else {
-        statsText += `📈 <b>总转发:</b> 0 条\n`;
-      }
-      
-      if (i < allRules.length - 1) {
-        statsText += `\n`;
-      }
-    }
-    
-    if (allRules.length === 0) {
-      statsText = `📊 <b>转发统计报告</b>\n\n暂无转发规则`;
-    }
-
-    await msg.edit({ text: statsText, parseMode: "html" });
-
-  } catch (error: any) {
-    console.error('Stats command error:', error);
-    const errorMessage = error.message || String(error);
-    const displayError = errorMessage.length > 100 ? errorMessage.substring(0, 100) + '...' : errorMessage;
-    await msg.edit({ 
-      text: `❌ <b>获取统计失败</b>\n\n<b>错误信息:</b> ${displayError}`, 
-      parseMode: "html" 
-    });
-  }
-}
-
-async function handlePauseCommand(msg: Api.Message, args: string[]): Promise<void> {
-  if (args.length < 2) {
-    await msg.edit({ 
-      text: "❌ <b>参数不足</b>\n\n<b>用法:</b> <code>shift pause [序号]</code>\n\n使用 <code>shift list</code> 查看规则序号", 
-      parseMode: "html" 
-    });
-    return;
-  }
-
-  await toggleRuleStatus(msg, args, true);
-}
-
-async function handleResumeCommand(msg: Api.Message, args: string[]): Promise<void> {
-  if (args.length < 2) {
-    await msg.edit({ 
-      text: "❌ <b>参数不足</b>\n\n<b>用法:</b> <code>shift resume [序号]</code>\n\n使用 <code>shift list</code> 查看规则序号", 
-      parseMode: "html" 
-    });
-    return;
-  }
-
-  await toggleRuleStatus(msg, args, false);
-}
-
-async function handleFilterCommand(msg: Api.Message, args: string[]): Promise<void> {
-  if (args.length < 3) {
-    await msg.edit({ 
-      text: "❌ <b>参数不足</b>\n\n<b>用法:</b>\n• <code>shift filter [序号] add [关键词]</code>\n• <code>shift filter [序号] del [关键词]</code>\n• <code>shift filter [序号] list</code>", 
-      parseMode: "html" 
-    });
-    return;
-  }
-
-  const index = parseInt(args[1]) - 1;
-  const action = args[2];
+// Update stats function
+function updateStats(sourceId: number, targetId: number, messageType: string): void {
+  if (!db) return;
   
   try {
-    const allRules = shiftManager.getAllRules();
+    const today = new Date().toISOString().split('T')[0];
+    const statsKey = `shift.stats.${sourceId}.${today}`;
     
-    if (index < 0 || index >= allRules.length) {
-      await msg.edit({ 
-        text: "❌ <b>序号无效</b>\n\n使用 <code>shift list</code> 查看有效序号", 
-        parseMode: "html" 
-      });
-      return;
-    }
-
-    const { sourceId } = allRules[index];
+    const stmt = db.prepare("SELECT stats_data FROM shift_stats WHERE stats_key = ?");
+    const row = stmt.get(statsKey) as any;
     
-    switch (action) {
-      case 'add':
-        if (args.length < 4) {
-          await msg.edit({ 
-            text: "❌ <b>缺少关键词</b>\n\n<b>用法:</b> <code>shift filter [序号] add [关键词]</code>", 
-            parseMode: "html" 
-          });
-          return;
-        }
-        const addKeyword = args.slice(3).join(' ');
-        const addSuccess = shiftManager.addFilter(sourceId, addKeyword);
-        
-        if (addSuccess) {
-          await msg.edit({ 
-            text: `✅ <b>过滤关键词已添加</b>\n\n<b>关键词:</b> <code>${addKeyword}</code>`, 
-            parseMode: "html" 
-          });
-        } else {
-          await msg.edit({ 
-            text: "❌ <b>添加失败</b>\n\n规则可能不存在", 
-            parseMode: "html" 
-          });
-        }
-        break;
-        
-      case 'del':
-      case 'delete':
-        if (args.length < 4) {
-          await msg.edit({ 
-            text: "❌ <b>缺少关键词</b>\n\n<b>用法:</b> <code>shift filter [序号] del [关键词]</code>", 
-            parseMode: "html" 
-          });
-          return;
-        }
-        const delKeyword = args.slice(3).join(' ');
-        const delSuccess = shiftManager.removeFilter(sourceId, delKeyword);
-        
-        if (delSuccess) {
-          await msg.edit({ 
-            text: `✅ <b>过滤关键词已删除</b>\n\n<b>关键词:</b> <code>${delKeyword}</code>`, 
-            parseMode: "html" 
-          });
-        } else {
-          await msg.edit({ 
-            text: "❌ <b>删除失败</b>\n\n关键词可能不存在", 
-            parseMode: "html" 
-          });
-        }
-        break;
-        
-      case 'list':
-        const filters = shiftManager.getFilters(sourceId);
-        const sourceDisplay = await getDisplayName(sourceId);
-        
-        let filterText = `🔍 <b>过滤关键词列表</b>\n\n📤 <b>源:</b> ${sourceDisplay}\n\n`;
-        
-        if (filters.length === 0) {
-          filterText += "暂无过滤关键词";
-        } else {
-          filterText += "<b>关键词:</b>\n";
-          filters.forEach((filter, i) => {
-            filterText += `${i + 1}. <code>${filter}</code>\n`;
-          });
-        }
-        
-        await msg.edit({ text: filterText, parseMode: "html" });
-        break;
-        
-      default:
-        await msg.edit({ 
-          text: "❌ <b>未知操作</b>\n\n<b>支持的操作:</b> add, del, list", 
-          parseMode: "html" 
-        });
+    let stats: any = { total: 0 };
+    if (row) {
+      stats = JSON.parse(row.stats_data);
     }
     
-  } catch (error: any) {
-    console.error('Filter command error:', error);
-    const errorMessage = error.message || String(error);
-    const displayError = errorMessage.length > 100 ? errorMessage.substring(0, 100) + '...' : errorMessage;
-    await msg.edit({ 
-      text: `❌ <b>过滤操作失败</b>\n\n<b>错误信息:</b> ${displayError}`, 
-      parseMode: "html" 
-    });
+    stats.total = (stats.total || 0) + 1;
+    stats[messageType] = (stats[messageType] || 0) + 1;
+    
+    const saveStmt = db.prepare(`
+      INSERT OR REPLACE INTO shift_stats (stats_key, stats_data)
+      VALUES (?, ?)
+    `);
+    
+    saveStmt.run(statsKey, JSON.stringify(stats));
+  } catch (error) {
+    console.error(`[SHIFT] Error updating stats:`, error);
   }
 }
 
-async function toggleRuleStatus(msg: Api.Message, args: string[], paused: boolean): Promise<void> {
-  const indexArg = args[1];
-  const index = parseInt(indexArg) - 1;
+// Check if message is filtered
+async function isMessageFiltered(message: any, sourceId: number): Promise<boolean> {
+  const rule = await getShiftRule(sourceId);
+  if (!rule) return false;
+  
+  const keywords = rule.filters;
+  if (!keywords || keywords.length === 0 || !message.text) return false;
+  
+  const text = message.text.toLowerCase();
+  return keywords.some(keyword => text.includes(keyword.toLowerCase()));
+}
 
-  try {
-    const allRules = shiftManager.getAllRules();
-    
-    if (index < 0 || index >= allRules.length) {
-      await msg.edit({ 
-        text: `❌ <b>序号无效</b>\n\n请输入 1-${allRules.length} 之间的序号`,
-        parseMode: "html"
-      });
-      return;
+// Get chat ID from message
+function getChatIdFromMessage(message: any): number | null {
+  if (message.chatId) {
+    return Number(message.chatId);
+  }
+  
+  if (message.peerId) {
+    if (message.peerId.channelId) {
+      return -1000000000000 - Number(message.peerId.channelId);
+    } else if (message.peerId.chatId) {
+      return -Number(message.peerId.chatId);
+    } else if (message.peerId.userId) {
+      return Number(message.peerId.userId);
     }
+  }
+  
+  return null;
+}
 
-    const { sourceId, rule } = allRules[index];
-    const sourceDisplay = await getDisplayName(sourceId);
+// Forward message with proper access hash handling
+async function shiftForwardMessage(client: TelegramClient, fromChatId: number, toChatId: number, messageId: number, depth: number = 0): Promise<void> {
+  if (depth > 5) {
+    console.log(`[SHIFT] 转发深度超限: ${depth}`);
+    return;
+  }
+  
+  try {
+    // Get entities with proper access hash
+    const fromEntity = await client.getEntity(fromChatId);
+    const toEntity = await client.getEntity(toChatId);
     
-    const success = shiftManager.toggleRule(sourceId, paused);
+    // Execute forwarding with proper entities
+    await client.forwardMessages(toEntity, {
+      messages: [messageId],
+      fromPeer: fromEntity
+    });
     
-    if (success) {
-      const action = paused ? "暂停" : "恢复";
-      const status = paused ? "⏸️ 已暂停" : "▶️ 运行中";
+    console.log(`[SHIFT] 转发成功: ${fromChatId} -> ${toChatId}, msg=${messageId}, depth=${depth}`);
+    
+    // Check for chained forwarding
+    const nextRule = await getShiftRule(toChatId);
+    if (nextRule && !nextRule.paused && nextRule.target_id) {
+      // Wait for message to arrive
+      await new Promise(resolve => setTimeout(resolve, 200));
       
-      await msg.edit({ 
-        text: `✅ <b>转发规则已${action}</b>\n\n` +
-              `📤 <b>源:</b> ${sourceDisplay}\n` +
-              `📊 <b>状态:</b> ${status}`,
-        parseMode: "html"
-      });
-    } else {
-      await msg.edit({ 
-        text: "❌ <b>操作失败</b>\n\n规则可能不存在", 
-        parseMode: "html" 
-      });
-    }
-
-  } catch (error: any) {
-    console.error('Toggle rule error:', error);
-    const errorMessage = error.message || String(error);
-    const displayError = errorMessage.length > 100 ? errorMessage.substring(0, 100) + '...' : errorMessage;
-    await msg.edit({ 
-      text: `❌ <b>操作失败</b>\n\n<b>错误信息:</b> ${displayError}`, 
-      parseMode: "html" 
-    });
-  }
-}
-
-// 辅助函数
-async function parseEntityId(entityArg: string, msg: Api.Message): Promise<number | null> {
-  try {
-    // 处理特殊关键词
-    if (entityArg === 'me' || entityArg === 'here') {
-      if (!msg.peerId) return null;
-      // 从 peerId 中提取数字ID
-      if ('userId' in msg.peerId) {
-        return Number(msg.peerId.userId);
-      } else if ('chatId' in msg.peerId) {
-        return -Number(msg.peerId.chatId);
-      } else if ('channelId' in msg.peerId) {
-        return -1000000000000 - Number(msg.peerId.channelId);
-      }
-      return null;
-    }
-
-    // 处理数字ID - 直接返回，不做格式转换
-    if (/^-?\d+$/.test(entityArg)) {
-      const numId = parseInt(entityArg);
-      console.log(`Parsing entity ID: ${entityArg} -> ${numId}`);
-      return numId;
-    }
-
-    // 处理用户名
-    if (entityArg.startsWith('@')) {
       try {
-        const client = await getGlobalClient();
-        const username = entityArg.slice(1); // 移除 @ 符号
-        
-        // 通过 Telegram API 解析用户名
-        const entity = await client.getEntity(username);
-        
-        if ('id' in entity) {
-          // 根据实体类型返回正确的ID格式
-          // entity.id 可能是 BigInt 类型，需要安全转换
-          const entityId = Number(entity.id);
+        // Get latest message from target chat
+        const messages = await client.getMessages(toChatId, { limit: 1 });
+        if (messages && messages.length > 0) {
+          const newMsgId = messages[0].id;
+          console.log(`[SHIFT] 发现下级转发规则: ${toChatId} -> ${nextRule.target_id}, new_msg=${newMsgId}`);
           
-          console.log(`Resolved username ${username}: type=${entity.className}, id=${entityId}`);
-          
-          if (entity.className === 'Channel') {
-            // 频道或超级群组
-            return -1000000000000 - entityId;
-          } else if (entity.className === 'Chat') {
-            // 普通群组
-            return -entityId;
-          } else if (entity.className === 'User') {
-            // 用户
-            return entityId;
-          }
-          return entityId;
+          // Recursive forward
+          await shiftForwardMessage(client, toChatId, nextRule.target_id, newMsgId, depth + 1);
+        } else {
+          console.log(`[SHIFT] 无法获取新消息，使用原消息ID: ${messageId}`);
+          await shiftForwardMessage(client, toChatId, nextRule.target_id, messageId, depth + 1);
         }
-        return null;
-      } catch (error: any) {
-        console.error('Username resolution failed:', entityArg, error);
-        return null;
+      } catch (error) {
+        console.error(`[SHIFT] 获取新消息失败: ${error}`);
+        // Fallback: use original message ID
+        await shiftForwardMessage(client, toChatId, nextRule.target_id, messageId, depth + 1);
       }
     }
-
-    return null;
+    
   } catch (error: any) {
-    console.error('Parse entity error:', error);
-    return null;
-  }
-}
-
-async function getDisplayName(entityId: number): Promise<string> {
-  // 检查缓存
-  const cached = entityCache.get(entityId);
-  if (cached && (Date.now() - cached.timestamp) < CACHE_DURATION) {
-    return cached.name;
-  }
-
-  // 先尝试预缓存对话实体
-  await cacheDialogEntities();
-
-  // 检查是否在对话缓存中（尝试多种ID格式）
-  let cachedEntity = entityInfoCache.get(entityId);
-  
-  // 如果直接查找失败，尝试其他ID格式
-  if (!cachedEntity) {
-    if (entityId < -1000000000000) {
-      // 频道格式，尝试原始ID
-      const originalId = Math.abs(entityId + 1000000000000);
-      cachedEntity = entityInfoCache.get(originalId);
-    } else if (entityId < 0) {
-      // 群组格式，尝试原始ID
-      const originalId = Math.abs(entityId);
-      cachedEntity = entityInfoCache.get(originalId);
-    }
-  }
-  
-  if (cachedEntity) {
-    let displayName = '';
+    console.error(`[SHIFT] 转发失败: ${error}`);
     
-    // 优先显示用户名，其次标题，最后名字
-    if ('username' in cachedEntity && cachedEntity.username) {
-      displayName = `@${cachedEntity.username}`;
-    } else if ('title' in cachedEntity && cachedEntity.title) {
-      displayName = String(cachedEntity.title);
-    } else if ('firstName' in cachedEntity && cachedEntity.firstName) {
-      displayName = String(cachedEntity.firstName);
-    } else {
-      displayName = `ID: ${entityId}`;
-    }
-    
-    console.log(`Display name resolved from cache: ${entityId} -> ${displayName}`);
-    
-    // 缓存结果
-    entityCache.set(entityId, { name: displayName, timestamp: Date.now() });
-    return displayName;
-  }
-
-  try {
-    const client = await getGlobalClient();
-    let actualId = entityId;
-    
-    // 转换ID格式用于API调用
-    if (entityId < -1000000000000) {
-      actualId = Math.abs(entityId + 1000000000000);
-    } else if (entityId < 0) {
-      actualId = Math.abs(entityId);
-    }
-
-    console.log(`Attempting to get entity: ${entityId} -> ${actualId}`);
-    
-    // 尝试获取实体
-    const entity = await client.getEntity(actualId);
-    
-    if (entity) {
-      let displayName = '';
+    // Handle flood wait
+    if (error.message && error.message.includes('FLOOD_WAIT')) {
+      const waitTime = parseInt(error.message.match(/\d+/)?.[0] || "60");
+      console.log(`[SHIFT] FloodWait ${waitTime}s, 等待重试`);
+      await new Promise(resolve => setTimeout(resolve, (waitTime + 1) * 1000));
       
-      // 优先显示用户名，其次标题，最后名字
-      if ('username' in entity && entity.username) {
-        displayName = `@${entity.username}`;
-      } else if ('title' in entity && entity.title) {
-        displayName = String(entity.title);
-      } else if ('firstName' in entity && entity.firstName) {
-        displayName = String(entity.firstName);
-      } else {
-        displayName = `ID: ${entityId}`;
-      }
-      
-      console.log(`Display name resolved from API: ${entityId} -> ${displayName}`);
-      
-      // 缓存结果和实体
-      entityCache.set(entityId, { name: displayName, timestamp: Date.now() });
-      entityInfoCache.set(entityId, entity);
-      return displayName;
-    }
-  } catch (error: any) {
-    console.warn(`Failed to get entity ${entityId}:`, error.message || error);
-  }
-
-  // 降级方案：显示ID
-  const fallbackName = `ID: ${entityId}`;
-  console.log(`Using fallback name: ${entityId} -> ${fallbackName}`);
-  entityCache.set(entityId, { name: fallbackName, timestamp: Date.now() });
-  return fallbackName;
-}
-
-// 消息转发处理函数
-async function handleMessageForwarding(msg: Api.Message): Promise<void> {
-  try {
-    // 获取消息来源ID
-    const sourceId = getSourceId(msg);
-    if (!sourceId) return;
-    
-    // 跳过自己发送的消息，避免循环
-    if (msg.out) return;
-
-    // 获取转发规则
-    const rule = shiftManager.getRule(sourceId);
-    if (!rule || rule.paused) return;
-
-    // 检查消息类型是否匹配
-    if (!shouldForwardMessage(msg, rule.options)) return;
-
-    // 检查过滤关键词
-    if (!passesFilter(msg, rule.filters)) return;
-
-    // 执行转发
-    await forwardMessage(msg, rule);
-    
-    // 更新统计
-    console.log(`Forwarding successful, updating stats for ${sourceId} -> ${rule.target_id}`);
-    shiftManager.updateStats(sourceId, rule.target_id, true);
-
-  } catch (error: any) {
-    console.error('Message forwarding failed:', error);
-    if (msg.peerId) {
-      const sourceId = getSourceId(msg);
-      const rule = sourceId ? shiftManager.getRule(sourceId) : null;
-      if (sourceId && rule) {
-        shiftManager.updateStats(sourceId, rule.target_id, false);
+      try {
+        await client.forwardMessages(toChatId, {
+          messages: [messageId],
+          fromPeer: fromChatId
+        });
+        console.log(`[SHIFT] 重试转发成功: ${fromChatId} -> ${toChatId}`);
+      } catch (retryError) {
+        console.error(`[SHIFT] 重试转发失败: ${retryError}`);
       }
     }
   }
 }
 
-// 获取消息来源ID
-function getSourceId(msg: Api.Message): number | null {
+// Message handler for automatic forwarding
+async function handleIncomingMessage(message: any): Promise<void> {
   try {
-    if (!msg.peerId) return null;
+    if (!message || !message.chat) {
+      return;
+    }
     
-    if ('userId' in msg.peerId) {
-      return Number(msg.peerId.userId);
-    } else if ('chatId' in msg.peerId) {
-      return -Number(msg.peerId.chatId);
-    } else if ('channelId' in msg.peerId) {
-      return -1000000000000 - Number(msg.peerId.channelId);
+    const sourceId = getChatIdFromMessage(message);
+    if (!sourceId) {
+      return;
     }
-    return null;
-  } catch (error: any) {
-    console.error('Get source ID error:', error);
-    return null;
-  }
-}
-
-// 检查消息是否应该转发
-function shouldForwardMessage(msg: Api.Message, options: MessageType[]): boolean {
-  // 如果包含 'all'，转发所有消息
-  if (options.includes('all')) {
-    return true;
-  }
-
-  // 检查媒体类型
-  if (msg.media) {
-    if ('photo' in msg.media && options.includes('photo')) return true;
-    if ('video' in msg.media && options.includes('video')) return true;
-    if ('document' in msg.media && msg.media.document) {
-      const doc = msg.media.document;
-      if ('mimeType' in doc && doc.mimeType) {
-        if (doc.mimeType.startsWith('image/') && options.includes('photo')) return true;
-        if (doc.mimeType.startsWith('video/') && options.includes('video')) return true;
-        if (doc.mimeType.startsWith('audio/') && options.includes('audio')) return true;
-        if (doc.mimeType === 'application/x-tgsticker' && options.includes('sticker')) return true;
-        if (doc.mimeType === 'video/mp4' && options.includes('animation')) return true;
-        if (options.includes('document')) return true;
-      }
+    
+    const rule = await getShiftRule(sourceId);
+    if (!rule || rule.paused) {
+      return;
     }
-    if ('voice' in msg.media && options.includes('voice')) return true;
-    if ('audio' in msg.media && options.includes('audio')) return true;
-    if ('sticker' in msg.media && options.includes('sticker')) return true;
-  }
-
-  // 检查文本消息
-  if (msg.message && options.includes('text')) {
-    return true;
-  }
-
-  return false;
-}
-
-// 检查消息是否通过过滤关键词
-function passesFilter(msg: Api.Message, filters: string[]): boolean {
-  // 如果没有过滤关键词，直接通过
-  if (!filters || filters.length === 0) {
-    return true;
-  }
-
-  // 获取消息文本内容
-  let messageText = '';
-  if (msg.message) {
-    messageText = msg.message.toLowerCase();
-  }
-  
-  // 也检查媒体标题
-  if (msg.media && 'caption' in msg.media && msg.media.caption) {
-    messageText += ' ' + String(msg.media.caption).toLowerCase();
-  }
-
-  // 检查是否包含任何过滤关键词
-  for (const filter of filters) {
-    if (messageText.includes(filter.toLowerCase())) {
-      console.log(`Message blocked by filter: ${filter}`);
-      return false; // 包含过滤关键词，不转发
-    }
-  }
-
-  return true; // 不包含任何过滤关键词，可以转发
-}
-
-// 执行消息转发
-async function forwardMessage(msg: Api.Message, rule: ForwardRule): Promise<void> {
-  try {
-    const client = await getGlobalClient();
+    
     const targetId = rule.target_id;
-    
-    console.log(`Attempting to forward message ${msg.id} to target ${targetId}`);
-    
-    // 方案1: 尝试使用高级API转发
-    try {
-      const result = await client.forwardMessages(targetId, {
-        messages: [msg.id],
-        fromPeer: msg.peerId,
-        silent: rule.options.includes('silent')
-      });
-      
-      if (result && result.length > 0) {
-        console.log(`Message ${msg.id} forwarded successfully using high-level API`);
-        return;
-      }
-    } catch (hlError: any) {
-      console.warn('High-level forwardMessages failed, trying alternative methods:', hlError.message);
+    if (!targetId) {
+      return;
     }
     
-    // 方案2: 使用sendMessage复制消息内容（推荐方案）
-    try {
-      if (msg.message || msg.media) {
-        const sendOptions: any = {
-          silent: rule.options.includes('silent')
-        };
-        
-        // 复制文本消息
-        if (msg.message) {
-          sendOptions.message = msg.message;
-        }
-        
-        // 复制媒体消息
-        if (msg.media) {
-          sendOptions.file = msg.media;
-          // 复制媒体标题
-          if ('caption' in msg.media && msg.media.caption) {
-            sendOptions.caption = String(msg.media.caption);
-          }
-        }
-        
-        // 复制回复信息
-        if (msg.replyTo) {
-          sendOptions.replyTo = msg.replyTo;
-        }
-        
-        await client.sendMessage(targetId, sendOptions);
-        console.log(`Message ${msg.id} copied successfully using sendMessage`);
-        return;
-      }
-    } catch (copyError: any) {
-      console.warn('Copy message failed:', copyError.message);
+    // Check content protection
+    if (message.chat.noforwards) {
+      console.log(`[SHIFT] 源聊天 ${sourceId} 开启了内容保护，删除转发规则`);
+      deleteShiftRule(sourceId);
+      return;
     }
     
-    // 方案3: 降级到低级API（最后尝试）
-    const targetPeer = await getTargetPeer(targetId);
-    console.log(`Using low-level API with peer:`, targetPeer.className);
+    // Check message filtering
+    if (await isMessageFiltered(message, sourceId)) {
+      console.log(`[SHIFT] 消息被过滤: ${sourceId}`);
+      return;
+    }
     
-    const forwardOptions = {
-      fromPeer: msg.peerId,
-      toPeer: targetPeer,
-      id: [msg.id],
-      silent: rule.options.includes('silent'),
-      dropAuthor: false,
-      dropMediaCaptions: false,
-      noforwards: false,
-    };
-
-    await client.invoke(
-      new Api.messages.ForwardMessages(forwardOptions)
-    );
-
-    console.log(`Message ${msg.id} forwarded successfully using low-level API`);
-
-  } catch (error: any) {
-    console.error('All forward methods failed:', error);
-    throw error;
+    // Check message type
+    const options = rule.options;
+    const messageType = getMediaType(message);
+    if (options.length > 0 && !options.includes("all") && !options.includes(messageType)) {
+      console.log(`[SHIFT] 消息类型不匹配: ${messageType} not in ${options}`);
+      return;
+    }
+    
+    // Execute forwarding
+    console.log(`[SHIFT] 开始转发: ${sourceId} -> ${targetId}, msg=${message.id}`);
+    const client = await getGlobalClient();
+    await shiftForwardMessage(client, sourceId, targetId, message.id);
+    
+    // Update stats
+    updateStats(sourceId, targetId, messageType);
+    
+  } catch (error) {
+    console.error(`[SHIFT] 处理消息时出错: ${error}`);
   }
 }
 
-// 获取目标 Peer 对象
-async function getTargetPeer(targetId: number): Promise<any> {
-  try {
-    const client = await getGlobalClient();
-    
-    if (targetId > 0) {
-      // 用户ID - 直接尝试获取
-      try {
-        const user = await client.getEntity(targetId);
-        return await client.getInputEntity(user);
-      } catch (userError) {
-        console.warn(`Could not get user entity ${targetId}, trying fallback`);
-        return new Api.InputPeerUser({
-          userId: targetId as any,
-          accessHash: 0 as any
-        });
-      }
-    } else if (targetId < -1000000000000) {
-      // 频道/超级群组ID格式
-      const channelId = Math.abs(targetId + 1000000000000);
-      try {
-        const channel = await client.getEntity(channelId);
-        return await client.getInputEntity(channel);
-      } catch (channelError) {
-        console.warn(`Could not get channel entity ${channelId}, trying fallback`);
-        return new Api.InputPeerChannel({
-          channelId: channelId as any,
-          accessHash: 0 as any
-        });
-      }
-    } else if (targetId < 0) {
-      // 普通群组ID格式
-      const chatId = Math.abs(targetId);
-      try {
-        const chat = await client.getEntity(chatId);
-        return await client.getInputEntity(chat);
-      } catch (chatError) {
-        console.warn(`Could not get chat entity ${chatId}, trying fallback`);
-        return new Api.InputPeerChat({
-          chatId: chatId as any
-        });
-      }
-    } else {
-      throw new Error(`Invalid target ID: ${targetId}`);
-    }
-  } catch (error: any) {
-    console.error('Get target peer completely failed:', error);
-    throw error;
-  }
+// Message listener handler for the plugin system
+async function shiftMessageListener(message: any): Promise<void> {
+  await handleIncomingMessage(message);
 }
 
 export default shiftPlugin;
