@@ -90,5 +90,9 @@
   "forward_cron": {
     "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/forward_cron/forward_cron.ts?raw=true",
     "author": "EALyce"
+  },
+  "lottery": {
+    "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/lottery/lottery.ts?raw=true",
+    "author": "EALyce"
   }
 }
