@@ -59,10 +59,6 @@
     "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/shift/shift.ts?raw=true",
     "author": "EALyce"
   },
-  "bf": {
-    "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/bf/bf.ts?raw=true",
-    "author": "EALyce"
-  },
   "da": {
     "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/da/da.ts?raw=true",
     "author": "EALyce"
@@ -82,5 +78,9 @@
   "dig": {
     "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/dig/dig.ts?raw=true",
     "author": "Assistant"
+  },
+  "keyword": {
+    "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/keyword/keyword.ts?raw=true",
+    "author": "EALyce"
   }
 }
