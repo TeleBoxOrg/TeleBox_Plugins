@@ -1,5 +1,5 @@
 import { Plugin } from "@utils/pluginBase";
-import { Api } from "telegram";
+import { Api, TelegramClient } from "telegram";
 import { getGlobalClient } from "@utils/globalClient";
 
 const daPlugin: Plugin = {
@@ -12,7 +12,8 @@ const daPlugin: Plugin = {
     // 检查是否在群组中
     if (!msg.chatId || msg.isPrivate) {
       await msg.edit({
-        text: "❌ 此命令只能在群组中使用"
+        text: "❌ 此命令只能在群组中使用",
+        parseMode: "html"
       });
       return;
     }
@@ -20,7 +21,8 @@ const daPlugin: Plugin = {
     // 安全确认机制
     if (param !== "true") {
       await msg.edit({
-        text: `⚠️ **危险操作警告**\n\n此命令将删除群内所有消息！\n\n如果确认执行，请使用：\`da true\``
+        text: `⚠️ <b>危险操作警告</b>\n\n此命令将删除群内所有消息！\n\n如果确认执行，请使用：<code>da true</code>`,
+        parseMode: "html"
       });
       return;
     }
@@ -28,13 +30,15 @@ const daPlugin: Plugin = {
     const client = await getGlobalClient();
     if (!client) {
       await msg.edit({
-        text: "❌ Telegram客户端未初始化"
+        text: "❌ Telegram客户端未初始化",
+        parseMode: "html"
       });
       return;
     }
     
     await msg.edit({
-      text: "🔄 正在删除所有消息..."
+      text: "🔄 <b>正在删除所有消息...</b>",
+      parseMode: "html"
     });
     
     try {
@@ -53,19 +57,36 @@ const daPlugin: Plugin = {
         const chat = await client.getEntity(chatId);
         if (chat.className === "Channel") {
           try {
-            const permissions = await client.invoke(new Api.channels.GetParticipant({
+            const result = await client.invoke(new Api.channels.GetParticipant({
               channel: chat as Api.Channel,
               participant: myId
             }));
-            isAdmin = permissions.participant.className === "ChannelParticipantAdmin" || 
-                     permissions.participant.className === "ChannelParticipantCreator";
+            isAdmin = result.participant instanceof Api.ChannelParticipantAdmin || 
+                     result.participant instanceof Api.ChannelParticipantCreator;
           } catch (permError) {
-            // 无法获取权限，假设不是管理员
-            isAdmin = false;
+            console.log('GetParticipant failed, trying alternative method:', permError);
+            // 备用方法：检查管理员列表
+            try {
+              const adminResult = await client.invoke(new Api.channels.GetParticipants({
+                channel: chat as Api.Channel,
+                filter: new Api.ChannelParticipantsAdmins(),
+                offset: 0,
+                limit: 100,
+                hash: 0 as any
+              }));
+              
+              if ('users' in adminResult) {
+                const admins = adminResult.users as Api.User[];
+                isAdmin = admins.some(admin => Number(admin.id) === Number(myId));
+              }
+            } catch (adminListError) {
+              console.log('GetParticipants admin list failed:', adminListError);
+              isAdmin = false;
+            }
           }
         }
       } catch (e) {
-        // 如果无法获取权限信息，假设不是管理员
+        console.error('Failed to check admin permissions:', e);
         isAdmin = false;
       }
       
@@ -91,7 +112,8 @@ const daPlugin: Plugin = {
             if (processed % 500 === 0) {
               try {
                 await msg.edit({
-                  text: `🔄 正在删除消息... 已处理 ${processed} 条`
+                  text: `🔄 <b>正在删除消息...</b> 已处理 <code>${processed}</code> 条`,
+                  parseMode: "html"
                 });
               } catch (e) {
                 // 忽略编辑失败
@@ -99,6 +121,16 @@ const daPlugin: Plugin = {
             }
           } catch (error) {
             console.error("批量删除消息失败:", error);
+            // 如果批量删除失败，尝试逐个删除
+            for (const message of messages) {
+              try {
+                await client.deleteMessages(chatId, [message.id], { revoke: true });
+                processed++;
+              } catch (singleError) {
+                console.error(`删除单条消息失败 (ID: ${message.id}):`, singleError);
+              }
+            }
+            messages = [];
           }
         }
       }
@@ -110,16 +142,28 @@ const daPlugin: Plugin = {
           processed += messages.length;
         } catch (error) {
           console.error("删除剩余消息失败:", error);
+          // 如果批量删除失败，尝试逐个删除剩余消息
+          for (const message of messages) {
+            try {
+              await client.deleteMessages(chatId, [message.id], { revoke: true });
+              processed++;
+            } catch (singleError) {
+              console.error(`删除单条消息失败 (ID: ${message.id}):`, singleError);
+            }
+          }
         }
       }
       
       // 发送完成消息
       const resultText = isAdmin 
-        ? `✅ 批量删除完成，共删除了 ${processed} 条消息`
-        : `✅ 删除完成，共删除了 ${processed} 条自己的消息（非管理员模式）`;
+        ? `✅ <b>批量删除完成</b>，共删除了 <code>${processed}</code> 条消息`
+        : `✅ <b>删除完成</b>，共删除了 <code>${processed}</code> 条自己的消息（非管理员模式）`;
       
       try {
-        const resultMsg = await client.sendMessage(chatId, { message: resultText });
+        const resultMsg = await client.sendMessage(chatId, { 
+          message: resultText,
+          parseMode: "html"
+        });
         
         // 5秒后删除结果消息
         setTimeout(async () => {
@@ -139,7 +183,8 @@ const daPlugin: Plugin = {
       console.error("DA插件执行失败:", error);
       try {
         await msg.edit({
-          text: `❌ 删除消息失败: ${String(error)}`
+          text: `❌ <b>删除消息失败:</b> ${String(error)}`,
+          parseMode: "html"
         });
       } catch (e) {
         // 忽略编辑失败

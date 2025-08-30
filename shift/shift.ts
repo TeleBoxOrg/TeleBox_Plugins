@@ -6,9 +6,20 @@
 import { Plugin } from "@utils/pluginBase";
 import { Api } from "telegram";
 import { getGlobalClient } from "@utils/globalClient";
+import { TelegramClient } from "telegram";
+import { createDirectoryInAssets } from "@utils/pathHelpers";
 import * as fs from "fs";
-import * as path from "path";
-const BigInteger = require("big-integer");
+import path from "path";
+
+// HTML escape function
+function htmlEscape(text: string): string {
+  return text
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#x27;");
+}
 
 // 基本类型定义
 type MessageType = "silent" | "text" | "all" | "photo" | "document" | "video" | "sticker" | "animation" | "voice" | "audio";
@@ -51,36 +62,36 @@ const entityInfoCache = new Map<number, any>();
 let lastDialogsFetch = 0;
 const DIALOGS_CACHE_DURATION = 10 * 60 * 1000; // 10分钟缓存对话列表
 
-const HELP_TEXT = `📢 **智能转发助手使用说明**
+const HELP_TEXT = `📢 <b>智能转发助手使用说明</b>
 
-🔧 **基础命令：**
-• \`shift set [源] [目标] [选项...]\` - 设置自动转发
-• \`shift del [序号]\` - 删除转发规则
-• \`shift list\` - 显示当前转发规则
-• \`shift stats\` - 查看转发统计
-• \`shift pause [序号]\` - 暂停转发
-• \`shift resume [序号]\` - 恢复转发
+<b>🔧 基础命令：</b>
+• <code>shift set [源] [目标] [选项...]</code> - 设置自动转发
+• <code>shift del [序号]</code> - 删除转发规则
+• <code>shift list</code> - 显示当前转发规则
+• <code>shift stats</code> - 查看转发统计
+• <code>shift pause [序号]</code> - 暂停转发
+• <code>shift resume [序号]</code> - 恢复转发
 
-🔍 **过滤命令：**
-• \`shift filter [序号] add [关键词]\` - 添加过滤关键词
-• \`shift filter [序号] del [关键词]\` - 删除过滤关键词
-• \`shift filter [序号] list\` - 查看过滤列表
+<b>🔍 过滤命令：</b>
+• <code>shift filter [序号] add [关键词]</code> - 添加过滤关键词
+• <code>shift filter [序号] del [关键词]</code> - 删除过滤关键词
+• <code>shift filter [序号] list</code> - 查看过滤列表
 
-🎯 **支持的目标类型：**
+<b>🎯 支持的目标类型：</b>
 • 频道/群组 - @username 或 -100...ID
 • 个人用户 - @username 或 user_id
 • 当前对话 - 使用 "me" 或 "here"
 
-📝 **消息类型选项：**
+<b>📝 消息类型选项：</b>
 • silent, text, photo, document, video, sticker, animation, voice, audio, all
 
-💡 **示例：**
-• \`shift set @channel1 @channel2 silent photo\`
-• \`shift del 1\`
-• \`shift filter 1 add 广告\``;
+<b>💡 示例：</b>
+• <code>shift set @channel1 @channel2 silent photo</code>
+• <code>shift del 1</code>
+• <code>shift filter 1 add 广告</code>`;
 
 // 数据存储路径
-const SHIFT_DATA_PATH = path.join(process.cwd(), "assets", "shift_rules.json");
+const SHIFT_DATA_PATH = path.join(createDirectoryInAssets("shift"), "shift_rules.json");
 
 class ShiftManager {
   private rules: Map<number, ForwardRule> = new Map();
@@ -93,10 +104,8 @@ class ShiftManager {
 
   // 确保数据目录存在
   private ensureDataDirectory(): void {
-    const dataDir = path.dirname(SHIFT_DATA_PATH);
-    if (!fs.existsSync(dataDir)) {
-      fs.mkdirSync(dataDir, { recursive: true });
-    }
+    // createDirectoryInAssets already ensures directory exists
+    // No additional action needed
   }
 
   // 加载规则数据
@@ -120,7 +129,7 @@ class ShiftManager {
           }
         }
       }
-    } catch (error) {
+    } catch (error: any) {
       console.error('Failed to load shift rules:', error);
     }
   }
@@ -134,7 +143,7 @@ class ShiftManager {
         updated_at: new Date().toISOString()
       };
       fs.writeFileSync(SHIFT_DATA_PATH, JSON.stringify(data, null, 2));
-    } catch (error) {
+    } catch (error: any) {
       console.error('Failed to save shift rules:', error);
     }
   }
@@ -312,27 +321,39 @@ async function cacheDialogEntities(): Promise<void> {
 
   try {
     const client = await getGlobalClient();
-    const dialogs = await client.getDialogs({ limit: 100 });
+    const dialogs = await client.getDialogs({ limit: 200 }); // 增加获取数量
     
     for (const dialog of dialogs) {
       const entity = dialog.entity;
       if (entity && 'id' in entity) {
         let entityId = Number(entity.id);
+        let originalId = entityId;
         
-        // 处理频道ID格式转换
-        if ('megagroup' in entity || 'broadcast' in entity) {
-          entityId = -1000000000000 - entityId;
-        } else if ('id' in entity && entityId > 0 && !('firstName' in entity)) {
-          entityId = -entityId;
+        // 根据实体类型正确转换ID格式
+        if (entity.className === 'Channel') {
+          // 频道或超级群组
+          entityId = -1000000000000 - originalId;
+        } else if (entity.className === 'Chat') {
+          // 普通群组
+          entityId = -originalId;
+        } else if (entity.className === 'User') {
+          // 用户保持正数
+          entityId = originalId;
         }
         
+        // 同时缓存原始ID和转换后的ID
         entityInfoCache.set(entityId, entity);
+        entityInfoCache.set(originalId, entity);
+        
+        const username = ('username' in entity) ? entity.username : 'none';
+        const displayInfo = ('title' in entity) ? entity.title : (('firstName' in entity) ? entity.firstName : 'none');
+        console.log(`Cached entity: ${entity.className} ${originalId} -> ${entityId}, username: ${username || 'none'}, title: ${displayInfo || 'none'}`);
       }
     }
     
     lastDialogsFetch = now;
     console.log(`Cached ${entityInfoCache.size} dialog entities`);
-  } catch (error) {
+  } catch (error: any) {
     console.warn('Failed to cache dialog entities:', error);
   }
 }
@@ -373,14 +394,19 @@ const shiftPlugin: Plugin = {
           break;
         case 'help':
         case '':
-          await msg.edit({ text: HELP_TEXT });
+          await msg.edit({ text: HELP_TEXT, parseMode: "html" });
           break;
         default:
-          await msg.edit({ text: "❌ **未知命令**\n\n使用 `shift help` 查看帮助" });
+          await msg.edit({ text: "❌ <b>未知命令</b>\n\n使用 <code>shift help</code> 查看帮助", parseMode: "html" });
       }
-    } catch (error) {
+    } catch (error: any) {
       console.error('Shift plugin error:', error);
-      await msg.edit({ text: `❌ **插件错误**\n\n${error}` });
+      const errorMessage = error.message || String(error);
+      const displayError = errorMessage.length > 100 ? errorMessage.substring(0, 100) + '...' : errorMessage;
+      await msg.edit({ 
+        text: `❌ <b>插件错误</b>\n\n<b>错误信息:</b> ${displayError}\n\n💡 <b>建议:</b> 请检查命令格式或联系管理员`, 
+        parseMode: "html" 
+      });
     }
   },
   
@@ -388,7 +414,7 @@ const shiftPlugin: Plugin = {
   listenMessageHandler: async (msg: Api.Message) => {
     try {
       await handleMessageForwarding(msg);
-    } catch (error) {
+    } catch (error: any) {
       console.error('Message forwarding error:', error);
     }
   },
@@ -398,7 +424,8 @@ const shiftPlugin: Plugin = {
 async function handleSetCommand(msg: Api.Message, args: string[]): Promise<void> {
   if (args.length < 3) {
     await msg.edit({ 
-      text: "❌ **参数不足**\n\n用法：`shift set [源] [目标] [选项...]`\n\n示例：`shift set @channel1 @channel2 silent photo`" 
+      text: "❌ <b>参数不足</b>\n\n<b>用法:</b> <code>shift set [源] [目标] [选项...]</code>\n\n<b>示例:</b> <code>shift set @channel1 @channel2 silent photo</code>", 
+      parseMode: "html" 
     });
     return;
   }
@@ -413,7 +440,10 @@ async function handleSetCommand(msg: Api.Message, args: string[]): Promise<void>
     const targetId = await parseEntityId(targetArg, msg);
 
     if (!sourceId || !targetId) {
-      await msg.edit({ text: "❌ **无法解析源或目标**\n\n请检查用户名或ID是否正确" });
+      await msg.edit({ 
+        text: "❌ <b>无法解析源或目标</b>\n\n请检查用户名或ID是否正确\n\n💡 <b>支持格式:</b>\n• @username\n• 数字ID\n• 'me' 或 'here' (当前对话)", 
+        parseMode: "html" 
+      });
       return;
     }
 
@@ -424,7 +454,8 @@ async function handleSetCommand(msg: Api.Message, args: string[]): Promise<void>
         validOptions.push(option as MessageType);
       } else {
         await msg.edit({ 
-          text: `❌ **无效选项**: ${option}\n\n可用选项：${Array.from(AVAILABLE_OPTIONS).join(', ')}` 
+          text: `❌ <b>无效选项:</b> <code>${option}</code>\n\n<b>可用选项:</b>\n${Array.from(AVAILABLE_OPTIONS).map(opt => `• <code>${opt}</code>`).join('\n')}`, 
+          parseMode: "html" 
         });
         return;
       }
@@ -437,7 +468,10 @@ async function handleSetCommand(msg: Api.Message, args: string[]): Promise<void>
     // 检查循环转发
     const circularCheck = shiftManager.checkCircularForward(sourceId, targetId);
     if (circularCheck.isCircular) {
-      await msg.edit({ text: `❌ **循环转发检测**\n\n${circularCheck.reason}` });
+      await msg.edit({ 
+        text: `❌ <b>循环转发检测</b>\n\n<b>错误原因:</b> ${circularCheck.reason}\n\n💡 <b>建议:</b> 请检查转发链路径`, 
+        parseMode: "html" 
+      });
       return;
     }
 
@@ -460,23 +494,30 @@ async function handleSetCommand(msg: Api.Message, args: string[]): Promise<void>
     const targetDisplay = `${targetArg} (ID: ${targetId})`;
 
     await msg.edit({ 
-      text: `✅ **转发规则已设置**\n\n` +
-            `📤 **源**：${sourceDisplay}\n` +
-            `📥 **目标**：${targetDisplay}\n` +
-            `🎯 **类型**：${validOptions.join(', ')}\n` +
-            `📅 **创建时间**：${new Date().toLocaleString('zh-CN')}`
+      text: `✅ <b>转发规则已设置</b>\n\n` +
+            `📤 <b>源:</b> ${sourceDisplay}\n` +
+            `📥 <b>目标:</b> ${targetDisplay}\n` +
+            `🎯 <b>类型:</b> ${validOptions.join(', ')}\n` +
+            `📅 <b>创建时间:</b> ${new Date().toLocaleString('zh-CN')}`,
+      parseMode: "html"
     });
 
-  } catch (error) {
+  } catch (error: any) {
     console.error('Set command error:', error);
-    await msg.edit({ text: `❌ **设置失败**\n\n${error}` });
+    const errorMessage = error.message || String(error);
+    const displayError = errorMessage.length > 100 ? errorMessage.substring(0, 100) + '...' : errorMessage;
+    await msg.edit({ 
+      text: `❌ <b>设置失败</b>\n\n<b>错误信息:</b> ${displayError}\n\n💡 <b>建议:</b> 请检查参数格式和权限`, 
+      parseMode: "html" 
+    });
   }
 }
 
 async function handleDeleteCommand(msg: Api.Message, args: string[]): Promise<void> {
   if (args.length < 2) {
     await msg.edit({ 
-      text: "❌ **参数不足**\n\n用法：`shift del [序号]`\n\n使用 `shift list` 查看规则序号" 
+      text: "❌ <b>参数不足</b>\n\n<b>用法:</b> <code>shift del [序号]</code>\n\n使用 <code>shift list</code> 查看规则序号", 
+      parseMode: "html" 
     });
     return;
   }
@@ -489,7 +530,8 @@ async function handleDeleteCommand(msg: Api.Message, args: string[]): Promise<vo
     
     if (index < 0 || index >= allRules.length) {
       await msg.edit({ 
-        text: `❌ **序号无效**\n\n请输入 1-${allRules.length} 之间的序号` 
+        text: `❌ <b>序号无效</b>\n\n请输入 1-${allRules.length} 之间的序号`,
+        parseMode: "html"
       });
       return;
     }
@@ -502,17 +544,26 @@ async function handleDeleteCommand(msg: Api.Message, args: string[]): Promise<vo
     
     if (deleted) {
       await msg.edit({ 
-        text: `✅ **转发规则已删除**\n\n` +
-              `📤 **源**：${sourceDisplay}\n` +
-              `📥 **目标**：${targetDisplay}`
+        text: `✅ <b>转发规则已删除</b>\n\n` +
+              `📤 <b>源:</b> ${sourceDisplay}\n` +
+              `📥 <b>目标:</b> ${targetDisplay}`,
+        parseMode: "html"
       });
     } else {
-      await msg.edit({ text: "❌ **删除失败**\n\n规则可能已被删除" });
+      await msg.edit({ 
+        text: "❌ <b>删除失败</b>\n\n规则可能已被删除", 
+        parseMode: "html" 
+      });
     }
 
-  } catch (error) {
+  } catch (error: any) {
     console.error('Delete command error:', error);
-    await msg.edit({ text: `❌ **删除失败**\n\n${error}` });
+    const errorMessage = error.message || String(error);
+    const displayError = errorMessage.length > 100 ? errorMessage.substring(0, 100) + '...' : errorMessage;
+    await msg.edit({ 
+      text: `❌ <b>删除失败</b>\n\n<b>错误信息:</b> ${displayError}`, 
+      parseMode: "html" 
+    });
   }
 }
 
@@ -522,12 +573,13 @@ async function handleListCommand(msg: Api.Message): Promise<void> {
     
     if (allRules.length === 0) {
       await msg.edit({ 
-        text: "📋 **转发规则列表**\n\n暂无转发规则\n\n使用 `shift set` 添加规则" 
+        text: "📋 <b>转发规则列表</b>\n\n暂无转发规则\n\n使用 <code>shift set</code> 添加规则", 
+        parseMode: "html" 
       });
       return;
     }
 
-    let listText = "📋 **转发规则列表**\n\n";
+    let listText = "📋 <b>转发规则列表</b>\n\n";
     
     for (let i = 0; i < allRules.length; i++) {
       const { sourceId, rule } = allRules[i];
@@ -538,22 +590,27 @@ async function handleListCommand(msg: Api.Message): Promise<void> {
       const forwardCount = stats ? stats.total_forwarded : 0;
       const filterCount = rule.filters ? rule.filters.length : 0;
       
-      listText += `${i + 1}. ${status}\n`;
-      listText += `📤 源：${sourceDisplay}\n`;
-      listText += `📥 目标：${targetDisplay}\n`;
-      listText += `🎯 类型：${rule.options.join(', ')}\n`;
-      listText += `📊 已转发：${forwardCount} 条\n`;
+      listText += `<b>${i + 1}.</b> ${status}\n`;
+      listText += `📤 <b>源:</b> ${sourceDisplay}\n`;
+      listText += `📥 <b>目标:</b> ${targetDisplay}\n`;
+      listText += `🎯 <b>类型:</b> ${rule.options.join(', ')}\n`;
+      listText += `📊 <b>已转发:</b> ${forwardCount} 条\n`;
       if (filterCount > 0) {
-        listText += `🔍 过滤规则：${filterCount} 条\n`;
+        listText += `🔍 <b>过滤规则:</b> ${filterCount} 条\n`;
       }
-      listText += `📅 创建：${new Date(rule.created_at).toLocaleString('zh-CN')}\n\n`;
+      listText += `📅 <b>创建:</b> ${new Date(rule.created_at).toLocaleString('zh-CN')}\n\n`;
     }
 
-    await msg.edit({ text: listText });
+    await msg.edit({ text: listText, parseMode: "html" });
 
-  } catch (error) {
+  } catch (error: any) {
     console.error('List command error:', error);
-    await msg.edit({ text: `❌ **获取列表失败**\n\n${error}` });
+    const errorMessage = error.message || String(error);
+    const displayError = errorMessage.length > 100 ? errorMessage.substring(0, 100) + '...' : errorMessage;
+    await msg.edit({ 
+      text: `❌ <b>获取列表失败</b>\n\n<b>错误信息:</b> ${displayError}`, 
+      parseMode: "html" 
+    });
   }
 }
 
@@ -563,7 +620,8 @@ async function handleStatsCommand(msg: Api.Message): Promise<void> {
     
     if (allRules.length === 0) {
       await msg.edit({ 
-        text: "📊 **转发统计**\n\n暂无转发规则" 
+        text: "📊 <b>转发统计</b>\n\n暂无转发规则", 
+        parseMode: "html" 
       });
       return;
     }
@@ -588,8 +646,8 @@ async function handleStatsCommand(msg: Api.Message): Promise<void> {
     }
 
     // 总体统计概览
-    let statsText = `📊 **转发统计报告**\n\n`;
-    statsText += `📈 **总体概览**\n`;
+    let statsText = `📊 <b>转发统计报告</b>\n\n`;
+    statsText += `📈 <b>总体概览</b>\n`;
     statsText += `• 总规则数: ${allRules.length} 条\n`;
     statsText += `• 运行中: ${activeRules} 条\n`;
     statsText += `• 已暂停: ${pausedRules} 条\n`;
@@ -597,7 +655,7 @@ async function handleStatsCommand(msg: Api.Message): Promise<void> {
     statsText += `• 总错误: ${totalErrors} 条\n\n`;
     
     // 按规则显示详细统计
-    statsText += `📋 **详细统计**\n\n`;
+    statsText += `📋 <b>详细统计</b>\n\n`;
     
     for (let i = 0; i < allRules.length; i++) {
       const { sourceId, rule } = allRules[i];
@@ -606,14 +664,14 @@ async function handleStatsCommand(msg: Api.Message): Promise<void> {
       const stats = shiftManager.getStats(sourceId, rule.target_id);
       const status = rule.paused ? "⏸️ 已暂停" : "▶️ 运行中";
       
-      statsText += `**${i + 1}.** ${status}\n`;
-      statsText += `📤 源: ${sourceDisplay}\n`;
-      statsText += `📥 目标: ${targetDisplay}\n`;
+      statsText += `<b>${i + 1}.</b> ${status}\n`;
+      statsText += `📤 <b>源:</b> ${sourceDisplay}\n`;
+      statsText += `📥 <b>目标:</b> ${targetDisplay}\n`;
       
       if (stats && stats.total_forwarded > 0) {
-        statsText += `📈 总转发: ${stats.total_forwarded} 条\n`;
+        statsText += `📈 <b>总转发:</b> ${stats.total_forwarded} 条\n`;
         if (stats.error_count > 0) {
-          statsText += `❌ 错误: ${stats.error_count} 条\n`;
+          statsText += `❌ <b>错误:</b> ${stats.error_count} 条\n`;
         }
         
         // 显示最近7天的统计
@@ -623,7 +681,7 @@ async function handleStatsCommand(msg: Api.Message): Promise<void> {
             .slice(0, 7);
           
           if (sortedDates.length > 0) {
-            statsText += `📅 最近7天:\n`;
+            statsText += `📅 <b>最近7天:</b>\n`;
             for (const date of sortedDates) {
               const count = stats.daily_stats[date];
               statsText += `  • ${date}: ${count} 条\n`;
@@ -631,7 +689,7 @@ async function handleStatsCommand(msg: Api.Message): Promise<void> {
           }
         }
       } else {
-        statsText += `📈 总转发: 0 条\n`;
+        statsText += `📈 <b>总转发:</b> 0 条\n`;
       }
       
       if (i < allRules.length - 1) {
@@ -640,21 +698,27 @@ async function handleStatsCommand(msg: Api.Message): Promise<void> {
     }
     
     if (allRules.length === 0) {
-      statsText = `📊 转发统计报告\n\n暂无转发规则`;
+      statsText = `📊 <b>转发统计报告</b>\n\n暂无转发规则`;
     }
 
-    await msg.edit({ text: statsText });
+    await msg.edit({ text: statsText, parseMode: "html" });
 
-  } catch (error) {
+  } catch (error: any) {
     console.error('Stats command error:', error);
-    await msg.edit({ text: `❌ **获取统计失败**\n\n${error}` });
+    const errorMessage = error.message || String(error);
+    const displayError = errorMessage.length > 100 ? errorMessage.substring(0, 100) + '...' : errorMessage;
+    await msg.edit({ 
+      text: `❌ <b>获取统计失败</b>\n\n<b>错误信息:</b> ${displayError}`, 
+      parseMode: "html" 
+    });
   }
 }
 
 async function handlePauseCommand(msg: Api.Message, args: string[]): Promise<void> {
   if (args.length < 2) {
     await msg.edit({ 
-      text: "❌ **参数不足**\n\n用法：`shift pause [序号]`\n\n使用 `shift list` 查看规则序号" 
+      text: "❌ <b>参数不足</b>\n\n<b>用法:</b> <code>shift pause [序号]</code>\n\n使用 <code>shift list</code> 查看规则序号", 
+      parseMode: "html" 
     });
     return;
   }
@@ -665,7 +729,8 @@ async function handlePauseCommand(msg: Api.Message, args: string[]): Promise<voi
 async function handleResumeCommand(msg: Api.Message, args: string[]): Promise<void> {
   if (args.length < 2) {
     await msg.edit({ 
-      text: "❌ **参数不足**\n\n用法：`shift resume [序号]`\n\n使用 `shift list` 查看规则序号" 
+      text: "❌ <b>参数不足</b>\n\n<b>用法:</b> <code>shift resume [序号]</code>\n\n使用 <code>shift list</code> 查看规则序号", 
+      parseMode: "html" 
     });
     return;
   }
@@ -676,7 +741,8 @@ async function handleResumeCommand(msg: Api.Message, args: string[]): Promise<vo
 async function handleFilterCommand(msg: Api.Message, args: string[]): Promise<void> {
   if (args.length < 3) {
     await msg.edit({ 
-      text: "❌ **参数不足**\n\n用法：\n• `shift filter [序号] add [关键词]`\n• `shift filter [序号] del [关键词]`\n• `shift filter [序号] list`" 
+      text: "❌ <b>参数不足</b>\n\n<b>用法:</b>\n• <code>shift filter [序号] add [关键词]</code>\n• <code>shift filter [序号] del [关键词]</code>\n• <code>shift filter [序号] list</code>", 
+      parseMode: "html" 
     });
     return;
   }
@@ -688,7 +754,10 @@ async function handleFilterCommand(msg: Api.Message, args: string[]): Promise<vo
     const allRules = shiftManager.getAllRules();
     
     if (index < 0 || index >= allRules.length) {
-      await msg.edit({ text: "❌ **序号无效**\n\n使用 `shift list` 查看有效序号" });
+      await msg.edit({ 
+        text: "❌ <b>序号无效</b>\n\n使用 <code>shift list</code> 查看有效序号", 
+        parseMode: "html" 
+      });
       return;
     }
 
@@ -697,32 +766,50 @@ async function handleFilterCommand(msg: Api.Message, args: string[]): Promise<vo
     switch (action) {
       case 'add':
         if (args.length < 4) {
-          await msg.edit({ text: "❌ **缺少关键词**\n\n用法：`shift filter [序号] add [关键词]`" });
+          await msg.edit({ 
+            text: "❌ <b>缺少关键词</b>\n\n<b>用法:</b> <code>shift filter [序号] add [关键词]</code>", 
+            parseMode: "html" 
+          });
           return;
         }
         const addKeyword = args.slice(3).join(' ');
         const addSuccess = shiftManager.addFilter(sourceId, addKeyword);
         
         if (addSuccess) {
-          await msg.edit({ text: `✅ **过滤关键词已添加**\n\n关键词：${addKeyword}` });
+          await msg.edit({ 
+            text: `✅ <b>过滤关键词已添加</b>\n\n<b>关键词:</b> <code>${addKeyword}</code>`, 
+            parseMode: "html" 
+          });
         } else {
-          await msg.edit({ text: "❌ **添加失败**\n\n规则可能不存在" });
+          await msg.edit({ 
+            text: "❌ <b>添加失败</b>\n\n规则可能不存在", 
+            parseMode: "html" 
+          });
         }
         break;
         
       case 'del':
       case 'delete':
         if (args.length < 4) {
-          await msg.edit({ text: "❌ **缺少关键词**\n\n用法：`shift filter [序号] del [关键词]`" });
+          await msg.edit({ 
+            text: "❌ <b>缺少关键词</b>\n\n<b>用法:</b> <code>shift filter [序号] del [关键词]</code>", 
+            parseMode: "html" 
+          });
           return;
         }
         const delKeyword = args.slice(3).join(' ');
         const delSuccess = shiftManager.removeFilter(sourceId, delKeyword);
         
         if (delSuccess) {
-          await msg.edit({ text: `✅ **过滤关键词已删除**\n\n关键词：${delKeyword}` });
+          await msg.edit({ 
+            text: `✅ <b>过滤关键词已删除</b>\n\n<b>关键词:</b> <code>${delKeyword}</code>`, 
+            parseMode: "html" 
+          });
         } else {
-          await msg.edit({ text: "❌ **删除失败**\n\n关键词可能不存在" });
+          await msg.edit({ 
+            text: "❌ <b>删除失败</b>\n\n关键词可能不存在", 
+            parseMode: "html" 
+          });
         }
         break;
         
@@ -730,27 +817,35 @@ async function handleFilterCommand(msg: Api.Message, args: string[]): Promise<vo
         const filters = shiftManager.getFilters(sourceId);
         const sourceDisplay = await getDisplayName(sourceId);
         
-        let filterText = `🔍 **过滤关键词列表**\n\n📤 **源**：${sourceDisplay}\n\n`;
+        let filterText = `🔍 <b>过滤关键词列表</b>\n\n📤 <b>源:</b> ${sourceDisplay}\n\n`;
         
         if (filters.length === 0) {
           filterText += "暂无过滤关键词";
         } else {
-          filterText += "**关键词：**\n";
+          filterText += "<b>关键词:</b>\n";
           filters.forEach((filter, i) => {
-            filterText += `${i + 1}. ${filter}\n`;
+            filterText += `${i + 1}. <code>${filter}</code>\n`;
           });
         }
         
-        await msg.edit({ text: filterText });
+        await msg.edit({ text: filterText, parseMode: "html" });
         break;
         
       default:
-        await msg.edit({ text: "❌ **未知操作**\n\n支持的操作：add, del, list" });
+        await msg.edit({ 
+          text: "❌ <b>未知操作</b>\n\n<b>支持的操作:</b> add, del, list", 
+          parseMode: "html" 
+        });
     }
     
-  } catch (error) {
+  } catch (error: any) {
     console.error('Filter command error:', error);
-    await msg.edit({ text: `❌ **过滤操作失败**\n\n${error}` });
+    const errorMessage = error.message || String(error);
+    const displayError = errorMessage.length > 100 ? errorMessage.substring(0, 100) + '...' : errorMessage;
+    await msg.edit({ 
+      text: `❌ <b>过滤操作失败</b>\n\n<b>错误信息:</b> ${displayError}`, 
+      parseMode: "html" 
+    });
   }
 }
 
@@ -763,7 +858,8 @@ async function toggleRuleStatus(msg: Api.Message, args: string[], paused: boolea
     
     if (index < 0 || index >= allRules.length) {
       await msg.edit({ 
-        text: `❌ **序号无效**\n\n请输入 1-${allRules.length} 之间的序号` 
+        text: `❌ <b>序号无效</b>\n\n请输入 1-${allRules.length} 之间的序号`,
+        parseMode: "html"
       });
       return;
     }
@@ -778,17 +874,26 @@ async function toggleRuleStatus(msg: Api.Message, args: string[], paused: boolea
       const status = paused ? "⏸️ 已暂停" : "▶️ 运行中";
       
       await msg.edit({ 
-        text: `✅ **转发规则已${action}**\n\n` +
-              `📤 **源**：${sourceDisplay}\n` +
-              `📊 **状态**：${status}`
+        text: `✅ <b>转发规则已${action}</b>\n\n` +
+              `📤 <b>源:</b> ${sourceDisplay}\n` +
+              `📊 <b>状态:</b> ${status}`,
+        parseMode: "html"
       });
     } else {
-      await msg.edit({ text: "❌ **操作失败**\n\n规则可能不存在" });
+      await msg.edit({ 
+        text: "❌ <b>操作失败</b>\n\n规则可能不存在", 
+        parseMode: "html" 
+      });
     }
 
-  } catch (error) {
+  } catch (error: any) {
     console.error('Toggle rule error:', error);
-    await msg.edit({ text: `❌ **操作失败**\n\n${error}` });
+    const errorMessage = error.message || String(error);
+    const displayError = errorMessage.length > 100 ? errorMessage.substring(0, 100) + '...' : errorMessage;
+    await msg.edit({ 
+      text: `❌ <b>操作失败</b>\n\n<b>错误信息:</b> ${displayError}`, 
+      parseMode: "html" 
+    });
   }
 }
 
@@ -797,6 +902,7 @@ async function parseEntityId(entityArg: string, msg: Api.Message): Promise<numbe
   try {
     // 处理特殊关键词
     if (entityArg === 'me' || entityArg === 'here') {
+      if (!msg.peerId) return null;
       // 从 peerId 中提取数字ID
       if ('userId' in msg.peerId) {
         return Number(msg.peerId.userId);
@@ -827,7 +933,7 @@ async function parseEntityId(entityArg: string, msg: Api.Message): Promise<numbe
         if ('id' in entity) {
           // 根据实体类型返回正确的ID格式
           // entity.id 可能是 BigInt 类型，需要安全转换
-          const entityId = typeof entity.id === 'bigint' ? Number(entity.id) : Number(entity.id);
+          const entityId = Number(entity.id);
           
           console.log(`Resolved username ${username}: type=${entity.className}, id=${entityId}`);
           
@@ -844,14 +950,14 @@ async function parseEntityId(entityArg: string, msg: Api.Message): Promise<numbe
           return entityId;
         }
         return null;
-      } catch (error) {
+      } catch (error: any) {
         console.error('Username resolution failed:', entityArg, error);
         return null;
       }
     }
 
     return null;
-  } catch (error) {
+  } catch (error: any) {
     console.error('Parse entity error:', error);
     return null;
   }
@@ -867,12 +973,26 @@ async function getDisplayName(entityId: number): Promise<string> {
   // 先尝试预缓存对话实体
   await cacheDialogEntities();
 
-  // 检查是否在对话缓存中
-  const cachedEntity = entityInfoCache.get(entityId);
+  // 检查是否在对话缓存中（尝试多种ID格式）
+  let cachedEntity = entityInfoCache.get(entityId);
+  
+  // 如果直接查找失败，尝试其他ID格式
+  if (!cachedEntity) {
+    if (entityId < -1000000000000) {
+      // 频道格式，尝试原始ID
+      const originalId = Math.abs(entityId + 1000000000000);
+      cachedEntity = entityInfoCache.get(originalId);
+    } else if (entityId < 0) {
+      // 群组格式，尝试原始ID
+      const originalId = Math.abs(entityId);
+      cachedEntity = entityInfoCache.get(originalId);
+    }
+  }
+  
   if (cachedEntity) {
     let displayName = '';
     
-    // 有用户名就只显示用户名，没有就显示ID
+    // 优先显示用户名，其次标题，最后名字
     if ('username' in cachedEntity && cachedEntity.username) {
       displayName = `@${cachedEntity.username}`;
     } else if ('title' in cachedEntity && cachedEntity.title) {
@@ -883,6 +1003,8 @@ async function getDisplayName(entityId: number): Promise<string> {
       displayName = `ID: ${entityId}`;
     }
     
+    console.log(`Display name resolved from cache: ${entityId} -> ${displayName}`);
+    
     // 缓存结果
     entityCache.set(entityId, { name: displayName, timestamp: Date.now() });
     return displayName;
@@ -892,20 +1014,22 @@ async function getDisplayName(entityId: number): Promise<string> {
     const client = await getGlobalClient();
     let actualId = entityId;
     
-    // 转换ID格式
+    // 转换ID格式用于API调用
     if (entityId < -1000000000000) {
       actualId = Math.abs(entityId + 1000000000000);
     } else if (entityId < 0) {
       actualId = Math.abs(entityId);
     }
 
+    console.log(`Attempting to get entity: ${entityId} -> ${actualId}`);
+    
     // 尝试获取实体
     const entity = await client.getEntity(actualId);
     
     if (entity) {
       let displayName = '';
       
-      // 有用户名就只显示用户名，没有就显示ID
+      // 优先显示用户名，其次标题，最后名字
       if ('username' in entity && entity.username) {
         displayName = `@${entity.username}`;
       } else if ('title' in entity && entity.title) {
@@ -916,16 +1040,20 @@ async function getDisplayName(entityId: number): Promise<string> {
         displayName = `ID: ${entityId}`;
       }
       
-      // 缓存结果
+      console.log(`Display name resolved from API: ${entityId} -> ${displayName}`);
+      
+      // 缓存结果和实体
       entityCache.set(entityId, { name: displayName, timestamp: Date.now() });
+      entityInfoCache.set(entityId, entity);
       return displayName;
     }
-  } catch (error) {
-    // 静默处理错误，不输出日志
+  } catch (error: any) {
+    console.warn(`Failed to get entity ${entityId}:`, error.message || error);
   }
 
-  // 降级方案：只显示ID
+  // 降级方案：显示ID
   const fallbackName = `ID: ${entityId}`;
+  console.log(`Using fallback name: ${entityId} -> ${fallbackName}`);
   entityCache.set(entityId, { name: fallbackName, timestamp: Date.now() });
   return fallbackName;
 }
@@ -936,6 +1064,9 @@ async function handleMessageForwarding(msg: Api.Message): Promise<void> {
     // 获取消息来源ID
     const sourceId = getSourceId(msg);
     if (!sourceId) return;
+    
+    // 跳过自己发送的消息，避免循环
+    if (msg.out) return;
 
     // 获取转发规则
     const rule = shiftManager.getRule(sourceId);
@@ -954,7 +1085,7 @@ async function handleMessageForwarding(msg: Api.Message): Promise<void> {
     console.log(`Forwarding successful, updating stats for ${sourceId} -> ${rule.target_id}`);
     shiftManager.updateStats(sourceId, rule.target_id, true);
 
-  } catch (error) {
+  } catch (error: any) {
     console.error('Message forwarding failed:', error);
     if (msg.peerId) {
       const sourceId = getSourceId(msg);
@@ -969,6 +1100,8 @@ async function handleMessageForwarding(msg: Api.Message): Promise<void> {
 // 获取消息来源ID
 function getSourceId(msg: Api.Message): number | null {
   try {
+    if (!msg.peerId) return null;
+    
     if ('userId' in msg.peerId) {
       return Number(msg.peerId.userId);
     } else if ('chatId' in msg.peerId) {
@@ -977,7 +1110,7 @@ function getSourceId(msg: Api.Message): number | null {
       return -1000000000000 - Number(msg.peerId.channelId);
     }
     return null;
-  } catch (error) {
+  } catch (error: any) {
     console.error('Get source ID error:', error);
     return null;
   }
@@ -992,10 +1125,10 @@ function shouldForwardMessage(msg: Api.Message, options: MessageType[]): boolean
 
   // 检查媒体类型
   if (msg.media) {
-    if (msg.photo && options.includes('photo')) return true;
-    if (msg.video && options.includes('video')) return true;
-    if (msg.document) {
-      const doc = msg.document;
+    if ('photo' in msg.media && options.includes('photo')) return true;
+    if ('video' in msg.media && options.includes('video')) return true;
+    if ('document' in msg.media && msg.media.document) {
+      const doc = msg.media.document;
       if ('mimeType' in doc && doc.mimeType) {
         if (doc.mimeType.startsWith('image/') && options.includes('photo')) return true;
         if (doc.mimeType.startsWith('video/') && options.includes('video')) return true;
@@ -1005,9 +1138,9 @@ function shouldForwardMessage(msg: Api.Message, options: MessageType[]): boolean
         if (options.includes('document')) return true;
       }
     }
-    if (msg.voice && options.includes('voice')) return true;
-    if (msg.audio && options.includes('audio')) return true;
-    if (msg.sticker && options.includes('sticker')) return true;
+    if ('voice' in msg.media && options.includes('voice')) return true;
+    if ('audio' in msg.media && options.includes('audio')) return true;
+    if ('sticker' in msg.media && options.includes('sticker')) return true;
   }
 
   // 检查文本消息
@@ -1088,7 +1221,7 @@ async function forwardMessage(msg: Api.Message, rule: ForwardRule): Promise<void
           sendOptions.file = msg.media;
           // 复制媒体标题
           if ('caption' in msg.media && msg.media.caption) {
-            sendOptions.caption = msg.media.caption;
+            sendOptions.caption = String(msg.media.caption);
           }
         }
         
@@ -1125,7 +1258,7 @@ async function forwardMessage(msg: Api.Message, rule: ForwardRule): Promise<void
 
     console.log(`Message ${msg.id} forwarded successfully using low-level API`);
 
-  } catch (error) {
+  } catch (error: any) {
     console.error('All forward methods failed:', error);
     throw error;
   }
@@ -1144,8 +1277,8 @@ async function getTargetPeer(targetId: number): Promise<any> {
       } catch (userError) {
         console.warn(`Could not get user entity ${targetId}, trying fallback`);
         return new Api.InputPeerUser({
-          userId: BigInteger(targetId),
-          accessHash: BigInteger(0)
+          userId: targetId as any,
+          accessHash: 0 as any
         });
       }
     } else if (targetId < -1000000000000) {
@@ -1157,8 +1290,8 @@ async function getTargetPeer(targetId: number): Promise<any> {
       } catch (channelError) {
         console.warn(`Could not get channel entity ${channelId}, trying fallback`);
         return new Api.InputPeerChannel({
-          channelId: BigInteger(channelId),
-          accessHash: BigInteger(0)
+          channelId: channelId as any,
+          accessHash: 0 as any
         });
       }
     } else if (targetId < 0) {
@@ -1170,13 +1303,13 @@ async function getTargetPeer(targetId: number): Promise<any> {
       } catch (chatError) {
         console.warn(`Could not get chat entity ${chatId}, trying fallback`);
         return new Api.InputPeerChat({
-          chatId: BigInteger(chatId)
+          chatId: chatId as any
         });
       }
     } else {
       throw new Error(`Invalid target ID: ${targetId}`);
     }
-  } catch (error) {
+  } catch (error: any) {
     console.error('Get target peer completely failed:', error);
     throw error;
   }
