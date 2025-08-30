@@ -78,5 +78,9 @@
   "komari": {
     "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/komari/komari.ts?raw=true",
     "author": "JohnsonRan"
+  },
+  "dig": {
+    "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/dig/dig.ts?raw=true",
+    "author": "Assistant"
   }
 }
