@@ -82,5 +82,9 @@
   "dig": {
     "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/dig/dig.ts?raw=true",
     "author": "Assistant"
+  },
+  "keyword": {
+    "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/keyword/keyword.ts?raw=true",
+    "author": "EALyce"
   }
 }
