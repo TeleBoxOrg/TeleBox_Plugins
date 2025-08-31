@@ -405,6 +405,50 @@ async function getManagedGroups(client: TelegramClient): Promise<Array<{ id: num
 }
 
 /**
+ * Check if chat supports message deletion
+ */
+async function canDeleteMessages(client: TelegramClient, chatId: any): Promise<boolean> {
+  try {
+    // Extract actual ID from peerId object or BigInt
+    let channelId: number;
+    if (chatId && typeof chatId === 'object' && chatId.channelId) {
+      channelId = Number(chatId.channelId.toString());
+    } else if (chatId && typeof chatId === 'object' && chatId.chatId) {
+      channelId = Number(chatId.chatId.toString());
+    } else if (typeof chatId === 'bigint') {
+      channelId = Number(chatId.toString());
+    } else {
+      channelId = Number(chatId);
+    }
+    
+    // Get chat info to check if it's a channel/supergroup
+    const chatEntity = await client.getEntity(channelId);
+    
+    // Only channels and supergroups support DeleteParticipantHistory
+    // Check if it's a channel or supergroup using proper type checking
+    const isChannel = (chatEntity as any).broadcast === true;
+    const isSupergroup = (chatEntity as any).megagroup === true;
+    
+    if (!isChannel && !isSupergroup) {
+      return false;
+    }
+    
+    // Check if bot has delete_messages permission
+    const me = await client.getMe();
+    const participant = await client.invoke(new Api.channels.GetParticipant({
+      channel: channelId,
+      participant: Number(me.id)
+    }));
+    
+    const rights = (participant.participant as any).adminRights;
+    return !!(rights && rights.deleteMessages);
+  } catch (error: any) {
+    console.log(`[BanManager] Cannot check delete permission: ${error.message}`);
+    return false;
+  }
+}
+
+/**
  * Safe ban action with multiple fallback methods
  */
 async function safeBanAction(client: TelegramClient, chatId: any, userId: number, rights: any): Promise<boolean> {
@@ -474,19 +518,31 @@ async function safeBanAction(client: TelegramClient, chatId: any, userId: number
       }
     }
     
-    // If permanent ban, try to delete user messages
+    // If permanent ban, try to delete user messages (with proper checks)
     if (banSuccess && rights.viewMessages) {
       try {
+        // Check if this chat supports message deletion
+        const canDelete = await canDeleteMessages(client, chatId);
+        if (!canDelete) {
+          console.log(`[BanManager] Chat ${channelId} doesn't support message deletion or lacks permission`);
+          return banSuccess;
+        }
+        
         const userEntity = await safeGetEntity(client, userId);
         if (userEntity) {
           await client.invoke(new Api.channels.DeleteParticipantHistory({
-            channel: Number(chatId),
+            channel: channelId,
             participant: userEntity
           }));
-          console.log(`[BanManager] Deleted all messages from ${userId} in ${chatId}`);
+          console.log(`[BanManager] Deleted all messages from ${userId} in ${channelId}`);
         }
       } catch (error: any) {
-        console.log(`[BanManager] Failed to delete messages: ${error.message}`);
+        // Don't log CHANNEL_INVALID and CHAT_ADMIN_REQUIRED as errors since they're expected
+        if (error.message.includes('CHANNEL_INVALID') || error.message.includes('CHAT_ADMIN_REQUIRED')) {
+          console.log(`[BanManager] Cannot delete messages in chat ${channelId}: ${error.message} (expected for some chat types)`);
+        } else {
+          console.log(`[BanManager] Failed to delete messages: ${error.message}`);
+        }
       }
     }
     
