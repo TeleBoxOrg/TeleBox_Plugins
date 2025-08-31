@@ -26,6 +26,15 @@
       "y": 292,
       "mask": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/eat/maskbc2.png?raw=true"
     }
+  }, 
+  "dd": {
+    "name": "逗逗你呀~",
+    "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/eat/eatdd.png?raw=true",
+    "you": {
+      "x": 175,
+      "y": 62,
+      "mask": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/eat/maskdd.png?raw=true"
+    }
   },
   "dl": {
     "name": "大佬~可靠",
@@ -41,15 +50,6 @@
       "mask": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/eat/maskdl2.png?raw=true"
     }
   },  
-  "dd": {
-    "name": "逗逗你呀~",
-    "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/eat/eatdd.png?raw=true",
-    "you": {
-      "x": 175,
-      "y": 62,
-      "mask": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/eat/maskdd.png?raw=true"
-    }
-  },
   "fk": {
     "name": "国际友好手势",
     "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/eat/eatfk.png?raw=true",
@@ -75,6 +75,15 @@
       "x": 170,
       "y": 95,
       "mask": "https://github.com/FoKit/PagerMaid_Plugins/blob/modify/eat/maskko.png?raw=true"
+    }
+  },
+  "kz": {
+    "name": "看来真得控制你了",
+    "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/eat/eatkz.png?raw=true",
+    "you": {
+      "x": 1,
+      "y": 202,
+      "mask": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/eat/maskkz.png?raw=true"
     }
   },  
   "ld": {
