@@ -273,7 +273,7 @@ async function downloadAndUploadSong(
     await msg.client
       ?.sendFile(msg.peerId, {
         file: downloadedFilePath,
-        caption: caption,
+        // caption: caption,
       })
       .catch((uploadError) => {
         console.error("音频上传错误，将尝试作为文档发送:", uploadError);

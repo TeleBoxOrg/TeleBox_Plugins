@@ -4,9 +4,13 @@ import path from "path";
 import fs from "fs";
 import download from "download";
 import { Api } from "telegram";
+import {
+  createDirectoryInAssets,
+  createDirectoryInTemp,
+} from "@utils/pathHelpers";
 
-const EAT_ASSET_PATH = path.join(process.cwd(), "assets", "eat");
-const EAT_TEMP_PATH = path.join(process.cwd(), "temp", "eat");
+const EAT_ASSET_PATH = createDirectoryInAssets("me");
+const EAT_TEMP_PATH = createDirectoryInTemp("eat");
 const YOU_AVATAR_PATH = path.join(EAT_TEMP_PATH, "you.png");
 const ME_AVATAR_PATH = path.join(EAT_TEMP_PATH, "me.png");
 const OUT_STICKER_PATH = path.join(EAT_TEMP_PATH, "output.webp");
@@ -102,29 +106,53 @@ async function iconMaskedFor(params: {
   };
 }
 
-async function compositeWithEntryConfig(parmas: {
-  entry: EntryConfig;
-  msg: Api.Message;
-}) {
-  const { entry, msg } = parmas;
-
-  const basePath = await assetPathFor(entry.url);
-
+async function downloadProfilePhoto(msg: Api.Message): Promise<Boolean> {
   const replied = await msg.getReplyMessage();
   const fromId = replied?.fromId;
-
   if (!fromId) {
     await msg.edit({ text: "无法获取对方头像" });
-    return;
+    return false;
   }
-
-  if (!fs.existsSync(EAT_TEMP_PATH)) {
-    fs.mkdirSync(EAT_TEMP_PATH, { recursive: true });
-  }
-
   await msg.client?.downloadProfilePhoto(fromId, {
     outputFile: YOU_AVATAR_PATH,
   });
+  return true;
+}
+
+async function downloadMedia(msg: Api.Message): Promise<Boolean> {
+  const replied = await msg.getReplyMessage();
+  if (!replied) {
+    await msg.edit({ text: "请回复一条图片消息" });
+    return false;
+  }
+  if (!replied.media) {
+    await msg.edit({ text: "请回复一条图片消息" });
+    return false;
+  }
+  await msg.client?.downloadMedia(replied, {
+    outputFile: YOU_AVATAR_PATH,
+  });
+  return true;
+}
+
+async function downloadAvatar(
+  msg: Api.Message,
+  isEat2: Boolean
+): Promise<Boolean> {
+  return isEat2 ? await downloadMedia(msg) : await downloadProfilePhoto(msg);
+}
+
+async function compositeWithEntryConfig(parmas: {
+  entry: EntryConfig;
+  msg: Api.Message;
+  isEat2: boolean;
+}): Promise<void> {
+  const { entry, msg, isEat2 } = parmas;
+
+  const basePath = await assetPathFor(entry.url);
+
+  const downloadResult = await downloadAvatar(msg, isEat2);
+  if (!downloadResult) return;
 
   let composite: sharp.OverlayOptions[] = [
     await iconMaskedFor({ role: entry.you, avatar: YOU_AVATAR_PATH }),
@@ -160,9 +188,10 @@ async function compositeWithEntryConfig(parmas: {
 
 async function sendSticker(params: { entry: EntryConfig; msg: Api.Message }) {
   const { entry, msg } = params;
-
+  const cmd = msg.message.slice(1).split(" ")[0];
+  const isEat2 = cmd === "eat2";
   await msg.edit({ text: `正在生成 ${entry.name} 表情包···` });
-  await compositeWithEntryConfig({ entry, msg });
+  await compositeWithEntryConfig({ entry, msg, isEat2 });
   await msg.delete();
 }
 
@@ -187,13 +216,13 @@ async function handleSetCommand(params: {
 }
 
 const eatPlugin: Plugin = {
-  command: ["eat"],
+  command: ["eat", "eat2"],
   description:
     `表情包插件，回复 eat 来获取表情包列表\n` +
     `回复 eat set [url] 来更新表情包配置，默认配置在 ${baseConfigURL}。\n` +
     `回复 eat <表情包名称> 来发送对应的表情包，或者直接回复 eat 来随机发送一个表情包。`,
   cmdHandler: async (msg) => {
-    const [, ...args] = msg.message.slice(1).split(" ");
+    const [, ...args] = msg.message.split(" ");
     if (!msg.isReply) {
       if (args[0] == "set") {
         let url = args[1] || baseConfigURL;

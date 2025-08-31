@@ -3,13 +3,6 @@
     "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/eat/eat.ts?raw=true",
     "author": "TeleBoxDev"
   },
-  "eat2": {
-    "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/eat2/eat2.ts?raw=true"
-  },
-  "speedtest": {
-    "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/speedtest/speedtest.ts?raw=true",
-    "author": "BirdBird"
-  },
   "q": {
     "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/q/q.ts?raw=true",
     "author": "TeleBoxDev"
@@ -97,6 +90,10 @@
   },
   "dme": {
     "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/dme/dme.ts?raw=true",
+    "author": "EALyce"
+  },
+  "pmcaptcha": {
+    "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/pmcaptcha/pmcaptcha.ts?raw=true",
     "author": "EALyce"
   }
 }
