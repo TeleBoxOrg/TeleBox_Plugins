@@ -6,6 +6,7 @@ import { getGlobalClient } from "@utils/globalClient";
 import { TelegramClient } from "telegram";
 import { NewMessage, NewMessageEvent } from "telegram/events";
 import { Api } from "telegram/tl";
+import { safeForwardMessage, parseEntityId, withEntityAccess } from "@utils/entityHelpers";
 
 // Available message types
 const AVAILABLE_OPTIONS = new Set(["silent", "text", "all", "photo", "document", "video", "sticker", "animation", "voice", "audio"]);
@@ -746,7 +747,7 @@ function getChatIdFromMessage(message: any): number | null {
   return null;
 }
 
-// Forward message with proper access hash handling
+// Forward message using universal access hash handler
 async function shiftForwardMessage(client: TelegramClient, fromChatId: number, toChatId: number, messageId: number, depth: number = 0): Promise<void> {
   if (depth > 5) {
     console.log(`[SHIFT] 转发深度超限: ${depth}`);
@@ -754,14 +755,9 @@ async function shiftForwardMessage(client: TelegramClient, fromChatId: number, t
   }
   
   try {
-    // Get entities with proper access hash
-    const fromEntity = await client.getEntity(fromChatId);
-    const toEntity = await client.getEntity(toChatId);
-    
-    // Execute forwarding with proper entities
-    await client.forwardMessages(toEntity, {
-      messages: [messageId],
-      fromPeer: fromEntity
+    // 使用通用的安全转发函数
+    await safeForwardMessage(client, fromChatId, toChatId, messageId, {
+      maxRetries: 3
     });
     
     console.log(`[SHIFT] 转发成功: ${fromChatId} -> ${toChatId}, msg=${messageId}, depth=${depth}`);
@@ -772,45 +768,13 @@ async function shiftForwardMessage(client: TelegramClient, fromChatId: number, t
       // Wait for message to arrive
       await new Promise(resolve => setTimeout(resolve, 200));
       
-      try {
-        // Get latest message from target chat
-        const messages = await client.getMessages(toChatId, { limit: 1 });
-        if (messages && messages.length > 0) {
-          const newMsgId = messages[0].id;
-          console.log(`[SHIFT] 发现下级转发规则: ${toChatId} -> ${nextRule.target_id}, new_msg=${newMsgId}`);
-          
-          // Recursive forward
-          await shiftForwardMessage(client, toChatId, nextRule.target_id, newMsgId, depth + 1);
-        } else {
-          console.log(`[SHIFT] 无法获取新消息，使用原消息ID: ${messageId}`);
-          await shiftForwardMessage(client, toChatId, nextRule.target_id, messageId, depth + 1);
-        }
-      } catch (error) {
-        console.error(`[SHIFT] 获取新消息失败: ${error}`);
-        // Fallback: use original message ID
-        await shiftForwardMessage(client, toChatId, nextRule.target_id, messageId, depth + 1);
-      }
+      // Recursive forwarding with depth tracking
+      await shiftForwardMessage(client, toChatId, nextRule.target_id, messageId, depth + 1);
     }
     
-  } catch (error: any) {
-    console.error(`[SHIFT] 转发失败: ${error}`);
-    
-    // Handle flood wait
-    if (error.message && error.message.includes('FLOOD_WAIT')) {
-      const waitTime = parseInt(error.message.match(/\d+/)?.[0] || "60");
-      console.log(`[SHIFT] FloodWait ${waitTime}s, 等待重试`);
-      await new Promise(resolve => setTimeout(resolve, (waitTime + 1) * 1000));
-      
-      try {
-        await client.forwardMessages(toChatId, {
-          messages: [messageId],
-          fromPeer: fromChatId
-        });
-        console.log(`[SHIFT] 重试转发成功: ${fromChatId} -> ${toChatId}`);
-      } catch (retryError) {
-        console.error(`[SHIFT] 重试转发失败: ${retryError}`);
-      }
-    }
+  } catch (error) {
+    console.error(`[SHIFT] 转发失败: ${fromChatId} -> ${toChatId}, msg=${messageId}`, error);
+    throw error;
   }
 }
 
