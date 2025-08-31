@@ -94,5 +94,9 @@
   "lottery": {
     "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/lottery/lottery.ts?raw=true",
     "author": "EALyce"
+  },
+  "dme": {
+    "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/dme/dme.ts?raw=true",
+    "author": "EALyce"
   }
 }
