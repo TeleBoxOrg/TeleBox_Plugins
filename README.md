@@ -36,11 +36,11 @@ npm i <插件名>
 · `shift` - 智能消息转发系统，支持规则过滤和统计  
 · `speednext` - 网络速度测试工具  
 · `yt-dlp` - YouTube 视频下载工具，支持多种格式
-
+· `autochangename` - 昵称显示当前时间
 ## 插件作者
 
 - **TeleBoxDev**: eat, q
-- **EALyce**: gt, ip, send_cron, aban, music, clean_member, speednext, shift, da, dc, keyword, pin_cron, forward_cron, lottery, dme, pmcaptcha, pm2
+- **EALyce**: gt, ip, send_cron, aban, music, clean_member, speednext, shift, da, dc, keyword, pin_cron, forward_cron, lottery, dme, pmcaptcha, pm2, autochangename
 - **BirdBird**: yt-dlp
 - **JohnsonRan**: gpt, komari
 - **Assistant**: dig
