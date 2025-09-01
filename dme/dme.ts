@@ -119,26 +119,56 @@ async function editMediaMessageToAntiRecall(
 }
 
 /**
- * 搜索并处理用户消息的主函数
+ * 搜索并处理用户消息的主函数 - 静默版本
  */
 async function searchEditAndDeleteMyMessages(
   client: TelegramClient,
   chatEntity: any,
   myId: bigint,
-  userRequestedCount: number,
-  progressCallback: (text: string) => Promise<void>
+  userRequestedCount: number
 ): Promise<{ processedCount: number; actualCount: number; editedCount: number }> {
-  const actualCount = userRequestedCount + 2;
-  const maxSearchLimit = Math.max(actualCount * CONFIG.MAX_SEARCH_MULTIPLIER, CONFIG.MIN_MAX_SEARCH);
+  // 检查是否为频道且有管理权限
+  const isChannel = chatEntity.className === 'Channel';
+  if (isChannel) {
+    console.log(`[DME] 检测到频道，检查管理员权限...`);
+    try {
+      const me = await client.getMe();
+      const participant = await client.invoke(
+        new Api.channels.GetParticipant({
+          channel: chatEntity,
+          participant: me.id
+        })
+      );
+      
+      const isAdmin = participant.participant.className === 'ChannelParticipantAdmin' || 
+                      participant.participant.className === 'ChannelParticipantCreator';
+      
+      if (isAdmin) {
+        console.log(`[DME] 拥有频道管理权限，但仍使用普通模式避免误删别人消息`);
+        console.log(`[DME] 如需删除所有消息，请使用其他管理工具`);
+      } else {
+        console.log(`[DME] 无频道管理权限，使用普通模式`);
+      }
+    } catch (error) {
+      console.log(`[DME] 权限检查失败，使用普通模式:`, error);
+    }
+  }
   
-  await progressCallback(`🔍 <b>搜索消息中...</b>`);
-
+  const targetCount = userRequestedCount === 999999 ? Infinity : userRequestedCount + 2;
+  
   const allMyMessages: Api.Message[] = [];
+  const processedIds = new Set<number>(); // 防止重复处理
   let offsetId = 0;
-  let searchedTotal = 0;
+  let batchCount = 0;
+  let hasReachedEnd = false;
+  let totalSearched = 0;
+  const RATE_LIMIT_DELAY = 2000; // 每批次间隔2秒避免触发限制
 
-  // 搜索用户消息
-  while (allMyMessages.length < actualCount && searchedTotal < maxSearchLimit) {
+  console.log(`[DME] 开始搜索消息，目标数量: ${targetCount === Infinity ? '全部' : targetCount}`);
+
+  // 搜索用户消息 - 永不终止直到到达聊天首条消息
+  while (!hasReachedEnd && (targetCount === Infinity || allMyMessages.length < targetCount)) {
+    batchCount++;
     try {
       const messages = await client.getMessages(chatEntity, {
         limit: 100,
@@ -146,111 +176,144 @@ async function searchEditAndDeleteMyMessages(
       });
 
       if (messages.length === 0) {
+        hasReachedEnd = true;
+        console.log(`[DME] 已到达聊天记录末尾，共搜索 ${totalSearched} 条消息`);
         break;
       }
-
-      searchedTotal += messages.length;
       
-      // 筛选自己的消息
+      totalSearched += messages.length;
+
+      // 筛选自己的消息，避免重复
       const myMessages = messages.filter((m: Api.Message) => {
         if (!m?.id || !m?.senderId) return false;
+        if (processedIds.has(m.id)) return false; // 跳过已处理的消息
         return m.senderId.toString() === myId.toString();
       });
       
-      allMyMessages.push(...myMessages);
+      // 记录找到的消息
+      if (myMessages.length > 0) {
+        myMessages.forEach(m => processedIds.add(m.id));
+        allMyMessages.push(...myMessages);
+        console.log(`[DME] 批次 ${batchCount}: 找到 ${myMessages.length} 条消息，总计 ${allMyMessages.length} 条`);
+      } else {
+        console.log(`[DME] 批次 ${batchCount}: 本批次无自己的消息`);
+      }
       
       if (messages.length > 0) {
         offsetId = messages[messages.length - 1].id;
       }
 
-      await progressCallback(`🔍 <b>搜索中...</b>`);
-
-      if (allMyMessages.length >= actualCount) break;
-      await sleep(CONFIG.DELAYS.SEARCH);
+      // 如果不是无限模式且已达到目标数量，退出
+      if (targetCount !== Infinity && allMyMessages.length >= targetCount) {
+        console.log(`[DME] 已达到目标数量 ${targetCount}`);
+        break;
+      }
+      
+      // 智能延迟避免API限制
+      await sleep(RATE_LIMIT_DELAY);
       
     } catch (error: any) {
       if (error.message?.includes("FLOOD_WAIT")) {
         const waitTime = parseInt(error.message.match(/\d+/)?.[0] || "60");
-        for (let i = waitTime; i > 0; i--) {
-          await progressCallback(`⏳ <b>API限制，等待 <code>${i}s</code>...</b>`);
-          await new Promise(resolve => setTimeout(resolve, 1000));
+        console.log(`[DME] 触发API限制，休眠 ${waitTime} 秒...`);
+        
+        // 每10秒输出一次等待状态
+        for (let i = waitTime; i > 0; i -= 10) {
+          if (i % 10 === 0 || i < 10) {
+            console.log(`[DME] 等待中... 剩余 ${i} 秒`);
+          }
+          await sleep(Math.min(i, 10) * 1000);
         }
+        
+        console.log(`[DME] 休眠结束，继续搜索...`);
         continue;
       }
       console.error("[DME] 搜索消息失败:", error);
-      break;
+      // 其他错误也不终止，等待后重试
+      await sleep(5000);
+      console.log(`[DME] 5秒后重试...`);
     }
   }
 
   // 处理找到的消息
-  const messagesToProcess = allMyMessages.slice(0, actualCount);
+  const messagesToProcess = targetCount === Infinity ? allMyMessages : allMyMessages.slice(0, targetCount);
   if (messagesToProcess.length === 0) {
-    return { processedCount: 0, actualCount, editedCount: 0 };
+    console.log(`[DME] 未找到任何需要处理的消息`);
+    return { processedCount: 0, actualCount: 0, editedCount: 0 };
   }
+  
+  console.log(`[DME] 准备处理 ${messagesToProcess.length} 条消息`);
 
   // 分类消息：媒体消息和文字消息
   const mediaMessages = messagesToProcess.filter((m: Api.Message) => 
     m.media && !(m.media instanceof Api.MessageMediaWebPage)
   );
 
-  await progressCallback(`📊 <b>分类消息...</b>`);
-
   let editedCount = 0;
   if (mediaMessages.length > 0) {
+    console.log(`[DME] 处理 ${mediaMessages.length} 条媒体消息...`);
     const trollImagePath = await getTrollImage();
     
-    await progressCallback(`🛡️ <b>处理媒体消息...</b>`);
-
     const editTasks = mediaMessages.map(message => 
       editMediaMessageToAntiRecall(client, message, trollImagePath, chatEntity)
     );
 
     const results = await Promise.allSettled(editTasks);
     editedCount = results.filter(r => r.status === 'fulfilled' && r.value === true).length;
+    console.log(`[DME] 成功编辑 ${editedCount} 条媒体消息`);
     
-    await progressCallback(`🖼️ <b>媒体处理完成</b>`);
     await sleep(CONFIG.DELAYS.EDIT_WAIT);
   }
 
   // 删除消息
-  await progressCallback(`🗑️ <b>删除消息中...</b>`);
-
+  console.log(`[DME] 开始删除 ${messagesToProcess.length} 条消息...`);
   const deleteIds = messagesToProcess.map((m: Api.Message) => m.id);
   let deletedCount = 0;
+  let deleteBatch = 0;
 
   for (let i = 0; i < deleteIds.length; i += CONFIG.BATCH_SIZE) {
+    deleteBatch++;
     const batch = deleteIds.slice(i, i + CONFIG.BATCH_SIZE);
     
     try {
       const batchDeleted = await deleteMessagesUniversal(client, chatEntity, batch);
       deletedCount += batchDeleted;
-      
-      if (deleteIds.length > CONFIG.BATCH_SIZE) {
-        await progressCallback(`🗑️ <b>删除中...</b>`);
-      }
+      console.log(`[DME] 删除批次 ${deleteBatch}: 成功删除 ${batchDeleted} 条，进度 ${deletedCount}/${deleteIds.length}`);
       
       await sleep(CONFIG.DELAYS.BATCH);
     } catch (error: any) {
       if (error.message?.includes("FLOOD_WAIT")) {
         const waitTime = parseInt(error.message.match(/\d+/)?.[0] || "60");
-        for (let j = waitTime; j > 0; j--) {
-          await progressCallback(`⏳ <b>等待 <code>${j}s</code>...</b>`);
-          await sleep(1000);
+        console.log(`[DME] 删除时触发API限制，休眠 ${waitTime} 秒...`);
+        
+        for (let j = waitTime; j > 0; j -= 10) {
+          if (j % 10 === 0 || j < 10) {
+            console.log(`[DME] 删除等待中... 剩余 ${j} 秒`);
+          }
+          await sleep(Math.min(j, 10) * 1000);
         }
+        
         i -= CONFIG.BATCH_SIZE; // 重试当前批次
+        console.log(`[DME] 休眠结束，重试批次 ${deleteBatch}`);
       } else {
         console.error("[DME] 删除批次失败:", error);
+        // 其他错误等待后继续
+        await sleep(5000);
       }
     }
   }
+  
+  console.log(`[DME] 删除完成，共删除 ${deletedCount} 条消息`);
 
-  return { processedCount: deletedCount, actualCount, editedCount };
+  return { processedCount: deletedCount, actualCount: messagesToProcess.length, editedCount };
 }
+
+// 已移除频道直接删除功能，避免误删别人消息
+// 所有情况下都使用普通模式，只删除自己的消息
 
 const dmePlugin: Plugin = {
   command: ["dme"],
-  description: `智能防撤回删除插件 - 优化版本
-- dme [数量] - 处理指定数量的消息（实际+2）
+  description: `智能防撤回删除插件
 - 媒体消息：防撤回图片替换
 - 文字消息：直接删除提升速度
 - 支持所有聊天类型`,
@@ -306,64 +369,27 @@ const dmePlugin: Plugin = {
 
       // 删除命令消息
       try {
-        await msg.delete();
-      } catch (error) {
-        console.error("[DME] 删除命令消息失败:", error);
-      }
-
-      // 创建进度消息
-      let progressMsg = await client.sendMessage(chatEntity as any, {
-        message: `🔍 <b>开始处理...</b>`,
-        parseMode: "html"
-      });
-
-      // 进度更新函数
-      const updateProgress = async (text: string) => {
-        try {
-          await progressMsg.edit({ text, parseMode: "html" });
-        } catch {
-          try {
-            await client.deleteMessages(chatEntity as any, [progressMsg.id], { revoke: true });
-            progressMsg = await client.sendMessage(chatEntity as any, { 
-              message: text, 
-              parseMode: "html" 
-            });
-          } catch (e) {
-            console.error("[DME] 无法更新进度:", e);
-          }
-        }
-      };
-
-      // 执行主要操作
-      const result = await searchEditAndDeleteMyMessages(client, chatEntity as any, myId, userRequestedCount, updateProgress);
-
-      // 清理进度消息
-      try {
-        await client.deleteMessages(chatEntity as any, [progressMsg.id], { revoke: true });
+        await client.deleteMessages(chatEntity as any, [msg.id], { revoke: true });
       } catch {}
 
-      // 显示结果
-      const resultMessage = result.processedCount === 0 
-        ? "❌ <b>未找到消息</b>"
-        : `✅ <b>操作完成</b>`;
-
-      const resultMsg = await client.sendMessage(chatEntity as any, {
-        message: resultMessage,
-        parseMode: "html"
-      });
-
-      setTimeout(async () => {
-        try {
-          await client.deleteMessages(chatEntity as any, [resultMsg.id], { revoke: true });
-        } catch {}
-      }, CONFIG.DELAYS.RESULT_DISPLAY);
+      // 执行主要操作 - 静默模式，不发送任何进度消息
+      console.log(`[DME] ========== 开始执行DME任务 ==========`);
+      console.log(`[DME] 聊天ID: ${chatId}`);
+      console.log(`[DME] 请求数量: ${userRequestedCount}`);
+      const startTime = Date.now();
+      
+      const result = await searchEditAndDeleteMyMessages(client, chatEntity as any, myId, userRequestedCount);
+      
+      const duration = Math.round((Date.now() - startTime) / 1000);
+      console.log(`[DME] ========== 任务完成 ==========`);
+      console.log(`[DME] 总耗时: ${duration} 秒`);
+      console.log(`[DME] 处理消息: ${result.processedCount} 条`);
+      console.log(`[DME] 编辑媒体: ${result.editedCount} 条`);
+      console.log(`[DME] =============================`);
 
     } catch (error: any) {
       console.error("[DME] 操作失败:", error);
-      await msg.edit({ 
-        text: `❌ <b>操作失败:</b> ${htmlEscape(error.message || String(error))}`, 
-        parseMode: "html" 
-      });
+      // 静默模式：不显示错误消息
     }
   },
 };
