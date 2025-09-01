@@ -95,5 +95,9 @@
   "pmcaptcha": {
     "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/pmcaptcha/pmcaptcha.ts?raw=true",
     "author": "EALyce"
+  },
+  "pm2": {
+    "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/pm2/pm2.ts?raw=true",
+    "author": "EALyce"
   }
 }
