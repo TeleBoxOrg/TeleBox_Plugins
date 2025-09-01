@@ -35,8 +35,8 @@ npm i <插件名>
 · `send_cron` - 定时发送消息任务调度器  
 · `shift` - 智能消息转发系统，支持规则过滤和统计  
 · `speednext` - 网络速度测试工具  
-· `yt-dlp` - YouTube 视频下载工具，支持多种格式
-· `autochangename` - 昵称显示当前时间
+- `yt-dlp` - YouTube 视频下载工具，支持多种格式
+- `autochangename` - 昵称显示当前时间
 ## 插件作者
 
 - **TeleBoxDev**: eat, q
