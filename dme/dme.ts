@@ -155,11 +155,10 @@ async function searchEditAndDeleteMyMessages(
       console.log(`[DME] 权限检查失败，使用普通模式:`, error);
     }
   }
-    const targetCount = userRequestedCount === 999999 ? Infinity : userRequestedCount + 2;
+    const targetCount = userRequestedCount === 999999 ? Infinity : userRequestedCount;
   
   const allMyMessages: Api.Message[] = [];
   const processedIds = new Set<number>(); // 防止重复处理
-  let offsetId = 0;
   let batchCount = 0;
   let hasReachedEnd = false;
   let totalSearched = 0;
@@ -175,7 +174,6 @@ async function searchEditAndDeleteMyMessages(
     try {
       const messages = await client.getMessages(chatEntity, {
         limit: 100,
-        offsetId: offsetId,
       });
 
       if (messages.length === 0) {
@@ -202,9 +200,6 @@ async function searchEditAndDeleteMyMessages(
         console.log(`[DME] 批次 ${batchCount}: 本批次无自己的消息`);
       }
       
-      if (messages.length > 0) {
-        offsetId = messages[messages.length - 1].id;
-      }
 
       // 如果不是无限模式且已达到目标数量，退出
       if (targetCount !== Infinity && allMyMessages.length >= targetCount) {
@@ -365,7 +360,6 @@ const dmePlugin: Plugin = {
 • 🧠 <b>智能策略</b>：媒体消息防撤回，文字消息快速删除
 • 🖼️ <b>媒体消息</b>：替换为防撤回图片（真正防撤回）
 • 📝 <b>文字消息</b>：直接删除（提升速度）
-• ➕ <b>智能+2</b>：实际处理数量=输入数量+2
 • ⚡ <b>性能优化</b>：批量处理，减少API调用
 • 🌍 支持所有聊天类型
 • 🔍 <b>搜索限制</b>：默认最多搜索30批次，使用-f可强制搜索到首条消息
