@@ -14,8 +14,8 @@ import * as path from "path";
 
 // 常量配置
 const CONFIG = {
-  TROLL_IMAGE_URL: "https://www.hhlqilongzhu.cn/api/tu_tuwen.php?msg=不可以防撤回哦",
-  TROLL_IMAGE_PATH: "./assets/dme/dme_troll_image.jpg",
+  TROLL_IMAGE_URL: "https://raw.githubusercontent.com/TeleBoxDev/TeleBox/main/telebox.png",
+  TROLL_IMAGE_PATH: "./assets/dme/dme_troll_image.png",
   BATCH_SIZE: 50,
   SEARCH_LIMIT: 100,
   MAX_SEARCH_MULTIPLIER: 10,
@@ -65,14 +65,24 @@ async function getTrollImage(): Promise<string | null> {
 }
 
 /**
- * 通用删除消息函数
+ * 通用删除消息函数 - 增强跨平台同步
  */
 async function deleteMessagesUniversal(
   client: TelegramClient,
   chatEntity: any,
   messageIds: number[]
 ): Promise<number> {
+  // 删除消息
   await client.deleteMessages(chatEntity, messageIds, { revoke: true });
+  
+  // 强制刷新更新状态，确保跨平台同步
+  try {
+    await client.invoke(new Api.updates.GetState());
+    console.log(`[DME] 已触发跨平台同步刷新`);
+  } catch (error) {
+    console.log(`[DME] 同步刷新失败，但不影响删除操作:`, error);
+  }
+  
   return messageIds.length;
 }
 
@@ -155,11 +165,10 @@ async function searchEditAndDeleteMyMessages(
       console.log(`[DME] 权限检查失败，使用普通模式:`, error);
     }
   }
-    const targetCount = userRequestedCount === 999999 ? Infinity : userRequestedCount + 2;
+    const targetCount = userRequestedCount === 999999 ? Infinity : userRequestedCount;
   
   const allMyMessages: Api.Message[] = [];
   const processedIds = new Set<number>(); // 防止重复处理
-  let offsetId = 0;
   let batchCount = 0;
   let hasReachedEnd = false;
   let totalSearched = 0;
@@ -169,13 +178,16 @@ async function searchEditAndDeleteMyMessages(
 
   // 搜索用户消息 - 根据模式决定是否限制批次数
   const maxBatches = forceMode ? Infinity : CONFIG.DEFAULT_BATCH_LIMIT;
+  let offsetId = 0; // 用于分页的偏移ID
+  let consecutiveEmptyBatches = 0; // 连续空批次计数
+  const MAX_EMPTY_BATCHES = 3; // 最大连续空批次数
   
   while (!hasReachedEnd && (targetCount === Infinity || allMyMessages.length < targetCount) && batchCount < maxBatches) {
     batchCount++;
     try {
       const messages = await client.getMessages(chatEntity, {
         limit: 100,
-        offsetId: offsetId,
+        offsetId: offsetId
       });
 
       if (messages.length === 0) {
@@ -185,6 +197,8 @@ async function searchEditAndDeleteMyMessages(
       }
       
       totalSearched += messages.length;
+      // 更新偏移ID为最后一条消息的ID
+      offsetId = messages[messages.length - 1].id;
 
       // 筛选自己的消息，避免重复
       const myMessages = messages.filter((m: Api.Message) => {
@@ -198,12 +212,20 @@ async function searchEditAndDeleteMyMessages(
         myMessages.forEach(m => processedIds.add(m.id));
         allMyMessages.push(...myMessages);
         console.log(`[DME] 批次 ${batchCount}: 找到 ${myMessages.length} 条消息，总计 ${allMyMessages.length} 条`);
+        consecutiveEmptyBatches = 0; // 重置连续空批次计数
       } else {
-        console.log(`[DME] 批次 ${batchCount}: 本批次无自己的消息`);
-      }
-      
-      if (messages.length > 0) {
-        offsetId = messages[messages.length - 1].id;
+        consecutiveEmptyBatches++;
+        console.log(`[DME] 批次 ${batchCount}: 本批次无自己的消息 (连续空批次: ${consecutiveEmptyBatches})`);
+        
+        // 如果连续多个批次都没有自己的消息，可能已经搜索完毕
+        if (consecutiveEmptyBatches >= MAX_EMPTY_BATCHES) {
+          console.log(`[DME] 连续 ${MAX_EMPTY_BATCHES} 个批次无自己的消息，可能已搜索完毕`);
+          // 在非强制模式下，提前结束搜索
+          if (!forceMode) {
+            console.log(`[DME] 非强制模式下提前结束搜索`);
+            break;
+          }
+        }
       }
 
       // 如果不是无限模式且已达到目标数量，退出
@@ -323,22 +345,43 @@ async function searchEditAndDeleteMyMessages(
 const dmePlugin: Plugin = {
   command: ["dme"],
   description: `智能防撤回删除插件
-- 媒体消息：防撤回图片替换
-- 文字消息：直接删除提升速度
-- 支持所有聊天类型`,
+
+参数说明:
+• [数量] - 要删除的消息数量
+• -f - 强制模式，搜索到首条消息（默认限制30批次）
+
+核心特性:
+• 🧠 智能策略：媒体消息防撤回，文字消息快速删除
+• 🖼️ 媒体消息：替换为防撤回图片（真正防撤回）
+• 📝 文字消息：直接删除（提升速度）
+• ⚡ 性能优化：批量处理，减少API调用
+• 🌍 支持所有聊天类型
+• 🔍 搜索限制：默认最多搜索30批次，使用-f可强制搜索到首条消息
+
+示例:
+• .dme 10 - 删除最近10条消息（最多搜索30批次）
+• .dme 50 -f - 删除最近50条消息（强制搜索到首条消息）
+
+工作流程:
+1️⃣ 搜索历史消息 → 2️⃣ 分类处理 → 3️⃣ 媒体防撤回 → 4️⃣ 批量删除`,
   cmdHandler: async (msg: Api.Message) => {
     const text = msg.message || "";
     const chatId = msg.chatId?.toString() || msg.peerId?.toString() || "";
     const args = text.trim().split(/\s+/);
     
-    // 解析参数：数量和-f标志
+    // 解析参数：数量、-f标志和帮助命令
     let countArg: string | undefined;
     let forceMode = false;
+    let showHelp = false;
     
-    // 检查参数中是否有-f标志
+    // 检查参数中是否有-f标志或帮助命令
     const filteredArgs = args.slice(1).filter(arg => {
       if (arg === '-f') {
         forceMode = true;
+        return false;
+      }
+      if (arg === 'help' || arg === 'h') {
+        showHelp = true;
         return false;
       }
       return true;
@@ -348,49 +391,27 @@ const dmePlugin: Plugin = {
 
     const client = await getGlobalClient();
     if (!client) {
-      await msg.edit({ text: "❌ 客户端未初始化", parseMode: "html" });
+      console.error("[DME] 客户端未初始化");
       return;
     }
 
+    // 显示帮助文档（仅在明确请求时）
+    if (showHelp) {
+      console.log("[DME] 用户请求帮助文档");
+      console.log(dmePlugin.description);
+      return;
+    }
+    
+    // 参数验证
     if (!countArg) {
-      const helpMsg = `<b>🛡️ 智能防撤回删除插件 - DME 优化版</b>
-
-<b>用法:</b> <code>.dme [数量] [-f]</code>
-
-<b>参数说明:</b>
-• <code>[数量]</code> - 要删除的消息数量
-• <code>-f</code> - 强制模式，搜索到首条消息（默认限制30批次）
-
-<b>核心特性:</b>
-• 🧠 <b>智能策略</b>：媒体消息防撤回，文字消息快速删除
-• 🖼️ <b>媒体消息</b>：替换为防撤回图片（真正防撤回）
-• 📝 <b>文字消息</b>：直接删除（提升速度）
-• ➕ <b>智能+2</b>：实际处理数量=输入数量+2
-• ⚡ <b>性能优化</b>：批量处理，减少API调用
-• 🌍 支持所有聊天类型
-• 🔍 <b>搜索限制</b>：默认最多搜索30批次，使用-f可强制搜索到首条消息
-
-<b>示例:</b>
-• <code>.dme 10</code> - 删除最近10条消息（最多搜索30批次）
-• <code>.dme 50 -f</code> - 删除最近50条消息（强制搜索到首条消息）
-
-<b>工作流程:</b>
-1️⃣ 搜索历史消息 → 2️⃣ 分类处理 → 3️⃣ 媒体防撤回 → 4️⃣ 批量删除`;
-      
-      await msg.edit({
-        text: helpMsg,
-        parseMode: "html",
-        linkPreview: false
-      });
+      console.error("[DME] 参数错误: 请提供要删除的消息数量");
+      console.log("[DME] 提示: 使用 .dme help 查看帮助");
       return;
     }
 
     const userRequestedCount = parseInt(countArg);
     if (isNaN(userRequestedCount) || userRequestedCount <= 0) {
-      await msg.edit({ 
-        text: "❌ <b>参数错误:</b> 数量必须是正整数", 
-        parseMode: "html" 
-      });
+      console.error("[DME] 参数错误: 数量必须是正整数");
       return;
     }
 
@@ -405,7 +426,7 @@ const dmePlugin: Plugin = {
         await client.deleteMessages(chatEntity as any, [msg.id], { revoke: true });
       } catch {}
 
-      // 执行主要操作 - 静默模式，不发送任何进度消息
+      // 执行主要操作
       console.log(`[DME] ========== 开始执行DME任务 ==========`);
       console.log(`[DME] 聊天ID: ${chatId}`);
       console.log(`[DME] 请求数量: ${userRequestedCount}`);
@@ -420,6 +441,8 @@ const dmePlugin: Plugin = {
       console.log(`[DME] 处理消息: ${result.processedCount} 条`);
       console.log(`[DME] 编辑媒体: ${result.editedCount} 条`);
       console.log(`[DME] =============================`);
+
+      // 完全静默模式 - 不发送任何前台消息
 
     } catch (error: any) {
       console.error("[DME] 操作失败:", error);
