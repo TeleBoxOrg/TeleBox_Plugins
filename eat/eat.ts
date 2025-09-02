@@ -51,11 +51,12 @@ loadConfigResource(baseConfigURL);
 
 // 取出表情包列表
 async function sendStickerList(msg: Api.Message) {
-  const keysText = Object.keys(config)
+  const stickerList = Object.keys(config)
     .sort((a, b) => a.localeCompare(b))
-    .join(",");
+    .map(key => `${key} - ${config[key].name}`)
+    .join('\n');
   await msg.edit({
-    text: `当前表情包：\n${keysText}`,
+    text: `当前表情包：\n${stickerList}`,
   });
 }
 
@@ -208,10 +209,12 @@ async function handleSetCommand(params: {
     text: "更新表情包配置中，请稍等···",
   });
   await loadConfigResource(url, true);
+  const stickerList = Object.keys(config)
+    .sort((a, b) => a.localeCompare(b))
+    .map(key => `${key} - ${config[key].name}`)
+    .join('\n');
   await msg.edit({
-    text: `已更新表情包配置，当前表情包：\n${Object.keys(config)
-      .sort((a, b) => a.localeCompare(b))
-      .join(",")}`,
+    text: `已更新表情包配置，当前表情包：\n${stickerList}`,
   });
 }
 
@@ -242,10 +245,12 @@ const eatPlugin: Plugin = {
       const stickerName = args[0];
       const entrys = Object.keys(config);
       if (!entrys.includes(stickerName)) {
+        const stickerList = entrys
+          .sort((a, b) => a.localeCompare(b))
+          .map(key => `${key} - ${config[key].name}`)
+          .join('\n');
         await msg.edit({
-          text: `找不到 ${stickerName} 该表情包，目前可用表情包如下:\n${entrys.join(
-            ","
-          )}`,
+          text: `找不到 ${stickerName} 该表情包，目前可用表情包如下:\n${stickerList}`,
         });
         return;
       }
