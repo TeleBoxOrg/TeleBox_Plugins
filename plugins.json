@@ -103,5 +103,9 @@
   "autochangename": {
     "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/autochangename/autochangename.ts?raw=true",
     "author": "EALyce"
+  },
+  "yvlu": {
+    "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/yvlu/yvlu.ts?raw=true",
+    "author": "EALyce"
   }
 }
