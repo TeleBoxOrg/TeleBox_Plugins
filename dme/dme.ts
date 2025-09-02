@@ -317,23 +317,46 @@ async function searchEditAndDeleteMyMessages(
 
 const dmePlugin: Plugin = {
   command: ["dme"],
-  description: `智能防撤回删除插件
-- 媒体消息：防撤回图片替换
-- 文字消息：直接删除提升速度
-- 支持所有聊天类型`,
+  description: `🛡️ 智能防撤回删除插件 - DME 优化版
+
+用法: .dme [数量] [-f]
+
+参数说明:
+• [数量] - 要删除的消息数量
+• -f - 强制模式，搜索到首条消息（默认限制30批次）
+
+核心特性:
+• 🧠 智能策略：媒体消息防撤回，文字消息快速删除
+• 🖼️ 媒体消息：替换为防撤回图片（真正防撤回）
+• 📝 文字消息：直接删除（提升速度）
+• ⚡ 性能优化：批量处理，减少API调用
+• 🌍 支持所有聊天类型
+• 🔍 搜索限制：默认最多搜索30批次，使用-f可强制搜索到首条消息
+
+示例:
+• .dme 10 - 删除最近10条消息（最多搜索30批次）
+• .dme 50 -f - 删除最近50条消息（强制搜索到首条消息）
+
+工作流程:
+1️⃣ 搜索历史消息 → 2️⃣ 分类处理 → 3️⃣ 媒体防撤回 → 4️⃣ 批量删除`,
   cmdHandler: async (msg: Api.Message) => {
     const text = msg.message || "";
     const chatId = msg.chatId?.toString() || msg.peerId?.toString() || "";
     const args = text.trim().split(/\s+/);
     
-    // 解析参数：数量和-f标志
+    // 解析参数：数量、-f标志和帮助命令
     let countArg: string | undefined;
     let forceMode = false;
+    let showHelp = false;
     
-    // 检查参数中是否有-f标志
+    // 检查参数中是否有-f标志或帮助命令
     const filteredArgs = args.slice(1).filter(arg => {
       if (arg === '-f') {
         forceMode = true;
+        return false;
+      }
+      if (arg === 'help' || arg === 'h') {
+        showHelp = true;
         return false;
       }
       return true;
@@ -347,34 +370,21 @@ const dmePlugin: Plugin = {
       return;
     }
 
-    if (!countArg) {
-      const helpMsg = `<b>🛡️ 智能防撤回删除插件 - DME 优化版</b>
-
-<b>用法:</b> <code>.dme [数量] [-f]</code>
-
-<b>参数说明:</b>
-• <code>[数量]</code> - 要删除的消息数量
-• <code>-f</code> - 强制模式，搜索到首条消息（默认限制30批次）
-
-<b>核心特性:</b>
-• 🧠 <b>智能策略</b>：媒体消息防撤回，文字消息快速删除
-• 🖼️ <b>媒体消息</b>：替换为防撤回图片（真正防撤回）
-• 📝 <b>文字消息</b>：直接删除（提升速度）
-• ⚡ <b>性能优化</b>：批量处理，减少API调用
-• 🌍 支持所有聊天类型
-• 🔍 <b>搜索限制</b>：默认最多搜索30批次，使用-f可强制搜索到首条消息
-
-<b>示例:</b>
-• <code>.dme 10</code> - 删除最近10条消息（最多搜索30批次）
-• <code>.dme 50 -f</code> - 删除最近50条消息（强制搜索到首条消息）
-
-<b>工作流程:</b>
-1️⃣ 搜索历史消息 → 2️⃣ 分类处理 → 3️⃣ 媒体防撤回 → 4️⃣ 批量删除`;
-      
+    // 显示帮助文档（仅在明确请求时）
+    if (showHelp) {
       await msg.edit({
-        text: helpMsg,
+        text: dmePlugin.description!,
         parseMode: "html",
         linkPreview: false
+      });
+      return;
+    }
+    
+    // 参数验证
+    if (!countArg) {
+      await msg.edit({ 
+        text: "❌ <b>参数错误:</b> 请提供要删除的消息数量\n\n💡 使用 <code>.dme help</code> 查看帮助", 
+        parseMode: "html" 
       });
       return;
     }
