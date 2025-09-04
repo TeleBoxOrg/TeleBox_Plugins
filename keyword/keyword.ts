@@ -5,6 +5,10 @@ import { TelegramClient } from "telegram";
 import { createDirectoryInAssets } from "@utils/pathHelpers";
 import path from "path";
 import Database from "better-sqlite3";
+import {
+  dealCommandPluginWithMessage,
+  getCommandFromMessage,
+} from "@utils/pluginManager";
 
 interface KeywordTaskData {
   task_id?: number;
@@ -163,6 +167,12 @@ class KeywordTask {
         }
         
         sentMsg = await client.sendMessage(message.peerId, sendOptions);
+
+        const cmd = await getCommandFromMessage(text);
+
+        if (cmd && sentMsg)
+          await dealCommandPluginWithMessage({ cmd, msg: sentMsg });
+        
       } catch (error) {
         console.error('Reply message error:', error);
       }
