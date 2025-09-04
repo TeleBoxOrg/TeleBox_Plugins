@@ -38,49 +38,26 @@ let config: EatConfig;
 let baseConfigURL =
   "https://github.com/TeleBoxDev/TeleBox_Plugins/raw/main/eat/config.json";
 
-async function loadConfigResource(url: string, forceUpdate = false) {
-  const filePath = await assetPathFor(url);
-  
-  // 如果有缓存且不强制更新，直接使用缓存
-  if (!forceUpdate && fs.existsSync(filePath)) {
-    try {
-      const content = fs.readFileSync(filePath, "utf-8");
-      config = JSON.parse(content);
-      return;
-    } catch (error) {
-      console.error("缓存文件损坏，尝试从远程下载:", error);
-    }
-  }
-  
-  // 下载最新配置
-  try {
+async function loadConfigResource(url: string, update = false) {
+  if (update) {
     await download(url, EAT_ASSET_PATH);
-    const content = fs.readFileSync(filePath, "utf-8");
-    config = JSON.parse(content);
-  } catch (error) {
-    console.error("从远程加载配置失败，尝试使用本地缓存:", error);
-    if (fs.existsSync(filePath)) {
-      const content = fs.readFileSync(filePath, "utf-8");
-      config = JSON.parse(content);
-    } else {
-      throw new Error("无可用配置，远程和本地缓存均不可用");
-    }
   }
+  const filePath = await assetPathFor(url);
+  const content = fs.readFileSync(filePath, "utf-8");
+  config = JSON.parse(content);
 }
 
-// 初始加载（使用缓存优先）
-loadConfigResource(baseConfigURL).catch(() => {
-  console.log("初始配置加载失败，将在首次使用时重试");
-});
+// 启动时强制更新配置
+loadConfigResource(baseConfigURL, true);
 
 // 取出表情包列表
 async function sendStickerList(msg: Api.Message) {
-  const stickerList = Object.keys(config)
-    .sort((a, b) => a.localeCompare(b))
-    .map(key => `${key} - ${config[key].name}`)
-    .join('\n');
+  const entries = Object.entries(config)
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([key, value]) => `${key} - ${value.name}`)
+    .join("\n");
   await msg.edit({
-    text: `当前表情包：\n${stickerList}`,
+    text: `当前表情包：\n${entries}`,
   });
 }
 
@@ -220,59 +197,46 @@ async function sendSticker(params: { entry: EntryConfig; msg: Api.Message }) {
   await msg.delete();
 }
 
-async function ensureConfigLoaded(msg?: Api.Message): Promise<void> {
-  if (!config || Object.keys(config).length === 0) {
-    if (msg) {
-      await msg.edit({ text: "正在加载表情包配置..." });
-    }
-    await loadConfigResource(baseConfigURL);
-  }
-}
-
 async function handleSetCommand(params: {
   msg: Api.Message;
   url: string;
 }): Promise<void> {
   const { msg, url } = params;
+  fs.rmSync(EAT_ASSET_PATH, { recursive: true, force: true });
   await msg.edit({
-    text: "强制更新表情包配置中，请稍等...",
+    text: `✅ 删除旧的表情包配置文件成功！`,
+  });
+  await msg.edit({
+    text: "更新表情包配置中，请稍等···",
   });
   await loadConfigResource(url, true);
-  const stickerList = Object.keys(config)
-    .sort((a, b) => a.localeCompare(b))
-    .map(key => `${key} - ${config[key].name}`)
-    .join('\n');
+  const entries = Object.entries(config)
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([key, value]) => `${key} - ${value.name}`)
+    .join("\n");
   await msg.edit({
-    text: `✅ 已强制更新表情包配置\n当前表情包：\n${stickerList}`,
+    text: `已更新表情包配置，当前表情包：\n${entries}`,
   });
 }
 
 const eatPlugin: Plugin = {
   command: ["eat", "eat2"],
   description:
-    `表情包插件，智能缓存机制，首次使用自动下载配置\n` +
-    `• eat - 获取表情包列表（优先使用缓存）\n` +
-    `• eat set [url] - 强制更新配置（覆盖缓存）\n` +
-    `• 回复消息 + eat <名称> - 发送指定表情包\n` +
-    `• 回复消息 + eat - 随机发送表情包`,
+    `表情包插件，回复 eat 来获取表情包列表\n` +
+    `回复 eat set [url] 来更新表情包配置，默认配置在 ${baseConfigURL}。\n` +
+    `回复 eat <表情包名称> 来发送对应的表情包，或者直接回复 eat 来随机发送一个表情包。`,
   cmdHandler: async (msg) => {
     const [, ...args] = msg.message.split(" ");
-    
     if (!msg.isReply) {
       if (args[0] == "set") {
         let url = args[1] || baseConfigURL;
         await handleSetCommand({ msg, url });
         return;
       }
-      
-      // 确保配置已加载（优先使用缓存）
-      await ensureConfigLoaded(msg);
+
       await sendStickerList(msg);
       return;
     }
-    
-    // 确保配置已加载（优先使用缓存）
-    await ensureConfigLoaded(msg);
 
     if (args.length == 0) {
       // 说明随机情况
@@ -282,12 +246,12 @@ const eatPlugin: Plugin = {
       const stickerName = args[0];
       const entrys = Object.keys(config);
       if (!entrys.includes(stickerName)) {
-        const stickerList = entrys
-          .sort((a, b) => a.localeCompare(b))
-          .map(key => `${key} - ${config[key].name}`)
-          .join('\n');
+        const entries = Object.entries(config)
+          .sort(([a], [b]) => a.localeCompare(b))
+          .map(([key, value]) => `${key} - ${value.name}`)
+          .join("\n");
         await msg.edit({
-          text: `找不到 ${stickerName} 该表情包，目前可用表情包如下:\n${stickerList}`,
+          text: `找不到 ${stickerName} 该表情包，目前可用表情包如下:\n${entries}`,
         });
         return;
       }

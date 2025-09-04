@@ -135,5 +135,10 @@
     "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/yvlu/yvlu.ts?raw=true",
     "author": "EALyce",
     "desc": "为被回复用户生成语录"
+  },
+  "trace": {
+    "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/trace/trace.ts?raw=true",
+    "author": "EALyce",
+    "desc": "在所有共同群组内为目标所有新发言点赞"
   }
 }
