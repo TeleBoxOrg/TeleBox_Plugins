@@ -1,32 +1,26 @@
 {
   "eat": {
     "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/eat/eat.ts?raw=true",
-    "author": "TeleBoxDev",
     "desc": "生成\"吃掉\"表情包，支持自定义头像合成"
   },
   "q": {
     "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/q/q.ts?raw=true",
-    "author": "TeleBoxDev",
     "desc": "消息引用生成器，通过 QuotLyBot 制作引用图片"
   },
   "yt-dlp": {
     "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/yt-dlp/yt-dlp.ts?raw=true",
-    "author": "BirdBird",
     "desc": "YouTube 视频下载工具，支持多种格式"
   },
   "gt": {
     "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/gt/gt.ts?raw=true",
-    "author": "EALyce",
     "desc": "谷歌翻译插件，支持中英文互译"
   },
   "ip": {
     "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/ip/ip.ts?raw=true",
-    "author": "EALyce",
     "desc": "IP 地址查询工具，获取地理位置和网络信息"
   },
   "send_cron": {
     "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/send_cron/send_cron.ts?raw=true",
-    "author": "EALyce",
     "desc": "定时发送消息任务调度器"
   },
   "netease": {
@@ -39,7 +33,6 @@
   },
   "aban": {
     "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/aban/aban.ts?raw=true",
-    "author": "EALyce",
     "desc": "管理用户权限工具，支持多群组操作和永久缓存"
   },
   "search": {
@@ -48,92 +41,74 @@
   },
   "music": {
     "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/music/music.ts?raw=true",
-    "author": "EALyce",
     "desc": "YouTube 音乐搜索和下载工具"
   },
   "clean_member": {
     "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/clean_member/clean_member.ts?raw=true",
-    "author": "EALyce",
     "desc": "群组成员清理工具，可按活跃度和时间筛选清理成员"
   },
   "speednext": {
     "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/speednext/speednext.ts?raw=true",
-    "author": "EALyce",
     "desc": "网络速度测试工具"
   },
   "shift": {
     "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/shift/shift.ts?raw=true",
-    "author": "EALyce",
     "desc": "智能消息转发系统，支持规则过滤和统计"
   },
   "da": {
     "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/da/da.ts?raw=true",
-    "author": "EALyce",
     "desc": "删除群内所有消息（非管理员仅删除自己的消息）"
   },
   "dc": {
     "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/dc/dc.ts?raw=true",
-    "author": "EALyce",
     "desc": "获取用户或群组的数据中心信息"
   },
   "gpt": {
     "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/gpt/gpt.ts?raw=true",
-    "author": "JohnsonRan",
     "desc": "OpenAI GPT 聊天助手，支持文本对话和图像识别"
   },
   "komari": {
     "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/komari/komari.ts?raw=true",
-    "author": "JohnsonRan",
     "desc": "Komari 服务器监控插件，获取节点状态和资源信息"
   },
   "dig": {
     "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/dig/dig.ts?raw=true",
-    "author": "Assistant",
     "desc": "DNS 查询工具，支持域名解析和网络诊断"
   },
   "keyword": {
     "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/keyword/keyword.ts?raw=true",
-    "author": "EALyce",
     "desc": "关键词自动回复系统，支持正则表达式匹配"
   },
   "pin_cron": {
     "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/pin_cron/pin_cron.ts?raw=true",
-    "author": "EALyce",
     "desc": "定时置顶消息管理器"
   },
   "forward_cron": {
     "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/forward_cron/forward_cron.ts?raw=true",
-    "author": "EALyce",
     "desc": "定时转发消息任务管理器"
   },
   "lottery": {
     "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/lottery/lottery.ts?raw=true",
-    "author": "EALyce",
     "desc": "抽奖系统，支持群组抽奖活动管理"
   },
   "dme": {
     "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/dme/dme.ts?raw=true",
-    "author": "EALyce",
     "desc": "删除指定数量的自己发送的消息"
   },
   "pmcaptcha": {
     "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/pmcaptcha/pmcaptcha.ts?raw=true",
-    "author": "EALyce",
     "desc": "私聊验证系统，防止垃圾消息骚扰"
   },
   "pm2": {
     "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/pm2/pm2.ts?raw=true",
-    "author": "EALyce",
     "desc": "PM2 进程管理工具，支持重启和停止操作"
   },
   "autochangename": {
     "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/autochangename/autochangename.ts?raw=true",
-    "author": "EALyce",
     "desc": "自动定时修改用户名插件，支持时区配置和计划任务管理"
   },
   "yvlu": {
     "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/yvlu/yvlu.ts?raw=true",
-    "author": "EALyce",
     "desc": "为被回复用户生成语录"
   }
 }
