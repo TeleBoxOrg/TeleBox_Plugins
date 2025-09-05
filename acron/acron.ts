@@ -17,7 +17,7 @@ const filePath = path.join(
   "acron_config.json"
 );
 // DB schema and helpers
-type AcronType = "send" | "del" | "del_re";
+type AcronType = "send" | "copy" | "forward" | "del" | "del_re";
 
 type AcronTaskBase = {
   id: string; // 自增主键（字符串格式）
@@ -52,7 +52,21 @@ type SendTask = AcronTaskBase & {
   replyTo?: string; // 回复的消息 ID
 };
 
-type AcronTask = SendTask | DelTask | DelReTask;
+type CopyTask = AcronTaskBase & {
+  type: "copy";
+  fromChatId: string; // 源消息所在对话ID（字符串）
+  fromMsgId: string; // 源消息ID（字符串）
+  replyTo?: string; // 发送时回复的消息ID（或话题顶贴ID）
+};
+
+type ForwardTask = AcronTaskBase & {
+  type: "forward";
+  fromChatId: string; // 源消息所在对话ID（字符串）
+  fromMsgId: string; // 源消息ID（字符串）
+  replyTo?: string; // 为了和 copy/send 一致保留，但转发API不支持replyTo
+};
+
+type AcronTask = SendTask | CopyTask | ForwardTask | DelTask | DelReTask;
 
 type AcronDB = {
   seq: string; // 自增计数器（字符串）
@@ -147,11 +161,23 @@ function parseCronFromArgs(
   return null;
 }
 
-function buildCopyCommand(task: AcronTask): string {
+function buildCopy(task: AcronTask): string {
   if (task.type === "send") {
     const remark = task.remark ? ` ${task.remark}` : "";
     return `${mainPrefix}acron send ${task.cron} ${task.chat}${remark}${
       task.replyTo ? `\n${task.replyTo}` : "\n"
+    }`;
+  } else if (task.type === "copy") {
+    const remark = task.remark ? ` ${task.remark}` : "";
+    const t = task as CopyTask;
+    return `${mainPrefix}acron copy ${t.cron} ${t.chat}${remark}${
+      t.replyTo ? `\n${t.replyTo}` : "\n"
+    }`;
+  } else if (task.type === "forward") {
+    const remark = task.remark ? ` ${task.remark}` : "";
+    const t = task as ForwardTask;
+    return `${mainPrefix}acron forward ${t.cron} ${t.chat}${remark}${
+      t.replyTo ? `\n${t.replyTo}` : "\n"
     }`;
   } else if (task.type === "del") {
     const remark = task.remark ? ` ${task.remark}` : "";
@@ -162,6 +188,10 @@ function buildCopyCommand(task: AcronTask): string {
     const remark = t.remark ? ` ${t.remark}` : "";
     return `${mainPrefix}acron del_re ${t.cron} ${t.chat} ${t.limit} ${t.regex}${remark}`;
   }
+}
+function buildCopyCommand(task: AcronTask): string {
+  const cmd = buildCopy(task);
+  return cmd?.includes("\n") ? cmd : `<code>${cmd}</code>`;
 }
 
 function tryParseRegex(input: string): RegExp {
@@ -200,6 +230,59 @@ async function scheduleTask(task: AcronTask) {
         if (idx >= 0) {
           db.data.tasks[idx].lastRunAt = String(now);
           db.data.tasks[idx].lastResult = `已发送 1 条消息`;
+          db.data.tasks[idx].lastError = undefined;
+          await db.write();
+        }
+      } else if (task.type === "copy") {
+        const t = task as CopyTask;
+        const fromChatIdNum = toInt(t.fromChatId);
+        const fromMsgIdNum = toInt(t.fromMsgId);
+        try {
+          // 获取源消息（尽量使用完整实体以避免 hash 失效）
+          const fromEntityLike = (fromChatIdNum as any) ?? t.fromChatId;
+          const messages = await client.getMessages(fromEntityLike as any, {
+            ids: fromMsgIdNum,
+          });
+          const realtimeMsg = messages?.[0] as any;
+          if (!realtimeMsg) throw new Error("未能获取源消息");
+
+          // 复制发送（保留文本/实体/媒体）
+          await client.sendMessage(entityLike, {
+            message: realtimeMsg, // 直接传入消息对象以便自动处理媒体/实体
+            replyTo: t.replyTo ? toInt(t.replyTo) : undefined,
+          });
+
+          if (idx >= 0) {
+            db.data.tasks[idx].lastRunAt = String(now);
+            db.data.tasks[idx].lastResult = `已复制发送 1 条消息`;
+            db.data.tasks[idx].lastError = undefined;
+            await db.write();
+          }
+        } catch (e: any) {
+          throw e;
+        }
+      } else if (task.type === "forward") {
+        const t = task as ForwardTask;
+        const fromChatIdNum = toInt(t.fromChatId);
+        const fromMsgIdNum = toInt(t.fromMsgId);
+        const fromEntityLike = (fromChatIdNum as any) ?? t.fromChatId;
+
+        // await client.forwardMessages(entityLike, {
+        //   messages: fromMsgIdNum!,
+        //   fromPeer: fromEntityLike as any,
+        // });
+        await client.invoke(
+          new Api.messages.ForwardMessages({
+            fromPeer: fromEntityLike,
+            id: [fromMsgIdNum!],
+            toPeer: entityLike,
+            // 如果在论坛话题中，指定话题的顶层消息 ID
+            ...(t.replyTo ? { topMsgId: toInt(t.replyTo) } : {}),
+          })
+        );
+        if (idx >= 0) {
+          db.data.tasks[idx].lastRunAt = String(now);
+          db.data.tasks[idx].lastResult = `已转发 1 条消息`;
           db.data.tasks[idx].lastError = undefined;
           await db.write();
         }
@@ -269,8 +352,12 @@ async function bootstrapTasks() {
 bootstrapTasks();
 
 const help_text = `用法:
+• 使用 <code>${mainPrefix}acron copy 0 0 2 * * * 对话ID/@name [备注]
+[注意此处是换行写 指定发送时的话题ID或回复消息的ID]</code> 回复一条消息 - 每天2点复制发送到指定对话(可指定话题或回复消息)
+• 使用 <code>${mainPrefix}acron forward 0 0 2 * * * 对话ID/@name [备注]
+[注意此处是换行写 指定发送时的话题ID]</code> 回复一条消息 - 每天2点转发到指定对话(可指定话题)
 • 使用 <code>${mainPrefix}acron send 0 0 2 * * * 对话ID/@name [备注]
-[注意此处是换行写 指定发送时话题的ID或回复消息的ID]</code> 为保证消息的格式, 需要回复一条消息 - 储存此消息到数据库, 每天2点在指定对话发送(可指定话题或回复消息). 不支持带多媒体或 replyMarkup 的消息, 可考虑使用本插件的定时复制/转发功能
+[注意此处是换行写 指定发送时话题的ID或回复消息的ID]</code> 回复一条消息 - 稍微麻烦了一点, 但是可以保证消息的完整格式. 储存此消息到数据库, 每天2点在指定对话发送(可指定话题或回复消息). 不支持带多媒体或 replyMarkup 的消息, 可考虑使用本插件的定时复制/转发功能
 • <code>${mainPrefix}acron del 0 0 2 * * * 对话ID/@name 消息ID [备注]</code> - 每天2点删除指定ID或@name的对话中的指定ID的消息
 • <code>${mainPrefix}acron del_re 0 0 2 * * * 对话ID/@name 100 /^test/i [备注]</code> - 每天2点删除指定ID或@name的对话中的最近的 100 条消息中 内容符合正则表达式的消息
 • <code>${mainPrefix}acron list</code> - 列出当前会话中的所有定时任务
@@ -289,8 +376,11 @@ class AcronPlugin extends Plugin {
     (msg: Api.Message, trigger?: Api.Message) => Promise<void>
   > = {
     acron: async (msg: Api.Message) => {
-      const parts = msg.text?.trim()?.slice(1).split(/ +/) || [];
-      const [, ...args] = parts; // 跳过 "acron"
+      const lines = msg.text?.trim()?.split(/\r?\n/g) || [];
+
+      const parts = lines?.[0]?.split(/\s+/) || [];
+
+      const [, ...args] = parts; // 跳过命令本身
       const sub = (args[0] || "").toLowerCase();
 
       try {
@@ -310,6 +400,8 @@ class AcronPlugin extends Plugin {
           const maybeType = (scopeAll ? p2 : p1) as AcronType | "";
           const typeFilter: AcronType | undefined =
             maybeType === "send" ||
+            maybeType === "copy" ||
+            maybeType === "forward" ||
             maybeType === "del" ||
             maybeType === "del_re"
               ? maybeType
@@ -318,6 +410,10 @@ class AcronPlugin extends Plugin {
           const typeLabel = (tp?: AcronType) =>
             tp === "send"
               ? "发送"
+              : tp === "copy"
+              ? "复制"
+              : tp === "forward"
+              ? "转发"
               : tp === "del"
               ? "删除"
               : tp === "del_re"
@@ -384,8 +480,13 @@ class AcronPlugin extends Plugin {
                   `<code>${t.chat}</code>`
                 }`
               );
-              if (t.type === "send" && (t as SendTask).replyTo) {
-                lines.push(`回复: <code>${(t as SendTask).replyTo}</code>`);
+              if (
+                (t.type === "send" && (t as SendTask).replyTo) ||
+                (t.type === "copy" && (t as CopyTask).replyTo) ||
+                (t.type === "forward" && (t as ForwardTask).replyTo)
+              ) {
+                const replyId = (t as any).replyTo as string | undefined;
+                if (replyId) lines.push(`回复: <code>${replyId}</code>`);
               }
               if (nextDt) {
                 lines.push(`下次: ${formatDate(nextDt.toJSDate())}`);
@@ -397,7 +498,7 @@ class AcronPlugin extends Plugin {
               }
               if (t.lastResult) lines.push(`结果: ${t.lastResult}`);
               if (t.lastError) lines.push(`错误: ${t.lastError}`);
-              lines.push(`复制: <code>${buildCopyCommand(t)}</code>`);
+              lines.push(`复制: ${buildCopyCommand(t)}`);
               lines.push("");
             }
           }
@@ -424,7 +525,7 @@ class AcronPlugin extends Plugin {
               }
               if (t.lastResult) lines.push(`结果: ${t.lastResult}`);
               if (t.lastError) lines.push(`错误: ${t.lastError}`);
-              lines.push(`复制: <code>${buildCopyCommand(t)}</code>`);
+              lines.push(`复制: ${buildCopyCommand(t)}`);
               lines.push("");
             }
           }
@@ -537,7 +638,13 @@ class AcronPlugin extends Plugin {
           return;
         }
 
-        if (sub === "send" || sub === "del" || sub === "del_re") {
+        if (
+          sub === "send" ||
+          sub === "copy" ||
+          sub === "forward" ||
+          sub === "del" ||
+          sub === "del_re"
+        ) {
           const argRest = args.slice(1); // 跳过子命令
           const parsed = parseCronFromArgs(argRest);
           if (!parsed) {
@@ -597,10 +704,8 @@ class AcronPlugin extends Plugin {
             const entities: any = mm.entities
               ? JSON.parse(JSON.stringify(mm.entities))
               : undefined;
-            let remark = rest.slice(1).join(" ").trim();
-            const remarkLines = remark.split(/\r?\n/g);
-            remark = remarkLines[0]?.trim();
-            const replyTo = remarkLines[1]?.trim();
+            const remark = rest.slice(1).join(" ").trim();
+            const replyTo = lines?.[1]?.trim();
 
             const task: SendTask = {
               id,
@@ -628,12 +733,96 @@ class AcronPlugin extends Plugin {
               ...(task.replyTo ? [`回复: ${task.replyTo}`] : []),
               ...(task.remark ? [`备注: ${task.remark}`] : []),
               nextAt ? `下次执行: ${formatDate(nextAt.toJSDate())}` : "",
-              `复制: <code>${buildCopyCommand(task)}</code>`,
+              `复制: ${buildCopyCommand(task)}`,
             ]
               .filter(Boolean)
               .join("\n");
             await msg.edit({ text: tip, parseMode: "html" });
             return;
+          } else if (sub === "copy" || sub === "forward") {
+            // 必须回复一条消息（作为源）
+            if (!msg.isReply) {
+              await msg.edit({ text: "请回复一条要复制/转发的源消息" });
+              return;
+            }
+            const replied = await msg.getReplyMessage();
+            const mm: any = replied || {};
+            const fromMsgId = toInt(mm.id);
+            const fromChatId = toInt(mm.chatId);
+            if (!fromMsgId || !fromChatId) {
+              await msg.edit({ text: "无法识别源消息ID或会话ID" });
+              return;
+            }
+
+            // 备注与回复ID（第二行）
+            const remark = rest.slice(1).join(" ").trim();
+            const replyTo = lines?.[1]?.trim();
+
+            if (sub === "copy") {
+              const task: CopyTask = {
+                id,
+                type: "copy",
+                cron: cronExpr,
+                chat: chatArg,
+                chatId: hasChatId as any,
+                fromChatId: String(Math.trunc(fromChatId)),
+                fromMsgId: String(Math.trunc(fromMsgId)),
+                replyTo: replyTo || undefined,
+                createdAt: String(Date.now()),
+                remark: remark || undefined,
+                display: display || undefined,
+              };
+              db.data.tasks.push(task);
+              await db.write();
+              await scheduleTask(task);
+
+              const nextAt = (cron as any).sendAt(cronExpr);
+              const tip = [
+                "✅ 已添加定时复制任务",
+                `ID: <code>${id}</code>`,
+                `对话: ${display}`,
+                ...(task.replyTo ? [`回复: ${task.replyTo}`] : []),
+                ...(task.remark ? [`备注: ${task.remark}`] : []),
+                nextAt ? `下次执行: ${formatDate(nextAt.toJSDate())}` : "",
+                `复制: ${buildCopyCommand(task)}`,
+              ]
+                .filter(Boolean)
+                .join("\n");
+              await msg.edit({ text: tip, parseMode: "html" });
+              return;
+            } else {
+              const task: ForwardTask = {
+                id,
+                type: "forward",
+                cron: cronExpr,
+                chat: chatArg,
+                chatId: hasChatId as any,
+                fromChatId: String(Math.trunc(fromChatId)),
+                fromMsgId: String(Math.trunc(fromMsgId)),
+                replyTo: replyTo || undefined, // API 不支持，但为了和 UI 一致保留
+                createdAt: String(Date.now()),
+                remark: remark || undefined,
+                display: display || undefined,
+              };
+              db.data.tasks.push(task);
+              await db.write();
+              await scheduleTask(task);
+
+              const nextAt = (cron as any).sendAt(cronExpr);
+              const tip = [
+                "✅ 已添加定时转发任务",
+                `ID: <code>${id}</code>`,
+                `对话: ${display}`,
+                ...(task.replyTo ? [`回复: ${task.replyTo}`] : []),
+                ...(task.remark ? [`备注: ${task.remark}`] : []),
+                nextAt ? `下次执行: ${formatDate(nextAt.toJSDate())}` : "",
+                `复制: ${buildCopyCommand(task)}`,
+              ]
+                .filter(Boolean)
+                .join("\n");
+              await msg.edit({ text: tip, parseMode: "html" });
+              return;
+            }
           } else if (sub === "del") {
             const msgIdStr = rest[1];
             let msgId = Number(msgIdStr);
@@ -673,7 +862,7 @@ class AcronPlugin extends Plugin {
               `对话: ${display}`,
               ...(task.remark ? [`备注: ${task.remark}`] : []),
               nextAt ? `下次执行: ${formatDate(nextAt.toJSDate())}` : "",
-              `复制: <code>${buildCopyCommand(task)}</code>`,
+              `复制: ${buildCopyCommand(task)}`,
             ].join("\n");
             await msg.edit({ text: tip, parseMode: "html" });
             return;
@@ -729,7 +918,7 @@ class AcronPlugin extends Plugin {
               `匹配: <code>${regexRaw}</code>`,
               ...(task.remark ? [`备注: ${task.remark}`] : []),
               nextAt ? `下次执行: ${formatDate(nextAt.toJSDate())}` : "",
-              `复制: <code>${buildCopyCommand(task)}</code>`,
+              `复制: ${buildCopyCommand(task)}`,
             ].join("\n");
             await msg.edit({ text: tip, parseMode: "html" });
             return;
