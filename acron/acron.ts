@@ -7,6 +7,7 @@ import * as cron from "cron";
 import { JSONFilePreset } from "lowdb/node";
 import * as path from "path";
 import { getGlobalClient } from "@utils/globalClient";
+import { reviveEntities } from "@utils/tlRevive";
 
 const prefixes = getPrefixes();
 const mainPrefix = prefixes[0];
@@ -16,7 +17,7 @@ const filePath = path.join(
   "acron_config.json"
 );
 // DB schema and helpers
-type AcronType = "del" | "del_re";
+type AcronType = "send" | "del" | "del_re";
 
 type AcronTaskBase = {
   id: string; // 自增主键（字符串格式）
@@ -30,6 +31,7 @@ type AcronTaskBase = {
   lastError?: string;
   disabled?: boolean; // 是否被禁用
   remark?: string; // 备注
+  display?: string; // 显示名称
 };
 
 type DelTask = AcronTaskBase & {
@@ -43,7 +45,14 @@ type DelReTask = AcronTaskBase & {
   regex: string; // 正则表达式字符串，支持 /.../flags 或纯文本
 };
 
-type AcronTask = DelTask | DelReTask;
+type SendTask = AcronTaskBase & {
+  type: "send";
+  message: string; // 纯文本内容
+  entities?: any; // TL JSON（MessageEntity 数组的 JSON 序列化）
+  replyTo?: string; // 回复的消息 ID
+};
+
+type AcronTask = SendTask | DelTask | DelReTask;
 
 type AcronDB = {
   seq: string; // 自增计数器（字符串）
@@ -123,20 +132,28 @@ function makeCronKey(id: string) {
 function parseCronFromArgs(
   args: string[]
 ): { cron: string; rest: string[] } | null {
-  // 固定为 6 段 (second minute hour dayOfMonth month dayOfWeek)
-  const n = 6;
-  if (args.length >= n) {
-    const maybeCron = args.slice(0, n).join(" ");
-    const validation = cron.validateCronExpression(maybeCron);
+  // 优先按 6 段解析 (second minute hour dayOfMonth month dayOfWeek)
+  const n6 = 6;
+  if (args.length >= n6) {
+    const maybeCron = args.slice(0, n6).join(" ");
+    const validation = (cron as any).validateCronExpression
+      ? (cron as any).validateCronExpression(maybeCron)
+      : { valid: true };
     if (validation.valid) {
-      return { cron: maybeCron, rest: args.slice(n) };
+      return { cron: maybeCron, rest: args.slice(n6) };
     }
   }
+
   return null;
 }
 
 function buildCopyCommand(task: AcronTask): string {
-  if (task.type === "del") {
+  if (task.type === "send") {
+    const remark = task.remark ? ` ${task.remark}` : "";
+    return `${mainPrefix}acron send ${task.cron} ${task.chat}${remark}${
+      task.replyTo ? `\n${task.replyTo}` : "\n"
+    }`;
+  } else if (task.type === "del") {
     const remark = task.remark ? ` ${task.remark}` : "";
     return `${mainPrefix}acron del ${task.cron} ${task.chat} ${task.msgId}${remark}`;
   } else {
@@ -172,7 +189,21 @@ async function scheduleTask(task: AcronTask) {
       const chatIdNum = toInt((task as any).chatId);
       const entityLike = (chatIdNum as any) ?? task.chat;
 
-      if (task.type === "del") {
+      if (task.type === "send") {
+        const t = task as SendTask;
+        const entities = reviveEntities(t.entities);
+        await client.sendMessage(entityLike, {
+          message: t.message,
+          formattingEntities: entities,
+          replyTo: t.replyTo ? toInt(t.replyTo) : undefined,
+        });
+        if (idx >= 0) {
+          db.data.tasks[idx].lastRunAt = String(now);
+          db.data.tasks[idx].lastResult = `已发送 1 条消息`;
+          db.data.tasks[idx].lastError = undefined;
+          await db.write();
+        }
+      } else if (task.type === "del") {
         const t = task as DelTask;
         const msgIdNum = toInt(t.msgId);
         if (msgIdNum !== undefined) {
@@ -238,8 +269,10 @@ async function bootstrapTasks() {
 bootstrapTasks();
 
 const help_text = `用法:
-• <code>${mainPrefix}acron del 0 0 2 * * * 对话ID/@name 消息ID 备注</code> - 每天2点删除指定ID或@name的对话中的指定ID的消息
-• <code>${mainPrefix}acron del_re 0 0 2 * * * 对话ID/@name 100 /^test/i 备注</code> - 每天2点删除指定ID或@name的对话中的最近的 100 条消息中 内容符合正则表达式的消息
+• 使用 <code>${mainPrefix}acron send 0 0 2 * * * 对话ID/@name [备注]
+[注意此处是换行写 指定发送时话题的ID或回复消息的ID]</code> 为保证消息的格式, 需要回复一条消息 - 储存此消息到数据库, 每天2点在指定对话发送(可指定话题或回复消息). 不支持带多媒体或 replyMarkup 的消息, 可考虑使用本插件的定时复制/转发功能
+• <code>${mainPrefix}acron del 0 0 2 * * * 对话ID/@name 消息ID [备注]</code> - 每天2点删除指定ID或@name的对话中的指定ID的消息
+• <code>${mainPrefix}acron del_re 0 0 2 * * * 对话ID/@name 100 /^test/i [备注]</code> - 每天2点删除指定ID或@name的对话中的最近的 100 条消息中 内容符合正则表达式的消息
 • <code>${mainPrefix}acron list</code> - 列出当前会话中的所有定时任务
 • <code>${mainPrefix}acron list all</code> - 列出所有的定时任务
 • <code>${mainPrefix}acron list del</code> - 列出当前会话中的类型为 del 的定时任务
@@ -256,7 +289,7 @@ class AcronPlugin extends Plugin {
     (msg: Api.Message, trigger?: Api.Message) => Promise<void>
   > = {
     acron: async (msg: Api.Message) => {
-      const parts = msg.text?.trim()?.slice(1).split(/\s+/) || [];
+      const parts = msg.text?.trim()?.slice(1).split(/ +/) || [];
       const [, ...args] = parts; // 跳过 "acron"
       const sub = (args[0] || "").toLowerCase();
 
@@ -276,12 +309,16 @@ class AcronPlugin extends Plugin {
           const scopeAll = p1 === "all";
           const maybeType = (scopeAll ? p2 : p1) as AcronType | "";
           const typeFilter: AcronType | undefined =
-            maybeType === "del" || maybeType === "del_re"
+            maybeType === "send" ||
+            maybeType === "del" ||
+            maybeType === "del_re"
               ? maybeType
               : undefined;
 
           const typeLabel = (tp?: AcronType) =>
-            tp === "del"
+            tp === "send"
+              ? "发送"
+              : tp === "del"
               ? "删除"
               : tp === "del_re"
               ? "正则删除"
@@ -342,8 +379,14 @@ class AcronPlugin extends Plugin {
               )}</code>${t.remark ? ` • ${t.remark}` : ""}`;
               lines.push(title);
               lines.push(
-                `对话: ${entityInfo?.display || `<code>${t.chat}</code>`}`
+                `对话: ${
+                  (entityInfo?.entity ? entityInfo?.display : t.display) ||
+                  `<code>${t.chat}</code>`
+                }`
               );
+              if (t.type === "send" && (t as SendTask).replyTo) {
+                lines.push(`回复: <code>${(t as SendTask).replyTo}</code>`);
+              }
               if (nextDt) {
                 lines.push(`下次: ${formatDate(nextDt.toJSDate())}`);
               }
@@ -494,15 +537,17 @@ class AcronPlugin extends Plugin {
           return;
         }
 
-        if (sub === "del" || sub === "del_re") {
+        if (sub === "send" || sub === "del" || sub === "del_re") {
           const argRest = args.slice(1); // 跳过子命令
           const parsed = parseCronFromArgs(argRest);
           if (!parsed) {
-            await msg.edit({ text: "无效的 Cron 表达式（需6段）" });
+            await msg.edit({ text: "无效的 Cron 表达式" });
             return;
           }
           const { cron: cronExpr, rest } = parsed;
-          const validation = cron.validateCronExpression(cronExpr);
+          const validation = (cron as any).validateCronExpression
+            ? (cron as any).validateCronExpression(cronExpr)
+            : { valid: true };
           if (!validation.valid) {
             await msg.edit({
               text: `Cron 校验失败: ${validation.error || "无效表达式"}`,
@@ -529,7 +574,67 @@ class AcronPlugin extends Plugin {
           db.data.seq = String(nextSeq);
           const id = String(nextSeq);
 
-          if (sub === "del") {
+          if (sub === "send") {
+            // 必须回复一条消息
+            if (!msg.isReply) {
+              await msg.edit({ text: "请回复一条要定时发送的消息" });
+              return;
+            }
+            const replied = await msg.getReplyMessage();
+            const mm: any = replied || {};
+            // 不支持多媒体或按钮
+            if (mm.media || mm.replyMarkup) {
+              await msg.edit({
+                text: "不支持带多媒体或 replyMarkup 的消息 可考虑使用本插件的定时复制/转发功能",
+              });
+              return;
+            }
+            const text: string = (mm.message ?? mm.text ?? "").toString();
+            if (!text || !text.trim()) {
+              await msg.edit({ text: "请回复一条包含文本的消息" });
+              return;
+            }
+            const entities: any = mm.entities
+              ? JSON.parse(JSON.stringify(mm.entities))
+              : undefined;
+            let remark = rest.slice(1).join(" ").trim();
+            const remarkLines = remark.split(/\r?\n/g);
+            remark = remarkLines[0]?.trim();
+            const replyTo = remarkLines[1]?.trim();
+
+            const task: SendTask = {
+              id,
+              type: "send",
+              cron: cronExpr,
+              chat: chatArg,
+              chatId: hasChatId as any,
+              message: text,
+              entities,
+              createdAt: String(Date.now()),
+              remark: remark || undefined,
+              replyTo: replyTo || undefined,
+              display: display || undefined,
+            };
+
+            db.data.tasks.push(task);
+            await db.write();
+            await scheduleTask(task);
+
+            const nextAt = (cron as any).sendAt(cronExpr);
+            const tip = [
+              "✅ 已添加定时发送任务",
+              `ID: <code>${id}</code>`,
+              `对话: ${display}`,
+              ...(task.replyTo ? [`回复: ${task.replyTo}`] : []),
+              ...(task.remark ? [`备注: ${task.remark}`] : []),
+              nextAt ? `下次执行: ${formatDate(nextAt.toJSDate())}` : "",
+              `复制: <code>${buildCopyCommand(task)}</code>`,
+            ]
+              .filter(Boolean)
+              .join("\n");
+            await msg.edit({ text: tip, parseMode: "html" });
+            return;
+          } else if (sub === "del") {
             const msgIdStr = rest[1];
             let msgId = Number(msgIdStr);
             if (!msgIdStr || Number.isNaN(msgId)) {
@@ -554,19 +659,20 @@ class AcronPlugin extends Plugin {
               msgId: String(Math.trunc(msgId)),
               createdAt: String(Date.now()),
               remark: remark || undefined,
+              display: display || undefined,
             };
 
             db.data.tasks.push(task);
             await db.write();
             await scheduleTask(task);
 
-            const nextAt = cron.sendAt(cronExpr);
+            const nextAt = (cron as any).sendAt(cronExpr);
             const tip = [
               "✅ 已添加删除消息的定时任务",
               `ID: <code>${id}</code>`,
               `对话: ${display}`,
               ...(task.remark ? [`备注: ${task.remark}`] : []),
-              `下次执行: ${formatDate(nextAt.toJSDate())}`,
+              nextAt ? `下次执行: ${formatDate(nextAt.toJSDate())}` : "",
               `复制: <code>${buildCopyCommand(task)}</code>`,
             ].join("\n");
             await msg.edit({ text: tip, parseMode: "html" });
@@ -608,12 +714,13 @@ class AcronPlugin extends Plugin {
               regex: regexRaw,
               createdAt: String(Date.now()),
               remark: remark || undefined,
+              display: display || undefined,
             };
             db.data.tasks.push(task);
             await db.write();
             await scheduleTask(task);
 
-            const nextAt = cron.sendAt(cronExpr);
+            const nextAt = (cron as any).sendAt(cronExpr);
             const tip = [
               "✅ 已添加正则删除的定时任务",
               `ID: <code>${id}</code>`,
@@ -621,7 +728,7 @@ class AcronPlugin extends Plugin {
               `最近条数: <code>${limit}</code>`,
               `匹配: <code>${regexRaw}</code>`,
               ...(task.remark ? [`备注: ${task.remark}`] : []),
-              `下次执行: ${formatDate(nextAt.toJSDate())}`,
+              nextAt ? `下次执行: ${formatDate(nextAt.toJSDate())}` : "",
               `复制: <code>${buildCopyCommand(task)}</code>`,
             ].join("\n");
             await msg.edit({ text: tip, parseMode: "html" });
