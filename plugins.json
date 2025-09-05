@@ -21,7 +21,7 @@
   },
   "acron": {
     "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/acron/acron.ts?raw=true",
-    "desc": "定时发送/转发/复制/置顶/取消置顶/删除消息"
+    "desc": "定时发送/转发/复制/置顶/取消置顶/删除消息/执行命令"
   },
   "netease": {
     "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/netease/netease.ts?raw=true",

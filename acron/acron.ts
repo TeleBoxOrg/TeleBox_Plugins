@@ -8,6 +8,10 @@ import { JSONFilePreset } from "lowdb/node";
 import * as path from "path";
 import { getGlobalClient } from "@utils/globalClient";
 import { reviveEntities } from "@utils/tlRevive";
+import {
+  dealCommandPluginWithMessage,
+  getCommandFromMessage,
+} from "@utils/pluginManager";
 
 const prefixes = getPrefixes();
 const mainPrefix = prefixes[0];
@@ -24,7 +28,8 @@ type AcronType =
   | "del"
   | "del_re"
   | "pin"
-  | "unpin";
+  | "unpin"
+  | "cmd";
 
 type AcronTaskBase = {
   id: string; // 自增主键（字符串格式）
@@ -59,6 +64,12 @@ type SendTask = AcronTaskBase & {
   replyTo?: string; // 回复的消息 ID
 };
 
+type CmdTask = AcronTaskBase & {
+  type: "cmd";
+  message: string; // 要执行的命令文本
+  replyTo?: string; // 指定执行命令的话题ID或回复消息ID
+};
+
 type CopyTask = AcronTaskBase & {
   type: "copy";
   fromChatId: string; // 源消息所在对话ID（字符串）
@@ -87,6 +98,7 @@ type UnpinTask = AcronTaskBase & {
 
 type AcronTask =
   | SendTask
+  | CmdTask
   | CopyTask
   | ForwardTask
   | DelTask
@@ -193,6 +205,12 @@ function buildCopy(task: AcronTask): string {
     return `${mainPrefix}acron send ${task.cron} ${task.chat}${remark}${
       task.replyTo ? `\n${task.replyTo}` : "\n"
     }`;
+  } else if (task.type === "cmd") {
+    const t = task as CmdTask;
+    const remark = t.remark ? ` ${t.remark}` : "";
+    return `${mainPrefix}acron cmd ${t.cron} ${t.chat}${remark}\n${t.message}${
+      t.replyTo ? `\n${t.replyTo}` : "\n"
+    }`;
   } else if (task.type === "copy") {
     const remark = task.remark ? ` ${task.remark}` : "";
     const t = task as CopyTask;
@@ -268,6 +286,21 @@ async function scheduleTask(task: AcronTask) {
         if (idx >= 0) {
           db.data.tasks[idx].lastRunAt = String(now);
           db.data.tasks[idx].lastResult = `已发送 1 条消息`;
+          db.data.tasks[idx].lastError = undefined;
+          await db.write();
+        }
+      } else if (task.type === "cmd") {
+        const t = task as CmdTask;
+        const cmd = await getCommandFromMessage(t.message);
+        const sudoMsg = await client.sendMessage(entityLike, {
+          message: t.message,
+          replyTo: t.replyTo ? toInt(t.replyTo) : undefined,
+        });
+        if (cmd && sudoMsg)
+          await dealCommandPluginWithMessage({ cmd, msg: sudoMsg as any });
+        if (idx >= 0) {
+          db.data.tasks[idx].lastRunAt = String(now);
+          db.data.tasks[idx].lastResult = `已执行命令`;
           db.data.tasks[idx].lastError = undefined;
           await db.write();
         }
@@ -414,17 +447,57 @@ async function bootstrapTasks() {
 // 启动时注册历史任务（异步，不阻塞加载）
 bootstrapTasks();
 
-const help_text = `用法:
-• 使用 <code>${mainPrefix}acron copy 0 0 2 * * * 对话ID/@name [备注]
-[注意此处是换行写 指定发送时的话题ID或回复消息的ID]</code> 回复一条消息 - 每天2点复制发送到指定对话(可指定话题或回复消息)
-• 使用 <code>${mainPrefix}acron forward 0 0 2 * * * 对话ID/@name [备注]
-[注意此处是换行写 指定发送时的话题ID]</code> 回复一条消息 - 每天2点转发到指定对话(可指定话题)
-• 使用 <code>${mainPrefix}acron send 0 0 2 * * * 对话ID/@name [备注]
-[注意此处是换行写 指定发送时话题的ID或回复消息的ID]</code> 回复一条消息 - 稍微麻烦了一点, 但是可以保证消息的完整格式. 储存此消息到数据库, 每天2点在指定对话发送(可指定话题或回复消息). 不支持带多媒体或 replyMarkup 的消息, 可考虑使用本插件的定时复制/转发功能
-• <code>${mainPrefix}acron del 0 0 2 * * * 对话ID/@name 消息ID [备注]</code> - 每天2点删除指定ID或@name的对话中的指定ID的消息
-• <code>${mainPrefix}acron del_re 0 0 2 * * * 对话ID/@name 100 /^test/i [备注]</code> - 每天2点删除指定ID或@name的对话中的最近的 100 条消息中 内容符合正则表达式的消息
-• <code>${mainPrefix}acron pin 0 0 2 * * * 对话ID/@name 消息ID 是否发通知 是否仅对自己置顶 [备注]</code> - 每天2点在指定ID或@name的对话中置顶指定ID的消息, 是否发通知(true/1, false/0), 是否仅对自己置顶(true/1, false/0)
-• <code>${mainPrefix}acron unpin 0 0 2 * * * 对话ID/@name 消息ID [备注]</code> - 每天2点在指定ID或@name的对话中取消置顶指定ID的消息
+const help_text = `▎定时复制
+
+每天2点复制发送到指定对话(可指定话题或回复消息)
+
+• 使用 ${mainPrefix}acron copy 0 0 2 * * * 对话ID/@name [备注]
+[注意此处是换行写 指定发送时的话题ID或回复消息的ID] 回复一条消息
+
+▎定时转发
+
+每天2点转发到指定对话(可指定话题)
+
+• 使用 ${mainPrefix}acron forward 0 0 2 * * * 对话ID/@name [备注]
+[注意此处是换行写 指定发送时的话题ID] 回复一条消息
+
+▎定时发送
+
+稍微麻烦了一点, 但是可以保证消息的完整格式. 储存此消息到数据库, 每天2点在指定对话发送(可指定话题或回复消息). 不支持带多媒体或 replyMarkup 的消息, 可考虑使用本插件的定时复制/转发功能
+
+• 使用 ${mainPrefix}acron send 0 0 2 * * * 对话ID/@name [备注]
+[注意此处是换行写 指定发送时话题的ID或回复消息的ID] 回复一条消息
+
+▎定时删除
+
+每天2点删除指定ID或@name的对话中的指定ID的消息
+
+• <code>${mainPrefix}acron del 0 0 2 * * * 对话ID/@name 消息ID [备注]</code>
+
+▎定时正则删除
+
+每天2点删除指定ID或@name的对话中的最近的 100 条消息中 内容符合正则表达式的消息
+
+• <code>${mainPrefix}acron del_re 0 0 2 * * * 对话ID/@name 100 /^test/i [备注]</code>
+
+▎定时置顶/取消置顶
+
+每天2点在指定ID或@name的对话中置顶指定ID的消息, 是否发通知(true/1, false/0), 是否仅对自己置顶(true/1, false/0)
+
+• <code>${mainPrefix}acron pin 0 0 2 * * * 对话ID/@name 消息ID 是否发通知 是否仅对自己置顶 [备注]</code>
+
+每天2点在指定ID或@name的对话中取消置顶指定ID的消息
+
+• <code>${mainPrefix}acron unpin 0 0 2 * * * 对话ID/@name 消息ID [备注]</code>
+
+▎定时执行命令
+
+每天2点在指定ID或@name的对话中执行命令 <code>${mainPrefix}a foo bar</code>(可指定话题或回复消息)
+
+• ${mainPrefix}acron cmd 0 0 2 * * * 对话ID/@name [备注]
+${mainPrefix}a foo bar
+[注意此处是换行写 指定执行命令的话题的ID或回复消息的ID]
+
 • <code>${mainPrefix}acron list</code> - 列出当前会话中的所有定时任务
 • <code>${mainPrefix}acron list all</code> - 列出所有的定时任务
 • <code>${mainPrefix}acron list del</code> - 列出当前会话中的类型为 del 的定时任务
@@ -435,7 +508,7 @@ const help_text = `用法:
 `;
 
 class AcronPlugin extends Plugin {
-  description: string = `定时发送/转发/复制/置顶/取消置顶/删除消息\n${help_text}`;
+  description: string = `定时发送/转发/复制/置顶/取消置顶/删除消息/执行命令\n\n${help_text}`;
   cmdHandlers: Record<
     string,
     (msg: Api.Message, trigger?: Api.Message) => Promise<void>
@@ -465,6 +538,7 @@ class AcronPlugin extends Plugin {
           const maybeType = (scopeAll ? p2 : p1) as AcronType | "";
           const typeFilter: AcronType | undefined = [
             "send",
+            "cmd",
             "copy",
             "forward",
             "del",
@@ -478,6 +552,8 @@ class AcronPlugin extends Plugin {
           const typeLabel = (tp?: AcronType) =>
             tp === "send"
               ? "发送"
+              : tp === "cmd"
+              ? "命令"
               : tp === "copy"
               ? "复制"
               : tp === "forward"
@@ -554,6 +630,7 @@ class AcronPlugin extends Plugin {
               );
               if (
                 (t.type === "send" && (t as SendTask).replyTo) ||
+                (t.type === "cmd" && (t as CmdTask).replyTo) ||
                 (t.type === "copy" && (t as CopyTask).replyTo) ||
                 (t.type === "forward" && (t as ForwardTask).replyTo)
               ) {
@@ -712,6 +789,7 @@ class AcronPlugin extends Plugin {
 
         if (
           sub === "send" ||
+          sub === "cmd" ||
           sub === "copy" ||
           sub === "forward" ||
           sub === "del" ||
@@ -802,6 +880,47 @@ class AcronPlugin extends Plugin {
             const nextAt = (cron as any).sendAt(cronExpr);
             const tip = [
               "✅ 已添加定时发送任务",
+              `ID: <code>${id}</code>`,
+              `对话: ${display}`,
+              ...(task.replyTo ? [`回复: ${task.replyTo}`] : []),
+              ...(task.remark ? [`备注: ${task.remark}`] : []),
+              nextAt ? `下次执行: ${formatDate(nextAt.toJSDate())}` : "",
+              `复制: ${buildCopyCommand(task)}`,
+            ]
+              .filter(Boolean)
+              .join("\n");
+            await msg.edit({ text: tip, parseMode: "html" });
+            return;
+          } else if (sub === "cmd") {
+            // 备注与回复ID（第二行）
+            const remark = rest.slice(1).join(" ").trim();
+            const message = lines?.[1]?.trim(); // 第二行
+            const replyTo = lines?.[2]?.trim(); // 第三行
+            if (!message) {
+              await msg.edit({ text: "无法识别要执行的命令" });
+              return;
+            }
+
+            const task: CmdTask = {
+              id,
+              type: "cmd",
+              cron: cronExpr,
+              chat: chatArg,
+              chatId: hasChatId as any,
+              message,
+              replyTo: replyTo || undefined,
+              createdAt: String(Date.now()),
+              remark: remark || undefined,
+              display: display || undefined,
+            };
+
+            db.data.tasks.push(task);
+            await db.write();
+            await scheduleTask(task);
+
+            const nextAt = (cron as any).sendAt(cronExpr);
+            const tip = [
+              "✅ 已添加定时命令任务",
               `ID: <code>${id}</code>`,
               `对话: ${display}`,
               ...(task.replyTo ? [`回复: ${task.replyTo}`] : []),
