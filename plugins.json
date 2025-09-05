@@ -19,9 +19,9 @@
     "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/ip/ip.ts?raw=true",
     "desc": "IP 地址查询工具，获取地理位置和网络信息"
   },
-  "send_cron": {
-    "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/send_cron/send_cron.ts?raw=true",
-    "desc": "定时发送消息任务调度器"
+  "acron": {
+    "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/acron/acron.ts?raw=true",
+    "desc": "定时发送/转发/复制/置顶/取消置顶/删除消息"
   },
   "netease": {
     "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/netease/netease.ts?raw=true",
@@ -78,14 +78,6 @@
   "keyword": {
     "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/keyword/keyword.ts?raw=true",
     "desc": "关键词自动回复系统，支持正则表达式匹配"
-  },
-  "pin_cron": {
-    "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/pin_cron/pin_cron.ts?raw=true",
-    "desc": "定时置顶消息管理器"
-  },
-  "forward_cron": {
-    "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/forward_cron/forward_cron.ts?raw=true",
-    "desc": "定时转发消息任务管理器"
   },
   "lottery": {
     "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/lottery/lottery.ts?raw=true",
