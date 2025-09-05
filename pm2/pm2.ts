@@ -1,3 +1,4 @@
+import { Api, TelegramClient } from "telegram";
 import { Plugin } from "@utils/pluginBase";
 import { exec } from "child_process";
 import { promisify } from "util";
@@ -21,44 +22,52 @@ const pm2HelpMsg = `🔧 <b>PM2 进程管理插件</b>
 • 命令执行后不会有任何反馈消息
 • 仅在 Linux 环境下有效`;
 
-const pm2Plugin: Plugin = {
-  command: ["pm2", "pm2r", "pm2s"],
-  description: `
+const fn = async (msg: Api.Message) => {
+  try {
+    const args = msg.message.slice(1).split(" ");
+    const command = args[0];
+
+    // Show help
+    if (
+      command === "pm2" &&
+      (args.length === 1 || args[1] === "help" || args[1] === "h")
+    ) {
+      await msg.edit({
+        text: pm2HelpMsg,
+        parseMode: "html",
+        linkPreview: false,
+      });
+      return;
+    }
+
+    // Delete trigger message for execution commands
+    await msg.delete();
+
+    if (command === "pm2r") {
+      await execAsync("pm2 restart all");
+    } else if (command === "pm2s") {
+      await execAsync("pm2 stop all");
+    }
+
+    // Silent execution - no feedback messages
+  } catch (error: any) {
+    console.error("PM2 command error:", error);
+    // Silent execution - no error messages
+  }
+};
+
+class Pm2Plugin extends Plugin {
+  description: string = `
 PM2进程管理插件：
 - pm2r - 重启所有应用
 - pm2s - 停止所有应用
 - pm2 help - 显示帮助信息
-  `,
-  cmdHandler: async (msg) => {
-    try {
-      const args = msg.message.slice(1).split(" ");
-      const command = args[0];
-      
-      // Show help
-      if (command === "pm2" && (args.length === 1 || args[1] === "help" || args[1] === "h")) {
-        await msg.edit({
-          text: pm2HelpMsg,
-          parseMode: "html",
-          linkPreview: false,
-        });
-        return;
-      }
-      
-      // Delete trigger message for execution commands
-      await msg.delete();
-      
-      if (command === "pm2r") {
-        await execAsync('pm2 restart all');
-      } else if (command === "pm2s") {
-        await execAsync('pm2 stop all');
-      }
-      
-      // Silent execution - no feedback messages
-    } catch (error: any) {
-      console.error("PM2 command error:", error);
-      // Silent execution - no error messages
-    }
-  },
-};
+  `;
+  cmdHandlers: Record<string, (msg: Api.Message) => Promise<void>> = {
+    pm2: fn,
+    pm2r: fn,
+    pm2s: fn,
+  };
+}
 
-export default pm2Plugin;
+export default new Pm2Plugin();

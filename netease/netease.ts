@@ -16,7 +16,11 @@ const NeteaseHelpMsg = `
 
 `;
 
-async function searchAndSendMusic(keyword: string, client: TelegramClient, chatId: any): Promise<void> {
+async function searchAndSendMusic(
+  keyword: string,
+  client: TelegramClient,
+  chatId: any
+): Promise<void> {
   try {
     // 获取bot实体
     const botEntity = await client.getEntity("Music163bot");
@@ -37,9 +41,13 @@ async function searchAndSendMusic(keyword: string, client: TelegramClient, chatI
     for (const msg of messages) {
       if (msg.text && msg.text.includes(keyword)) {
         // 查找内联键盘按钮
-        if (msg.replyMarkup && 'rows' in msg.replyMarkup && msg.replyMarkup.rows) {
+        if (
+          msg.replyMarkup &&
+          "rows" in msg.replyMarkup &&
+          msg.replyMarkup.rows
+        ) {
           const firstButton = msg.replyMarkup.rows[0]?.buttons[0];
-          if (firstButton && 'data' in firstButton && firstButton.data) {
+          if (firstButton && "data" in firstButton && firstButton.data) {
             // 获取bot实体
             const botEntity = await client.getEntity("Music163bot");
 
@@ -85,7 +93,11 @@ async function searchAndSendMusic(keyword: string, client: TelegramClient, chatI
   }
 }
 
-async function sendMusicById(songId: string, client: TelegramClient, chatId: any): Promise<void> {
+async function sendMusicById(
+  songId: string,
+  client: TelegramClient,
+  chatId: any
+): Promise<void> {
   try {
     // 获取bot实体
     const botEntity = await client.getEntity("Music163bot");
@@ -130,49 +142,52 @@ function extractSongId(text: string): string | null {
   return idMatch ? idMatch[1] : null;
 }
 
-const neteasePlugin: Plugin = {
-  command: ["netease"],
-  description: "网易云音乐 - 直接发送音频",
-  cmdHandler: async (msg: Api.Message) => {
-    const text = msg.message || "";
-    const args = text.split(" ").slice(1).join(" ").trim();
+const netease = async (msg: Api.Message) => {
+  const text = msg.message || "";
+  const args = text.split(" ").slice(1).join(" ").trim();
 
-    if (!args) {
-      await msg.edit({ text: NeteaseHelpMsg });
-      return;
-    }
+  if (!args) {
+    await msg.edit({ text: NeteaseHelpMsg });
+    return;
+  }
 
-    try {
-      await msg.edit({ text: `正在获取音频: ${args}` });
-      const client = await getGlobalClient();
+  try {
+    await msg.edit({ text: `正在获取音频: ${args}` });
+    const client = await getGlobalClient();
 
-      if (/^\d+$/.test(args.trim())) {
-        // 纯数字ID
-        await sendMusicById(args.trim(), client, msg.peerId);
-      } else if (args.includes("music.163.com")) {
-        // 网易云链接
-        const songId = extractSongId(args);
-        if (songId) {
-          await sendMusicById(songId, client, msg.peerId);
-        } else {
-          await client.sendMessage(msg.peerId, {
-            message: "无法解析网易云链接中的歌曲ID",
-          });
-        }
+    if (/^\d+$/.test(args.trim())) {
+      // 纯数字ID
+      await sendMusicById(args.trim(), client, msg.peerId);
+    } else if (args.includes("music.163.com")) {
+      // 网易云链接
+      const songId = extractSongId(args);
+      if (songId) {
+        await sendMusicById(songId, client, msg.peerId);
       } else {
-        // 歌曲搜索
-        await searchAndSendMusic(args, client, msg.peerId);
+        await client.sendMessage(msg.peerId, {
+          message: "无法解析网易云链接中的歌曲ID",
+        });
       }
-
-      await msg.delete();
-    } catch (error: any) {
-      console.error('Netease plugin error:', error);
-      await msg.edit({ 
-        text: `获取音频失败: ${error?.message || "未知错误"}`,
-        parseMode: "html"
-      });
+    } else {
+      // 歌曲搜索
+      await searchAndSendMusic(args, client, msg.peerId);
     }
-  },
+
+    await msg.delete();
+  } catch (error: any) {
+    console.error("Netease plugin error:", error);
+    await msg.edit({
+      text: `获取音频失败: ${error?.message || "未知错误"}`,
+      parseMode: "html",
+    });
+  }
 };
 
-export default neteasePlugin;
+class NeteasePlugin extends Plugin {
+  description: string = `网易云音乐 - 直接发送音频`;
+  cmdHandlers: Record<string, (msg: Api.Message) => Promise<void>> = {
+    netease,
+  };
+}
+
+export default new NeteasePlugin();

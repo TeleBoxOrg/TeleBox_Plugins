@@ -292,97 +292,97 @@ async function downloadAndUploadSong(
   }
 }
 
-const ytMusicPlugin: Plugin = {
-  command: ["yt"],
-  description:
-    "从 YouTube 下载音乐并发送（支持封面获取）。用法：.yt <歌曲名称>-<歌手> 或 .yt <搜索关键词>",
-  cmdHandler: async (msg) => {
-    const args = msg.message.split(" ").slice(1).join(" ") || "";
+const yt = async (msg: Api.Message) => {
+  const args = msg.message.split(" ").slice(1).join(" ") || "";
 
-    if (!args.trim()) {
-      await msg.edit({
-        text: toSimplified(
-          "YouTube 音乐下载器使用方法\n\n" +
-            "基本用法:\n" +
-            ".yt <歌曲名称> 或 .yt <歌曲名> <歌手>\n\n" +
-            "强制指定元数据:\n" +
-            "使用 `歌名-歌手` 或 `歌名 歌手` 格式可获得最精准的文件名和标签。\n\n" +
-            "示例:\n" +
-            ".yt Shape of You-Ed Sheeran\n" +
-            ".yt 周杰伦 晴天\n" +
-            ".yt 辞九门回忆"
-        ),
-      });
-      return;
+  if (!args.trim()) {
+    await msg.edit({
+      text: toSimplified(
+        "YouTube 音乐下载器使用方法\n\n" +
+          "基本用法:\n" +
+          ".yt <歌曲名称> 或 .yt <歌曲名> <歌手>\n\n" +
+          "强制指定元数据:\n" +
+          "使用 `歌名-歌手` 或 `歌名 歌手` 格式可获得最精准的文件名和标签。\n\n" +
+          "示例:\n" +
+          ".yt Shape of You-Ed Sheeran\n" +
+          ".yt 周杰伦 晴天\n" +
+          ".yt 辞九门回忆"
+      ),
+    });
+    return;
+  }
+
+  await msg.edit({ text: toSimplified("初始化音乐下载环境...") });
+  if (!msg) {
+    console.error("无法编辑消息。");
+    return;
+  }
+
+  try {
+    await ensureYtDlpExists(msg);
+
+    const searchQuery = args.trim();
+    let preferredTitle: string | undefined;
+    let preferredArtist: string | undefined;
+
+    if (searchQuery.includes("-")) {
+      const parts = searchQuery.split("-");
+      preferredTitle = parts[0].trim();
+      preferredArtist = parts.slice(1).join("-").trim();
+    } else {
+      const parts = searchQuery.split(" ").filter((p) => p.length > 0);
+      if (parts.length > 1) {
+        preferredArtist = parts.pop()?.trim();
+        preferredTitle = parts.join(" ").trim();
+      }
     }
 
-    await msg.edit({ text: toSimplified("初始化音乐下载环境...") });
-    if (!msg) {
-      console.error("无法编辑消息。");
-      return;
+    if (!preferredTitle || !preferredArtist) {
+      preferredTitle = undefined;
+      preferredArtist = undefined;
     }
 
-    try {
-      await ensureYtDlpExists(msg);
-
-      const searchQuery = args.trim();
-      let preferredTitle: string | undefined;
-      let preferredArtist: string | undefined;
-
-      if (searchQuery.includes("-")) {
-        const parts = searchQuery.split("-");
-        preferredTitle = parts[0].trim();
-        preferredArtist = parts.slice(1).join("-").trim();
-      } else {
-        const parts = searchQuery.split(" ").filter((p) => p.length > 0);
-        if (parts.length > 1) {
-          preferredArtist = parts.pop()?.trim();
-          preferredTitle = parts.join(" ").trim();
-        }
-      }
-
-      if (!preferredTitle || !preferredArtist) {
-        preferredTitle = undefined;
-        preferredArtist = undefined;
-      }
-
-      await downloadAndUploadSong(
-        msg,
-        args.trim(),
-        preferredTitle,
-        preferredArtist
+    await downloadAndUploadSong(
+      msg,
+      args.trim(),
+      preferredTitle,
+      preferredArtist
+    );
+  } catch (error: any) {
+    let errorMessage = toSimplified(`音乐下载失败\n\n`);
+    if (error.message.includes("未找到")) {
+      errorMessage += toSimplified(
+        `原因: 未找到相关歌曲\n` +
+          `建议: 尝试更具体的关键词或使用"歌名-歌手"格式\n\n` +
+          `示例: /yt Shape of You-Ed Sheeran`
       );
-    } catch (error: any) {
-      let errorMessage = toSimplified(`音乐下载失败\n\n`);
-      if (error.message.includes("未找到")) {
-        errorMessage += toSimplified(
-          `原因: 未找到相关歌曲\n` +
-            `建议: 尝试更具体的关键词或使用"歌名-歌手"格式\n\n` +
-            `示例: /yt Shape of You-Ed Sheeran`
-        );
-      } else if (
-        error.message.includes("network") ||
-        error.message.includes("timeout")
-      ) {
-        errorMessage += toSimplified(
-          `原因: 网络连接问题\n` + `建议: 请稍后重试`
-        );
-      } else if (
-        error.message.includes("permission") ||
-        error.message.includes("access")
-      ) {
-        errorMessage += toSimplified(
-          `原因: 访问权限问题\n` + `建议: 该视频可能存在地区限制或版权保护`
-        );
-      } else if (error.message) {
-        errorMessage += toSimplified(
-          `技术详情: ${error.message}\n\n` + `需要帮助? 请联系管理员或稍后重试`
-        );
-      }
-      console.error("YouTube music download error:", error);
-      await msg.edit({ text: errorMessage, linkPreview: false });
+    } else if (
+      error.message.includes("network") ||
+      error.message.includes("timeout")
+    ) {
+      errorMessage += toSimplified(`原因: 网络连接问题\n` + `建议: 请稍后重试`);
+    } else if (
+      error.message.includes("permission") ||
+      error.message.includes("access")
+    ) {
+      errorMessage += toSimplified(
+        `原因: 访问权限问题\n` + `建议: 该视频可能存在地区限制或版权保护`
+      );
+    } else if (error.message) {
+      errorMessage += toSimplified(
+        `技术详情: ${error.message}\n\n` + `需要帮助? 请联系管理员或稍后重试`
+      );
     }
-  },
+    console.error("YouTube music download error:", error);
+    await msg.edit({ text: errorMessage, linkPreview: false });
+  }
 };
 
-export default ytMusicPlugin;
+class YtMusicPlugin extends Plugin {
+  description: string = `从 YouTube 下载音乐并发送（支持封面获取）。用法：.yt <歌曲名称>-<歌手> 或 .yt <搜索关键词>`;
+  cmdHandlers: Record<string, (msg: Api.Message) => Promise<void>> = {
+    yt,
+  };
+}
+
+export default new YtMusicPlugin();

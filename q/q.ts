@@ -39,17 +39,19 @@ async function handleQutoe(msg: Api.Message): Promise<void> {
   }
 }
 
-const qPlugin: Plugin = {
-  command: ["q"],
-  description:
-    ".q [count] - 制作语录表情包, count: 可选，默认为 1, 表示消息的数量",
-  cmdHandler: async (msg) => {
-    if (!msg.isReply) {
-      await msg.edit({ text: "请回复一条消息来制作语录表情包" });
-      return;
-    }
-    await handleQutoe(msg);
-  },
+const q = async (msg: Api.Message) => {
+  if (!msg.isReply) {
+    await msg.edit({ text: "请回复一条消息来制作语录表情包" });
+    return;
+  }
+  await handleQutoe(msg);
 };
 
-export default qPlugin;
+class QPlugin extends Plugin {
+  description: string = `.q [count] - 制作语录表情包, count: 可选，默认为 1, 表示消息的数量`;
+  cmdHandlers: Record<string, (msg: Api.Message) => Promise<void>> = {
+    q,
+  };
+}
+
+export default new QPlugin();
