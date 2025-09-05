@@ -17,7 +17,14 @@ const filePath = path.join(
   "acron_config.json"
 );
 // DB schema and helpers
-type AcronType = "send" | "copy" | "forward" | "del" | "del_re";
+type AcronType =
+  | "send"
+  | "copy"
+  | "forward"
+  | "del"
+  | "del_re"
+  | "pin"
+  | "unpin";
 
 type AcronTaskBase = {
   id: string; // 自增主键（字符串格式）
@@ -66,7 +73,26 @@ type ForwardTask = AcronTaskBase & {
   replyTo?: string; // 为了和 copy/send 一致保留，但转发API不支持replyTo
 };
 
-type AcronTask = SendTask | CopyTask | ForwardTask | DelTask | DelReTask;
+type PinTask = AcronTaskBase & {
+  type: "pin";
+  msgId: string; // 要置顶的消息ID（字符串）
+  notify?: boolean; // 是否通知
+  pmOneSide?: boolean; // 是否仅自己置顶（私聊）
+};
+
+type UnpinTask = AcronTaskBase & {
+  type: "unpin";
+  msgId: string; // 要取消置顶的消息ID（字符串）
+};
+
+type AcronTask =
+  | SendTask
+  | CopyTask
+  | ForwardTask
+  | DelTask
+  | DelReTask
+  | PinTask
+  | UnpinTask;
 
 type AcronDB = {
   seq: string; // 自增计数器（字符串）
@@ -182,12 +208,24 @@ function buildCopy(task: AcronTask): string {
   } else if (task.type === "del") {
     const remark = task.remark ? ` ${task.remark}` : "";
     return `${mainPrefix}acron del ${task.cron} ${task.chat} ${task.msgId}${remark}`;
-  } else {
+  } else if (task.type === "del_re") {
     // 尽量保留原始正则字符串
     const t = task as DelReTask;
     const remark = t.remark ? ` ${t.remark}` : "";
     return `${mainPrefix}acron del_re ${t.cron} ${t.chat} ${t.limit} ${t.regex}${remark}`;
+  } else if (task.type === "pin") {
+    const t = task as PinTask;
+    const remark = t.remark ? ` ${t.remark}` : "";
+    const notify = t.notify ? "1" : "0";
+    const pmOneSide = t.pmOneSide ? "1" : "0";
+    return `${mainPrefix}acron pin ${t.cron} ${t.chat} ${t.msgId} ${notify} ${pmOneSide}${remark}`;
+  } else if (task.type === "unpin") {
+    const t = task as UnpinTask;
+    const remark = t.remark ? ` ${t.remark}` : "";
+    return `${mainPrefix}acron unpin ${t.cron} ${t.chat} ${t.msgId}${remark}`;
   }
+  // fallback（理论不可达）
+  return `${mainPrefix}acron`;
 }
 function buildCopyCommand(task: AcronTask): string {
   const cmd = buildCopy(task);
@@ -322,6 +360,31 @@ async function scheduleTask(task: AcronTask) {
           db.data.tasks[idx].lastError = undefined;
           await db.write();
         }
+      } else if (task.type === "pin") {
+        const t = task as PinTask;
+        const msgIdNum = toInt(t.msgId);
+        if (msgIdNum === undefined) throw new Error("无效的消息ID");
+        await client.pinMessage(entityLike, msgIdNum, {
+          notify: !!t.notify,
+          pmOneSide: !!t.pmOneSide,
+        });
+        if (idx >= 0) {
+          db.data.tasks[idx].lastRunAt = String(now);
+          db.data.tasks[idx].lastResult = `已置顶消息 ${t.msgId}`;
+          db.data.tasks[idx].lastError = undefined;
+          await db.write();
+        }
+      } else if (task.type === "unpin") {
+        const t = task as UnpinTask;
+        const msgIdNum = toInt(t.msgId);
+        if (msgIdNum === undefined) throw new Error("无效的消息ID");
+        await client.unpinMessage(entityLike, msgIdNum);
+        if (idx >= 0) {
+          db.data.tasks[idx].lastRunAt = String(now);
+          db.data.tasks[idx].lastResult = `已取消置顶消息 ${t.msgId}`;
+          db.data.tasks[idx].lastError = undefined;
+          await db.write();
+        }
       }
     } catch (e: any) {
       console.error(`[acron] 任务 ${task.id} 执行失败:`, e);
@@ -360,6 +423,8 @@ const help_text = `用法:
 [注意此处是换行写 指定发送时话题的ID或回复消息的ID]</code> 回复一条消息 - 稍微麻烦了一点, 但是可以保证消息的完整格式. 储存此消息到数据库, 每天2点在指定对话发送(可指定话题或回复消息). 不支持带多媒体或 replyMarkup 的消息, 可考虑使用本插件的定时复制/转发功能
 • <code>${mainPrefix}acron del 0 0 2 * * * 对话ID/@name 消息ID [备注]</code> - 每天2点删除指定ID或@name的对话中的指定ID的消息
 • <code>${mainPrefix}acron del_re 0 0 2 * * * 对话ID/@name 100 /^test/i [备注]</code> - 每天2点删除指定ID或@name的对话中的最近的 100 条消息中 内容符合正则表达式的消息
+• <code>${mainPrefix}acron pin 0 0 2 * * * 对话ID/@name 消息ID 是否发通知 是否仅对自己置顶 [备注]</code> - 每天2点在指定ID或@name的对话中置顶指定ID的消息, 是否发通知(true/1, false/0), 是否仅对自己置顶(true/1, false/0)
+• <code>${mainPrefix}acron unpin 0 0 2 * * * 对话ID/@name 消息ID [备注]</code> - 每天2点在指定ID或@name的对话中取消置顶指定ID的消息
 • <code>${mainPrefix}acron list</code> - 列出当前会话中的所有定时任务
 • <code>${mainPrefix}acron list all</code> - 列出所有的定时任务
 • <code>${mainPrefix}acron list del</code> - 列出当前会话中的类型为 del 的定时任务
@@ -398,14 +463,17 @@ class AcronPlugin extends Plugin {
 
           const scopeAll = p1 === "all";
           const maybeType = (scopeAll ? p2 : p1) as AcronType | "";
-          const typeFilter: AcronType | undefined =
-            maybeType === "send" ||
-            maybeType === "copy" ||
-            maybeType === "forward" ||
-            maybeType === "del" ||
-            maybeType === "del_re"
-              ? maybeType
-              : undefined;
+          const typeFilter: AcronType | undefined = [
+            "send",
+            "copy",
+            "forward",
+            "del",
+            "del_re",
+            "pin",
+            "unpin",
+          ].includes(maybeType as any)
+            ? (maybeType as AcronType)
+            : undefined;
 
           const typeLabel = (tp?: AcronType) =>
             tp === "send"
@@ -418,6 +486,10 @@ class AcronPlugin extends Plugin {
               ? "删除"
               : tp === "del_re"
               ? "正则删除"
+              : tp === "pin"
+              ? "置顶"
+              : tp === "unpin"
+              ? "取消置顶"
               : String(tp || "");
 
           const db = await getDB();
@@ -643,7 +715,9 @@ class AcronPlugin extends Plugin {
           sub === "copy" ||
           sub === "forward" ||
           sub === "del" ||
-          sub === "del_re"
+          sub === "del_re" ||
+          sub === "pin" ||
+          sub === "unpin"
         ) {
           const argRest = args.slice(1); // 跳过子命令
           const parsed = parseCronFromArgs(argRest);
@@ -860,6 +934,110 @@ class AcronPlugin extends Plugin {
               "✅ 已添加删除消息的定时任务",
               `ID: <code>${id}</code>`,
               `对话: ${display}`,
+              ...(task.remark ? [`备注: ${task.remark}`] : []),
+              nextAt ? `下次执行: ${formatDate(nextAt.toJSDate())}` : "",
+              `复制: ${buildCopyCommand(task)}`,
+            ].join("\n");
+            await msg.edit({ text: tip, parseMode: "html" });
+            return;
+          } else if (sub === "pin") {
+            // rest: [chat, msgId, notify, pmOneSide, ...remark]
+            const msgIdStr = rest[1];
+            let msgId = Number(msgIdStr);
+            if (!msgIdStr || Number.isNaN(msgId)) {
+              if (msg.isReply) {
+                const replied = await msg.getReplyMessage();
+                msgId = Number(replied?.id);
+              }
+            }
+            if (!msgId || Number.isNaN(msgId)) {
+              await msg.edit({ text: "请提供有效的消息ID，或回复一条消息" });
+              return;
+            }
+            const notifyRaw = (rest[2] || "").toLowerCase();
+            const pmOneSideRaw = (rest[3] || "").toLowerCase();
+            if (!notifyRaw || !pmOneSideRaw) {
+              await msg.edit({
+                text: "请提供是否发通知与是否仅对自己置顶参数，如: 1 0 或 true false",
+              });
+              return;
+            }
+            const parseBool = (v: string) =>
+              v === "1" || v === "true" || v === "yes" || v === "y";
+            const notify = parseBool(notifyRaw);
+            const pmOneSide = parseBool(pmOneSideRaw);
+            const remark = rest.slice(4).join(" ").trim();
+
+            const task: PinTask = {
+              id,
+              type: "pin",
+              cron: cronExpr,
+              chat: chatArg,
+              chatId: hasChatId as any,
+              msgId: String(Math.trunc(msgId)),
+              notify,
+              pmOneSide,
+              createdAt: String(Date.now()),
+              remark: remark || undefined,
+              display: display || undefined,
+            };
+
+            db.data.tasks.push(task);
+            await db.write();
+            await scheduleTask(task);
+
+            const nextAt = (cron as any).sendAt(cronExpr);
+            const tip = [
+              "✅ 已添加置顶消息的定时任务",
+              `ID: <code>${id}</code>`,
+              `对话: ${display}`,
+              `消息ID: <code>${task.msgId}</code>`,
+              `通知: <code>${task.notify ? "1" : "0"}</code>`,
+              `仅自己置顶: <code>${task.pmOneSide ? "1" : "0"}</code>`,
+              ...(task.remark ? [`备注: ${task.remark}`] : []),
+              nextAt ? `下次执行: ${formatDate(nextAt.toJSDate())}` : "",
+              `复制: ${buildCopyCommand(task)}`,
+            ].join("\n");
+            await msg.edit({ text: tip, parseMode: "html" });
+            return;
+          } else if (sub === "unpin") {
+            // rest: [chat, msgId, ...remark]
+            const msgIdStr = rest[1];
+            let msgId = Number(msgIdStr);
+            if (!msgIdStr || Number.isNaN(msgId)) {
+              if (msg.isReply) {
+                const replied = await msg.getReplyMessage();
+                msgId = Number(replied?.id);
+              }
+            }
+            if (!msgId || Number.isNaN(msgId)) {
+              await msg.edit({ text: "请提供有效的消息ID，或回复一条消息" });
+              return;
+            }
+            const remark = rest.slice(2).join(" ").trim();
+
+            const task: UnpinTask = {
+              id,
+              type: "unpin",
+              cron: cronExpr,
+              chat: chatArg,
+              chatId: hasChatId as any,
+              msgId: String(Math.trunc(msgId)),
+              createdAt: String(Date.now()),
+              remark: remark || undefined,
+              display: display || undefined,
+            };
+
+            db.data.tasks.push(task);
+            await db.write();
+            await scheduleTask(task);
+
+            const nextAt = (cron as any).sendAt(cronExpr);
+            const tip = [
+              "✅ 已添加取消置顶的定时任务",
+              `ID: <code>${id}</code>`,
+              `对话: ${display}`,
+              `消息ID: <code>${task.msgId}</code>`,
               ...(task.remark ? [`备注: ${task.remark}`] : []),
               nextAt ? `下次执行: ${formatDate(nextAt.toJSDate())}` : "",
               `复制: ${buildCopyCommand(task)}`,
