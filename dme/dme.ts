@@ -14,7 +14,8 @@ import * as path from "path";
 
 // 常量配置
 const CONFIG = {
-  TROLL_IMAGE_URL: "https://raw.githubusercontent.com/TeleBoxDev/TeleBox/main/telebox.png",
+  TROLL_IMAGE_URL:
+    "https://raw.githubusercontent.com/TeleBoxDev/TeleBox/main/telebox.png",
   TROLL_IMAGE_PATH: "./assets/dme/dme_troll_image.png",
   BATCH_SIZE: 50,
   SEARCH_LIMIT: 100,
@@ -25,17 +26,25 @@ const CONFIG = {
     BATCH: 200,
     EDIT_WAIT: 1000,
     SEARCH: 100,
-    RESULT_DISPLAY: 3000
-  }
+    RESULT_DISPLAY: 3000,
+  },
 } as const;
 
 // 工具函数
-const htmlEscape = (text: string): string => 
-  text.replace(/[&<>"']/g, m => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#x27;' }[m] || m));
+const htmlEscape = (text: string): string =>
+  text.replace(
+    /[&<>"']/g,
+    (m) =>
+      ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#x27;" }[
+        m
+      ] || m)
+  );
 
-const sleep = (ms: number): Promise<void> => new Promise(resolve => setTimeout(resolve, ms));
+const sleep = (ms: number): Promise<void> =>
+  new Promise((resolve) => setTimeout(resolve, ms));
 
-const formatProgress = (current: number, total: number): string => `<code>${current}/${total}</code>`;
+const formatProgress = (current: number, total: number): string =>
+  `<code>${current}/${total}</code>`;
 
 /**
  * 获取防撤回图片，支持缓存
@@ -74,7 +83,7 @@ async function deleteMessagesUniversal(
 ): Promise<number> {
   // 删除消息
   await client.deleteMessages(chatEntity, messageIds, { revoke: true });
-  
+
   // 强制刷新更新状态，确保跨平台同步
   try {
     await client.invoke(new Api.updates.GetState());
@@ -82,7 +91,7 @@ async function deleteMessagesUniversal(
   } catch (error) {
     console.log(`[DME] 同步刷新失败，但不影响删除操作:`, error);
   }
-  
+
   return messageIds.length;
 }
 
@@ -111,7 +120,7 @@ async function editMediaMessageToAntiRecall(
         fs.statSync(trollImagePath).size,
         trollImagePath
       ),
-      workers: 1
+      workers: 1,
     });
 
     await client.invoke(
@@ -119,7 +128,7 @@ async function editMediaMessageToAntiRecall(
         peer: chatEntity,
         id: message.id,
         message: "",
-        media: new Api.InputMediaUploadedPhoto({ file: uploadedFile })
+        media: new Api.InputMediaUploadedPhoto({ file: uploadedFile }),
       })
     );
     return true;
@@ -138,9 +147,13 @@ async function searchEditAndDeleteMyMessages(
   myId: bigint,
   userRequestedCount: number,
   forceMode: boolean = false
-): Promise<{ processedCount: number; actualCount: number; editedCount: number }> {
+): Promise<{
+  processedCount: number;
+  actualCount: number;
+  editedCount: number;
+}> {
   // 检查是否为频道且有管理权限
-  const isChannel = chatEntity.className === 'Channel';
+  const isChannel = chatEntity.className === "Channel";
   if (isChannel) {
     console.log(`[DME] 检测到频道，检查管理员权限...`);
     try {
@@ -148,13 +161,14 @@ async function searchEditAndDeleteMyMessages(
       const participant = await client.invoke(
         new Api.channels.GetParticipant({
           channel: chatEntity,
-          participant: me.id
+          participant: me.id,
         })
       );
-      
-      const isAdmin = participant.participant.className === 'ChannelParticipantAdmin' || 
-                      participant.participant.className === 'ChannelParticipantCreator';
-      
+
+      const isAdmin =
+        participant.participant.className === "ChannelParticipantAdmin" ||
+        participant.participant.className === "ChannelParticipantCreator";
+
       if (isAdmin) {
         console.log(`[DME] 拥有频道管理权限，但仍使用普通模式避免误删别人消息`);
         console.log(`[DME] 如需删除所有消息，请使用其他管理工具`);
@@ -165,8 +179,9 @@ async function searchEditAndDeleteMyMessages(
       console.log(`[DME] 权限检查失败，使用普通模式:`, error);
     }
   }
-    const targetCount = userRequestedCount === 999999 ? Infinity : userRequestedCount;
-  
+  const targetCount =
+    userRequestedCount === 999999 ? Infinity : userRequestedCount;
+
   const allMyMessages: Api.Message[] = [];
   const processedIds = new Set<number>(); // 防止重复处理
   let batchCount = 0;
@@ -174,20 +189,28 @@ async function searchEditAndDeleteMyMessages(
   let totalSearched = 0;
   const RATE_LIMIT_DELAY = 2000; // 每批次间隔2秒避免触发限制
 
-  console.log(`[DME] 开始搜索消息，目标数量: ${targetCount === Infinity ? '全部' : targetCount}${forceMode ? ' (强制模式)' : ` (最多${CONFIG.DEFAULT_BATCH_LIMIT}批次)`}`);
+  console.log(
+    `[DME] 开始搜索消息，目标数量: ${
+      targetCount === Infinity ? "全部" : targetCount
+    }${forceMode ? " (强制模式)" : ` (最多${CONFIG.DEFAULT_BATCH_LIMIT}批次)`}`
+  );
 
   // 搜索用户消息 - 根据模式决定是否限制批次数
   const maxBatches = forceMode ? Infinity : CONFIG.DEFAULT_BATCH_LIMIT;
   let offsetId = 0; // 用于分页的偏移ID
   let consecutiveEmptyBatches = 0; // 连续空批次计数
   const MAX_EMPTY_BATCHES = 3; // 最大连续空批次数
-  
-  while (!hasReachedEnd && (targetCount === Infinity || allMyMessages.length < targetCount) && batchCount < maxBatches) {
+
+  while (
+    !hasReachedEnd &&
+    (targetCount === Infinity || allMyMessages.length < targetCount) &&
+    batchCount < maxBatches
+  ) {
     batchCount++;
     try {
       const messages = await client.getMessages(chatEntity, {
         limit: 100,
-        offsetId: offsetId
+        offsetId: offsetId,
       });
 
       if (messages.length === 0) {
@@ -195,7 +218,7 @@ async function searchEditAndDeleteMyMessages(
         console.log(`[DME] 已到达聊天记录末尾，共搜索 ${totalSearched} 条消息`);
         break;
       }
-      
+
       totalSearched += messages.length;
       // 更新偏移ID为最后一条消息的ID
       offsetId = messages[messages.length - 1].id;
@@ -206,20 +229,26 @@ async function searchEditAndDeleteMyMessages(
         if (processedIds.has(m.id)) return false; // 跳过已处理的消息
         return m.senderId.toString() === myId.toString();
       });
-      
+
       // 记录找到的消息
       if (myMessages.length > 0) {
-        myMessages.forEach(m => processedIds.add(m.id));
+        myMessages.forEach((m) => processedIds.add(m.id));
         allMyMessages.push(...myMessages);
-        console.log(`[DME] 批次 ${batchCount}: 找到 ${myMessages.length} 条消息，总计 ${allMyMessages.length} 条`);
+        console.log(
+          `[DME] 批次 ${batchCount}: 找到 ${myMessages.length} 条消息，总计 ${allMyMessages.length} 条`
+        );
         consecutiveEmptyBatches = 0; // 重置连续空批次计数
       } else {
         consecutiveEmptyBatches++;
-        console.log(`[DME] 批次 ${batchCount}: 本批次无自己的消息 (连续空批次: ${consecutiveEmptyBatches})`);
-        
+        console.log(
+          `[DME] 批次 ${batchCount}: 本批次无自己的消息 (连续空批次: ${consecutiveEmptyBatches})`
+        );
+
         // 如果连续多个批次都没有自己的消息，可能已经搜索完毕
         if (consecutiveEmptyBatches >= MAX_EMPTY_BATCHES) {
-          console.log(`[DME] 连续 ${MAX_EMPTY_BATCHES} 个批次无自己的消息，可能已搜索完毕`);
+          console.log(
+            `[DME] 连续 ${MAX_EMPTY_BATCHES} 个批次无自己的消息，可能已搜索完毕`
+          );
           // 在非强制模式下，提前结束搜索
           if (!forceMode) {
             console.log(`[DME] 非强制模式下提前结束搜索`);
@@ -233,21 +262,22 @@ async function searchEditAndDeleteMyMessages(
         console.log(`[DME] 已达到目标数量 ${targetCount}`);
         break;
       }
-      
+
       // 检查是否达到批次限制（仅在非强制模式下）
       if (!forceMode && batchCount >= CONFIG.DEFAULT_BATCH_LIMIT) {
-        console.log(`[DME] 已达到默认搜索批次限制 (${CONFIG.DEFAULT_BATCH_LIMIT} 批次)，使用 -f 参数可强制搜索到首条消息`);
+        console.log(
+          `[DME] 已达到默认搜索批次限制 (${CONFIG.DEFAULT_BATCH_LIMIT} 批次)，使用 -f 参数可强制搜索到首条消息`
+        );
         break;
       }
-      
+
       // 智能延迟避免API限制
       await sleep(RATE_LIMIT_DELAY);
-      
     } catch (error: any) {
       if (error.message?.includes("FLOOD_WAIT")) {
         const waitTime = parseInt(error.message.match(/\d+/)?.[0] || "60");
         console.log(`[DME] 触发API限制，休眠 ${waitTime} 秒...`);
-        
+
         // 每10秒输出一次等待状态
         for (let i = waitTime; i > 0; i -= 10) {
           if (i % 10 === 0 || i < 10) {
@@ -255,7 +285,7 @@ async function searchEditAndDeleteMyMessages(
           }
           await sleep(Math.min(i, 10) * 1000);
         }
-        
+
         console.log(`[DME] 休眠结束，继续搜索...`);
         continue;
       }
@@ -267,32 +297,37 @@ async function searchEditAndDeleteMyMessages(
   }
 
   // 处理找到的消息
-  const messagesToProcess = targetCount === Infinity ? allMyMessages : allMyMessages.slice(0, targetCount);
+  const messagesToProcess =
+    targetCount === Infinity
+      ? allMyMessages
+      : allMyMessages.slice(0, targetCount);
   if (messagesToProcess.length === 0) {
     console.log(`[DME] 未找到任何需要处理的消息`);
     return { processedCount: 0, actualCount: 0, editedCount: 0 };
   }
-  
+
   console.log(`[DME] 准备处理 ${messagesToProcess.length} 条消息`);
 
   // 分类消息：媒体消息和文字消息
-  const mediaMessages = messagesToProcess.filter((m: Api.Message) => 
-    m.media && !(m.media instanceof Api.MessageMediaWebPage)
+  const mediaMessages = messagesToProcess.filter(
+    (m: Api.Message) => m.media && !(m.media instanceof Api.MessageMediaWebPage)
   );
 
   let editedCount = 0;
   if (mediaMessages.length > 0) {
     console.log(`[DME] 处理 ${mediaMessages.length} 条媒体消息...`);
     const trollImagePath = await getTrollImage();
-    
-    const editTasks = mediaMessages.map(message => 
+
+    const editTasks = mediaMessages.map((message) =>
       editMediaMessageToAntiRecall(client, message, trollImagePath, chatEntity)
     );
 
     const results = await Promise.allSettled(editTasks);
-    editedCount = results.filter(r => r.status === 'fulfilled' && r.value === true).length;
+    editedCount = results.filter(
+      (r) => r.status === "fulfilled" && r.value === true
+    ).length;
     console.log(`[DME] 成功编辑 ${editedCount} 条媒体消息`);
-    
+
     await sleep(CONFIG.DELAYS.EDIT_WAIT);
   }
 
@@ -305,25 +340,31 @@ async function searchEditAndDeleteMyMessages(
   for (let i = 0; i < deleteIds.length; i += CONFIG.BATCH_SIZE) {
     deleteBatch++;
     const batch = deleteIds.slice(i, i + CONFIG.BATCH_SIZE);
-    
+
     try {
-      const batchDeleted = await deleteMessagesUniversal(client, chatEntity, batch);
+      const batchDeleted = await deleteMessagesUniversal(
+        client,
+        chatEntity,
+        batch
+      );
       deletedCount += batchDeleted;
-      console.log(`[DME] 删除批次 ${deleteBatch}: 成功删除 ${batchDeleted} 条，进度 ${deletedCount}/${deleteIds.length}`);
-      
+      console.log(
+        `[DME] 删除批次 ${deleteBatch}: 成功删除 ${batchDeleted} 条，进度 ${deletedCount}/${deleteIds.length}`
+      );
+
       await sleep(CONFIG.DELAYS.BATCH);
     } catch (error: any) {
       if (error.message?.includes("FLOOD_WAIT")) {
         const waitTime = parseInt(error.message.match(/\d+/)?.[0] || "60");
         console.log(`[DME] 删除时触发API限制，休眠 ${waitTime} 秒...`);
-        
+
         for (let j = waitTime; j > 0; j -= 10) {
           if (j % 10 === 0 || j < 10) {
             console.log(`[DME] 删除等待中... 剩余 ${j} 秒`);
           }
           await sleep(Math.min(j, 10) * 1000);
         }
-        
+
         i -= CONFIG.BATCH_SIZE; // 重试当前批次
         console.log(`[DME] 休眠结束，重试批次 ${deleteBatch}`);
       } else {
@@ -333,18 +374,114 @@ async function searchEditAndDeleteMyMessages(
       }
     }
   }
-  
+
   console.log(`[DME] 删除完成，共删除 ${deletedCount} 条消息`);
 
-  return { processedCount: deletedCount, actualCount: messagesToProcess.length, editedCount };
+  return {
+    processedCount: deletedCount,
+    actualCount: messagesToProcess.length,
+    editedCount,
+  };
 }
 
 // 已移除频道直接删除功能，避免误删别人消息
 // 所有情况下都使用普通模式，只删除自己的消息
 
-const dmePlugin: Plugin = {
-  command: ["dme"],
-  description: `智能防撤回删除插件
+const dme = async (msg: Api.Message) => {
+  const text = msg.message || "";
+  const chatId = msg.chatId?.toString() || msg.peerId?.toString() || "";
+  const args = text.trim().split(/\s+/);
+
+  // 解析参数：数量、-f标志和帮助命令
+  let countArg: string | undefined;
+  let forceMode = false;
+  let showHelp = false;
+
+  // 检查参数中是否有-f标志或帮助命令
+  const filteredArgs = args.slice(1).filter((arg) => {
+    if (arg === "-f") {
+      forceMode = true;
+      return false;
+    }
+    if (arg === "help" || arg === "h") {
+      showHelp = true;
+      return false;
+    }
+    return true;
+  });
+
+  countArg = filteredArgs[0];
+
+  const client = await getGlobalClient();
+  if (!client) {
+    console.error("[DME] 客户端未初始化");
+    return;
+  }
+
+  // 显示帮助文档（仅在明确请求时）
+  if (showHelp) {
+    console.log("[DME] 用户请求帮助文档");
+    console.log(dmePlugin.description);
+    return;
+  }
+
+  // 参数验证
+  if (!countArg) {
+    console.error("[DME] 参数错误: 请提供要删除的消息数量");
+    console.log("[DME] 提示: 使用 .dme help 查看帮助");
+    return;
+  }
+
+  const userRequestedCount = parseInt(countArg);
+  if (isNaN(userRequestedCount) || userRequestedCount <= 0) {
+    console.error("[DME] 参数错误: 数量必须是正整数");
+    return;
+  }
+
+  try {
+    const me = await client.getMe();
+    const myId = BigInt(me.id.toString());
+
+    const chatEntity = await getEntityWithHash(client, chatId);
+
+    // 删除命令消息
+    try {
+      await client.deleteMessages(chatEntity as any, [msg.id], {
+        revoke: true,
+      });
+    } catch {}
+
+    // 执行主要操作
+    console.log(`[DME] ========== 开始执行DME任务 ==========`);
+    console.log(`[DME] 聊天ID: ${chatId}`);
+    console.log(`[DME] 请求数量: ${userRequestedCount}`);
+    console.log(`[DME] 强制模式: ${forceMode ? "是" : "否"}`);
+    const startTime = Date.now();
+
+    const result = await searchEditAndDeleteMyMessages(
+      client,
+      chatEntity as any,
+      myId,
+      userRequestedCount,
+      forceMode
+    );
+
+    const duration = Math.round((Date.now() - startTime) / 1000);
+    console.log(`[DME] ========== 任务完成 ==========`);
+    console.log(`[DME] 总耗时: ${duration} 秒`);
+    console.log(`[DME] 处理消息: ${result.processedCount} 条`);
+    console.log(`[DME] 编辑媒体: ${result.editedCount} 条`);
+    console.log(`[DME] =============================`);
+
+    // 完全静默模式 - 不发送任何前台消息
+  } catch (error: any) {
+    console.error("[DME] 操作失败:", error);
+    // 静默模式：不显示错误消息
+  }
+};
+
+class DmePlugin extends Plugin {
+  description: string = `智能防撤回删除插件
 
 参数说明:
 • [数量] - 要删除的消息数量
@@ -363,92 +500,10 @@ const dmePlugin: Plugin = {
 • .dme 50 -f - 删除最近50条消息（强制搜索到首条消息）
 
 工作流程:
-1️⃣ 搜索历史消息 → 2️⃣ 分类处理 → 3️⃣ 媒体防撤回 → 4️⃣ 批量删除`,
-  cmdHandler: async (msg: Api.Message) => {
-    const text = msg.message || "";
-    const chatId = msg.chatId?.toString() || msg.peerId?.toString() || "";
-    const args = text.trim().split(/\s+/);
-    
-    // 解析参数：数量、-f标志和帮助命令
-    let countArg: string | undefined;
-    let forceMode = false;
-    let showHelp = false;
-    
-    // 检查参数中是否有-f标志或帮助命令
-    const filteredArgs = args.slice(1).filter(arg => {
-      if (arg === '-f') {
-        forceMode = true;
-        return false;
-      }
-      if (arg === 'help' || arg === 'h') {
-        showHelp = true;
-        return false;
-      }
-      return true;
-    });
-    
-    countArg = filteredArgs[0];
+1️⃣ 搜索历史消息 → 2️⃣ 分类处理 → 3️⃣ 媒体防撤回 → 4️⃣ 批量删除`;
+  cmdHandlers: Record<string, (msg: Api.Message) => Promise<void>> = {
+    dme,
+  };
+}
 
-    const client = await getGlobalClient();
-    if (!client) {
-      console.error("[DME] 客户端未初始化");
-      return;
-    }
-
-    // 显示帮助文档（仅在明确请求时）
-    if (showHelp) {
-      console.log("[DME] 用户请求帮助文档");
-      console.log(dmePlugin.description);
-      return;
-    }
-    
-    // 参数验证
-    if (!countArg) {
-      console.error("[DME] 参数错误: 请提供要删除的消息数量");
-      console.log("[DME] 提示: 使用 .dme help 查看帮助");
-      return;
-    }
-
-    const userRequestedCount = parseInt(countArg);
-    if (isNaN(userRequestedCount) || userRequestedCount <= 0) {
-      console.error("[DME] 参数错误: 数量必须是正整数");
-      return;
-    }
-
-    try {
-      const me = await client.getMe();
-      const myId = BigInt(me.id.toString());
-      
-      const chatEntity = await getEntityWithHash(client, chatId);
-
-      // 删除命令消息
-      try {
-        await client.deleteMessages(chatEntity as any, [msg.id], { revoke: true });
-      } catch {}
-
-      // 执行主要操作
-      console.log(`[DME] ========== 开始执行DME任务 ==========`);
-      console.log(`[DME] 聊天ID: ${chatId}`);
-      console.log(`[DME] 请求数量: ${userRequestedCount}`);
-      console.log(`[DME] 强制模式: ${forceMode ? '是' : '否'}`);
-      const startTime = Date.now();
-      
-      const result = await searchEditAndDeleteMyMessages(client, chatEntity as any, myId, userRequestedCount, forceMode);
-      
-      const duration = Math.round((Date.now() - startTime) / 1000);
-      console.log(`[DME] ========== 任务完成 ==========`);
-      console.log(`[DME] 总耗时: ${duration} 秒`);
-      console.log(`[DME] 处理消息: ${result.processedCount} 条`);
-      console.log(`[DME] 编辑媒体: ${result.editedCount} 条`);
-      console.log(`[DME] =============================`);
-
-      // 完全静默模式 - 不发送任何前台消息
-
-    } catch (error: any) {
-      console.error("[DME] 操作失败:", error);
-      // 静默模式：不显示错误消息
-    }
-  },
-};
-
-export default dmePlugin;
+export default new DmePlugin();
