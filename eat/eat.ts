@@ -40,7 +40,7 @@ let baseConfigURL =
 
 async function loadConfigResource(url: string, forceUpdate = false) {
   const filePath = await assetPathFor(url);
-  
+
   // 如果有缓存且不强制更新，直接使用缓存
   if (!forceUpdate && fs.existsSync(filePath)) {
     try {
@@ -51,7 +51,7 @@ async function loadConfigResource(url: string, forceUpdate = false) {
       console.error("缓存文件损坏，尝试从远程下载:", error);
     }
   }
-  
+
   // 下载最新配置
   try {
     await download(url, EAT_ASSET_PATH);
@@ -77,8 +77,8 @@ loadConfigResource(baseConfigURL).catch(() => {
 async function sendStickerList(msg: Api.Message) {
   const stickerList = Object.keys(config)
     .sort((a, b) => a.localeCompare(b))
-    .map(key => `${key} - ${config[key].name}`)
-    .join('\n');
+    .map((key) => `${key} - ${config[key].name}`)
+    .join("\n");
   await msg.edit({
     text: `当前表情包：\n${stickerList}`,
   });
@@ -171,8 +171,9 @@ async function compositeWithEntryConfig(parmas: {
   entry: EntryConfig;
   msg: Api.Message;
   isEat2: boolean;
+  trigger?: Api.Message;
 }): Promise<void> {
-  const { entry, msg, isEat2 } = parmas;
+  const { entry, msg, isEat2, trigger } = parmas;
 
   const basePath = await assetPathFor(entry.url);
 
@@ -185,7 +186,7 @@ async function compositeWithEntryConfig(parmas: {
 
   // 如果有两人互动
   if (entry.me) {
-    const meId = msg.fromId;
+    const meId = trigger?.fromId || msg.fromId;
     if (!meId) {
       await msg.edit({ text: "无法获取自己的头像" });
       return;
@@ -211,12 +212,16 @@ async function compositeWithEntryConfig(parmas: {
   });
 }
 
-async function sendSticker(params: { entry: EntryConfig; msg: Api.Message }) {
-  const { entry, msg } = params;
+async function sendSticker(params: {
+  entry: EntryConfig;
+  msg: Api.Message;
+  trigger?: Api.Message;
+}) {
+  const { entry, msg, trigger } = params;
   const cmd = msg.message.slice(1).split(" ")[0];
   const isEat2 = cmd === "eat2";
   await msg.edit({ text: `正在生成 ${entry.name} 表情包···` });
-  await compositeWithEntryConfig({ entry, msg, isEat2 });
+  await compositeWithEntryConfig({ entry, msg, isEat2, trigger });
   await msg.delete();
 }
 
@@ -240,61 +245,67 @@ async function handleSetCommand(params: {
   await loadConfigResource(url, true);
   const stickerList = Object.keys(config)
     .sort((a, b) => a.localeCompare(b))
-    .map(key => `${key} - ${config[key].name}`)
-    .join('\n');
+    .map((key) => `${key} - ${config[key].name}`)
+    .join("\n");
   await msg.edit({
     text: `✅ 已强制更新表情包配置\n当前表情包：\n${stickerList}`,
   });
 }
 
-const eatPlugin: Plugin = {
-  command: ["eat", "eat2"],
-  description:
-    `表情包插件，智能缓存机制，首次使用自动下载配置\n` +
-    `• eat - 获取表情包列表（优先使用缓存）\n` +
-    `• eat set [url] - 强制更新配置（覆盖缓存）\n` +
-    `• 回复消息 + eat <名称> - 发送指定表情包\n` +
-    `• 回复消息 + eat - 随机发送表情包`,
-  cmdHandler: async (msg) => {
-    const [, ...args] = msg.message.split(" ");
-    
-    if (!msg.isReply) {
-      if (args[0] == "set") {
-        let url = args[1] || baseConfigURL;
-        await handleSetCommand({ msg, url });
-        return;
-      }
-      
-      // 确保配置已加载（优先使用缓存）
-      await ensureConfigLoaded(msg);
-      await sendStickerList(msg);
+const fn = async (msg: Api.Message, trigger?: Api.Message) => {
+  const [, ...args] = msg.message.split(" ");
+
+  if (!msg.isReply) {
+    if (args[0] == "set") {
+      let url = args[1] || baseConfigURL;
+      await handleSetCommand({ msg, url });
       return;
     }
-    
+
     // 确保配置已加载（优先使用缓存）
     await ensureConfigLoaded(msg);
+    await sendStickerList(msg);
+    return;
+  }
 
-    if (args.length == 0) {
-      // 说明随机情况
-      const entry = getRandomEntry();
-      await sendSticker({ entry, msg });
-    } else {
-      const stickerName = args[0];
-      const entrys = Object.keys(config);
-      if (!entrys.includes(stickerName)) {
-        const stickerList = entrys
-          .sort((a, b) => a.localeCompare(b))
-          .map(key => `${key} - ${config[key].name}`)
-          .join('\n');
-        await msg.edit({
-          text: `找不到 ${stickerName} 该表情包，目前可用表情包如下:\n${stickerList}`,
-        });
-        return;
-      }
-      let entry = config[stickerName];
-      await sendSticker({ entry, msg });
+  // 确保配置已加载（优先使用缓存）
+  await ensureConfigLoaded(msg);
+
+  if (args.length == 0) {
+    // 说明随机情况
+    const entry = getRandomEntry();
+    await sendSticker({ entry, msg, trigger });
+  } else {
+    const stickerName = args[0];
+    const entrys = Object.keys(config);
+    if (!entrys.includes(stickerName)) {
+      const stickerList = entrys
+        .sort((a, b) => a.localeCompare(b))
+        .map((key) => `${key} - ${config[key].name}`)
+        .join("\n");
+      await msg.edit({
+        text: `找不到 ${stickerName} 该表情包，目前可用表情包如下:\n${stickerList}`,
+      });
+      return;
     }
-  },
+    let entry = config[stickerName];
+    await sendSticker({ entry, msg, trigger });
+  }
 };
 
-export default eatPlugin;
+const help_text =
+  `表情包插件，智能缓存机制，首次使用自动下载配置\n` +
+  `• eat - 获取表情包列表（优先使用缓存）\n` +
+  `• eat set [url] - 强制更新配置（覆盖缓存）\n` +
+  `• 回复消息 + eat <名称> - 发送指定表情包\n` +
+  `• 回复消息 + eat - 随机发送表情包`;
+
+class EatPlugin extends Plugin {
+  description: string = `${help_text}`;
+  cmdHandlers: Record<string, (msg: Api.Message) => Promise<void>> = {
+    eat: fn,
+    eat2: fn,
+  };
+}
+
+export default new EatPlugin();

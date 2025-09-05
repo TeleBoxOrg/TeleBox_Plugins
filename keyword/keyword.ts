@@ -94,9 +94,13 @@ class KeywordTask {
   }
 
   checkNeedReply(message: Api.Message): boolean {
-    const text = message.message || (message.media && 'caption' in message.media ? String(message.media.caption || '') : '');
+    const text =
+      message.message ||
+      (message.media && "caption" in message.media
+        ? String(message.media.caption || "")
+        : "");
     if (!text) return false;
-    
+
     if (this.ignore_forward && message.fwdFrom) {
       return false;
     }
@@ -106,7 +110,7 @@ class KeywordTask {
 
     if (this.regexp) {
       try {
-        const regex = new RegExp(key, this.case ? 'g' : 'gi');
+        const regex = new RegExp(key, this.case ? "g" : "gi");
         return regex.test(messageText);
       } catch {
         return false;
@@ -127,11 +131,14 @@ class KeywordTask {
 
   replaceReply(message: Api.Message): string {
     let text = this.msg;
-    
-    if (message.fromId && 'userId' in message.fromId) {
+
+    if (message.fromId && "userId" in message.fromId) {
       const userId = Number(message.fromId.userId);
       const firstName = "User"; // 简化处理，实际中可以通过API获取用户信息
-      text = text.replace("$mention", `<a href="tg://user?id=${userId}">${firstName}</a>`);
+      text = text.replace(
+        "$mention",
+        `<a href="tg://user?id=${userId}">${firstName}</a>`
+      );
       text = text.replace("$code_id", String(userId));
       text = text.replace("$code_name", firstName);
     } else {
@@ -153,28 +160,27 @@ class KeywordTask {
     try {
       const text = this.replaceReply(message);
       const client = await getGlobalClient();
-      
+
       // 发送回复消息
       let sentMsg: Api.Message | null = null;
       try {
         const sendOptions: any = {
           message: text,
-          parseMode: "html"
+          parseMode: "html",
         };
-        
+
         if (this.reply && message.id) {
           sendOptions.replyTo = message.id;
         }
-        
+
         sentMsg = await client.sendMessage(message.peerId, sendOptions);
 
         const cmd = await getCommandFromMessage(text);
 
         if (cmd && sentMsg)
           await dealCommandPluginWithMessage({ cmd, msg: sentMsg });
-        
       } catch (error) {
-        console.error('Reply message error:', error);
+        console.error("Reply message error:", error);
       }
 
       // 删除原消息
@@ -183,16 +189,20 @@ class KeywordTask {
           if (this.source_delay_delete > 0) {
             setTimeout(async () => {
               try {
-                await client.deleteMessages(message.peerId, [message.id], { revoke: true });
+                await client.deleteMessages(message.peerId, [message.id], {
+                  revoke: true,
+                });
               } catch (error) {
-                console.error('Delayed delete message error:', error);
+                console.error("Delayed delete message error:", error);
               }
             }, this.source_delay_delete * 1000);
           } else {
-            await client.deleteMessages(message.peerId, [message.id], { revoke: true });
+            await client.deleteMessages(message.peerId, [message.id], {
+              revoke: true,
+            });
           }
         } catch (error) {
-          console.error('Delete message error:', error);
+          console.error("Delete message error:", error);
         }
       }
 
@@ -200,18 +210,19 @@ class KeywordTask {
       if (this.delay_delete > 0 && sentMsg) {
         setTimeout(async () => {
           try {
-            await client.deleteMessages(message.peerId, [sentMsg!.id], { revoke: true });
+            await client.deleteMessages(message.peerId, [sentMsg!.id], {
+              revoke: true,
+            });
           } catch (error) {
-            console.error('Delayed delete reply error:', error);
+            console.error("Delayed delete reply error:", error);
           }
         }, this.delay_delete * 1000);
       }
 
       // 封禁和限制功能在TeleBox中需要管理员权限，暂时跳过实现
       // TODO: 实现ban和restrict功能
-      
     } catch (error) {
-      console.error('Process keyword error:', error);
+      console.error("Process keyword error:", error);
     }
   }
 
@@ -280,7 +291,12 @@ class KeywordTask {
       this.source_delay_delete = parseInt(data[5]) || 0;
     }
 
-    if (this.ban < 0 || this.restrict < 0 || this.delay_delete < 0 || this.source_delay_delete < 0) {
+    if (
+      this.ban < 0 ||
+      this.restrict < 0 ||
+      this.delay_delete < 0 ||
+      this.source_delay_delete < 0
+    ) {
       throw new Error("时间参数不能为负数");
     }
   }
@@ -312,7 +328,7 @@ if (db) {
       source_delay_delete INTEGER DEFAULT 0
     )
   `);
-  
+
   db.exec(`
     CREATE TABLE IF NOT EXISTS keyword_alias (
       from_cid INTEGER PRIMARY KEY,
@@ -349,7 +365,9 @@ class KeywordAlias {
 
   get(fromCid: number): number | undefined {
     if (!db) return undefined;
-    const stmt = db.prepare("SELECT to_cid FROM keyword_alias WHERE from_cid = ?");
+    const stmt = db.prepare(
+      "SELECT to_cid FROM keyword_alias WHERE from_cid = ?"
+    );
     const row = stmt.get(fromCid) as any;
     return row ? row.to_cid : undefined;
   }
@@ -363,13 +381,13 @@ class KeywordTasks {
   }
 
   add(task: KeywordTask): void {
-    if (!this.tasks.some(t => t.task_id === task.task_id)) {
+    if (!this.tasks.some((t) => t.task_id === task.task_id)) {
       this.tasks.push(task);
     }
   }
 
   remove(taskId: number): boolean {
-    const taskIndex = this.tasks.findIndex(t => t.task_id === taskId);
+    const taskIndex = this.tasks.findIndex((t) => t.task_id === taskId);
     if (taskIndex !== -1) {
       this.tasks.splice(taskIndex, 1);
       return true;
@@ -380,7 +398,7 @@ class KeywordTasks {
   removeByIds(taskIds: number[]): { success: number; failed: number } {
     let success = 0;
     let failed = 0;
-    
+
     for (const taskId of taskIds) {
       if (this.remove(taskId)) {
         success++;
@@ -388,12 +406,12 @@ class KeywordTasks {
         failed++;
       }
     }
-    
+
     return { success, failed };
   }
 
   get(taskId: number): KeywordTask | undefined {
-    return this.tasks.find(task => task.task_id === taskId);
+    return this.tasks.find((task) => task.task_id === taskId);
   }
 
   getAll(): KeywordTask[] {
@@ -401,19 +419,21 @@ class KeywordTasks {
   }
 
   getAllIds(): number[] {
-    return this.tasks.map(task => task.task_id!);
+    return this.tasks.map((task) => task.task_id!);
   }
 
   printAllTasks(showAll: boolean = false, cid: number = 0): string {
     const tasksToShow = showAll
       ? this.tasks
-      : this.tasks.filter(task => task.cid === cid);
+      : this.tasks.filter((task) => task.cid === cid);
 
     if (tasksToShow.length === 0) {
-      return showAll ? "当前没有任何关键词任务。" : "当前聊天没有任何关键词任务。";
+      return showAll
+        ? "当前没有任何关键词任务。"
+        : "当前聊天没有任何关键词任务。";
     }
 
-    return tasksToShow.map(task => task.exportStr(showAll)).join('\n');
+    return tasksToShow.map((task) => task.exportStr(showAll)).join("\n");
   }
 
   saveToDB(): void {
@@ -456,40 +476,43 @@ class KeywordTasks {
     const stmt = db.prepare("SELECT * FROM keyword_tasks");
     const rows = stmt.all() as any[];
 
-    this.tasks = rows.map(row => new KeywordTask({
-      task_id: row.task_id,
-      cid: row.cid,
-      key: row.key,
-      msg: row.msg,
-      include: row.include === 1,
-      regexp: row.regexp === 1,
-      exact: row.exact === 1,
-      case: row.case_sensitive === 1,
-      ignore_forward: row.ignore_forward === 1,
-      reply: row.reply === 1,
-      delete: row.delete_msg === 1,
-      ban: row.ban,
-      restrict: row.restrict,
-      delay_delete: row.delay_delete,
-      source_delay_delete: row.source_delay_delete
-    }));
+    this.tasks = rows.map(
+      (row) =>
+        new KeywordTask({
+          task_id: row.task_id,
+          cid: row.cid,
+          key: row.key,
+          msg: row.msg,
+          include: row.include === 1,
+          regexp: row.regexp === 1,
+          exact: row.exact === 1,
+          case: row.case_sensitive === 1,
+          ignore_forward: row.ignore_forward === 1,
+          reply: row.reply === 1,
+          delete: row.delete_msg === 1,
+          ban: row.ban,
+          restrict: row.restrict,
+          delay_delete: row.delay_delete,
+          source_delay_delete: row.source_delay_delete,
+        })
+    );
   }
 
   getNextTaskId(): number {
     return this.tasks.length > 0
-      ? Math.max(...this.tasks.map(t => t.task_id!)) + 1
+      ? Math.max(...this.tasks.map((t) => t.task_id!)) + 1
       : 1;
   }
 
   getTasksForChat(cid: number): KeywordTask[] {
-    return this.tasks.filter(task => task.cid === cid);
+    return this.tasks.filter((task) => task.cid === cid);
   }
 
   async checkAndReply(message: Api.Message): Promise<void> {
     try {
       const chatId = getChatId(message);
       if (!chatId || chatId === 0) return;
-      
+
       // 检查别名继承
       const aliasId = keywordAlias.get(chatId);
       if (aliasId) {
@@ -509,16 +532,16 @@ class KeywordTasks {
         }
       }
     } catch (error) {
-      console.error('Check and reply error:', error);
+      console.error("Check and reply error:", error);
     }
   }
 }
 
 // 类型安全的ID转换函数
 function toNumber(value: any): number {
-  if (typeof value === 'number') return value;
-  if (typeof value === 'bigint') return Number(value);
-  if (typeof value === 'string') return parseInt(value, 10) || 0;
+  if (typeof value === "number") return value;
+  if (typeof value === "bigint") return Number(value);
+  if (typeof value === "string") return parseInt(value, 10) || 0;
   return 0;
 }
 
@@ -535,7 +558,7 @@ function getChatId(msg: Api.Message): number {
       return 0;
     }
   } catch (error) {
-    console.error('Get chat ID error:', error);
+    console.error("Get chat ID error:", error);
     return 0;
   }
 }
@@ -548,7 +571,7 @@ const keywordTasks = new KeywordTasks();
 function parseTaskIds(idsStr: string): number[] {
   const idList = idsStr.split(",");
   const result: number[] = [];
-  
+
   for (const id of idList) {
     const num = parseInt(id.trim());
     if (isNaN(num)) {
@@ -556,22 +579,20 @@ function parseTaskIds(idsStr: string): number[] {
     }
     result.push(num);
   }
-  
+
   return result;
 }
 
-const keywordPlugin: Plugin = {
-  command: ["keyword"],
-  description: "关键词回复管理",
-  cmdHandler: async (msg: Api.Message) => {
-    try {
-      const messageText = msg.message || '';
-      const args = messageText.split(' ').slice(1) || [];
-      const spaceIndex = messageText.indexOf(' ');
-      const fullArgs = spaceIndex !== -1 ? messageText.substring(spaceIndex + 1) : '';
+const keyword = async (msg: Api.Message) => {
+  try {
+    const messageText = msg.message || "";
+    const args = messageText.split(" ").slice(1) || [];
+    const spaceIndex = messageText.indexOf(" ");
+    const fullArgs =
+      spaceIndex !== -1 ? messageText.substring(spaceIndex + 1) : "";
 
-      if (args.length === 0 || args[0] === 'h' || args[0] === 'help') {
-        const helpText = `<b>🔧 关键词回复插件 - 完整使用指南</b>
+    if (args.length === 0 || args[0] === "h" || args[0] === "help") {
+      const helpText = `<b>🔧 关键词回复插件 - 完整使用指南</b>
 
 <b>📋 基础命令：</b>
 <code>keyword list</code> - 查看当前群组的关键词任务
@@ -666,197 +687,213 @@ reply delete ban3600</code>
 
 <b>🔗 更多信息：</b>
 如需更多帮助，请参考 TeleBox 官方文档或联系管理员。`;
-        
+
+      await msg.edit({
+        text: helpText,
+        parseMode: "html",
+      });
+      return;
+    }
+
+    if (args.length === 1) {
+      if (args[0] === "list") {
+        const chatId = getChatId(msg);
+        const taskList = keywordTasks.printAllTasks(false, chatId);
         await msg.edit({
-          text: helpText,
-          parseMode: "html"
+          text: `<b>当前聊天的关键词任务：</b>\n\n${taskList}`,
+          parseMode: "html",
         });
         return;
-      }
-
-      if (args.length === 1) {
-        if (args[0] === 'list') {
-          const chatId = getChatId(msg);
-          const taskList = keywordTasks.printAllTasks(false, chatId);
+      } else if (args[0] === "alias") {
+        const chatId = getChatId(msg) || 0;
+        const aliasId = keywordAlias.get(chatId);
+        if (aliasId) {
           await msg.edit({
-            text: `<b>当前聊天的关键词任务：</b>\n\n${taskList}`,
-            parseMode: "html"
+            text: `当前群组的关键字将继承：${aliasId}`,
           });
-          return;
-        } else if (args[0] === 'alias') {
-          const chatId = getChatId(msg) || 0;
-          const aliasId = keywordAlias.get(chatId);
-          if (aliasId) {
-            await msg.edit({
-              text: `当前群组的关键字将继承：${aliasId}`
-            });
-          } else {
-            await msg.edit({
-              text: "当前群组没有继承。"
-            });
-          }
-          return;
+        } else {
+          await msg.edit({
+            text: "当前群组没有继承。",
+          });
         }
+        return;
       }
+    }
 
-      if (args.length === 2) {
-        if (args[0] === 'rm') {
-          try {
-            const idList = parseTaskIds(args[1]);
-            const result = keywordTasks.removeByIds(idList);
-            keywordTasks.saveToDB();
+    if (args.length === 2) {
+      if (args[0] === "rm") {
+        try {
+          const idList = parseTaskIds(args[1]);
+          const result = keywordTasks.removeByIds(idList);
+          keywordTasks.saveToDB();
+          await msg.edit({
+            text: `✅ 已删除任务成功 <code>${result.success}</code> 个，失败 <code>${result.failed}</code> 个。`,
+            parseMode: "html",
+          });
+        } catch (error: any) {
+          await msg.edit({
+            text: `❌ <b>参数错误:</b> ${htmlEscape(error.message || error)}`,
+            parseMode: "html",
+          });
+        }
+        return;
+      } else if (args[0] === "list" && args[1] === "all") {
+        const taskList = keywordTasks.printAllTasks(true);
+        await msg.edit({
+          text: `<b>所有关键词任务：</b>\n\n${taskList}`,
+          parseMode: "html",
+        });
+        return;
+      } else if (args[0] === "alias") {
+        const chatId = getChatId(msg) || 0;
+        if (args[1] === "rm") {
+          if (!keywordAlias.get(chatId)) {
             await msg.edit({
-              text: `✅ 已删除任务成功 <code>${result.success}</code> 个，失败 <code>${result.failed}</code> 个。`,
-              parseMode: "html"
+              text: "当前群组没有继承。",
+            });
+            return;
+          }
+          keywordAlias.remove(chatId);
+          await msg.edit({
+            text: "已删除继承。",
+          });
+        } else {
+          try {
+            const cid = parseInt(args[1]);
+            keywordAlias.add(chatId, cid);
+            await msg.edit({
+              text: `✅ 已添加继承：<code>${cid}</code>`,
+              parseMode: "html",
             });
           } catch (error: any) {
             await msg.edit({
-              text: `❌ <b>参数错误:</b> ${htmlEscape(error.message || error)}`,
-              parseMode: "html"
+              text: `❌ <b>参数错误:</b> ${htmlEscape(
+                error.message || "请输入正确的参数"
+              )}`,
+              parseMode: "html",
             });
           }
-          return;
-        } else if (args[0] === 'list' && args[1] === 'all') {
-          const taskList = keywordTasks.printAllTasks(true);
-          await msg.edit({
-            text: `<b>所有关键词任务：</b>\n\n${taskList}`,
-            parseMode: "html"
-          });
-          return;
-        } else if (args[0] === 'alias') {
-          const chatId = getChatId(msg) || 0;
-          if (args[1] === 'rm') {
-            if (!keywordAlias.get(chatId)) {
-              await msg.edit({
-                text: "当前群组没有继承。"
-              });
-              return;
-            }
-            keywordAlias.remove(chatId);
-            await msg.edit({
-              text: "已删除继承。"
-            });
-          } else {
-            try {
-              const cid = parseInt(args[1]);
-              keywordAlias.add(chatId, cid);
-              await msg.edit({
-                text: `✅ 已添加继承：<code>${cid}</code>`,
-                parseMode: "html"
-              });
-            } catch (error: any) {
-              await msg.edit({
-                text: `❌ <b>参数错误:</b> ${htmlEscape(error.message || "请输入正确的参数")}`,
-                parseMode: "html"
-              });
-            }
-          }
-          return;
         }
-      }
-
-      // 添加任务 - 参考send_cron.ts的聊天ID获取方式
-      let chatId: number;
-      try {
-        if (msg.chat?.id) {
-          chatId = Number(msg.chat.id);
-        } else if (msg.peerId) {
-          chatId = Number(msg.peerId.toString());
-        } else if (msg.chatId) {
-          chatId = Number(msg.chatId.toString());
-        } else {
-          chatId = 0;
-        }
-      } catch (error) {
-        chatId = 0;
-      }
-
-      if (!chatId || chatId === 0) {
-        await msg.edit({ text: "❌ 无法获取聊天ID，请重试。" });
         return;
       }
+    }
 
-      const task = new KeywordTask({
-        task_id: keywordTasks.getNextTaskId(),
-        cid: chatId,
-        key: '',
-        msg: '',
-        include: true,
-        regexp: false,
-        exact: false,
-        case: false,
-        ignore_forward: false,
-        reply: true,
-        delete: false,
-        ban: 0,
-        restrict: 0,
-        delay_delete: 0,
-        source_delay_delete: 0
-      });
-
-      try {
-        task.parseTask(fullArgs);
-        keywordTasks.add(task);
-        keywordTasks.saveToDB();
-        await msg.edit({
-          text: `✅ 已添加关键词任务，ID 为 <code>${task.task_id}</code>。`,
-          parseMode: "html"
-        });
-      } catch (error: any) {
-        await msg.edit({
-          text: `❌ <b>参数错误:</b> ${htmlEscape(error.message || error)}`,
-          parseMode: "html"
-        });
+    // 添加任务 - 参考send_cron.ts的聊天ID获取方式
+    let chatId: number;
+    try {
+      if (msg.chat?.id) {
+        chatId = Number(msg.chat.id);
+      } else if (msg.peerId) {
+        chatId = Number(msg.peerId.toString());
+      } else if (msg.chatId) {
+        chatId = Number(msg.chatId.toString());
+      } else {
+        chatId = 0;
       }
+    } catch (error) {
+      chatId = 0;
+    }
 
-    } catch (error: any) {
-      console.error('Keyword plugin error:', error);
+    if (!chatId || chatId === 0) {
+      await msg.edit({ text: "❌ 无法获取聊天ID，请重试。" });
+      return;
+    }
+
+    const task = new KeywordTask({
+      task_id: keywordTasks.getNextTaskId(),
+      cid: chatId,
+      key: "",
+      msg: "",
+      include: true,
+      regexp: false,
+      exact: false,
+      case: false,
+      ignore_forward: false,
+      reply: true,
+      delete: false,
+      ban: 0,
+      restrict: 0,
+      delay_delete: 0,
+      source_delay_delete: 0,
+    });
+
+    try {
+      task.parseTask(fullArgs);
+      keywordTasks.add(task);
+      keywordTasks.saveToDB();
       await msg.edit({
-        text: `❌ 操作失败：${error.message || error}`
+        text: `✅ 已添加关键词任务，ID 为 <code>${task.task_id}</code>。`,
+        parseMode: "html",
+      });
+    } catch (error: any) {
+      await msg.edit({
+        text: `❌ <b>参数错误:</b> ${htmlEscape(error.message || error)}`,
+        parseMode: "html",
       });
     }
+  } catch (error: any) {
+    console.error("Keyword plugin error:", error);
+    await msg.edit({
+      text: `❌ 操作失败：${error.message || error}`,
+    });
   }
 };
 
-export default keywordPlugin;
+class KeywordPlugin extends Plugin {
+  description: string = `关键词回复管理 .keyword h 查看帮助`;
+  cmdHandlers: Record<string, (msg: Api.Message) => Promise<void>> = {
+    keyword,
+  };
+  listenMessageHandler?: ((msg: Api.Message) => Promise<void>) | undefined =
+    async (message) => {
+      try {
+        // 只处理文本消息和带文本的媒体消息
+        const text =
+          message.message ||
+          (message.media && "caption" in message.media
+            ? String(message.media.caption || "")
+            : "");
+        if (!text) {
+          return;
+        }
 
-// 添加消息监听处理器
-keywordPlugin.listenMessageHandler = async (message: Api.Message) => {
-  try {
-    // 只处理文本消息和带文本的媒体消息
-    const text = message.message || (message.media && 'caption' in message.media ? String(message.media.caption || '') : '');
-    if (!text) {
-      return;
-    }
-    
-    // 跳过机器人自己的消息
-    if (message.out) {
-      return;
-    }
-    
-    await keywordTasks.checkAndReply(message);
-  } catch (error) {
-    console.error('Process keyword message error:', error);
-  }
-};
+        // 跳过机器人自己的消息
+        if (message.out) {
+          return;
+        }
+
+        await keywordTasks.checkAndReply(message);
+      } catch (error) {
+        console.error("Process keyword message error:", error);
+      }
+    };
+}
+
+export default new KeywordPlugin();
 
 // 导出用于消息监听的函数
 // 全局消息监听器 - 需要在TeleBox主程序中集成
-export async function processKeywordMessage(message: Api.Message): Promise<void> {
+export async function processKeywordMessage(
+  message: Api.Message
+): Promise<void> {
   try {
     // 只处理文本消息和带文本的媒体消息
-    const text = message.message || (message.media && 'caption' in message.media ? String(message.media.caption || '') : '');
+    const text =
+      message.message ||
+      (message.media && "caption" in message.media
+        ? String(message.media.caption || "")
+        : "");
     if (!text) {
       return;
     }
-    
+
     // 跳过机器人自己的消息
     if (message.out) {
       return;
     }
-    
+
     await keywordTasks.checkAndReply(message);
   } catch (error) {
-    console.error('Process keyword message error:', error);
+    console.error("Process keyword message error:", error);
   }
 }

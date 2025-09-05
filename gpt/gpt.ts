@@ -32,7 +32,11 @@ const DEFAULT_CONFIG = {
 };
 
 // 数据库路径
-const CONFIG_DB_PATH = path.join((globalThis as any).process?.cwd?.() || ".", "assets", "gpt_config.db");
+const CONFIG_DB_PATH = path.join(
+  (globalThis as any).process?.cwd?.() || ".",
+  "assets",
+  "gpt_config.db"
+);
 
 // 确保assets目录存在
 if (!fs.existsSync(path.dirname(CONFIG_DB_PATH))) {
@@ -47,7 +51,7 @@ class ConfigManager {
   // 初始化数据库
   private static init(): void {
     if (this.initialized) return;
-    
+
     try {
       this.db = new Database(CONFIG_DB_PATH);
       this.db.exec(`
@@ -65,24 +69,24 @@ class ConfigManager {
 
   static get(key: string, defaultValue?: string): string {
     this.init();
-    
+
     try {
       const stmt = this.db.prepare("SELECT value FROM config WHERE key = ?");
       const row = stmt.get(key) as { value: string } | undefined;
-      
+
       if (row) {
         return row.value;
       }
     } catch (error) {
       console.error("读取配置失败:", error);
     }
-    
+
     return defaultValue || DEFAULT_CONFIG[key] || "";
   }
 
   static set(key: string, value: string): void {
     this.init();
-    
+
     try {
       const stmt = this.db.prepare(`
         INSERT OR REPLACE INTO config (key, value, updated_at) 
@@ -97,16 +101,16 @@ class ConfigManager {
   // 获取所有配置
   static getAll(): { [key: string]: string } {
     this.init();
-    
+
     try {
       const stmt = this.db.prepare("SELECT key, value FROM config");
       const rows = stmt.all() as { key: string; value: string }[];
-      
+
       const config: { [key: string]: string } = {};
-      rows.forEach(row => {
+      rows.forEach((row) => {
         config[row.key] = row.value;
       });
-      
+
       return config;
     } catch (error) {
       console.error("读取所有配置失败:", error);
@@ -117,7 +121,7 @@ class ConfigManager {
   // 删除配置
   static delete(key: string): void {
     this.init();
-    
+
     try {
       const stmt = this.db.prepare("DELETE FROM config WHERE key = ?");
       stmt.run(key);
@@ -148,7 +152,7 @@ function htmlEscape(text: string): string {
 function markdownToHtml(text: string): string {
   // 首先对特殊HTML字符进行转义，但要保护已经存在的HTML标签
   let result = text;
-  
+
   // 临时替换现有的HTML标签
   const htmlTags: string[] = [];
   let tagIndex = 0;
@@ -156,55 +160,61 @@ function markdownToHtml(text: string): string {
     htmlTags.push(match);
     return `__HTML_TAG_${tagIndex++}__`;
   });
-  
+
   // 转义其他HTML字符
   result = result
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;");
-  
+
   // 恢复HTML标签
   htmlTags.forEach((tag, index) => {
     result = result.replace(`__HTML_TAG_${index}__`, tag);
   });
-  
+
   // 应用markdown转换
   result = result
     // 代码块 (```) - 先处理，避免内部内容被其他规则影响
     .replace(/```(\w+)?\n([\s\S]*?)```/g, (match, lang, code) => {
-      const escapedCode = code.replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&');
+      const escapedCode = code
+        .replace(/&lt;/g, "<")
+        .replace(/&gt;/g, ">")
+        .replace(/&amp;/g, "&");
       return `<pre><code>${htmlEscape(escapedCode)}</code></pre>`;
     })
     // 行内代码 (`)
     .replace(/`([^`]+)`/g, (match, code) => {
-      const escapedCode = code.replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&');
+      const escapedCode = code
+        .replace(/&lt;/g, "<")
+        .replace(/&gt;/g, ">")
+        .replace(/&amp;/g, "&");
       return `<code>${htmlEscape(escapedCode)}</code>`;
     })
     // 粗体 (**)
-    .replace(/\*\*([^*]+)\*\*/g, '<b>$1</b>')
+    .replace(/\*\*([^*]+)\*\*/g, "<b>$1</b>")
     // 斜体 (*) - 简化版本，避免与粗体冲突
-    .replace(/\*([^*\n]+)\*/g, '<i>$1</i>')
+    .replace(/\*([^*\n]+)\*/g, "<i>$1</i>")
     // 粗体 (__)
-    .replace(/__([^_]+)__/g, '<b>$1</b>')
+    .replace(/__([^_]+)__/g, "<b>$1</b>")
     // 斜体 (_) - 简化版本，避免与粗体冲突
-    .replace(/_([^_\n]+)_/g, '<i>$1</i>')
+    .replace(/_([^_\n]+)_/g, "<i>$1</i>")
     // 删除线 (~~)
-    .replace(/~~([^~]+)~~/g, '<s>$1</s>')
+    .replace(/~~([^~]+)~~/g, "<s>$1</s>")
     // 链接 [text](url)
     .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2">$1</a>')
     // 标题 (# ## ###)
-    .replace(/^### (.+)$/gm, '<b>$1</b>')
-    .replace(/^## (.+)$/gm, '<b>$1</b>')
-    .replace(/^# (.+)$/gm, '<b>$1</b>')
+    .replace(/^### (.+)$/gm, "<b>$1</b>")
+    .replace(/^## (.+)$/gm, "<b>$1</b>")
+    .replace(/^# (.+)$/gm, "<b>$1</b>")
     // 引用 (>)
-    .replace(/^> (.+)$/gm, '<blockquote>$1</blockquote>');
-  
+    .replace(/^> (.+)$/gm, "<blockquote>$1</blockquote>");
+
   return result;
 }
 
 // 睡眠函数
 function sleep(ms: number): Promise<void> {
-  return new Promise(resolve => setTimeout(resolve, ms));
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 // 图片上传到 fars.ee
@@ -215,19 +225,19 @@ async function uploadImage(imagePath: string): Promise<string> {
   const formData = new FormData();
   const imageBuffer = await fs.promises.readFile(imagePath);
   const imageBlob = new Blob([imageBuffer]);
-  
-  formData.append('c', imageBlob, basename);
-  formData.append('sunset', '120');
-  formData.append('private', '1');
+
+  formData.append("c", imageBlob, basename);
+  formData.append("sunset", "120");
+  formData.append("private", "1");
 
   const headers = {
-    'Accept': 'application/json'
+    Accept: "application/json",
   };
 
   try {
     const response = await axios.post(url, formData, {
       headers,
-      timeout: 30000
+      timeout: 30000,
     });
 
     if (response.status !== 200) {
@@ -240,15 +250,15 @@ async function uploadImage(imagePath: string): Promise<string> {
 
     const data = response.data;
     let retUrl = data.url;
-    
+
     if (!retUrl) {
       retUrl = response.headers.location;
     }
-    
+
     if (!retUrl) {
       throw new Error("有响应但无法获取图片 URL");
     }
-    
+
     return retUrl;
   } catch (error: any) {
     throw new Error(`上传图片失败: ${error.message}`);
@@ -262,13 +272,15 @@ async function downloadAndProcessImage(
   infoMessage: Api.Message
 ): Promise<{ imagePath: string; imageSource: string }> {
   const tempDir = os.tmpdir();
-  const imageName = `gpt_tmp_${Math.random().toString(36).substring(7)}_${Date.now()}.png`;
+  const imageName = `gpt_tmp_${Math.random()
+    .toString(36)
+    .substring(7)}_${Date.now()}.png`;
   const imagePath = path.join(tempDir, imageName);
 
   try {
     // 下载图片
     await infoMessage.edit({ text: "下载图片..." });
-    
+
     let mediaMsg = message;
     const replyMsg = await message.getReplyMessage();
     if (!message.media && replyMsg?.media) {
@@ -280,14 +292,16 @@ async function downloadAndProcessImage(
     }
 
     // 尝试下载图片
-    const buffer = await client.downloadMedia(mediaMsg.media, { 
+    const buffer = await client.downloadMedia(mediaMsg.media, {
       workers: 1,
       progressCallback: (received: number, total: number) => {
-        const percent = (received * 100 / total);
-        infoMessage.edit({
-          text: `下载图片 ${percent.toFixed(1)}%`
-        }).catch(() => {});
-      }
+        const percent = (received * 100) / total;
+        infoMessage
+          .edit({
+            text: `下载图片 ${percent.toFixed(1)}%`,
+          })
+          .catch(() => {});
+      },
     });
 
     if (!buffer) {
@@ -299,15 +313,16 @@ async function downloadAndProcessImage(
     await infoMessage.edit({ text: "下载图片 100%" });
 
     // 检查是否需要上传图片
-    const imageUploadEnabled = ConfigManager.get(CONFIG_KEYS.GPT_IMAGE_UPLOAD).toLowerCase() === 'true';
-    
+    const imageUploadEnabled =
+      ConfigManager.get(CONFIG_KEYS.GPT_IMAGE_UPLOAD).toLowerCase() === "true";
+
     let imageSource: string;
     if (imageUploadEnabled) {
       const imageUrl = await uploadImage(imagePath);
       imageSource = imageUrl;
     } else {
       const imageBuffer = await fs.promises.readFile(imagePath);
-      const base64 = imageBuffer.toString('base64');
+      const base64 = imageBuffer.toString("base64");
       imageSource = `data:image/png;base64,${base64}`;
     }
 
@@ -322,9 +337,13 @@ async function downloadAndProcessImage(
 }
 
 // 设置max_tokens参数（兼容不同模型）
-function setMaxTokensParam(payload: any, modelName: string, maxTokens: number | null): void {
+function setMaxTokensParam(
+  payload: any,
+  modelName: string,
+  maxTokens: number | null
+): void {
   if (maxTokens === null) return;
-  
+
   const modelLower = modelName.toLowerCase();
   if (modelLower.startsWith("gpt-5") || modelLower.startsWith("o1-")) {
     payload.max_completion_tokens = maxTokens;
@@ -341,10 +360,11 @@ async function callGptApi(
 ): Promise<string> {
   const apiKey = ConfigManager.get(CONFIG_KEYS.GPT_KEY);
   const apiUrl = ConfigManager.get(CONFIG_KEYS.GPT_API);
-  const model = useVision 
+  const model = useVision
     ? ConfigManager.get(CONFIG_KEYS.GPT_VISION_MODEL)
     : ConfigManager.get(CONFIG_KEYS.GPT_MODEL);
-  const webSearch = ConfigManager.get(CONFIG_KEYS.GPT_WEB_SEARCH).toLowerCase() === 'true';
+  const webSearch =
+    ConfigManager.get(CONFIG_KEYS.GPT_WEB_SEARCH).toLowerCase() === "true";
   const maxTokensStr = ConfigManager.get(CONFIG_KEYS.GPT_MAX_TOKENS);
 
   if (!apiKey) {
@@ -370,7 +390,7 @@ async function callGptApi(
   }
 
   const useResponsesApi = webSearch;
-  const url = useResponsesApi 
+  const url = useResponsesApi
     ? `${apiUrl}/v1/responses`
     : `${apiUrl}/v1/chat/completions`;
 
@@ -386,13 +406,14 @@ async function callGptApi(
             role: "user",
             content: [
               { type: "input_text", text: question },
-              { type: "input_image", image_url: imageSource }
-            ]
-          }
+              { type: "input_image", image_url: imageSource },
+            ],
+          },
         ],
         tools: [{ type: "web_search" }],
         tool_choice: "auto",
-        temperature: model.startsWith('o1-') || model.startsWith('gpt-5') ? 1 : 0.5
+        temperature:
+          model.startsWith("o1-") || model.startsWith("gpt-5") ? 1 : 0.5,
       };
       if (maxTokens !== null) {
         payload.max_output_tokens = maxTokens;
@@ -407,12 +428,13 @@ async function callGptApi(
             role: "user",
             content: [
               { type: "text", text: question },
-              { type: "image_url", image_url: { url: imageSource } }
-            ]
-          }
+              { type: "image_url", image_url: { url: imageSource } },
+            ],
+          },
         ],
-        temperature: model.startsWith('o1-') || model.startsWith('gpt-5') ? 1 : 0.5,
-        presence_penalty: 0
+        temperature:
+          model.startsWith("o1-") || model.startsWith("gpt-5") ? 1 : 0.5,
+        presence_penalty: 0,
       };
       setMaxTokensParam(payload, model, maxTokens);
     }
@@ -424,7 +446,8 @@ async function callGptApi(
         input: question,
         tools: [{ type: "web_search" }],
         tool_choice: "auto",
-        temperature: model.startsWith('o1-') || model.startsWith('gpt-5') ? 1 : 0.5
+        temperature:
+          model.startsWith("o1-") || model.startsWith("gpt-5") ? 1 : 0.5,
       };
       if (maxTokens !== null) {
         payload.max_output_tokens = maxTokens;
@@ -434,27 +457,26 @@ async function callGptApi(
       payload = {
         stream: false,
         model,
-        messages: [
-          { role: "user", content: question }
-        ],
-        temperature: model.startsWith('o1-') || model.startsWith('gpt-5') ? 1 : 0.5,
-        presence_penalty: 0
+        messages: [{ role: "user", content: question }],
+        temperature:
+          model.startsWith("o1-") || model.startsWith("gpt-5") ? 1 : 0.5,
+        presence_penalty: 0,
       };
       setMaxTokensParam(payload, model, maxTokens);
     }
   }
 
   const headers = {
-    'Authorization': `Bearer ${apiKey}`,
-    'Content-Type': 'application/json'
+    Authorization: `Bearer ${apiKey}`,
+    "Content-Type": "application/json",
   };
 
   const timeout = useResponsesApi ? 120000 : 30000;
-  
+
   try {
     const response = await axios.post(url, payload, {
       headers,
-      timeout
+      timeout,
     });
 
     if (response.status !== 200) {
@@ -468,16 +490,16 @@ async function callGptApi(
       // Handle Responses API response
       let responseData = data;
       const startTime = Date.now();
-      
+
       // Poll if response is still processing
       while (
-        responseData.status === "in_progress" || 
+        responseData.status === "in_progress" ||
         responseData.status === "queued"
       ) {
         if (Date.now() - startTime > timeout - 5000) {
           break;
         }
-        
+
         await sleep(1000);
         const pollResponse = await axios.get(
           `${apiUrl}/v1/responses/${responseData.id}`,
@@ -494,13 +516,13 @@ async function callGptApi(
           if (item.content && Array.isArray(item.content)) {
             for (const c of item.content) {
               const text = c.text || c.content || c.value;
-              if (typeof text === 'string') {
+              if (typeof text === "string") {
                 parts.push(text);
               }
             }
           }
         }
-        answer = parts.join('').trim() || null;
+        answer = parts.join("").trim() || null;
       }
     } else {
       // Handle Chat Completions response
@@ -560,10 +582,10 @@ async function handleGptRequest(msg: Api.Message): Promise<void> {
     if (args.length === 2 && args[0].startsWith("_set_")) {
       const configKey = args[0];
       const configValue = args[1].trim();
-      
+
       let actualKey: string;
       let displayName: string;
-      
+
       switch (configKey) {
         case "_set_key":
           actualKey = CONFIG_KEYS.GPT_KEY;
@@ -605,13 +627,17 @@ async function handleGptRequest(msg: Api.Message): Promise<void> {
           await msg.edit({ text: "❌ 未知的配置项" });
           return;
       }
-      
+
       ConfigManager.set(actualKey, configValue);
-      const confirmMsg = await msg.edit({ 
-        text: `✅ 已设置 ${displayName}: \`${actualKey === CONFIG_KEYS.GPT_KEY ? configValue.substring(0, 8) + "..." : configValue}\``,
-        parseMode: "markdown"
+      const confirmMsg = await msg.edit({
+        text: `✅ 已设置 ${displayName}: \`${
+          actualKey === CONFIG_KEYS.GPT_KEY
+            ? configValue.substring(0, 8) + "..."
+            : configValue
+        }\``,
+        parseMode: "markdown",
       });
-      
+
       await sleep(5000);
       await confirmMsg.delete();
       return;
@@ -623,7 +649,7 @@ async function handleGptRequest(msg: Api.Message): Promise<void> {
     let questionType: string | null = null;
 
     // 检查是否有媒体（图片）
-    const hasMedia = msg.media || (replyMsg?.media);
+    const hasMedia = msg.media || replyMsg?.media;
     const useVision = hasMedia;
 
     if (useVision) {
@@ -631,7 +657,7 @@ async function handleGptRequest(msg: Api.Message): Promise<void> {
         question = "用中文描述此图片";
         questionType = "empty";
       }
-      
+
       // 下载并处理图片
       await msg.edit({ text: "🤔 下载图片中..." });
       const { imagePath, imageSource } = await downloadAndProcessImage(
@@ -650,18 +676,17 @@ async function handleGptRequest(msg: Api.Message): Promise<void> {
       }
 
       await msg.edit({ text: "🤔 思考中..." });
-      
+
       // 调用GPT API
       const answer = await callGptApi(question, imageSource, true);
-      
+
       // 格式化并发送回复
       const formattedText = formatResponse(question, answer);
-      await msg.edit({ 
+      await msg.edit({
         text: formattedText,
         linkPreview: false,
-        parseMode: "html"
+        parseMode: "html",
       });
-
     } else {
       // 文本问答模式
       if (!question) {
@@ -685,39 +710,40 @@ async function handleGptRequest(msg: Api.Message): Promise<void> {
       }
 
       await msg.edit({ text: "🤔 思考中..." });
-      
+
       // 调用GPT API
       const answer = await callGptApi(question, undefined, false);
-      
+
       // 格式化并发送回复
       const formattedText = formatResponse(
-        questionType === "empty" ? "" : question, 
+        questionType === "empty" ? "" : question,
         answer
       );
-      await msg.edit({ 
+      await msg.edit({
         text: formattedText,
         linkPreview: false,
-        parseMode: "html"
+        parseMode: "html",
       });
     }
 
     // 自动删除空提问
-    const autoRemove = ConfigManager.get(CONFIG_KEYS.GPT_AUTO_REMOVE).toLowerCase() === 'true';
+    const autoRemove =
+      ConfigManager.get(CONFIG_KEYS.GPT_AUTO_REMOVE).toLowerCase() === "true";
     if (autoRemove && questionType === "empty") {
       await sleep(1000);
       await msg.delete();
     }
-
   } catch (error: any) {
     console.error("GPT处理错误:", error);
-    
+
     const errorMsg = `❌ 错误：${error.message}`;
     await msg.edit({ text: errorMsg });
     await sleep(10000);
     await msg.delete();
 
     // 自动删除空提问（即使出错）
-    const autoRemove = ConfigManager.get(CONFIG_KEYS.GPT_AUTO_REMOVE).toLowerCase() === 'true';
+    const autoRemove =
+      ConfigManager.get(CONFIG_KEYS.GPT_AUTO_REMOVE).toLowerCase() === "true";
     if (autoRemove && args.length === 0) {
       await sleep(1000);
       await msg.delete();
@@ -728,9 +754,8 @@ async function handleGptRequest(msg: Api.Message): Promise<void> {
   }
 }
 
-const gptPlugin: Plugin = {
-  command: ["gpt"],
-  description: `
+class GptPlugin extends Plugin {
+  description: string = `
 GPT 助手插件：
 直接提问或回复一条消息（自动识别图片）
 
@@ -744,8 +769,10 @@ GPT 助手插件：
 • \`gpt _set_auto_remove <true/false>\` - 自动删除空提问（默认: false）
 • \`gpt _set_max_tokens <数量>\` - 设置最大Token数（-1表示不限制，默认: 888）
 • \`gpt _set_collapse <true/false>\` - 启用折叠引用（默认: false）
-  `,
-  cmdHandler: handleGptRequest,
-};
+  `;
+  cmdHandlers: Record<string, (msg: Api.Message) => Promise<void>> = {
+    gpt: handleGptRequest,
+  };
+}
 
-export default gptPlugin;
+export default new GptPlugin();
