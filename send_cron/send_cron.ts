@@ -1,28 +1,11 @@
 import { Plugin } from "@utils/pluginBase";
-import path from "path";
-import schedule, { Job } from "node-schedule";
-import Database from "better-sqlite3";
-import { createDirectoryInAssets } from "@utils/pathHelpers";
+import { Api, TelegramClient } from "telegram";
 import { getGlobalClient } from "@utils/globalClient";
-import { TelegramClient } from "telegram";
-
-// Initialize database
-let db = new Database(
-  path.join(createDirectoryInAssets("send_cron"), "send_cron.db")
-);
-
-// Initialize database table
-if (db) {
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS send_cron_tasks (
-      task_id INTEGER PRIMARY KEY,
-      chat_id INTEGER NOT NULL,
-      msg TEXT NOT NULL,
-      cron TEXT NOT NULL,
-      pause INTEGER DEFAULT 0
-    )
-  `);
-}
+import { createDirectoryInAssets } from "@utils/pathHelpers";
+import { cronManager } from "@utils/cronManager";
+import { JSONFilePreset } from "lowdb/node";
+import * as path from "path";
+import * as fs from "fs";
 
 // HTML escape function
 function htmlEscape(text: string): string {
@@ -34,6 +17,11 @@ function htmlEscape(text: string): string {
     .replace(/'/g, "&#x27;");
 }
 
+// 配置接口
+interface SendCronConfig {
+  tasks?: SendTaskData[];
+}
+
 interface SendTaskData {
   task_id: number;
   chat_id: number;
@@ -42,13 +30,61 @@ interface SendTaskData {
   pause: boolean;
 }
 
+// 统一配置管理类
+class Config {
+  private static db: any = null;
+  private static initPromise: Promise<void> | null = null;
+
+  private static async init(): Promise<void> {
+    if (this.db) return;
+    if (this.initPromise) return this.initPromise;
+
+    this.initPromise = this.doInit();
+    await this.initPromise;
+  }
+
+  private static async doInit(): Promise<void> {
+    const filePath = path.join(
+      createDirectoryInAssets("send_cron"),
+      "send_cron_config.json"
+    );
+    this.db = await JSONFilePreset<SendCronConfig>(filePath, { tasks: [] });
+  }
+
+  static async load(): Promise<SendCronConfig> {
+    await this.init();
+    return { ...this.db.data };
+  }
+
+  static async save(config: SendCronConfig): Promise<void> {
+    await this.init();
+    this.db.data = { ...config };
+    await this.db.write();
+  }
+
+  static async get<T>(key: keyof SendCronConfig, def?: T): Promise<T> {
+    await this.init();
+    const v = (this.db.data as any)[key];
+    return v !== undefined ? (v as T) : (def as T);
+  }
+
+  static async set<T>(key: keyof SendCronConfig, value: T): Promise<void> {
+    await this.init();
+    if (value === null || value === undefined) {
+      delete (this.db.data as any)[key];
+    } else {
+      (this.db.data as any)[key] = value;
+    }
+    await this.db.write();
+  }
+}
+
 class SendTask {
   task_id: number;
   chat_id: number;
   msg: string;
   cron: string;
   pause: boolean;
-  public scheduledJob: Job | undefined = undefined;
 
   constructor(
     task_id: number,
@@ -74,17 +110,14 @@ class SendTask {
     };
   }
 
-  removeJob(): void {
-    if (this.scheduledJob) {
-      this.scheduledJob.cancel();
-      this.scheduledJob = undefined;
-    }
+  getTaskName(): string {
+    return `send_cron_${this.task_id}`;
   }
 
   exportStr(showAll: boolean = false): string {
     let text = `<code>${this.task_id}</code> - <code>${this.cron}</code> - `;
 
-    if (this.scheduledJob && !this.pause) {
+    if (cronManager.has(this.getTaskName()) && !this.pause) {
       text += `<code>运行中</code> - `;
     } else {
       text += `<code>已暂停</code> - `;
@@ -114,12 +147,11 @@ class SendTask {
       throw new Error("Cron 表达式格式错误（需要6个字段）。");
     }
 
-    // node-schedule supports 6-field cron expressions natively
     this.cron = cronText;
   }
 
   getCronExpression(): string {
-    return this.cron; // node-schedule supports 6-field expressions directly
+    return this.cron;
   }
 }
 
@@ -135,7 +167,9 @@ class SendTasks {
   remove(taskId: number): boolean {
     const taskIndex = this.tasks.findIndex((t) => t.task_id === taskId);
     if (taskIndex !== -1) {
-      this.tasks[taskIndex].removeJob();
+      // 移除 cronManager 中的任务
+      const task = this.tasks[taskIndex];
+      cronManager.del(task.getTaskName());
       this.tasks.splice(taskIndex, 1);
       return true;
     }
@@ -158,42 +192,21 @@ class SendTasks {
     return tasksToShow.map((task) => task.exportStr(showAll)).join("\n");
   }
 
-  saveToDB(): void {
-    if (!db) return;
-
-    const stmt = db.prepare(`
-      INSERT OR REPLACE INTO send_cron_tasks (task_id, chat_id, msg, cron, pause)
-      VALUES (?, ?, ?, ?, ?)
-    `);
-
-    const deleteStmt = db.prepare("DELETE FROM send_cron_tasks");
-    deleteStmt.run();
-
-    for (const task of this.tasks) {
-      stmt.run(
-        task.task_id,
-        task.chat_id,
-        task.msg,
-        task.cron,
-        task.pause ? 1 : 0
-      );
-    }
+  async saveToDB(): Promise<void> {
+    const tasksData = this.tasks.map((task) => task.export());
+    await Config.set("tasks", tasksData);
   }
 
-  loadFromDB(): void {
-    if (!db) return;
-
-    const stmt = db.prepare("SELECT * FROM send_cron_tasks");
-    const rows = stmt.all() as any[];
-
-    this.tasks = rows.map(
-      (row) =>
+  async loadFromDB(): Promise<void> {
+    const tasksData = await Config.get<SendTaskData[]>("tasks", []);
+    this.tasks = tasksData.map(
+      (data) =>
         new SendTask(
-          row.task_id,
-          row.chat_id,
-          row.msg,
-          row.cron,
-          row.pause === 1
+          data.task_id,
+          data.chat_id,
+          data.msg,
+          data.cron,
+          data.pause
         )
     );
   }
@@ -202,7 +215,7 @@ class SendTasks {
     const task = this.get(taskId);
     if (task) {
       task.pause = true;
-      task.removeJob();
+      cronManager.del(task.getTaskName());
       this.saveToDB();
       return true;
     }
@@ -214,7 +227,6 @@ class SendTasks {
     bot: TelegramClient | undefined
   ): Promise<void> {
     try {
-      // Try multiple methods to send message
       if (bot) {
         await bot.sendMessage(task.chat_id, { message: task.msg });
       } else {
@@ -229,13 +241,13 @@ class SendTasks {
   }
 
   registerTask(task: SendTask, bot: TelegramClient | undefined): void {
-    if (task.pause || !schedule) {
+    if (task.pause) {
       return;
     }
 
     try {
       const cronExpression = task.getCronExpression();
-      task.scheduledJob = schedule.scheduleJob(cronExpression, () => {
+      cronManager.set(task.getTaskName(), cronExpression, () => {
         SendTasks.sendMessageJob(task, bot);
       });
     } catch (error) {
@@ -272,10 +284,11 @@ const sendCronTasks = new SendTasks();
 
 async function loadTasksAfterImportCurrentPlugin() {
   try {
-    if (!db) return;
     const client = await getGlobalClient();
+    if (!client) return;
+
     await client.getDialogs();
-    sendCronTasks.loadFromDB();
+    await sendCronTasks.loadFromDB();
     sendCronTasks.registerAllTasks(client);
   } catch (error) {
     console.error(
@@ -285,7 +298,10 @@ async function loadTasksAfterImportCurrentPlugin() {
   }
 }
 
-loadTasksAfterImportCurrentPlugin();
+// 延迟加载任务
+setTimeout(() => {
+  loadTasksAfterImportCurrentPlugin();
+}, 2000);
 
 const sendHelpMsg = `<b>定时发送消息插件</b>
 
@@ -308,10 +324,8 @@ const sendHelpMsg = `<b>定时发送消息插件</b>
   <code>send_cron pause &lt;ID&gt;</code>
   <code>send_cron resume &lt;ID&gt;</code>`;
 
-const sendCronPlugin: Plugin = {
-  command: ["send_cron"],
-  description: `
-定时发送消息插件：
+class SendCronPlugin extends Plugin {
+  description: string = `定时发送消息插件：
 - send_cron <crontab> | <消息> - 添加定时任务
 - send_cron list - 查看当前聊天任务
 - send_cron list all - 查看所有任务
@@ -320,10 +334,9 @@ const sendCronPlugin: Plugin = {
 - send_cron resume <ID> - 恢复任务
 
 Crontab 格式：秒 分 时 日 月 周
-示例：send_cron 0 0 12 * * * | 每天中午12点的消息
-  `,
-  cmdHandler: async (msg) => {
-    try {
+示例：send_cron 0 0 12 * * * | 每天中午12点的消息`;
+  cmdHandlers: Record<string, (msg: Api.Message) => Promise<void>> = {
+    send_cron: async (msg) => {
       const args = msg.message.slice(1).split(" ").slice(1); // Remove command part
 
       if (args.length === 0 || args[0] === "h") {
@@ -390,7 +403,7 @@ Crontab 格式：秒 分 时 日 月 周
 
         if (cmd === "rm") {
           sendCronTasks.remove(taskId);
-          sendCronTasks.saveToDB();
+          await sendCronTasks.saveToDB();
           await msg.edit({
             text: `✅ 已删除任务 <code>${taskId}</code>。`,
             parseMode: "html",
@@ -446,19 +459,23 @@ Crontab 格式：秒 分 时 日 月 周
 
       sendCronTasks.add(task);
       sendCronTasks.registerTask(task, msg.client);
-      sendCronTasks.saveToDB();
+      await sendCronTasks.saveToDB();
 
       await msg.edit({
         text: `✅ 已添加新任务，ID 为 <code>${task.task_id}</code>。`,
         parseMode: "html",
       });
-    } catch (error: any) {
-      console.error("Send cron error:", error);
-      await msg.edit({
-        text: `❌ 操作失败：${error.message || error}`,
-      });
-    }
-  },
-};
+    },
+  };
+}
 
-export default sendCronPlugin;
+// 插件初始化时启动定时任务
+setTimeout(() => {
+  try {
+    loadTasksAfterImportCurrentPlugin();
+  } catch (error) {
+    console.error("定时发送任务启动失败:", error);
+  }
+}, 3000);
+
+export default new SendCronPlugin();
