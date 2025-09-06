@@ -5,6 +5,7 @@ import * as fs from "fs";
 import * as path from "path";
 import * as os from "os";
 import Database from "better-sqlite3";
+import { createDirectoryInAssets } from "@utils/pathHelpers";
 
 // 配置存储键名
 const CONFIG_KEYS = {
@@ -33,8 +34,7 @@ const DEFAULT_CONFIG = {
 
 // 数据库路径
 const CONFIG_DB_PATH = path.join(
-  (globalThis as any).process?.cwd?.() || ".",
-  "assets",
+  createDirectoryInAssets("gpt"),
   "gpt_config.db"
 );
 
