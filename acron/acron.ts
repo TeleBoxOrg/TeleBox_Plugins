@@ -133,7 +133,11 @@ function formatDate(date: Date): string {
   return date.toLocaleString("zh-CN", { timeZone: CN_TIME_ZONE });
 }
 
-async function formatEntity(target: any, throwErrorIfFailed?: boolean) {
+async function formatEntity(
+  target: any,
+  mention?: boolean,
+  throwErrorIfFailed?: boolean
+) {
   const client = await getGlobalClient();
   if (!client) throw new Error("Telegram 客户端未初始化");
   if (!target) throw new Error("无效的目标");
@@ -158,7 +162,10 @@ async function formatEntity(target: any, throwErrorIfFailed?: boolean) {
   if (entity?.title) displayParts.push(entity.title);
   if (entity?.firstName) displayParts.push(entity.firstName);
   if (entity?.lastName) displayParts.push(entity.lastName);
-  if (entity?.username) displayParts.push(`<code>@${entity.username}</code>`);
+  if (entity?.username)
+    displayParts.push(
+      mention ? `@${entity.username}` : `<code>@${entity.username}</code>`
+    );
 
   if (id) {
     displayParts.push(
