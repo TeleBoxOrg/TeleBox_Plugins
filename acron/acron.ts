@@ -20,6 +20,12 @@ const filePath = path.join(
   createDirectoryInAssets("acron"),
   "acron_config.json"
 );
+
+function getRemarkFromMsg(msg: Api.Message | string, n: number): string {
+  return (typeof msg === "string" ? msg : msg?.message || "")
+    .replace(new RegExp(`^\\S+${Array(n).fill("\\s+\\S+").join("")}`), "")
+    .trim();
+}
 // DB schema and helpers
 type AcronType =
   | "send"
@@ -900,7 +906,8 @@ class AcronPlugin extends Plugin {
             const entities: any = mm.entities
               ? JSON.parse(JSON.stringify(mm.entities))
               : undefined;
-            const remark = rest.slice(1).join(" ").trim();
+            // const remark = rest.slice(1).join(" ").trim();
+            const remark = getRemarkFromMsg(lines[0], 8);
             const replyTo = restChatArg[0];
 
             const task: SendTask = {
@@ -937,7 +944,8 @@ class AcronPlugin extends Plugin {
             return;
           } else if (sub === "cmd") {
             // 备注与回复ID
-            const remark = rest.slice(1).join(" ").trim();
+            // const remark = rest.slice(1).join(" ").trim();
+            const remark = getRemarkFromMsg(lines[0], 8);
             const replyTo = restChatArg[0];
             const message = lines?.[1]?.trim(); // 第二行
             if (!message) {
@@ -992,7 +1000,8 @@ class AcronPlugin extends Plugin {
             }
 
             // 备注与回复ID
-            const remark = rest.slice(1).join(" ").trim();
+            // const remark = rest.slice(1).join(" ").trim();
+            const remark = getRemarkFromMsg(lines[0], 8);
             const replyTo = restChatArg[0];
 
             if (sub === "copy") {
@@ -1062,19 +1071,13 @@ class AcronPlugin extends Plugin {
             }
           } else if (sub === "del") {
             const msgIdStr = rest[1];
-            let msgId = Number(msgIdStr);
-            if (!msgIdStr || Number.isNaN(msgId)) {
-              // 如果未提供，尝试从回复中获取
-              if (msg.isReply) {
-                const replied = await msg.getReplyMessage();
-                msgId = Number(replied?.id);
-              }
-            }
-            if (!msgId || Number.isNaN(msgId)) {
-              await msg.edit({ text: "请提供有效的消息ID，或回复一条消息" });
+
+            if (!msgIdStr) {
+              await msg.edit({ text: "请提供消息 ID" });
               return;
             }
-            const remark = rest.slice(2).join(" ").trim();
+            // const remark = rest.slice(2).join(" ").trim();
+            const remark = getRemarkFromMsg(lines[0], 9);
 
             const task: DelTask = {
               id,
@@ -1082,7 +1085,7 @@ class AcronPlugin extends Plugin {
               cron: cronExpr,
               chat: chatArg,
               chatId: hasChatId as any,
-              msgId: String(Math.trunc(msgId)),
+              msgId: msgIdStr,
               createdAt: String(Date.now()),
               remark: remark || undefined,
               display: display || undefined,
@@ -1106,15 +1109,9 @@ class AcronPlugin extends Plugin {
           } else if (sub === "pin") {
             // rest: [chat, msgId, notify, pmOneSide, ...remark]
             const msgIdStr = rest[1];
-            let msgId = Number(msgIdStr);
-            if (!msgIdStr || Number.isNaN(msgId)) {
-              if (msg.isReply) {
-                const replied = await msg.getReplyMessage();
-                msgId = Number(replied?.id);
-              }
-            }
-            if (!msgId || Number.isNaN(msgId)) {
-              await msg.edit({ text: "请提供有效的消息ID，或回复一条消息" });
+
+            if (!msgIdStr) {
+              await msg.edit({ text: "请提供消息 ID" });
               return;
             }
             const notifyRaw = (rest[2] || "").toLowerCase();
@@ -1129,7 +1126,8 @@ class AcronPlugin extends Plugin {
               v === "1" || v === "true" || v === "yes" || v === "y";
             const notify = parseBool(notifyRaw);
             const pmOneSide = parseBool(pmOneSideRaw);
-            const remark = rest.slice(4).join(" ").trim();
+            // const remark = rest.slice(4).join(" ").trim();
+            const remark = getRemarkFromMsg(lines[0], 11);
 
             const task: PinTask = {
               id,
@@ -1137,7 +1135,7 @@ class AcronPlugin extends Plugin {
               cron: cronExpr,
               chat: chatArg,
               chatId: hasChatId as any,
-              msgId: String(Math.trunc(msgId)),
+              msgId: msgIdStr,
               notify,
               pmOneSide,
               createdAt: String(Date.now()),
@@ -1166,18 +1164,13 @@ class AcronPlugin extends Plugin {
           } else if (sub === "unpin") {
             // rest: [chat, msgId, ...remark]
             const msgIdStr = rest[1];
-            let msgId = Number(msgIdStr);
-            if (!msgIdStr || Number.isNaN(msgId)) {
-              if (msg.isReply) {
-                const replied = await msg.getReplyMessage();
-                msgId = Number(replied?.id);
-              }
-            }
-            if (!msgId || Number.isNaN(msgId)) {
-              await msg.edit({ text: "请提供有效的消息ID，或回复一条消息" });
+
+            if (!msgIdStr) {
+              await msg.edit({ text: "请提供消息 ID" });
               return;
             }
-            const remark = rest.slice(2).join(" ").trim();
+            // const remark = rest.slice(2).join(" ").trim();
+            const remark = getRemarkFromMsg(lines[0], 9);
 
             const task: UnpinTask = {
               id,
@@ -1185,7 +1178,7 @@ class AcronPlugin extends Plugin {
               cron: cronExpr,
               chat: chatArg,
               chatId: hasChatId as any,
-              msgId: String(Math.trunc(msgId)),
+              msgId: msgIdStr,
               createdAt: String(Date.now()),
               remark: remark || undefined,
               display: display || undefined,
@@ -1221,7 +1214,8 @@ class AcronPlugin extends Plugin {
             }
             // 新增备注支持：从第三段起第一个参数为正则，其余合并为备注
             const regexRaw = String(rest[2]).trim();
-            const remark = rest.slice(3).join(" ").trim();
+            // const remark = rest.slice(3).join(" ").trim();
+            const remark = getRemarkFromMsg(lines[0], 10);
             if (!regexRaw) {
               await msg.edit({ text: "请提供消息正则表达式" });
               return;
