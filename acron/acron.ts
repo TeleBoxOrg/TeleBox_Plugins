@@ -608,11 +608,11 @@ class AcronPlugin extends Plugin {
           const lines: string[] = [];
           const header = scopeAll
             ? typeFilter
-              ? `📋 所有 ${typeLabel(typeFilter)} 定时任务:`
-              : "📋 所有定时任务:"
+              ? `📋 所有 ${typeLabel(typeFilter)} 定时任务`
+              : "📋 所有定时任务"
             : typeFilter
-            ? `📋 当前会话 ${typeLabel(typeFilter)} 定时任务:`
-            : "📋 当前会话定时任务:";
+            ? `📋 当前会话 ${typeLabel(typeFilter)} 定时任务`
+            : "📋 当前会话定时任务";
           lines.push(header);
           lines.push("");
 
@@ -638,6 +638,23 @@ class AcronPlugin extends Plugin {
                   `<code>${t.chat}</code>`
                 }`
               );
+              const msgId = (t as any)?.msgId;
+              const fromChatId = (t as any)?.fromChatId;
+              const fromMsgId = (t as any)?.fromMsgId;
+              if (msgId) {
+                lines.push(
+                  `消息: <a href="https://t.me/c/${String(
+                    (t as any).chatId ?? t.chat
+                  ).replace("-100", "")}/${msgId}">${msgId}</a>`
+                );
+              }
+              if (fromChatId && fromMsgId) {
+                lines.push(
+                  `消息: <a href="https://t.me/c/${String(
+                    (t as any).chatId ?? t.chat
+                  ).replace("-100", "")}/${fromMsgId}">${fromMsgId}</a>`
+                );
+              }
               if (
                 (t.type === "send" && (t as SendTask).replyTo) ||
                 (t.type === "cmd" && (t as CmdTask).replyTo) ||
@@ -645,7 +662,12 @@ class AcronPlugin extends Plugin {
                 (t.type === "forward" && (t as ForwardTask).replyTo)
               ) {
                 const replyId = (t as any).replyTo as string | undefined;
-                if (replyId) lines.push(`回复: <code>${replyId}</code>`);
+                if (replyId)
+                  lines.push(
+                    `回复: <a href="https://t.me/c/${String(
+                      (t as any).chatId ?? t.chat
+                    ).replace("-100", "")}/${replyId}">${replyId}</a>`
+                  );
               }
               if (nextDt) {
                 lines.push(`下次: ${formatDate(nextDt.toJSDate())}`);
