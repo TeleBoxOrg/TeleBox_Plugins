@@ -87,10 +87,6 @@
     "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/dme/dme.ts?raw=true",
     "desc": "删除指定数量的自己发送的消息"
   },
-  "pmcaptcha": {
-    "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/pmcaptcha/pmcaptcha.ts?raw=true",
-    "desc": "私聊验证系统，防止垃圾消息骚扰"
-  },
   "pm2": {
     "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/pm2/pm2.ts?raw=true",
     "desc": "PM2 进程管理工具，支持重启和停止操作"
