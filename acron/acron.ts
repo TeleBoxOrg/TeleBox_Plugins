@@ -658,7 +658,7 @@ class AcronPlugin extends Plugin {
               if (fromChatId && fromMsgId) {
                 lines.push(
                   `消息: <a href="https://t.me/c/${String(
-                    (t as any).chatId ?? t.chat
+                    (t as any).fromChatId ?? t.fromChatId
                   ).replace("-100", "")}/${fromMsgId}">${fromMsgId}</a>`
                 );
               }
