@@ -209,27 +209,27 @@ function parseCronFromArgs(
 function buildCopy(task: AcronTask): string {
   if (task.type === "send") {
     const remark = task.remark ? ` ${task.remark}` : "";
-    return `${mainPrefix}acron send ${task.cron} ${task.chat}${remark}${
-      task.replyTo ? `\n${task.replyTo}` : "\n"
-    }`;
+    return `${mainPrefix}acron send ${task.cron} ${task.chat}${
+      task.replyTo ? `|${task.replyTo}` : ""
+    }${remark}`;
   } else if (task.type === "cmd") {
     const t = task as CmdTask;
     const remark = t.remark ? ` ${t.remark}` : "";
-    return `${mainPrefix}acron cmd ${t.cron} ${t.chat}${remark}\n${t.message}${
-      t.replyTo ? `\n${t.replyTo}` : "\n"
-    }`;
+    return `${mainPrefix}acron cmd ${t.cron} ${t.chat}${
+      t.replyTo ? `|${t.replyTo}` : ""
+    }${remark}\n${t.message}`;
   } else if (task.type === "copy") {
     const remark = task.remark ? ` ${task.remark}` : "";
     const t = task as CopyTask;
-    return `${mainPrefix}acron copy ${t.cron} ${t.chat}${remark}${
-      t.replyTo ? `\n${t.replyTo}` : "\n"
-    }`;
+    return `${mainPrefix}acron copy ${t.cron} ${t.chat}${
+      t.replyTo ? `|${t.replyTo}` : ""
+    }${remark}`;
   } else if (task.type === "forward") {
     const remark = task.remark ? ` ${task.remark}` : "";
     const t = task as ForwardTask;
-    return `${mainPrefix}acron forward ${t.cron} ${t.chat}${remark}${
-      t.replyTo ? `\n${t.replyTo}` : "\n"
-    }`;
+    return `${mainPrefix}acron forward ${t.cron} ${t.chat}${
+      t.replyTo ? `|${t.replyTo}` : ""
+    }${remark}`;
   } else if (task.type === "del") {
     const remark = task.remark ? ` ${task.remark}` : "";
     return `${mainPrefix}acron del ${task.cron} ${task.chat} ${task.msgId}${remark}`;
@@ -458,22 +458,22 @@ const help_text = `▎定时复制
 
 每天2点复制发送到指定对话(可指定话题或回复消息)
 
-• 使用 ${mainPrefix}acron copy 0 0 2 * * * 对话ID/@name [备注]
-[注意此处是换行写 指定发送时的话题ID或回复消息的ID] 回复一条消息
+• 使用 <code>${mainPrefix}acron copy 0 0 2 * * * 对话ID/@name [备注]</code> 回复一条消息
+• 使用 <code>${mainPrefix}acron copy 0 0 2 * * * 对话ID/@name|发送时的话题ID或回复消息的ID [备注]</code> 回复一条消息
 
 ▎定时转发
 
 每天2点转发到指定对话(可指定话题)
 
-• 使用 ${mainPrefix}acron forward 0 0 2 * * * 对话ID/@name [备注]
-[注意此处是换行写 指定发送时的话题ID] 回复一条消息
+• 使用 <code>${mainPrefix}acron forward 0 0 2 * * * 对话ID/@name [备注]</code> 回复一条消息
+• 使用 <code>${mainPrefix}acron forward 0 0 2 * * * 对话ID/@name|发送时的话题ID [备注]</code> 回复一条消息
 
 ▎定时发送
 
 稍微麻烦了一点, 但是可以保证消息的完整格式. 储存此消息到数据库, 每天2点在指定对话发送(可指定话题或回复消息). 不支持带多媒体或 replyMarkup 的消息, 可考虑使用本插件的定时复制/转发功能
 
-• 使用 ${mainPrefix}acron send 0 0 2 * * * 对话ID/@name [备注]
-[注意此处是换行写 指定发送时话题的ID或回复消息的ID] 回复一条消息
+• 使用 <code>${mainPrefix}acron send 0 0 2 * * * 对话ID/@name [备注]</code> 回复一条消息
+• 使用 <code>${mainPrefix}acron send 0 0 2 * * * 对话ID/@name|发送时话题的ID或回复消息的ID [备注]</code> 回复一条消息
 
 ▎定时删除
 
@@ -500,10 +500,13 @@ const help_text = `▎定时复制
 ▎定时执行命令
 
 每天2点在指定ID或@name的对话中执行命令 <code>${mainPrefix}a foo bar</code>(可指定话题或回复消息)
+注意要换行写
 
 • ${mainPrefix}acron cmd 0 0 2 * * * 对话ID/@name [备注]
 ${mainPrefix}a foo bar
-[注意此处是换行写 指定执行命令的话题的ID或回复消息的ID]
+
+• ${mainPrefix}acron cmd 0 0 2 * * * 对话ID/@name|发送时话题的ID或回复消息的ID [备注]
+${mainPrefix}a foo bar
 
 • <code>${mainPrefix}acron list</code> - 列出当前会话中的所有定时任务
 • <code>${mainPrefix}acron list all</code> - 列出所有的定时任务
@@ -821,7 +824,12 @@ class AcronPlugin extends Plugin {
             return;
           }
 
-          const chatArg = rest[0];
+          const [chatArg, ...restChatArg] =
+            rest[0]
+              ?.split(/\s*[|｜]\s*/g)
+              .map((i) => i.trim())
+              .filter((i) => i.length > 0) || [];
+
           if (!chatArg) {
             await msg.edit({ text: "请提供对话ID或@name" });
             return;
@@ -864,7 +872,7 @@ class AcronPlugin extends Plugin {
               ? JSON.parse(JSON.stringify(mm.entities))
               : undefined;
             const remark = rest.slice(1).join(" ").trim();
-            const replyTo = lines?.[1]?.trim();
+            const replyTo = restChatArg[0];
 
             const task: SendTask = {
               id,
@@ -899,10 +907,10 @@ class AcronPlugin extends Plugin {
             await msg.edit({ text: tip, parseMode: "html" });
             return;
           } else if (sub === "cmd") {
-            // 备注与回复ID（第二行）
+            // 备注与回复ID
             const remark = rest.slice(1).join(" ").trim();
+            const replyTo = restChatArg[0];
             const message = lines?.[1]?.trim(); // 第二行
-            const replyTo = lines?.[2]?.trim(); // 第三行
             if (!message) {
               await msg.edit({ text: "无法识别要执行的命令" });
               return;
@@ -954,9 +962,9 @@ class AcronPlugin extends Plugin {
               return;
             }
 
-            // 备注与回复ID（第二行）
+            // 备注与回复ID
             const remark = rest.slice(1).join(" ").trim();
-            const replyTo = lines?.[1]?.trim();
+            const replyTo = restChatArg[0];
 
             if (sub === "copy") {
               const task: CopyTask = {
@@ -999,7 +1007,7 @@ class AcronPlugin extends Plugin {
                 chatId: hasChatId as any,
                 fromChatId: String(Math.trunc(fromChatId)),
                 fromMsgId: String(Math.trunc(fromMsgId)),
-                replyTo: replyTo || undefined, // API 不支持，但为了和 UI 一致保留
+                replyTo: replyTo || undefined,
                 createdAt: String(Date.now()),
                 remark: remark || undefined,
                 display: display || undefined,
