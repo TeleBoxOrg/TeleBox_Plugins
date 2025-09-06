@@ -301,6 +301,7 @@ const HELP_TEXT = `📢 <b>智能转发助手使用说明</b>
 
 🔧 <b>基础命令：</b>
 • <code>shift set [源] [目标] [选项...]</code> - 设置自动转发
+• <code>shift set [源] [目标]|[话题 ID] [选项...]</code> - 设置自动转发(指定目标话题 ID)
 • <code>shift del [序号]</code> - 删除转发规则
 • <code>shift list/ls</code> - 显示当前转发规则
 • <code>shift stats</code> - 查看转发统计
@@ -318,10 +319,14 @@ const HELP_TEXT = `📢 <b>智能转发助手使用说明</b>
 • 当前对话 - 使用 <code>"me"</code> 或 <code>"here"</code>
 
 📝 <b>消息类型选项：</b>
-<code>silent</code>, <code>text</code>, <code>photo</code>, <code>document</code>, <code>video</code>, <code>sticker</code>, <code>animation</code>, <code>voice</code>, <code>audio</code>, <code>all</code>
+<code>text</code>, <code>photo</code>, <code>document</code>, <code>video</code>, <code>sticker</code>, <code>animation</code>, <code>voice</code>, <code>audio</code>, <code>all</code>
+
+⚙️ <b>静音选项：</b>
+<code>silent</code>
 
 💡 <b>示例：</b>
 • <code>shift set @channel1 @channel2 silent photo</code>
+• <code>shift set @channel1 @channel2|TopicID</code>
 • <code>shift del 1</code>
 • <code>shift filter 1 add 广告</code>`;
 // Message listener handler for the plugin system
@@ -369,6 +374,16 @@ class ShiftPlugin extends Plugin {
           options = new Set(
             params.slice(2).filter((opt) => AVAILABLE_OPTIONS.has(opt))
           );
+        }
+        const [realTargetInput, ...rest] =
+          targetInput
+            ?.split(/\s*[|｜]\s*/g)
+            .map((i) => i.trim())
+            .filter((i) => i.length > 0) || [];
+        targetInput = realTargetInput;
+        const replyTo = rest?.[0];
+        if (replyTo) {
+          options.add(`replyTo:${replyTo}`);
         }
 
         // Resolve source
@@ -464,11 +479,29 @@ class ShiftPlugin extends Plugin {
             const targetEntity = await msg.client.getEntity(
               Number(rule.target_id)
             );
+            let replyTo = undefined;
+            const options = [];
+            if (rule.options && rule.options.length > 0) {
+              for (const option of rule.options) {
+                if (option.startsWith("replyTo:")) {
+                  const replyToStr = option.replace("replyTo:", "").trim();
+                  const replyToNum = parseInt(replyToStr);
+                  if (!isNaN(replyToNum)) {
+                    replyTo = replyToNum;
+                  }
+                } else {
+                  options.push(option);
+                }
+              }
+            }
 
             output += `${i + 1}. ${status}\n`;
             output += `   📤 源: ${getDisplayName(sourceEntity)}\n`;
             output += `   📥 目标: ${getDisplayName(targetEntity)}\n`;
-            output += `   🎯 类型: ${rule.options.join(", ") || "all"}\n`;
+            if (replyTo) {
+              output += `   📬 回复: ${replyTo}\n`;
+            }
+            output += `   🎯 类型: ${options.join(", ") || "all"}\n`;
             output += `   🛡️ 过滤: ${rule.filters.length} 个关键词\n\n`;
           } catch (error) {
             output += `${i + 1}. ⚠️ 规则损坏 (${sourceId})\n\n`;
@@ -818,7 +851,8 @@ async function shiftForwardMessage(
   fromChatId: number,
   toChatId: number,
   messageId: number,
-  depth: number = 0
+  depth: number = 0,
+  options?: any
 ): Promise<void> {
   if (depth > 5) {
     console.log(`[SHIFT] 转发深度超限: ${depth}`);
@@ -829,6 +863,8 @@ async function shiftForwardMessage(
     // 使用通用的安全转发函数
     await safeForwardMessage(client, fromChatId, toChatId, messageId, {
       maxRetries: 3,
+      silent: options?.silent,
+      replyTo: options?.replyTo,
     });
 
     console.log(
@@ -847,7 +883,8 @@ async function shiftForwardMessage(
         toChatId,
         nextRule.target_id,
         messageId,
-        depth + 1
+        depth + 1,
+        options
       );
     }
   } catch (error) {
@@ -896,12 +933,19 @@ async function handleIncomingMessage(message: any): Promise<void> {
 
     // Check message type
     const options = rule.options;
+    const messageTypes = [];
+    if (Array.isArray(options) && options.length > 0) {
+      for (const option of options) {
+        if (
+          !option.startsWith("replyTo:") &&
+          !["all", "silent"].includes(option)
+        ) {
+          messageTypes.push(option);
+        }
+      }
+    }
     const messageType = getMediaType(message);
-    if (
-      options.length > 0 &&
-      !options.includes("all") &&
-      !options.includes(messageType)
-    ) {
+    if (messageTypes.length > 0 && !messageTypes.includes(messageType)) {
       console.log(`[SHIFT] 消息类型不匹配: ${messageType} not in ${options}`);
       return;
     }
@@ -911,7 +955,30 @@ async function handleIncomingMessage(message: any): Promise<void> {
       `[SHIFT] 开始转发: ${sourceId} -> ${targetId}, msg=${message.id}`
     );
     const client = await getGlobalClient();
-    await shiftForwardMessage(client, sourceId, targetId, message.id);
+    let replyTo = undefined;
+    if (options && options.length > 0) {
+      for (const option of options) {
+        if (option.startsWith("replyTo:")) {
+          const replyToStr = option.replace("replyTo:", "").trim();
+          const replyToNum = parseInt(replyToStr);
+          if (!isNaN(replyToNum)) {
+            replyTo = replyToNum;
+          }
+          break;
+        }
+      }
+    }
+    await shiftForwardMessage(
+      client,
+      sourceId,
+      targetId,
+      message.id,
+      undefined,
+      {
+        silent: options?.includes("silent"),
+        replyTo,
+      }
+    );
 
     // Update stats
     updateStats(sourceId, targetId, messageType);
