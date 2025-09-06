@@ -47,14 +47,64 @@ const bd = async (msg: Api.Message) => {
       const messagesToDelete: number[] = [msg.id]; // 包含指令本身
       let count = 0;
 
-      // 获取自己发送的消息
-      const myMessages = await client.getMessages(chatId, { limit: 100 });
-      const myUserMessages = myMessages.filter(
-        (m: Api.Message) => m.senderId?.equals(me.id) && m.id !== msg.id
-      );
+      // 检查用户权限设置和管理员权限
+      let isAdmin = false;
+      let canDeleteOthers = userDeleteMode.get(userId) !== false; // 默认开启删除他人权限
 
-      for (let i = 0; i < Math.min(numArg, myUserMessages.length); i++) {
-        messagesToDelete.push(myUserMessages[i].id);
+      try {
+        const chat = await client.getEntity(chatId);
+        // Only check permissions in group chats or channels
+        if (
+          chat &&
+          (chat.className === "Channel" || chat.className === "Chat")
+        ) {
+          try {
+            const participant = await client.invoke(
+              new Api.channels.GetParticipant({
+                channel: chatId,
+                participant: me.id,
+              })
+            );
+
+            if (participant && participant.participant) {
+              const p = participant.participant;
+              if (
+                p.className === "ChannelParticipantCreator" ||
+                (p.className === "ChannelParticipantAdmin" &&
+                  p.adminRights?.deleteMessages)
+              ) {
+                isAdmin = true;
+              }
+            }
+          } catch (e) {
+            // 忽略权限检查错误，可能在私聊中
+          }
+        } else {
+          // 私聊中视为管理员
+          isAdmin = true;
+        }
+      } catch (e) {
+        console.warn("无法获取权限信息，可能是在私聊中:", e);
+      }
+
+      // 结合用户设置的删除权限与实际管理员权限
+      const finalCanDeleteOthers = canDeleteOthers && isAdmin;
+
+      // 获取最近的消息
+      const recentMessages = await client.getMessages(chatId, { limit: 100 });
+      const filteredMessages = recentMessages.filter((m: Api.Message) => {
+        // 排除当前指令消息
+        if (m.id === msg.id) return false;
+
+        // 如果可以删除他人消息，则包含所有消息
+        if (finalCanDeleteOthers) return true;
+
+        // 否则只包含自己的消息
+        return m.senderId?.equals(me.id);
+      });
+
+      for (let i = 0; i < Math.min(numArg, filteredMessages.length); i++) {
+        messagesToDelete.push(filteredMessages[i].id);
         count++;
       }
 
@@ -63,8 +113,10 @@ const bd = async (msg: Api.Message) => {
         await client.deleteMessages(chatId, messagesToDelete, {
           revoke: true,
         });
+
+        const messageType = finalCanDeleteOthers ? "最近的" : "您最近的";
         const feedbackMsg = await client.sendMessage(chatId, {
-          message: `✅ 成功删除您最近的 ${count} 条消息。`,
+          message: `✅ 成功删除${messageType} ${count} 条消息。`,
         });
         // 2秒后删除反馈消息
         setTimeout(async () => {
