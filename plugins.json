@@ -102,5 +102,9 @@
   "yvlu": {
     "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/yvlu/yvlu.ts?raw=true",
     "desc": "为被回复用户生成语录"
+  },
+  "dbdj": {
+    "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/dbdj/dbdj.ts?raw=true",
+    "desc": "点兵点将 - 从最近的消息中随机抽取指定人数的用户"
   }
 }
