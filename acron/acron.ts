@@ -508,6 +508,13 @@ ${mainPrefix}a foo bar
 • ${mainPrefix}acron cmd 0 0 2 * * * 对话ID/@name|发送时话题的ID或回复消息的ID [备注]
 ${mainPrefix}a foo bar
 
+一个典型的使用场景:
+
+每天2点自动备份(调用 <code>${mainPrefix}bf</code> 命令)
+
+${mainPrefix}acron cmd 0 0 2 * * * me 定时备份
+.bf
+
 • <code>${mainPrefix}acron list</code> - 列出当前会话中的所有定时任务
 • <code>${mainPrefix}acron list all</code> - 列出所有的定时任务
 • <code>${mainPrefix}acron list del</code> - 列出当前会话中的类型为 del 的定时任务
