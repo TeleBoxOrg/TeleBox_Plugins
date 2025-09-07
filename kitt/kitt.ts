@@ -215,11 +215,11 @@ await msg.reply({ message: \`\${(await formatEntity(msg.sender)).display}, V 我
 return msg.chat?.username === 'test' && !msg.sender?.username
 await msg.reply({ message: \`\${(await formatEntity(msg.sender)).display}, 你不许参加淫趴!\`, parseMode: 'html' })</pre>
 
-- <code>username</code> 为 <code>test</code> 的用户可使用 <code>${mainPrefix}${mainPrefix}</code> 执行命令 <code>${mainPrefix}tpm ls -v</code>
+- <code>username</code> 为 <code>test</code> 的用户可使用 <code>${mainPrefix}${mainPrefix}</code> 依次执行命令 一键强制更新并退出重启
 
-<pre>${commandName} add 一键 TPM
+<pre>.kitt add 一键强制更新并退出重启
 return msg.sender?.username === 'test' && msg.text === '${mainPrefix}${mainPrefix}'
-await run('${mainPrefix}tpm ls -v', msg)</pre>
+await run('${mainPrefix}update -f', msg); await run('${mainPrefix}dme 1', msg); try { await msg.delete() } catch (e) {}; await run('.exit', msg)</pre>
 
 ▎管理
 <code>${commandName} ls</code>, <code>${commandName} list</code>: 列出所有任务
