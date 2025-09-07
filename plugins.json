@@ -87,10 +87,6 @@
     "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/dme/dme.ts?raw=true",
     "desc": "删除指定数量的自己发送的消息"
   },
-  "pm2": {
-    "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/pm2/pm2.ts?raw=true",
-    "desc": "PM2 进程管理工具，支持重启和停止操作"
-  },
   "autochangename": {
     "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/autochangename/autochangename.ts?raw=true",
     "desc": "自动定时修改用户名插件，支持时区配置和计划任务管理"
