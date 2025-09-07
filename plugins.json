@@ -110,5 +110,9 @@
   "his": {
     "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/his/his.ts?raw=true",
     "desc": "查看被回复者最近三十条消息"
+  },
+  "moyu": {
+    "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/moyu/moyu.ts?raw=true",
+    "desc": "摸鱼日报"
   }
 }
