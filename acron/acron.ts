@@ -260,7 +260,7 @@ function buildCopy(task: AcronTask): string {
 }
 function buildCopyCommand(task: AcronTask): string {
   const cmd = buildCopy(task);
-  return cmd?.includes("\n") ? cmd : `<code>${cmd}</code>`;
+  return cmd?.includes("\n") ? `<pre>${cmd}</pre>` : `<code>${cmd}</code>`;
 }
 
 function tryParseRegex(input: string): RegExp {
@@ -508,11 +508,11 @@ const help_text = `▎定时复制
 每天2点在指定ID或@name的对话中执行命令 <code>${mainPrefix}a foo bar</code>(可指定话题或回复消息)
 注意要换行写
 
-• ${mainPrefix}acron cmd 0 0 2 * * * 对话ID/@name [备注]
-${mainPrefix}a foo bar
+<pre>${mainPrefix}acron cmd 0 0 2 * * * 对话ID/@name [备注]
+${mainPrefix}a foo bar</pre>
 
-• ${mainPrefix}acron cmd 0 0 2 * * * 对话ID/@name|发送时话题的ID或回复消息的ID [备注]
-${mainPrefix}a foo bar
+<pre>${mainPrefix}acron cmd 0 0 2 * * * 对话ID/@name|发送时话题的ID或回复消息的ID [备注]
+${mainPrefix}a foo bar</pre>
 
 一个典型的使用场景:
 
@@ -537,7 +537,7 @@ class AcronPlugin extends Plugin {
     (msg: Api.Message, trigger?: Api.Message) => Promise<void>
   > = {
     acron: async (msg: Api.Message) => {
-      const lines = msg.text?.trim()?.split(/\r?\n/g) || [];
+      const lines = msg.message?.trim()?.split(/\r?\n/g) || [];
 
       const parts = lines?.[0]?.split(/\s+/) || [];
 
