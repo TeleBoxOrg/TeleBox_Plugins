@@ -153,7 +153,7 @@ async function exec(text: string, msg: Api.Message, trigger?: Api.Message) {
   return await (
     await import(
       `data:text/javascript;charset=utf-8,${encodeURIComponent(
-        `export default async ({ msg, chat, sender, trigger, reply, client, _, axios, formatEntity, sleep, dayjs, run }) => { ${text} }`
+        `export default async ({ msg, chat, sender, trigger, reply, client, _, axios, formatEntity, sleep, dayjs, run, Api }) => { ${text} }`
       )}`
     )
   ).default({
@@ -169,6 +169,7 @@ async function exec(text: string, msg: Api.Message, trigger?: Api.Message) {
     sleep,
     dayjs,
     run,
+    Api,
   });
 }
 
@@ -196,6 +197,7 @@ const help_text = `▎格式
 <code>reply?: Api.Message</code>: 若此消息是回复的其他消息, 则此字段为被回复的消息
 <code>trigger?: Api.Message</code>: <code>sudo</code> 模式下, 触发执行当前操作的原始消息
 <code>client?: TelegramClient</code>: <code>client</code>(可从 <code>msg</code> 上取, 这里是为了精简)
+<code>Api: </code>: <code>Api</code>
 <code>_</code>: <code>lodash</code>
 <code>axios</code>: <code>axios</code>
 <code>dayjs</code>: <code>dayjs</code>
