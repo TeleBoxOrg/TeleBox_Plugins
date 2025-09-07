@@ -2,10 +2,7 @@ import { getPrefixes } from "@utils/pluginManager";
 import { Plugin } from "@utils/pluginBase";
 import { Api } from "telegram";
 import { getGlobalClient } from "@utils/globalClient";
-import { npm_install } from "@utils/npm_install";
-
-// 确保依赖可用
-npm_install("axios");
+import axios from "axios";
 
 // 获取命令前缀
 const prefixes = getPrefixes();
@@ -144,8 +141,7 @@ class NewsPlugin extends Plugin {
       // 渐进式状态更新
       await msg.edit({ text: "📰 获取中...", parseMode: "html" });
 
-      // 动态导入axios
-      const axios = (await import("axios")).default;
+      // 使用内部导入的axios
       
       // 渐进式状态更新
       await msg.edit({ text: "📡 连接服务器...", parseMode: "html" });
