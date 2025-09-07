@@ -1,0 +1,199 @@
+name: Update README Plugin List
+
+on:
+  push:
+    branches: [ main ]
+    paths: [ 'plugins.json' ]
+  pull_request:
+    branches: [ main ]
+    paths: [ 'plugins.json' ]
+  workflow_dispatch:
+
+jobs:
+  update-readme:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+        
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '18'
+        
+    - name: Update README plugin list via GitHub API
+      env:
+        GITHUB_REPOSITORY: ${{ github.repository }}
+        GITHUB_REF: ${{ github.ref }}
+      run: |
+        node -e "
+        const https = require('https');
+        const fs = require('fs');
+        
+        // GitHub API 配置
+        const [owner, repo] = process.env.GITHUB_REPOSITORY.split('/');
+        const branch = process.env.GITHUB_REF.replace('refs/heads/', '');
+        
+        // 公共 API 请求函数
+        function apiRequest(path, method = 'GET', data = null) {
+          return new Promise((resolve, reject) => {
+            const options = {
+              hostname: 'api.github.com',
+              path: path,
+              method: method,
+              headers: {
+                'User-Agent': 'TeleBox-Plugin-Updater',
+                'Accept': 'application/vnd.github.v3+json'
+              }
+            };
+            
+            if (data) {
+              options.headers['Content-Type'] = 'application/json';
+            }
+            
+            const req = https.request(options, (res) => {
+              let body = '';
+              res.on('data', chunk => body += chunk);
+              res.on('end', () => {
+                try {
+                  const result = JSON.parse(body);
+                  if (res.statusCode >= 200 && res.statusCode < 300) {
+                    resolve(result);
+                  } else {
+                    reject(new Error(\`API Error: \${res.statusCode} - \${result.message}\`));
+                  }
+                } catch (e) {
+                  reject(new Error(\`Parse Error: \${e.message}\`));
+                }
+              });
+            });
+            
+            req.on('error', reject);
+            
+            if (data) {
+              req.write(JSON.stringify(data));
+            }
+            
+            req.end();
+          });
+        }
+        
+        async function main() {
+          try {
+            // 获取当前 plugins.json 内容
+            const pluginsResponse = await apiRequest(\`/repos/\${owner}/\${repo}/contents/plugins.json?ref=\${branch}\`);
+            const pluginsContent = Buffer.from(pluginsResponse.content, 'base64').toString('utf8');
+            const pluginsData = JSON.parse(pluginsContent);
+            
+            // 获取当前 README.md 内容
+            const readmeResponse = await apiRequest(\`/repos/\${owner}/\${repo}/contents/README.md?ref=\${branch}\`);
+            const readmeContent = Buffer.from(readmeResponse.content, 'base64').toString('utf8');
+            
+            // 提取插件信息并排序去重
+            const plugins = Object.keys(pluginsData)
+              .map(name => ({
+                name: name.trim(),
+                desc: pluginsData[name].desc.trim()
+              }))
+              .filter((plugin, index, self) => 
+                index === self.findIndex(p => p.name === plugin.name)
+              )
+              .sort((a, b) => a.name.localeCompare(b.name, 'zh-CN'));
+            
+            // 生成插件列表 markdown (保持原格式，每行末尾添加两个空格)
+            const pluginListMd = plugins
+              .map(plugin => \`- \\\`\${plugin.name}\\\` - \${plugin.desc}  \`)
+              .join('\\n');
+            
+            // 定义替换的开始和结束标记
+            const startMarker = '## 可用插件列表';
+            const endMarker = '## 技术栈';
+            
+            // 查找标记位置
+            const startIndex = readmeContent.indexOf(startMarker);
+            const endIndex = readmeContent.indexOf(endMarker);
+            
+            if (startIndex === -1 || endIndex === -1) {
+              console.error('未找到插件列表标记');
+              process.exit(1);
+            }
+            
+            // 构建新的 README 内容
+            const beforeSection = readmeContent.substring(0, startIndex + startMarker.length);
+            const afterSection = readmeContent.substring(endIndex);
+            
+            const newReadmeContent = \`\${beforeSection}\\n\${pluginListMd}\\n\\n\${afterSection}\`;
+            
+            // 检查内容是否有变化
+            if (readmeContent === newReadmeContent) {
+              console.log('✅ README.md 已是最新状态，无需更新');
+              return;
+            }
+            
+            // 创建 Pull Request 而不是直接提交
+            const prTitle = '🤖 自动更新插件列表';
+            const prBody = \`## 自动更新插件列表\\n\\n- 从 plugins.json 同步插件信息\\n- 按字母顺序排序\\n- 自动去重处理\\n\\n**插件数量**: \${plugins.length}\\n**插件列表**: \${plugins.map(p => p.name).join(', ')}\\n\\n---\\n*此 PR 由 GitHub Actions 自动生成*\`;
+            
+            // 创建新分支
+            const branchName = \`auto-update-plugins-\${Date.now()}\`;
+            
+            // 获取主分支的最新 commit SHA
+            const mainBranchResponse = await apiRequest(\`/repos/\${owner}/\${repo}/git/refs/heads/\${branch}\`);
+            const baseSha = mainBranchResponse.object.sha;
+            
+            // 创建新分支引用
+            await apiRequest(\`/repos/\${owner}/\${repo}/git/refs\`, 'POST', {
+              ref: \`refs/heads/\${branchName}\`,
+              sha: baseSha
+            });
+            
+            // 更新 README.md 文件
+            await apiRequest(\`/repos/\${owner}/\${repo}/contents/README.md\`, 'PUT', {
+              message: prTitle,
+              content: Buffer.from(newReadmeContent).toString('base64'),
+              sha: readmeResponse.sha,
+              branch: branchName
+            });
+            
+            // 创建 Pull Request
+            const prResponse = await apiRequest(\`/repos/\${owner}/\${repo}/pulls\`, 'POST', {
+              title: prTitle,
+              head: branchName,
+              base: branch,
+              body: prBody
+            });
+            
+            // 启用自动合并
+            try {
+              await apiRequest(\`/repos/\${owner}/\${repo}/pulls/\${prResponse.number}/merge\`, 'PUT', {
+                commit_title: prTitle,
+                commit_message: \`自动更新插件列表 (\${plugins.length} 个插件)\`,
+                merge_method: 'squash'
+              });
+              
+              console.log(\`✅ Pull Request 已自动合并: \${prResponse.html_url}\`);
+              
+              // 删除临时分支
+              try {
+                await apiRequest(\`/repos/\${owner}/\${repo}/git/refs/heads/\${branchName}\`, 'DELETE');
+                console.log(\`🧹 已清理临时分支: \${branchName}\`);
+              } catch (deleteError) {
+                console.log(\`⚠️ 清理分支失败: \${deleteError.message}\`);
+              }
+              
+            } catch (mergeError) {
+              console.log(\`⚠️ 自动合并失败，需要手动处理: \${mergeError.message}\`);
+              console.log(\`📋 Pull Request 链接: \${prResponse.html_url}\`);
+            }
+            
+            console.log(\`📦 更新了 \${plugins.length} 个插件\`);
+            
+          } catch (error) {
+            console.error('❌ 更新失败:', error.message);
+            process.exit(1);
+          }
+        }
+        
+        main();
+        "
