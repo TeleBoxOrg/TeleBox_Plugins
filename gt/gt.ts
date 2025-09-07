@@ -1,8 +1,6 @@
 import { Plugin } from "@utils/pluginBase";
 import { Api, TelegramClient } from "telegram";
-import { npm_install } from "@utils/npm_install";
 
-npm_install("@vitalets/google-translate-api");
 
 const gt = async (msg: Api.Message) => {
   let translate: any;
