@@ -102,5 +102,9 @@
   "rate": {
     "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/rate/rate.ts?raw=true",
     "desc": "货币实时汇率查询与计算"
+  },
+  "kitt": {
+    "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/kitt/kitt.ts?raw=true",
+    "desc": "高级触发器: 匹配 -> 执行, 高度自定义, 逻辑自由"
   }
 }
