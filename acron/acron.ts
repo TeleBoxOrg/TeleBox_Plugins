@@ -334,6 +334,7 @@ async function scheduleTask(task: AcronTask) {
           await client.sendMessage(entityLike, {
             message: realtimeMsg, // 直接传入消息对象以便自动处理媒体/实体
             replyTo: t.replyTo ? toInt(t.replyTo) : undefined,
+            formattingEntities: realtimeMsg.entities,
           });
 
           if (idx >= 0) {
