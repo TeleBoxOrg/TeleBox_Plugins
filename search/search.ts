@@ -122,25 +122,29 @@ class SearchService {
     for (const channelHandle of channels) {
       try {
         const entity = await this.client.getEntity(channelHandle.trim());
+        
+        // 检查实体类型，只允许频道和群组
         if (!(entity instanceof Api.Channel) && !(entity instanceof Api.Chat)) {
           await msg.edit({
-            text: `错误： ${channelHandle.trim()} 不是公开频道或群组。`,
+            text: `错误： ${channelHandle.trim()} 不是公开频道或群组，而是 ${entity.className}。`,
           });
           continue;
         }
 
-        const channelId = entity.id.toString();
-        if (this.config.channelList.some((c) => c.id === channelId)) {
+        // 直接使用原始的频道链接作为唯一标识
+        const normalizedHandle = channelHandle.trim();
+        
+        if (this.config.channelList.some((c) => c.handle === normalizedHandle)) {
           await msg.edit({ text: `目标 "${entity.title}" 已存在。` });
           continue;
         }
 
         this.config.channelList.push({
-          id: channelId,
+          id: entity.id.toString(), // 保留ID用于内部操作
           title: entity.title,
-          handle: channelHandle.trim(),
+          handle: normalizedHandle, // 使用原始链接作为主要标识
         });
-        if (!this.config.defaultChannel) this.config.defaultChannel = channelId;
+        if (!this.config.defaultChannel) this.config.defaultChannel = normalizedHandle;
         addedCount++;
       } catch (error: any) {
         await msg.edit({
@@ -161,24 +165,24 @@ class SearchService {
 
     for (const channelHandle of channels) {
       try {
-        const entity = await this.client.getEntity(channelHandle.trim());
-        const channelId = entity.id.toString();
+        const normalizedHandle = channelHandle.trim();
+        
         const initialLength = this.config.channelList.length;
         this.config.channelList = this.config.channelList.filter(
-          (c) => c.id !== channelId
+          (c) => c.handle !== normalizedHandle
         );
 
         if (this.config.channelList.length === initialLength) {
           await msg.edit({
-            text: `❓ 目标 "${(entity as any).title}" 不在列表中。`,
+            text: `❓ 目标 "${normalizedHandle}" 不在列表中。`,
           });
           continue;
         }
 
-        if (this.config.defaultChannel === channelId) {
+        if (this.config.defaultChannel === normalizedHandle) {
           this.config.defaultChannel =
             this.config.channelList.length > 0
-              ? this.config.channelList[0].id
+              ? this.config.channelList[0].handle
               : null;
         }
         removedCount++;
@@ -211,12 +215,13 @@ class SearchService {
         throw new Error("目标不是频道或群组。");
       }
 
-      const channelId = entity.id.toString();
-      if (!this.config.channelList.some((c) => c.id === channelId)) {
+      const normalizedHandle = args.trim();
+      
+      if (!this.config.channelList.some((c) => c.handle === normalizedHandle)) {
         throw new Error("请先使用 `.so add` 添加此频道。");
       }
 
-      this.config.defaultChannel = channelId;
+      this.config.defaultChannel = normalizedHandle;
       await this.saveConfig();
       await msg.edit({ text: `✅ "${entity.title}" 已被设为默认频道。` });
     } catch (error: any) {
@@ -231,19 +236,19 @@ class SearchService {
     }
 
     let listText = "**当前搜索频道列表 (按搜索顺序):**\n\n";
-    const searchOrderIds = [
+    const searchOrderHandles = [
       ...new Set(
         [
           this.config.defaultChannel,
-          ...this.config.channelList.map((c) => c.id),
+          ...this.config.channelList.map((c) => c.handle),
         ].filter(Boolean)
       ),
     ];
-    searchOrderIds.forEach((id, index) => {
-      const channel = this.config.channelList.find((c) => c.id === id);
+    searchOrderHandles.forEach((handle, index) => {
+      const channel = this.config.channelList.find((c) => c.handle === handle);
       if (channel) {
         const isDefault =
-          channel.id === this.config.defaultChannel ? " (默认)" : "";
+          channel.handle === this.config.defaultChannel ? " (默认)" : "";
         listText += `${index + 1}. ${channel.title}${isDefault}\n`;
       }
     });
@@ -257,7 +262,7 @@ class SearchService {
     }
 
     const backupContent = this.config.channelList
-      .map((c) => c.handle || `https://t.me/c/${c.id.replace("-100", "")}`)
+      .map((c) => c.handle)
       .join("\n");
     const tempDir = path.join(process.cwd(), "temp");
     await fs.mkdir(tempDir, { recursive: true });
@@ -294,22 +299,21 @@ class SearchService {
     });
     const newConfig: SearchConfig = { defaultChannel: null, channelList: [] };
     let successCount = 0;
-    let firstAddedId: string | null = null;
+    let firstAddedHandle: string | null = null;
 
     for (const handle of handles) {
       try {
         const entity = await this.client.getEntity(handle);
         if (
           (entity instanceof Api.Channel || entity instanceof Api.Chat) &&
-          !newConfig.channelList.some((c) => c.id === entity.id.toString())
+          !newConfig.channelList.some((c) => c.handle === handle)
         ) {
-          const channelId = entity.id.toString();
           newConfig.channelList.push({
-            id: channelId,
+            id: entity.id.toString(), // 保留ID用于内部操作
             title: entity.title,
-            handle: handle,
+            handle: handle, // 使用原始链接作为主要标识
           });
-          if (!firstAddedId) firstAddedId = channelId;
+          if (!firstAddedHandle) firstAddedHandle = handle;
           successCount++;
         }
       } catch (e) {
@@ -317,7 +321,7 @@ class SearchService {
       }
     }
 
-    newConfig.defaultChannel = firstAddedId;
+    newConfig.defaultChannel = firstAddedHandle;
     this.config = newConfig;
     await this.saveConfig();
     await msg.edit({
@@ -365,24 +369,33 @@ class SearchService {
       ...new Set(
         [
           this.config.defaultChannel,
-          ...this.config.channelList.map((c) => c.id),
+          ...this.config.channelList.map((c) => c.handle),
         ].filter(Boolean) as string[]
       ),
     ];
     let validVideos: Api.Message[] = [];
     let allVideosForFallback: Api.Message[] = [];
-    for (const channelId of searchOrder) {
+    for (const channelHandle of searchOrder) {
       const channelInfo = this.config.channelList.find(
-        (c) => c.id === channelId
+        (c) => c.handle === channelHandle
       );
       if (!channelInfo) continue;
       try {
         await msg.edit({
-          text: `- 正在搜索... (源: ${searchOrder.indexOf(channelId) + 1}/${
+          text: `- 正在搜索... (源: ${searchOrder.indexOf(channelHandle) + 1}/${
             searchOrder.length
           })`,
         });
-        const channelEntity = await this.client.getEntity(channelInfo.id);
+        
+        // 直接使用频道链接获取实体
+        const channelEntity = await this.client.getEntity(channelInfo.handle);
+        
+        // 验证实体类型
+        if (!(channelEntity instanceof Api.Channel) && !(channelEntity instanceof Api.Chat)) {
+          console.error(`实体类型错误: ${channelEntity.className}，跳过此频道`);
+          continue;
+        }
+        
         const videos = await this.client.getMessages(
           utils.getInputPeer(channelEntity),
           {
@@ -423,23 +436,18 @@ class SearchService {
           e instanceof Error &&
           e.message.includes("Could not find the input entity")
         ) {
-          console.error("无法找到频道实体，尝试刷新对话缓存...");
-          await this.client.getDialogs();
-          try {
-            await this.client.getEntity(channelInfo.id);
-          } catch (refreshError: unknown) {
-            console.error(
-              `刷新后仍无法找到频道实体: ${
-                refreshError instanceof Error
-                  ? refreshError.message
-                  : refreshError
-              }`
-            );
-            continue;
+          console.error(`无法找到频道实体 ${channelInfo.title} (${channelInfo.handle})，从配置中移除...`);
+          // 从配置中移除无效的频道
+          this.config.channelList = this.config.channelList.filter(c => c.handle !== channelInfo.handle);
+          if (this.config.defaultChannel === channelInfo.handle) {
+            this.config.defaultChannel = this.config.channelList.length > 0 ? this.config.channelList[0].handle : null;
           }
+          await this.saveConfig();
+          console.log(`已从配置中移除无效频道: ${channelInfo.title}`);
+          continue
         } else {
           console.error(
-            `在频道 "${channelInfo.title}" (${channelId}) 中失败: ${
+            `在频道 "${channelInfo.title}" (${channelHandle}) 中失败: ${
               e instanceof Error ? e.message : e
             }`
           );
