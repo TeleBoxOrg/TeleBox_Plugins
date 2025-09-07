@@ -118,5 +118,9 @@
   "clearblocked": {
     "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/clearblocked/clearblocked.ts?raw=true",
     "desc": "批量清理已拉黑用户"
+  },
+  "gemini": {
+    "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/gemini/gemini.ts?raw=true",
+    "desc": "谷歌AI助手Gemini"
   }
 }
