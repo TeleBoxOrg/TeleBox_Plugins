@@ -129,6 +129,6 @@
   },
   "qr": {
     "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/qr/qr.ts?raw=true",
-    "desc": "每日新闻插件"
+    "desc": "QR 二维码插件"
   }
 }
