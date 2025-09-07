@@ -44,9 +44,10 @@ RUB INR AUD CAD HKD SGD THB
 BRL MXN SAR AED TWD CHF
 
 💡 <b>小贴士</b>
-• 支持法币间汇率查询
+• 支持所有CoinGecko上的加密货币和法币
 • 货币代码不区分大小写
-• 可添加数量进行换算`;
+• 可添加数量进行换算
+• 法币优先：TRY=土耳其里拉，USD=美元等`;
 
 class RatePlugin extends Plugin {
   description: string = `加密货币汇率查询 & 数量换算\n\n${help_text}`;
@@ -70,6 +71,19 @@ class RatePlugin extends Plugin {
     if (cached) {
       return cached;
     }
+    
+    // 优先检查是否为常用法币 - 避免与加密货币符号冲突
+    if (this.commonFiats.includes(query.toLowerCase())) {
+      const result = {
+        id: query.toLowerCase(),
+        symbol: query.toUpperCase(),
+        name: query.toUpperCase(),
+        type: 'fiat' as const
+      };
+      this.currencyCache[query.toLowerCase()] = result;
+      return result;
+    }
+    
     const searchEndpoints = [
       `https://api.coingecko.com/api/v3/search?query=${encodeURIComponent(query)}`,
       `https://api.coingecko.com/api/v3/coins/list`
@@ -129,17 +143,6 @@ class RatePlugin extends Plugin {
       }
     }
     
-    // 检查是否为常用法币
-    if (this.commonFiats.includes(query.toLowerCase())) {
-      const result = {
-        id: query.toLowerCase(),
-        symbol: query.toUpperCase(),
-        name: query.toUpperCase(),
-        type: 'fiat' as const
-      };
-      this.currencyCache[query.toLowerCase()] = result;
-      return result;
-    }
     
     return null;
   }
