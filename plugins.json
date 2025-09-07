@@ -134,5 +134,9 @@
   "convert": {
     "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/convert/convert.ts?raw=true",
     "desc": "视频转音频插件"
+  },
+  "gif": {
+    "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/gif/gif.ts?raw=true",
+    "desc": "GIF转贴纸插件"
   }
 }
