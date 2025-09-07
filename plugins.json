@@ -126,5 +126,9 @@
   "news": {
     "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/news/news.ts?raw=true",
     "desc": "每日新闻插件"
+  },
+  "qr": {
+    "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/qr/qr.ts?raw=true",
+    "desc": "每日新闻插件"
   }
 }
