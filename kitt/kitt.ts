@@ -203,7 +203,7 @@ const help_text = `▎格式
 <code>sleep</code>: <code>sleep</code>(单位 <code>ms</code>)
 <code>run</code>: <code>run</code> 执行插件命令
 
-- <code>username</code> 为 <code>test</code> 的用户在星期四发言就回复 <code>V 我 50!<code>
+- <code>username</code> 为 <code>test</code> 的用户在星期四发言就回复 <code>V 我 50!</code>
 
 <pre>${commandName} add 疯狂星期四
 return msg.sender?.username === 'test' && dayjs().day() === 4
