@@ -117,6 +117,6 @@
   },
   "clearblocked": {
     "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/clearblocked/clearblocked.ts?raw=true",
-    "desc": "摸鱼日报"
+    "desc": "批量清理已拉黑用户"
   }
 }
