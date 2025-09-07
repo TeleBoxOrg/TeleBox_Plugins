@@ -1,6 +1,7 @@
 import { Api } from "telegram";
 import { Plugin } from "@utils/pluginBase";
 import { getGlobalClient } from "@utils/globalClient";
+import axios from "axios";
 
 
 interface CoinGeckoResponse {
@@ -239,20 +240,6 @@ class RatePlugin extends Plugin {
   };
 
   private async fetchCryptoPrice(coinIds: string[], currencies: string[]): Promise<CoinGeckoResponse> {
-    let axios: any;
-    
-    try {
-      // 动态导入axios
-      const axiosModule = await import("axios");
-      axios = axiosModule.default || axiosModule;
-      
-      if (!axios || typeof axios.get !== "function") {
-        throw new Error("Axios未正确加载");
-      }
-    } catch (importError: any) {
-      console.error("Failed to import axios:", importError);
-      throw new Error(`网络库加载失败: ${importError.message || importError}`);
-    }
 
     try {
       const coinIdsStr = coinIds.join(',');
@@ -494,7 +481,6 @@ class RatePlugin extends Plugin {
       });
 
       // 调用CoinGecko API
-      const axios = (await import('axios')).default;
       const response = await axios.get<CoinGeckoResponse>(
         `https://api.coingecko.com/api/v3/simple/price?ids=${cryptoId}&vs_currencies=${fiatCurrency}&include_last_updated_at=true`
       );
