@@ -130,5 +130,9 @@
   "qr": {
     "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/qr/qr.ts?raw=true",
     "desc": "QR 二维码插件"
+  },
+  "convert": {
+    "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/convert/convert.ts?raw=true",
+    "desc": "视频转音频插件"
   }
 }
