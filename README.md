@@ -39,15 +39,6 @@ npm i <插件名>
 - `yvlu` - 为被回复用户生成语录
 - `rate` - 汇率查询计算插件
 
-## 技术栈
-
-- **开发语言**: TypeScript
-- **数据库**: SQLite (better-sqlite3)
-- **任务调度**: node-schedule
-- **Telegram API**: telegram (GramJS)
-- **图像处理**: Sharp
-- **其他依赖**: axios, lodash 等
-
 ## 贡献指南
 
 欢迎提交新插件或改进现有插件。请确保：
