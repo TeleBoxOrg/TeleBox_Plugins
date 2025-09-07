@@ -1,8 +1,44 @@
 import { Api } from "telegram";
 import { Plugin } from "@utils/pluginBase";
+import { createDirectoryInAssets } from "@utils/pathHelpers";
+import { JSONFilePreset } from "lowdb/node";
+import path from "path";
 
-// 存储每个用户的删除模式设置
-const userDeleteMode = new Map<string, boolean>();
+// 数据库文件路径
+const filePath = path.join(createDirectoryInAssets("bd"), "bd_config.json");
+
+// 数据库类型定义
+interface BdDB {
+  userDeleteMode: Record<string, boolean>;
+}
+
+// 获取数据库实例
+async function getDB() {
+  const db = await JSONFilePreset<BdDB>(filePath, { userDeleteMode: {} });
+  return db;
+}
+
+// 获取用户删除模式设置
+async function getUserDeleteMode(userId: string): Promise<boolean> {
+  try {
+    const db = await getDB();
+    return db.data.userDeleteMode[userId] !== false; // 默认开启删除他人权限
+  } catch (error) {
+    console.warn("获取bd用户设置失败:", error);
+    return true; // 默认开启删除他人权限
+  }
+}
+
+// 保存用户设置到数据库
+async function saveUserSetting(userId: string, canDeleteOthers: boolean) {
+  try {
+    const db = await getDB();
+    db.data.userDeleteMode[userId] = canDeleteOthers;
+    await db.write();
+  } catch (error) {
+    console.warn("保存bd用户设置失败:", error);
+  }
+}
 
 /**
  * 批量向下删除插件
@@ -24,7 +60,8 @@ const bd = async (msg: Api.Message) => {
 
   if (subCommand === "on" || subCommand === "off") {
     const canDeleteOthers = subCommand === "on";
-    userDeleteMode.set(userId, canDeleteOthers);
+    // 持久化保存设置
+    await saveUserSetting(userId, canDeleteOthers);
     const status = canDeleteOthers ? "开启" : "关闭";
     const feedbackMsg = await client.sendMessage(chatId, {
       message: `✅ 已${status}删除他人消息权限。`,
@@ -49,7 +86,7 @@ const bd = async (msg: Api.Message) => {
 
       // 检查用户权限设置和管理员权限
       let isAdmin = false;
-      let canDeleteOthers = userDeleteMode.get(userId) !== false; // 默认开启删除他人权限
+      let canDeleteOthers = await getUserDeleteMode(userId);
 
       try {
         const chat = await client.getEntity(chatId);
@@ -132,7 +169,7 @@ const bd = async (msg: Api.Message) => {
     }
 
     // B. 如果只是 .bd
-    const currentMode = userDeleteMode.get(userId) === false ? "关闭" : "开启";
+    const currentMode = (await getUserDeleteMode(userId)) ? "开启" : "关闭";
     const sentMsg = await client.sendMessage(chatId, {
       message: `⚠️ 请回复一条消息以确定删除范围，或使用 \`.bd <数字>\` 删除您最近的消息。\n💡 当前删除他人权限: ${currentMode} (.bd on/off 切换)`,
     });
@@ -156,7 +193,7 @@ const bd = async (msg: Api.Message) => {
   const endId = msg.id;
 
   let isAdmin = false;
-  let canDeleteOthers = userDeleteMode.get(userId) !== false; // 默认开启删除他人权限
+  let canDeleteOthers = await getUserDeleteMode(userId);
 
   try {
     const chat = await client.getEntity(chatId);
