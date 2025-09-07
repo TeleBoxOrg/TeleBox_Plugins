@@ -26,7 +26,7 @@ interface EntryConfig {
   name: string;
   url: string;
   me?: RoleConfig; // 少部分有两人互动，比如 tc
-  you: RoleConfig;
+  you?: RoleConfig;
 }
 
 interface EatConfig {
@@ -180,9 +180,14 @@ async function compositeWithEntryConfig(parmas: {
   const downloadResult = await downloadAvatar(msg, isEat2);
   if (!downloadResult) return;
 
-  let composite: sharp.OverlayOptions[] = [
-    await iconMaskedFor({ role: entry.you, avatar: YOU_AVATAR_PATH }),
-  ];
+  let composite: sharp.OverlayOptions[] = [];
+  if (entry.you) {
+    const iconMasked = await iconMaskedFor({
+      role: entry.you,
+      avatar: YOU_AVATAR_PATH,
+    });
+    composite.push(iconMasked);
+  }
 
   // 如果有两人互动
   if (entry.me) {
