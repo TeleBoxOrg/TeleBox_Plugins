@@ -106,5 +106,9 @@
   "kitt": {
     "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/kitt/kitt.ts?raw=true",
     "desc": "高级触发器: 匹配 -> 执行, 高度自定义, 逻辑自由"
+  },
+  "his": {
+    "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/his/his.ts?raw=true",
+    "desc": "查看被回复者最近三十条消息"
   }
 }
