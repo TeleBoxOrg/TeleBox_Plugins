@@ -114,5 +114,9 @@
   "moyu": {
     "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/moyu/moyu.ts?raw=true",
     "desc": "摸鱼日报"
+  },
+  "clearblocked": {
+    "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/clearblocked/clearblocked.ts?raw=true",
+    "desc": "摸鱼日报"
   }
 }
