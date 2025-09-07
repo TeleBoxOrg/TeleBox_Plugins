@@ -1,10 +1,7 @@
 import { Api } from "telegram";
 import { Plugin } from "@utils/pluginBase";
 import { getGlobalClient } from "@utils/globalClient";
-import { npm_install } from "@utils/npm_install";
 
-// 确保axios依赖可用
-npm_install("axios");
 
 interface CoinGeckoResponse {
   [coinId: string]: {
@@ -237,21 +234,6 @@ class RatePlugin extends Plugin {
 
   cmdHandlers: Record<string, (msg: Api.Message) => Promise<void>> = {
     rate: async (msg: Api.Message) => {
-      await this.handleRate(msg);
-    },
-    汇率: async (msg: Api.Message) => {
-      await this.handleRate(msg);
-    },
-    价格: async (msg: Api.Message) => {
-      await this.handleRate(msg);
-    },
-    price: async (msg: Api.Message) => {
-      await this.handleRate(msg);
-    },
-    crypto: async (msg: Api.Message) => {
-      await this.handleRate(msg);
-    },
-    币价: async (msg: Api.Message) => {
       await this.handleRate(msg);
     }
   };
