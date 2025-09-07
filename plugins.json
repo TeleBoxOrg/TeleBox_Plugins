@@ -122,5 +122,9 @@
   "gemini": {
     "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/gemini/gemini.ts?raw=true",
     "desc": "谷歌AI助手Gemini"
+  },
+  "news": {
+    "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/news/news.ts?raw=true",
+    "desc": "每日新闻插件"
   }
 }
