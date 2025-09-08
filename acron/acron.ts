@@ -519,8 +519,8 @@ ${mainPrefix}a foo bar</pre>
 
 每天2点自动备份(调用 <code>${mainPrefix}bf</code> 命令)
 
-${mainPrefix}acron cmd 0 0 2 * * * me 定时备份
-.bf
+<pre>${mainPrefix}acron cmd 0 0 2 * * * me 定时备份
+.bf</pre>
 
 • <code>${mainPrefix}acron list</code> - 列出当前会话中的所有定时任务
 • <code>${mainPrefix}acron list all</code> - 列出所有的定时任务
