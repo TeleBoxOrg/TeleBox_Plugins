@@ -204,10 +204,10 @@ const help_text = `▎格式
 <code>sleep</code>: <code>sleep</code>(单位 <code>ms</code>)
 <code>run</code>: <code>run</code> 执行插件命令
 
-- <code>username</code> 为 <code>test</code> 的用户在星期四发言就回复 <code>V 我 50!</code>
+- <code>username</code> 为 <code>a</code> 或 <code>b</code> 的用户在星期四发言就回复 <code>V 我 50!</code>
 
 <pre>${commandName} add 疯狂星期四
-return msg.sender?.username === 'test' && dayjs().day() === 4
+return ['a', 'b'].includes(msg.sender?.username) && dayjs().day() === 4
 await msg.reply({ message: \`\${(await formatEntity(msg.sender)).display}, V 我 50!\`}, parseMode: 'html' })</pre>
 
 - <code>username</code> 为 <code>test</code> 的群里的没有 <code>username</code> 的用户不许参加淫趴
@@ -216,11 +216,17 @@ await msg.reply({ message: \`\${(await formatEntity(msg.sender)).display}, V 我
 return msg.chat?.username === 'test' && !msg.sender?.username
 await msg.reply({ message: \`\${(await formatEntity(msg.sender)).display}, 你不许参加淫趴!\`, parseMode: 'html' })</pre>
 
-- <code>username</code> 为 <code>test</code> 的用户可使用 <code>${mainPrefix}${mainPrefix}</code> 依次执行命令 一键强制更新并退出重启
+- <code>username</code> 为 <code>a</code> 或 <code>b</code> 的用户可使用 <code>${mainPrefix}${mainPrefix}</code> 依次执行命令 一键强制更新并退出重启
 
 <pre>.kitt add 一键强制更新并退出重启
-return msg.sender?.username === 'test' && msg.text === '${mainPrefix}${mainPrefix}'
+return ['a', 'b'].includes(msg.sender?.username) && msg.text === '${mainPrefix}${mainPrefix}'
 await run('${mainPrefix}update -f', msg); await run('${mainPrefix}dme 1', msg); try { await msg.delete() } catch (e) {}; await run('.exit', msg)</pre>
+
+- <code>username</code> 为 <code>a</code> 或 <code>b</code> 的用户可使用 <code>,,</code> 一键更新已安装的远程插件
+
+<pre>.kitt add 一键更新已安装的远程插件
+return ['a', 'b'].includes(msg.sender?.username) && msg.text === ',,'
+await run('${mainPrefix}tpm update', msg); await run('${mainPrefix}dme 1', msg); try { await msg.delete() } catch (e) {};</pre>
 
 ▎管理
 <code>${commandName} ls</code>, <code>${commandName} list</code>: 列出所有任务
