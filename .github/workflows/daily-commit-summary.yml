@@ -24,13 +24,15 @@ jobs:
         path: TeleBox_Plugins
         fetch-depth: 0
         
-    - name: Checkout TeleBox-main repository
+    - name: Checkout TeleBox repository
+      id: checkout-telebox
       uses: actions/checkout@v4
       with:
-        repository: ${{ github.repository_owner }}/TeleBox-main
-        path: TeleBox-main
+        repository: TeleBoxOrg/TeleBox
+        path: TeleBox
         fetch-depth: 0
         token: ${{ secrets.GITHUB_TOKEN }}
+      continue-on-error: true
         
     - name: Setup Node.js
       uses: actions/setup-node@v4
@@ -42,6 +44,7 @@ jobs:
         TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
         TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         TARGET_DATE: ${{ github.event.inputs.date }}
+        CHECKOUT_SUCCESS: ${{ steps.checkout-telebox.outcome == 'success' }}
       run: |
         cat > commit-summary.js << 'EOF'
         const { execSync } = require('child_process');
@@ -52,6 +55,7 @@ jobs:
         const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
         const CHAT_ID = process.env.TELEGRAM_CHAT_ID;
         const TARGET_DATE = process.env.TARGET_DATE || new Date().toISOString().split('T')[0];
+        const CHECKOUT_SUCCESS = process.env.CHECKOUT_SUCCESS === 'true';
         
         // 验证环境变量
         if (!BOT_TOKEN || !CHAT_ID) {
@@ -93,8 +97,12 @@ jobs:
         }
         
         // 获取两个仓库的提交
-        const teleboxCommits = getCommitsForDate('TeleBox-main', 'TeleBox-main', TARGET_DATE);
+        const teleboxCommits = CHECKOUT_SUCCESS ? getCommitsForDate('TeleBox', 'TeleBox', TARGET_DATE) : [];
         const pluginsCommits = getCommitsForDate('TeleBox_Plugins', 'TeleBox_Plugins', TARGET_DATE);
+        
+        if (!CHECKOUT_SUCCESS) {
+          console.warn('⚠️ TeleBox 仓库访问失败，仅统计 TeleBox_Plugins 提交');
+        }
         
         const allCommits = [...teleboxCommits, ...pluginsCommits];
         
@@ -110,7 +118,7 @@ jobs:
         
         // 按仓库分组提交
         const commitsByRepo = {
-          'TeleBox-main': teleboxCommits,
+          'TeleBox': teleboxCommits,
           'TeleBox_Plugins': pluginsCommits
         };
         
@@ -118,7 +126,7 @@ jobs:
         let message = `📅 *TeleBox 日报 - ${TARGET_DATE}*\n\n`;
         message += `📊 *今日提交统计*\n`;
         message += `• 总提交数: ${allCommits.length}\n`;
-        message += `• TeleBox-main: ${teleboxCommits.length} 次提交\n`;
+        message += `• TeleBox: ${teleboxCommits.length} 次提交\n`;
         message += `• TeleBox_Plugins: ${pluginsCommits.length} 次提交\n\n`;
         
         // 添加详细提交信息
