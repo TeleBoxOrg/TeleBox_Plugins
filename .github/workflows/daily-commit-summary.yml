@@ -136,7 +136,7 @@ jobs:
           console.log('📭 今日无提交记录');
           
           // 发送无提交的通知
-          const noCommitsMessage = `📅 *TeleBox 日报 - ${TARGET_DATE}*\n\n🌙 今日无代码提交\n\n_保持代码整洁，明日再战！_`;
+          const noCommitsMessage = `📅 TeleBox 日报 - ${TARGET_DATE}\n\n🌙 今日无代码提交\n\n保持代码整洁，明日再战！`;
           
           sendToTelegram(noCommitsMessage);
           return;
@@ -149,8 +149,8 @@ jobs:
         };
         
         // 生成摘要消息
-        let message = `📅 *TeleBox 日报 - ${TARGET_DATE}*\n\n`;
-        message += `📊 *今日提交统计*\n`;
+        let message = `📅 TeleBox 日报 - ${TARGET_DATE}\n\n`;
+        message += `📊 今日提交统计\n`;
         message += `• 总提交数: ${allCommits.length}\n`;
         message += `• TeleBox: ${dedupedTeleboxCommits.length} 次提交\n`;
         message += `• TeleBox_Plugins: ${dedupedPluginsCommits.length} 次提交\n\n`;
@@ -159,7 +159,7 @@ jobs:
         for (const [repoName, commits] of Object.entries(commitsByRepo)) {
           if (commits.length === 0) continue;
           
-          message += `🔧 *${repoName}*\n`;
+          message += `🔧 ${repoName}\n`;
           
           // 限制每个仓库最多显示10条提交
           const displayCommits = commits.slice(0, 10);
@@ -189,7 +189,7 @@ jobs:
         // 添加贡献者统计
         const contributors = [...new Set(allCommits.map(c => c.author))];
         if (contributors.length > 0) {
-          message += `👥 *今日贡献者*\n`;
+          message += `👥 今日贡献者\n`;
           contributors.forEach(author => {
             const authorCommits = allCommits.filter(c => c.author === author).length;
             message += `• ${author}: ${authorCommits} 次提交\n`;
@@ -198,7 +198,7 @@ jobs:
         }
         
         // 添加时间戳
-        message += `⏰ _报告生成时间: ${new Date().toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' })}_`;
+        message += `⏰ 报告生成时间: ${new Date().toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' })}`;
         
         // 检查消息长度，Telegram 限制为 4096 字符
         if (message.length > 4000) {
@@ -216,7 +216,6 @@ jobs:
           const data = querystring.stringify({
             chat_id: CHAT_ID,
             text: text,
-            parse_mode: 'Markdown',
             disable_web_page_preview: true
           });
           
