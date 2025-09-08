@@ -110,7 +110,7 @@
         "y": 15,
         "mask": "eat/maskpl.png"
       }
-    },    
+    },
     "ri": {
       "name": "日一下",
       "url": "https://github.com/FoKit/PagerMaid_Plugins/raw/modify/eat/eatri.png",
@@ -179,7 +179,7 @@
         "y": 22,
         "mask": "eat/maskxm.png"
       }
-    },    
+    },
     "xyy": {
       "name": "性压抑了",
       "url": "eat/eatxyy.png",
