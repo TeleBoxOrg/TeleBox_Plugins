@@ -36,19 +36,53 @@ interface EatConfig {
   [key: string]: EntryConfig;
 }
 
-let config: EatConfig;
+let config: EatConfig = {}; 
 
+// + 新增此行：用于存储根据meta配置拼接好的资源基础URL
+let resourceBaseUrl = ""; 
+
+// + 修改此行：请将URL替换为您新配置文件的【实际Raw地址】
 let baseConfigURL =
-  "https://github.com/TeleBoxDev/TeleBox_Plugins/raw/main/eat/config.json";
+  "https://raw.githubusercontent.com/YourUsername/YourRepo/main/eat/config.json";
+function resolveResourceUrl(path: string): string {
+  if (path.startsWith("http://") || path.startsWith("https://")) {
+    return path;
+  }
+  return `${resourceBaseUrl}/${path}`;
+}
+// eat.ts (用这个版本替换整个 loadConfigResource 函数)
 
 async function loadConfigResource(url: string, forceUpdate = false) {
-  const filePath = await assetPathFor(url);
+  const filePath = path.join(EAT_ASSET_PATH, path.basename(new URL(url).pathname));
 
-  // 如果有缓存且不强制更新，直接使用缓存
+  const parseAndSetConfig = (content: string) => {
+    const fullConfig = JSON.parse(content);
+    if (!fullConfig.meta || !fullConfig.resources) {
+      throw new Error("配置文件格式错误，缺少 meta 或 resources 字段");
+    }
+
+    const meta = fullConfig.meta;
+    const { repo_owner, repo_name, branch, base_url_template } = meta;
+
+    if (!repo_owner || !repo_name || !branch || !base_url_template) {
+      throw new Error("meta配置不完整, 缺少 repo_owner, repo_name, branch, 或 base_url_template 之一");
+    }
+
+    // 动态替换模板中的占位符
+    resourceBaseUrl = base_url_template
+      .replace('${repo_owner}', repo_owner)
+      .replace('${repo_name}', repo_name)
+      .replace('${branch}', branch);
+
+    config = fullConfig.resources;
+    console.log(`配置加载成功，当前分支: ${branch}, 资源基础URL: ${resourceBaseUrl}`);
+  };
+
+  // 如果有缓存且不强制更新
   if (!forceUpdate && fs.existsSync(filePath)) {
     try {
       const content = fs.readFileSync(filePath, "utf-8");
-      config = JSON.parse(content);
+      parseAndSetConfig(content);
       return;
     } catch (error) {
       console.error("缓存文件损坏，尝试从远程下载:", error);
@@ -57,14 +91,15 @@ async function loadConfigResource(url: string, forceUpdate = false) {
 
   // 下载最新配置
   try {
-    await download(url, EAT_ASSET_PATH);
+    // 注意: download的第二个参数是目录，它会自动使用URL中的文件名
+    await download(url, EAT_ASSET_PATH); 
     const content = fs.readFileSync(filePath, "utf-8");
-    config = JSON.parse(content);
+    parseAndSetConfig(content);
   } catch (error) {
     console.error("从远程加载配置失败，尝试使用本地缓存:", error);
     if (fs.existsSync(filePath)) {
       const content = fs.readFileSync(filePath, "utf-8");
-      config = JSON.parse(content);
+      parseAndSetConfig(content);
     } else {
       throw new Error("无可用配置，远程和本地缓存均不可用");
     }
@@ -112,7 +147,7 @@ async function iconMaskedFor(params: {
 }): Promise<sharp.OverlayOptions> {
   const { role, avatar } = params;
 
-  const maskSharp = sharp(await assetPathFor(role.mask)).ensureAlpha();
+  const maskSharp = sharp(await assetPathFor(resolveResourceUrl(role.mask))).ensureAlpha(); // ✅ 已修正
   const { width, height } = await maskSharp.metadata(); // 只读一次 metadata
 
   const [iconBuffer, alphaMask] = await Promise.all([
@@ -178,7 +213,7 @@ async function compositeWithEntryConfig(parmas: {
 }): Promise<void> {
   const { entry, msg, isEat2, trigger } = parmas;
 
-  const basePath = await assetPathFor(entry.url);
+  const basePath = await assetPathFor(resolveResourceUrl(entry.url)); // ✅ 已修正
 
   const downloadResult = await downloadAvatar(msg, isEat2);
   if (!downloadResult) return;
