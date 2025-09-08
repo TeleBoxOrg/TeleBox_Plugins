@@ -138,5 +138,9 @@
   "gif": {
     "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/gif/gif.ts?raw=true",
     "desc": "GIF转贴纸插件"
+  },
+  "trace": {
+    "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/trace/trace.ts?raw=true",
+    "desc": "全局追踪点赞插件"
   }
 }
