@@ -102,6 +102,15 @@
         "mask": "eat/maskld.png"
       }
     },
+    "pl": {
+      "name": "我他妈直接跑路",
+      "url": "eat/eatpl.png",
+      "me": {
+        "x": 163,
+        "y": 15,
+        "mask": "eat/maskpl.png"
+      }
+    },    
     "ri": {
       "name": "日一下",
       "url": "https://github.com/FoKit/PagerMaid_Plugins/raw/modify/eat/eatri.png",
@@ -162,6 +171,15 @@
         "mask": "eat/maskwyz.png"
       }
     },
+    "xm": {
+      "name": "羡慕死了",
+      "url": "eat/eatxm.png",
+      "me": {
+        "x": 131,
+        "y": 22,
+        "mask": "eat/maskxm.png"
+      }
+    },    
     "xyy": {
       "name": "性压抑了",
       "url": "eat/eatxyy.png",
