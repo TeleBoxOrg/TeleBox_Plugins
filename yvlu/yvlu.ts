@@ -211,7 +211,9 @@ class YvluPlugin extends Plugin {
 
           for await (const [i, message] of messages.entries()) {
             // 获取发送者信息
-            const sender = await message.getSender();
+            const sender =
+              (await message.forward?.getSender()) ||
+              (await message.getSender());
             if (!sender) {
               await msg.edit({ text: "无法获取消息发送者信息" });
               return;
