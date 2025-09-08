@@ -240,7 +240,7 @@ class KittPlugin extends Plugin {
       const lines = msg.message.split(/\r?\n/g).map((l) => l.trim());
       const args = lines[0].split(/\s+/g);
       const command = args[1];
-      const remark = getRemarkFromMsg(lines[0], 2);
+      const remark = getRemarkFromMsg(lines[0], 1);
       if (["add"].includes(command)) {
         const match = lines[1];
         const action = lines[2];
