@@ -1,4 +1,3 @@
-
 import { Plugin } from "@utils/pluginBase";
 import sharp from "sharp";
 import path from "path";
@@ -9,7 +8,10 @@ import {
   createDirectoryInAssets,
   createDirectoryInTemp,
 } from "@utils/pathHelpers";
+import { getPrefixes } from "@utils/pluginManager";
 
+const prefixes = getPrefixes();
+const mainPrefix = prefixes[0];
 const EAT_ASSET_PATH = createDirectoryInAssets("me");
 const EAT_TEMP_PATH = createDirectoryInTemp("eat");
 const YOU_AVATAR_PATH = path.join(EAT_TEMP_PATH, "you.png");
@@ -304,7 +306,13 @@ const help_text =
   `• eat - 获取表情包列表（优先使用缓存）\n` +
   `• eat set [url] - 强制更新配置（覆盖缓存）\n` +
   `• 回复消息 + eat <名称> - 发送指定表情包\n` +
-  `• 回复消息 + eat - 随机发送表情包`;
+  `• 回复消息 + eat - 随机发送表情包\n\n` +
+  `若想实现定时更新表情包配置, 可安装并使用 <code>${mainPrefix}tpm i acron</code>
+每天2点自动更新 <code>eat</code> 的表情包配置(调用 <code>${mainPrefix}eat set</code> 命令)
+
+<pre>${mainPrefix}acron cmd 0 0 2 * * * me 定时更新表情包
+${mainPrefix}eat set</pre>
+`;
 
 class EatPlugin extends Plugin {
   description: string = `${help_text}`;

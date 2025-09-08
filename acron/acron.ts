@@ -515,12 +515,17 @@ ${mainPrefix}a foo bar</pre>
 <pre>${mainPrefix}acron cmd 0 0 2 * * * 对话ID/@name|发送时话题的ID或回复消息的ID [备注]
 ${mainPrefix}a foo bar</pre>
 
-一个典型的使用场景:
+典型的使用场景:
 
 每天2点自动备份(调用 <code>${mainPrefix}bf</code> 命令)
 
 <pre>${mainPrefix}acron cmd 0 0 2 * * * me 定时备份
 .bf</pre>
+
+每天2点自动更新 <code>eat</code> 的表情包配置(调用 <code>${mainPrefix}eat set</code> 命令)
+
+<pre>${mainPrefix}acron cmd 0 0 2 * * * me 定时更新表情包
+${mainPrefix}eat set</pre>
 
 • <code>${mainPrefix}acron list</code> - 列出当前会话中的所有定时任务
 • <code>${mainPrefix}acron list all</code> - 列出所有的定时任务
