@@ -1,176 +1,184 @@
 {
-   "ada": {
-    "name": "给爷死",
-    "url": "https://github.com/FoKit/PagerMaid_Plugins/raw/modify/eat/eatada.png",
-    "me": {
-      "x": 283,
-      "y": 146,
-      "mask": "https://github.com/FoKit/PagerMaid_Plugins/raw/modify/eat/maskada.png"
+  "meta": {
+    "repo_owner": "TeleBoxDev",
+    "repo_name": "TeleBox_Plugins",
+    "branch": "main",
+    "base_url_template": "https://github.com/${repo_owner}/${repo_name}/raw/${branch}"
+  },
+  "resources": {
+    "ada": {
+      "name": "给爷死",
+      "url": "https://github.com/FoKit/PagerMaid_Plugins/raw/modify/eat/eatada.png",
+      "me": {
+        "x": 283,
+        "y": 146,
+        "mask": "https://github.com/FoKit/PagerMaid_Plugins/raw/modify/eat/maskada.png"
+      },
+      "you": {
+        "x": 223,
+        "y": 314,
+        "mask": "https://github.com/FoKit/PagerMaid_Plugins/raw/modify/eat/maskada.png"
+      }
     },
-    "you": {
-      "x": 223,
-      "y": 314,
-      "mask": "https://github.com/FoKit/PagerMaid_Plugins/raw/modify/eat/maskada.png"
-    }
-  },
-  "bc": {
-    "name": "鞭笞",
-    "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/eat/eatbc.png?raw=true",
-    "me": {
-      "x": 331,
-      "y": 76,
-      "mask": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/eat/maskbc1.png?raw=true"
+    "bc": {
+      "name": "鞭笞",
+      "url": "eat/eatbc.png",
+      "me": {
+        "x": 331,
+        "y": 76,
+        "mask": "eat/maskbc1.png"
+      },
+      "you": {
+        "x": 23,
+        "y": 292,
+        "mask": "eat/maskbc2.png"
+      }
     },
-    "you": {
-      "x": 23,
-      "y": 292,
-      "mask": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/eat/maskbc2.png?raw=true"
-    }
-  }, 
-  "dd": {
-    "name": "逗逗你呀~",
-    "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/eat/eatdd.png?raw=true",
-    "you": {
-      "x": 175,
-      "y": 62,
-      "mask": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/eat/maskdd.png?raw=true"
-    }
-  },
-  "dl": {
-    "name": "大佬~可靠",
-    "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/eat/eatdl.png?raw=true",
-    "me": {
-      "x": 350,
-      "y": 197,
-      "mask": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/eat/maskdl1.png?raw=true"
+    "dd": {
+      "name": "逗逗你呀~",
+      "url": "eat/eatdd.png",
+      "you": {
+        "x": 175,
+        "y": 62,
+        "mask": "eat/maskdd.png"
+      }
     },
-    "you": {
-      "x": 91,
-      "y": 16,
-      "mask": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/eat/maskdl2.png?raw=true"
-    }
-  },  
-  "fk": {
-    "name": "国际友好手势",
-    "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/eat/eatfk.png?raw=true",
-    "me": {
-      "x": 184,
-      "y": 143,
-      "mask": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/eat/maskfk.png?raw=true"
-    }
-  },
-  "fl": {
-    "name": "翻脸",
-    "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/eat/eatfl.png?raw=true",
-    "you": {
-      "x": 7,
-      "y": 19,
-      "mask": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/eat/maskfl.png?raw=true"
-    }
-  },     
-  "ko": {
-    "name": "升龙拳",
-    "url": "https://github.com/FoKit/PagerMaid_Plugins/blob/modify/eat/eatko.png?raw=true",
-    "you": {
-      "x": 170,
-      "y": 95,
-      "mask": "https://github.com/FoKit/PagerMaid_Plugins/blob/modify/eat/maskko.png?raw=true"
-    }
-  },
-  "kz": {
-    "name": "看来真得控制你了",
-    "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/eat/eatkz.png?raw=true",
-    "you": {
-      "x": 1,
-      "y": 202,
-      "mask": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/eat/maskkz.png?raw=true"
-    }
-  },  
-  "ld": {
-    "name": "我没意见",
-    "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/eat/eatld.png?raw=true",
-    "you": {
-      "x": 157,
-      "y": 0,
-      "mask": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/eat/maskld.png?raw=true"
-    }
-  },
-  "ri": {
-    "name": "日一下",
-    "url": "https://github.com/FoKit/PagerMaid_Plugins/blob/modify/eat/eatri.png?raw=true",
-    "you": {
-      "x": 64,
-      "y": 87,
-      "mask": "https://github.com/FoKit/PagerMaid_Plugins/blob/modify/eat/maskri.png?raw=true"
-    }
-  },
-  "sj": {
-    "name": "我会一直视奸你",
-    "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/eat/eatsj.png?raw=true",
-    "me": {
-      "x": 118,
-      "y": 42,
-      "brightness": 0.6,
-      "mask": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/eat/masksj.png?raw=true"
-    }
-  },          
-  "tc": {
-    "name": "老汉推车",
-    "url": "https://github.com/FoKit/PagerMaid_Plugins/raw/modify/eat/eattc.png",
-    "me": {
-      "x": 224,
-      "y": 173,
-      "mask": "https://github.com/FoKit/PagerMaid_Plugins/raw/modify/eat/masktc.png"
+    "dl": {
+      "name": "大佬~可靠",
+      "url": "eat/eatdl.png",
+      "me": {
+        "x": 350,
+        "y": 197,
+        "mask": "eat/maskdl1.png"
+      },
+      "you": {
+        "x": 91,
+        "y": 16,
+        "mask": "eat/maskdl2.png"
+      }
     },
-    "you": {
-      "x": 55,
-      "y": 286,
-      "mask": "https://github.com/FoKit/PagerMaid_Plugins/raw/modify/eat/masktc.png"
-    }
-  },
-  "tlg": {
-    "name": "偷撸狗",
-    "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/eat/eattlg.png?raw=true",
-    "you": {
-      "x": 16,
-      "y": 280,
-      "mask": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/eat/masktlg.png?raw=true"
-    }
-  },
-  "wyy": {
-    "name": "网抑云时间",
-    "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/eat/eatwyy.png?raw=true",
-    "you": {
-      "x": 135,
-      "y": 160,
-      "mask": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/eat/maskwyy.png?raw=true"
-    }
-  },  
-  "wyz": {
-    "name": "我有罪",
-    "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/eat/eatwyz.png?raw=true",
-    "you": {
-      "x": 153,
-      "y": 0,
-      "mask": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/eat/maskwyz.png?raw=true"
-    }
-  },
-  "xyy": {
-    "name": "性压抑了",
-    "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/eat/eatxyy.png?raw=true",
-    "you": {
-      "x": 146,
-      "y": 0,
-      "mask": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/eat/maskxyy.png?raw=true"
-    }
-  },  
-  "yuyu": {
-    "name": "我有郁郁症",
-    "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/eat/eatyuyu.png?raw=true",
-    "you": {
-      "x": 55,
-      "y": 52,
-      "mask": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/eat/maskyuyu.png?raw=true"
+    "fk": {
+      "name": "国际友好手势",
+      "url": "eat/eatfk.png",
+      "me": {
+        "x": 184,
+        "y": 143,
+        "mask": "eat/maskfk.png"
+      }
+    },
+    "fl": {
+      "name": "翻脸",
+      "url": "eat/eatfl.png",
+      "you": {
+        "x": 7,
+        "y": 19,
+        "mask": "eat/maskfl.png"
+      }
+    },
+    "ko": {
+      "name": "升龙拳",
+      "url": "https://github.com/FoKit/PagerMaid_Plugins/raw/modify/eat/eatko.png",
+      "you": {
+        "x": 170,
+        "y": 95,
+        "mask": "https://github.com/FoKit/PagerMaid_Plugins/raw/modify/eat/maskko.png"
+      }
+    },
+    "kz": {
+      "name": "看来真得控制你了",
+      "url": "eat/eatkz.png",
+      "you": {
+        "x": 1,
+        "y": 202,
+        "mask": "eat/maskkz.png"
+      }
+    },
+    "ld": {
+      "name": "我没意见",
+      "url": "eat/eatld.png",
+      "you": {
+        "x": 157,
+        "y": 0,
+        "mask": "eat/maskld.png"
+      }
+    },
+    "ri": {
+      "name": "日一下",
+      "url": "https://github.com/FoKit/PagerMaid_Plugins/raw/modify/eat/eatri.png",
+      "you": {
+        "x": 64,
+        "y": 87,
+        "mask": "https://github.com/FoKit/PagerMaid_Plugins/raw/modify/eat/maskri.png"
+      }
+    },
+    "sj": {
+      "name": "我会一直视奸你",
+      "url": "eat/eatsj.png",
+      "me": {
+        "x": 118,
+        "y": 42,
+        "brightness": 0.6,
+        "mask": "eat/masksj.png"
+      }
+    },
+    "tc": {
+      "name": "老汉推车",
+      "url": "https://github.com/FoKit/PagerMaid_Plugins/raw/modify/eat/eattc.png",
+      "me": {
+        "x": 224,
+        "y": 173,
+        "mask": "https://github.com/FoKit/PagerMaid_Plugins/raw/modify/eat/masktc.png"
+      },
+      "you": {
+        "x": 55,
+        "y": 286,
+        "mask": "https://github.com/FoKit/PagerMaid_Plugins/raw/modify/eat/masktc.png"
+      }
+    },
+    "tlg": {
+      "name": "偷撸狗",
+      "url": "eat/eattlg.png",
+      "you": {
+        "x": 16,
+        "y": 280,
+        "mask": "eat/masktlg.png"
+      }
+    },
+    "wyy": {
+      "name": "网抑云时间",
+      "url": "eat/eatwyy.png",
+      "you": {
+        "x": 135,
+        "y": 160,
+        "mask": "eat/maskwyy.png"
+      }
+    },
+    "wyz": {
+      "name": "我有罪",
+      "url": "eat/eatwyz.png",
+      "you": {
+        "x": 153,
+        "y": 0,
+        "mask": "eat/maskwyz.png"
+      }
+    },
+    "xyy": {
+      "name": "性压抑了",
+      "url": "eat/eatxyy.png",
+      "you": {
+        "x": 146,
+        "y": 0,
+        "mask": "eat/maskxyy.png"
+      }
+    },
+    "yuyu": {
+      "name": "我有郁郁症",
+      "url": "eat/eatyuyu.png",
+      "you": {
+        "x": 55,
+        "y": 52,
+        "mask": "eat/maskyuyu.png"
+      }
     }
   }
 }
