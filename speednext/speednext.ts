@@ -514,7 +514,7 @@ class SpeednextPlugin extends Plugin {
   description: string = `⚡️ 网络速度测试工具 | SpeedTest by Ookla`;
   cmdHandlers: Record<string, (msg: Api.Message) => Promise<void>> = {
     speedtest,
-    s: speedtest,
+    st: speedtest,
   };
 }
 
