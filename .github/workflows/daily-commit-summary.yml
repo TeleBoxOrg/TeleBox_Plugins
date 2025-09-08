@@ -104,7 +104,33 @@ jobs:
           console.warn('⚠️ TeleBox 仓库访问失败，仅统计 TeleBox_Plugins 提交');
         }
         
-        const allCommits = [...teleboxCommits, ...pluginsCommits];
+        // 去重和过滤提交信息
+        function deduplicateCommits(commits) {
+          const seen = new Set();
+          const filtered = [];
+          
+          for (const commit of commits) {
+            // 跳过自动化提交
+            if (commit.message.includes('🤖 自动更新插件列表') || 
+                commit.message.includes('Merge pull request') ||
+                commit.message.match(/^Update \w+\.(json|yml|md)$/)) {
+              continue;
+            }
+            
+            // 基于消息内容去重
+            const key = commit.message.toLowerCase().trim();
+            if (!seen.has(key)) {
+              seen.add(key);
+              filtered.push(commit);
+            }
+          }
+          
+          return filtered;
+        }
+        
+        const dedupedTeleboxCommits = deduplicateCommits(teleboxCommits);
+        const dedupedPluginsCommits = deduplicateCommits(pluginsCommits);
+        const allCommits = [...dedupedTeleboxCommits, ...dedupedPluginsCommits];
         
         if (allCommits.length === 0) {
           console.log('📭 今日无提交记录');
@@ -118,36 +144,44 @@ jobs:
         
         // 按仓库分组提交
         const commitsByRepo = {
-          'TeleBox': teleboxCommits,
-          'TeleBox_Plugins': pluginsCommits
+          'TeleBox': dedupedTeleboxCommits,
+          'TeleBox_Plugins': dedupedPluginsCommits
         };
         
         // 生成摘要消息
         let message = `📅 *TeleBox 日报 - ${TARGET_DATE}*\n\n`;
         message += `📊 *今日提交统计*\n`;
         message += `• 总提交数: ${allCommits.length}\n`;
-        message += `• TeleBox: ${teleboxCommits.length} 次提交\n`;
-        message += `• TeleBox_Plugins: ${pluginsCommits.length} 次提交\n\n`;
+        message += `• TeleBox: ${dedupedTeleboxCommits.length} 次提交\n`;
+        message += `• TeleBox_Plugins: ${dedupedPluginsCommits.length} 次提交\n\n`;
         
-        // 添加详细提交信息
+        // 添加详细提交信息 (限制显示数量避免消息过长)
         for (const [repoName, commits] of Object.entries(commitsByRepo)) {
           if (commits.length === 0) continue;
           
           message += `🔧 *${repoName}*\n`;
           
-          commits.forEach(commit => {
+          // 限制每个仓库最多显示10条提交
+          const displayCommits = commits.slice(0, 10);
+          
+          displayCommits.forEach(commit => {
             // 简化提交信息，移除常见前缀
             let cleanMessage = commit.message
               .replace(/^(feat|fix|docs|style|refactor|test|chore|perf)(\(.+\))?: /, '')
               .replace(/^(🎉|🐛|📝|💄|♻️|✅|🔧|⚡|🚀|📦|🔀|⏪|🔖|💚|👷|📈|♿|🍱|🚨|🔇|👥|🚚|📄|⚗️|🏷️|🌐|💫|🗑️|🔊|🔇|🐛|💩|⏪|🔀|📦|👽|🚚|📱|🤡|🥚|🙈|📸|⚗️|🔍|🏷️|🌱|🚩|💥|🍱|♿|💬|🗃️|🔊|📈|⚗️|🔍|🏷️)\s*/, '')
-              .substring(0, 60);
+              .substring(0, 50);
             
-            if (commit.message.length > 60) {
+            if (commit.message.length > 50) {
               cleanMessage += '...';
             }
             
-            message += `  • \`${commit.hash}\` ${cleanMessage} _${commit.time}_\n`;
+            message += `• \`${commit.hash}\` ${cleanMessage} _${commit.time}_\n`;
           });
+          
+          // 如果有更多提交，显示省略信息
+          if (commits.length > 10) {
+            message += `• _... 还有 ${commits.length - 10} 条提交_\n`;
+          }
           
           message += '\n';
         }
@@ -165,6 +199,12 @@ jobs:
         
         // 添加时间戳
         message += `⏰ _报告生成时间: ${new Date().toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' })}_`;
+        
+        // 检查消息长度，Telegram 限制为 4096 字符
+        if (message.length > 4000) {
+          console.warn('⚠️ 消息过长，进行截断处理');
+          message = message.substring(0, 3900) + '\n\n_... 消息过长已截断_';
+        }
         
         console.log('📝 生成的消息:');
         console.log(message);
