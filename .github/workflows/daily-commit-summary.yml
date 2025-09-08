@@ -1,0 +1,220 @@
+name: Daily Commit Summary & Telegram Notification
+
+on:
+  schedule:
+    # 每天晚上 23:00 (UTC+8 15:00) 运行
+    - cron: '0 15 * * *'
+  workflow_dispatch:
+    inputs:
+      date:
+        description: '指定日期 (YYYY-MM-DD，默认为今天)'
+        required: false
+        type: string
+
+jobs:
+  daily-summary:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    
+    steps:
+    - name: Checkout TeleBox_Plugins repository
+      uses: actions/checkout@v4
+      with:
+        path: TeleBox_Plugins
+        fetch-depth: 0
+        
+    - name: Checkout TeleBox-main repository
+      uses: actions/checkout@v4
+      with:
+        repository: ${{ github.repository_owner }}/TeleBox-main
+        path: TeleBox-main
+        fetch-depth: 0
+        token: ${{ secrets.GITHUB_TOKEN }}
+        
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '18'
+        
+    - name: Generate commit summary and send to Telegram
+      env:
+        TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+        TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        TARGET_DATE: ${{ github.event.inputs.date }}
+      run: |
+        cat > commit-summary.js << 'EOF'
+        const { execSync } = require('child_process');
+        const https = require('https');
+        const querystring = require('querystring');
+        
+        // 配置
+        const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
+        const CHAT_ID = process.env.TELEGRAM_CHAT_ID;
+        const TARGET_DATE = process.env.TARGET_DATE || new Date().toISOString().split('T')[0];
+        
+        // 验证环境变量
+        if (!BOT_TOKEN || !CHAT_ID) {
+          console.error('❌ 缺少必要的环境变量: TELEGRAM_BOT_TOKEN 或 TELEGRAM_CHAT_ID');
+          process.exit(1);
+        }
+        
+        console.log(`📅 生成 ${TARGET_DATE} 的提交摘要`);
+        
+        // 获取指定日期的提交
+        function getCommitsForDate(repoPath, repoName, date) {
+          try {
+            const since = `${date} 00:00:00`;
+            const until = `${date} 23:59:59`;
+            
+            const gitLog = execSync(
+              `cd ${repoPath} && git log --since="${since}" --until="${until}" --pretty=format:"%h|%s|%an|%ad" --date=format:"%H:%M"`,
+              { encoding: 'utf8' }
+            ).trim();
+            
+            if (!gitLog) {
+              return [];
+            }
+            
+            return gitLog.split('\n').map(line => {
+              const [hash, message, author, time] = line.split('|');
+              return {
+                hash: hash.trim(),
+                message: message.trim(),
+                author: author.trim(),
+                time: time.trim(),
+                repo: repoName
+              };
+            });
+          } catch (error) {
+            console.warn(`⚠️ 获取 ${repoName} 提交记录失败:`, error.message);
+            return [];
+          }
+        }
+        
+        // 获取两个仓库的提交
+        const teleboxCommits = getCommitsForDate('TeleBox-main', 'TeleBox-main', TARGET_DATE);
+        const pluginsCommits = getCommitsForDate('TeleBox_Plugins', 'TeleBox_Plugins', TARGET_DATE);
+        
+        const allCommits = [...teleboxCommits, ...pluginsCommits];
+        
+        if (allCommits.length === 0) {
+          console.log('📭 今日无提交记录');
+          
+          // 发送无提交的通知
+          const noCommitsMessage = `📅 *TeleBox 日报 - ${TARGET_DATE}*\n\n🌙 今日无代码提交\n\n_保持代码整洁，明日再战！_`;
+          
+          sendToTelegram(noCommitsMessage);
+          return;
+        }
+        
+        // 按仓库分组提交
+        const commitsByRepo = {
+          'TeleBox-main': teleboxCommits,
+          'TeleBox_Plugins': pluginsCommits
+        };
+        
+        // 生成摘要消息
+        let message = `📅 *TeleBox 日报 - ${TARGET_DATE}*\n\n`;
+        message += `📊 *今日提交统计*\n`;
+        message += `• 总提交数: ${allCommits.length}\n`;
+        message += `• TeleBox-main: ${teleboxCommits.length} 次提交\n`;
+        message += `• TeleBox_Plugins: ${pluginsCommits.length} 次提交\n\n`;
+        
+        // 添加详细提交信息
+        for (const [repoName, commits] of Object.entries(commitsByRepo)) {
+          if (commits.length === 0) continue;
+          
+          message += `🔧 *${repoName}*\n`;
+          
+          commits.forEach(commit => {
+            // 简化提交信息，移除常见前缀
+            let cleanMessage = commit.message
+              .replace(/^(feat|fix|docs|style|refactor|test|chore|perf)(\(.+\))?: /, '')
+              .replace(/^(🎉|🐛|📝|💄|♻️|✅|🔧|⚡|🚀|📦|🔀|⏪|🔖|💚|👷|📈|♿|🍱|🚨|🔇|👥|🚚|📄|⚗️|🏷️|🌐|💫|🗑️|🔊|🔇|🐛|💩|⏪|🔀|📦|👽|🚚|📱|🤡|🥚|🙈|📸|⚗️|🔍|🏷️|🌱|🚩|💥|🍱|♿|💬|🗃️|🔊|📈|⚗️|🔍|🏷️)\s*/, '')
+              .substring(0, 60);
+            
+            if (commit.message.length > 60) {
+              cleanMessage += '...';
+            }
+            
+            message += `  • \`${commit.hash}\` ${cleanMessage} _${commit.time}_\n`;
+          });
+          
+          message += '\n';
+        }
+        
+        // 添加贡献者统计
+        const contributors = [...new Set(allCommits.map(c => c.author))];
+        if (contributors.length > 0) {
+          message += `👥 *今日贡献者*\n`;
+          contributors.forEach(author => {
+            const authorCommits = allCommits.filter(c => c.author === author).length;
+            message += `• ${author}: ${authorCommits} 次提交\n`;
+          });
+          message += '\n';
+        }
+        
+        // 添加时间戳
+        message += `⏰ _报告生成时间: ${new Date().toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' })}_`;
+        
+        console.log('📝 生成的消息:');
+        console.log(message);
+        
+        // 发送到 Telegram
+        sendToTelegram(message);
+        
+        function sendToTelegram(text) {
+          const data = querystring.stringify({
+            chat_id: CHAT_ID,
+            text: text,
+            parse_mode: 'Markdown',
+            disable_web_page_preview: true
+          });
+          
+          const options = {
+            hostname: 'api.telegram.org',
+            port: 443,
+            path: `/bot${BOT_TOKEN}/sendMessage`,
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/x-www-form-urlencoded',
+              'Content-Length': Buffer.byteLength(data)
+            }
+          };
+          
+          const req = https.request(options, (res) => {
+            let responseData = '';
+            
+            res.on('data', (chunk) => {
+              responseData += chunk;
+            });
+            
+            res.on('end', () => {
+              try {
+                const response = JSON.parse(responseData);
+                if (response.ok) {
+                  console.log('✅ 消息已成功发送到 Telegram');
+                } else {
+                  console.error('❌ Telegram API 错误:', response.description);
+                  process.exit(1);
+                }
+              } catch (error) {
+                console.error('❌ 解析响应失败:', error.message);
+                console.error('响应内容:', responseData);
+                process.exit(1);
+              }
+            });
+          });
+          
+          req.on('error', (error) => {
+            console.error('❌ 发送请求失败:', error.message);
+            process.exit(1);
+          });
+          
+          req.write(data);
+          req.end();
+        }
+        EOF
+        
+        node commit-summary.js
