@@ -527,13 +527,13 @@ ${mainPrefix}a foo bar</pre>
 <pre>${mainPrefix}acron cmd 0 0 2 * * * me 定时更新表情包
 ${mainPrefix}eat set</pre>
 
-• <code>${mainPrefix}acron list</code> - 列出当前会话中的所有定时任务
-• <code>${mainPrefix}acron list all</code> - 列出所有的定时任务
-• <code>${mainPrefix}acron list del</code> - 列出当前会话中的类型为 del 的定时任务
-• <code>${mainPrefix}acron list all del</code> - 列出所有的类型为 del 的定时任务
+• <code>${mainPrefix}acron list</code>, <code>${mainPrefix}acron ls</code> - 列出当前会话中的所有定时任务
+• <code>${mainPrefix}acron ls all</code>, <code>${mainPrefix}acron la</code> - 列出所有的定时任务
+• <code>${mainPrefix}acron ls del</code> - 列出当前会话中的类型为 del 的定时任务
+• <code>${mainPrefix}acron ls all del</code>, <code>${mainPrefix}acron la del</code> - 列出所有的类型为 del 的定时任务
 • <code>${mainPrefix}acron rm 定时任务ID</code> - 删除指定的定时任务
-• <code>${mainPrefix}acron disable 定时任务ID</code> - 禁用指定的定时任务
-• <code>${mainPrefix}acron enable 定时任务ID</code> - 启用指定的定时任务
+• <code>${mainPrefix}acron disable/off 定时任务ID</code> - 禁用指定的定时任务
+• <code>${mainPrefix}acron enable/on 定时任务ID</code> - 启用指定的定时任务
 `;
 
 class AcronPlugin extends Plugin {
@@ -559,9 +559,13 @@ class AcronPlugin extends Plugin {
           return;
         }
 
-        if (sub === "list") {
-          const p1 = (args[1] || "").toLowerCase();
-          const p2 = (args[2] || "").toLowerCase();
+        if (sub === "list" || sub === "ls" || sub === "la") {
+          let p1 = (args[1] || "").toLowerCase();
+          let p2 = (args[2] || "").toLowerCase();
+          if (sub === "la") {
+            p2 = p1;
+            p1 = "all";
+          }
 
           const scopeAll = p1 === "all";
           const maybeType = (scopeAll ? p2 : p1) as AcronType | "";
@@ -778,7 +782,12 @@ class AcronPlugin extends Plugin {
           return;
         }
 
-        if (sub === "disable" || sub === "enable") {
+        if (
+          sub === "disable" ||
+          sub === "enable" ||
+          sub === "off" ||
+          sub === "on"
+        ) {
           const id = args[1];
           if (!id) {
             await msg.edit({
@@ -800,7 +809,7 @@ class AcronPlugin extends Plugin {
             return;
           }
           const t = db.data.tasks[idx];
-          if (sub === "disable") {
+          if (sub === "disable" || sub === "off") {
             if (t.disabled) {
               await msg.edit({
                 text: `任务 <code>${id}</code> 已处于禁用状态`,
