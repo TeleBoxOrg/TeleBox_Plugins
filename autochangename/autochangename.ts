@@ -64,7 +64,6 @@ if (db) {
         original_last_name TEXT,
         is_enabled INTEGER DEFAULT 0,
         mode TEXT DEFAULT 'time',
-        online INTEGER DEFAULT 1,
         last_update TEXT,
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP
       )
@@ -83,7 +82,6 @@ if (db) {
           original_last_name TEXT,
           is_enabled INTEGER DEFAULT 0,
           mode TEXT DEFAULT 'time',
-          online INTEGER DEFAULT 1,
           last_update TEXT,
           created_at DATETIME DEFAULT CURRENT_TIMESTAMP
         )
@@ -115,7 +113,6 @@ interface UserSettings {
   original_last_name: string | null;
   is_enabled: boolean;
   mode: "time" | "text" | "both";
-  online: boolean;
   last_update: string | null;
   text_index?: number; // Track current text index for sequential display
 }
@@ -173,10 +170,6 @@ class AutoChangeNameManager {
         original_last_name: originalProfile.lastName || null,
         is_enabled: existingSettings?.is_enabled || false,
         mode: existingSettings?.mode || "text",
-        online:
-          existingSettings?.online !== undefined
-            ? existingSettings.online
-            : true,
         last_update: existingSettings?.last_update || null,
       };
 
@@ -218,7 +211,6 @@ class AutoChangeNameManager {
         original_last_name: result.original_last_name,
         is_enabled: Boolean(result.is_enabled),
         mode: result.mode || "time",
-        online: Boolean(result.online !== undefined ? result.online : true),
         last_update: result.last_update,
       };
     } catch (error) {
@@ -241,7 +233,6 @@ class AutoChangeNameManager {
           original_last_name TEXT,
           is_enabled INTEGER DEFAULT 0,
           mode TEXT DEFAULT 'time',
-          online INTEGER DEFAULT 1,
           last_update TEXT,
           created_at DATETIME DEFAULT CURRENT_TIMESTAMP
         )
@@ -259,8 +250,8 @@ class AutoChangeNameManager {
     try {
       const stmt = db.prepare(`
         INSERT OR REPLACE INTO autochangename_settings 
-        (user_id, timezone, original_first_name, original_last_name, is_enabled, mode, online, last_update)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        (user_id, timezone, original_first_name, original_last_name, is_enabled, mode, last_update)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
       `);
 
       stmt.run(
@@ -270,7 +261,6 @@ class AutoChangeNameManager {
         settings.original_last_name,
         settings.is_enabled ? 1 : 0,
         settings.mode,
-        settings.online ? 1 : 0,
         settings.last_update
       );
     } catch (error) {
@@ -654,14 +644,13 @@ class AutoChangeNameManager {
     timezone: string;
     is_enabled: boolean;
     mode: string;
-    online: boolean;
   }[] {
     if (!db) return [];
 
     try {
       const query = includeInactive
-        ? "SELECT user_id, timezone, is_enabled, mode, online FROM autochangename_settings"
-        : "SELECT user_id, timezone, is_enabled, mode, online FROM autochangename_settings WHERE is_enabled = 1";
+        ? "SELECT user_id, timezone, is_enabled, mode FROM autochangename_settings"
+        : "SELECT user_id, timezone, is_enabled, mode FROM autochangename_settings WHERE is_enabled = 1";
 
       const stmt = db.prepare(query);
       return stmt.all() as {
@@ -669,7 +658,6 @@ class AutoChangeNameManager {
         timezone: string;
         is_enabled: boolean;
         mode: string;
-        online: boolean;
       }[];
     } catch (error) {
       console.error("[AutoChangeName] Error getting status:", error);
@@ -727,36 +715,36 @@ const autoChangeNameManager = new AutoChangeNameManager();
 const help_text = `动态昵称插件 - 自动在昵称中显示时间或随机文本
 
 基础命令:
-• ${mainPrefix}autochangename save - 保存当前昵称为原始昵称
-• ${mainPrefix}autochangename on/off - 开启/关闭功能
-• ${mainPrefix}autochangename mode - 切换显示模式 (time/text/both)
-• ${mainPrefix}autochangename online - 切换在线状态
+• <code>${mainPrefix}autochangename save    </code> - 保存当前昵称为原始昵称
+• <code>${mainPrefix}autochangename on/off  </code> - 开启/关闭功能
+• <code>${mainPrefix}autochangename mode    </code> - 切换显示模式 (time/text/both)
 
 文本管理:
-• ${mainPrefix}autochangename text add [内容] - 添加随机文本
-• ${mainPrefix}autochangename text del [序号] - 删除指定文本
-• ${mainPrefix}autochangename text clear - 清空所有文本
-• ${mainPrefix}autochangename list - 查看文本列表
+• <code>${mainPrefix}autochangename text add [内容]</code> - 添加随机文本
+• <code>${mainPrefix}autochangename text del [序号]</code> - 删除指定文本
+• <code>${mainPrefix}autochangename text clear   </code> - 清空所有文本
+• <code>${mainPrefix}autochangename list         </code> - 查看文本列表
 
 高级设置:
-• ${mainPrefix}autochangename tz [时区] - 设置时区
-• ${mainPrefix}autochangename status - 查看系统状态
-• ${mainPrefix}autochangename update - 立即更新昵称
-• ${mainPrefix}autochangename reset - 恢复原始昵称`;
+• <code>${mainPrefix}autochangename tz [时区]</code> - 设置时区
+• <code>${mainPrefix}autochangename status  </code> - 查看系统状态
+• <code>${mainPrefix}autochangename update  </code> - 立即更新昵称
+• <code>${mainPrefix}autochangename reset   </code> - 恢复原始昵称`;
 
-const fn = async (msg) => {
+const fn = async (msg: any) => {
   const text = msg.message || "";
   const args = text.trim().split(/\s+/);
   let showHelp = false;
 
-  // 标准参数过滤模式
-  const filteredArgs = args.slice(1).filter((arg) => {
+  // 检查帮助参数并获取实际命令参数
+  const cmdArgs = args.slice(1);
+  for (const arg of cmdArgs) {
     if (arg === "help" || arg === "h") {
       showHelp = true;
-      return false;
+      break;
     }
-    return true;
-  });
+  }
+  const filteredArgs = cmdArgs.filter((arg: string) => arg !== "help" && arg !== "h");
 
   const client = await getGlobalClient();
   if (!client) {
@@ -842,7 +830,6 @@ const fn = async (msg) => {
         original_last_name: originalProfile.lastName || null,
         is_enabled: true,
         mode: "time" as "time" | "text" | "both",
-        online: true,
         last_update: null,
       };
     } else {
@@ -864,12 +851,10 @@ const fn = async (msg) => {
 
 🕐 当前时区: <code>${settings.timezone}</code>
 📝 显示模式: <code>${settings.mode}</code>
-🌐 保持在线: <code>${settings.online ? "是" : "否"}</code>
 ⏰ 更新频率: 每分钟
 
 使用其他命令管理设置：
 • <code>${mainPrefix}autochangename mode</code> - 切换显示模式
-• <code>${mainPrefix}autochangename online</code> - 设置在线状态
 • <code>${mainPrefix}autochangename text add</code> - 管理随机文本`,
           parseMode: "html",
         });
@@ -926,7 +911,7 @@ const fn = async (msg) => {
     return;
   }
 
-  if (subCmd === "status" && args.length === 2) {
+  if (subCmd === "status") {
     // Show system status
     await msg.edit({ text: "⏳ 正在处理..." });
 
@@ -943,30 +928,6 @@ const fn = async (msg) => {
     return;
   }
 
-  if (subCmd === "online") {
-    // Toggle online status feature
-    await msg.edit({ text: "⏳ 正在处理..." });
-
-    const settings = autoChangeNameManager.getUserSettings(userId);
-    if (!settings) {
-      await msg.edit({
-        text: "❌ 请先使用 <code>autochangename on</code> 命令启用动态昵称功能。",
-        parseMode: "html",
-      });
-      return;
-    }
-
-    settings.online = !settings.online;
-    autoChangeNameManager.saveUserSettings(settings);
-
-    await msg.edit({
-      text: `✅ <b>在线状态设置已更新</b>\n\n🌐 保持在线: <code>${
-        settings.online ? "是" : "否"
-      }</code>\n\n注意：此功能仅在 <code>status</code> 模式下生效`,
-      parseMode: "html",
-    });
-    return;
-  }
 
   if (subCmd === "text") {
     // Manage random texts
@@ -981,8 +942,8 @@ const fn = async (msg) => {
       return;
     }
 
-    const action = args[2] || "";
-    const textArgs = args.slice(3);
+    const action = filteredArgs[1] || "";
+    const textArgs = filteredArgs.slice(2);
 
     const config = loadConfig();
 
@@ -1073,7 +1034,7 @@ const fn = async (msg) => {
   if (subCmd === "tz" || subCmd === "timezone") {
     await msg.edit({ text: "⏳ 正在处理..." });
 
-    const newTimezone = args.slice(2).join(" ");
+    const newTimezone = filteredArgs.slice(1).join(" ");
     if (!newTimezone) {
       const commonTimezones = autoChangeNameManager.getCommonTimezones();
       const timezoneList = commonTimezones
