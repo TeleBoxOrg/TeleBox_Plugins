@@ -16,6 +16,27 @@ import { promisify } from "util";
 
 const execAsync = promisify(exec);
 
+// 检测依赖工具
+async function checkDependencies(): Promise<{ ytdlp: boolean; ffmpeg: boolean }> {
+  const result = { ytdlp: false, ffmpeg: false };
+  
+  try {
+    await execAsync("yt-dlp --version");
+    result.ytdlp = true;
+  } catch {
+    console.log("[music] yt-dlp not found");
+  }
+  
+  try {
+    await execAsync("ffmpeg -version");
+    result.ffmpeg = true;
+  } catch {
+    console.log("[music] FFmpeg not found (optional)");
+  }
+  
+  return result;
+}
+
 // 获取命令前缀
 const prefixes = getPrefixes();
 const mainPrefix = prefixes[0];
@@ -180,31 +201,49 @@ class MusicDownloader {
 const downloader = new MusicDownloader();
 
 // 帮助文档
-const help_text = `🎵 <b>音乐下载器</b>
+const help_text = `🎵 <b>YouTube 音乐下载器</b>
 
-<b>📥 基本用法：</b>
-• <code>${mainPrefix}music &lt;关键词&gt;</code> - 搜索并下载音乐
-• <code>${mainPrefix}music &lt;YouTube链接&gt;</code> - 直接下载指定视频
+<b>📝 功能描述:</b>
+• 🔍 <b>智能搜索</b>：自动优选歌词版和高质量音频
+• 📥 <b>高速下载</b>：支持 YouTube 链接直接下载
+• 💾 <b>本地收藏</b>：音频文件保存和管理功能
+• 🔧 <b>Cookie 支持</b>：突破年龄和地区访问限制
 
-<b>🔧 辅助功能：</b>
-• <code>${mainPrefix}music save</code> - 回复音频消息保存到本地
-• <code>${mainPrefix}music cookie &lt;内容&gt;</code> - 设置访问受限内容的Cookie
-• <code>${mainPrefix}music clear</code> - 清理临时文件缓存
+<b>🔧 使用方法:</b>
+• <code>${mainPrefix}music &lt;关键词&gt;</code> - 智能搜索并下载音乐
+• <code>${mainPrefix}music &lt;YouTube链接&gt;</code> - 直接下载指定视频音频
+• <code>${mainPrefix}music save</code> - 回复音频消息保存到本地收藏
+• <code>${mainPrefix}music cookie &lt;Netscape格式&gt;</code> - 设置 YouTube Cookie
+• <code>${mainPrefix}music clear</code> - 清理临时文件释放空间
 • <code>${mainPrefix}music help</code> - 显示此帮助信息
 
-<b>💡 示例：</b>
-• <code>${mainPrefix}music 周杰伦 晴天</code>
-• <code>${mainPrefix}music Taylor Swift Love Story</code>
-• <code>${mainPrefix}music https://youtu.be/xxxxx</code>
+<b>💡 示例:</b>
+• <code>${mainPrefix}music 周杰伦 晴天</code> - 搜索下载周杰伦的晴天
+• <code>${mainPrefix}music Taylor Swift Love Story</code> - 搜索英文歌曲
+• <code>${mainPrefix}music https://youtu.be/dQw4w9WgXcQ</code> - 直接下载链接
 
-<b>⚠️ 注意事项：</b>
-• 优先选择包含"歌词版"的视频
-• 支持 FFmpeg 自动转换为 MP3 格式
-• 临时文件会在发送后自动清理
-• 需要安装 yt-dlp 和 FFmpeg (可选)`;
+<b>🛠️ 环境要求:</b>
+• <b>必需工具:</b> yt-dlp (YouTube 下载核心)
+  <code>pip install -U yt-dlp</code>
+• <b>推荐工具:</b> FFmpeg (音频格式转换)
+  <code>apt install ffmpeg</code> 或 <code>brew install ffmpeg</code>
+• <b>网络环境:</b> WARP+ 或稳定代理 (绕过地区限制)
+  <code>wget -N https://gitlab.com/fscarmen/warp/-/raw/main/menu.sh && bash menu.sh e</code>
+• <b>访问权限:</b> YouTube Cookie (Netscape 格式，突破限制)
+
+<b>⚡ 智能特性:</b>
+• 自动优选"歌词版"或高质量音频源
+• 智能转换为 MP3 格式并嵌入完整元数据
+• 自动清理临时文件节省磁盘空间
+• 支持断点续传和网络错误自动重试
+
+<b>🔒 隐私安全:</b>
+• Cookie 配置仅本地存储，程序重启后自动清除
+• 下载文件仅保存在指定目录，不会外传
+• 不会上传、收集或泄露任何个人隐私信息`;
 
 class MusicPlugin extends Plugin {
-  description: string = `音乐下载器 - 搜索并下载 YouTube 音乐`;
+  description: string = help_text;
   
   cmdHandlers: Record<string, (msg: Api.Message, trigger?: Api.Message) => Promise<void>> = {
     music: async (msg: Api.Message, trigger?: Api.Message) => {
@@ -224,7 +263,7 @@ class MusicPlugin extends Plugin {
         // 无参数时显示错误提示
         if (!sub) {
           await msg.edit({
-            text: `❌ <b>参数不足</b>\n\n💡 使用 <code>${mainPrefix}music help</code> 查看帮助`,
+            text: `❌ <b>缺少参数</b>\n\n🎯 <b>快速开始：</b>\n• <code>${mainPrefix}music 歌手名 歌曲名</code>\n• <code>${mainPrefix}music help</code> 查看完整说明\n\n💡 <b>提示：</b> 支持中英文搜索和 YouTube 链接`,
             parseMode: "html"
           });
           return;
@@ -262,7 +301,7 @@ class MusicPlugin extends Plugin {
         const query = args.join(" ").trim();
         if (!query) {
           await msg.edit({
-            text: `❌ <b>搜索关键词不能为空</b>\n\n<b>用法:</b> <code>${mainPrefix}music &lt;关键词或链接&gt;</code>`,
+            text: `❌ <b>搜索内容为空</b>\n\n🎯 <b>正确用法：</b>\n<code>${mainPrefix}music &lt;关键词或YouTube链接&gt;</code>\n\n💡 <b>示例：</b>\n• <code>${mainPrefix}music 周杰伦 稻香</code>\n• <code>${mainPrefix}music https://youtu.be/xxxxx</code>`,
             parseMode: "html"
           });
           return;
@@ -272,8 +311,10 @@ class MusicPlugin extends Plugin {
 
       } catch (error: any) {
         console.error("[music] 插件执行失败:", error);
+        const errorMsg = error.message || String(error);
+        const displayError = errorMsg.length > 150 ? errorMsg.substring(0, 150) + "..." : errorMsg;
         await msg.edit({
-          text: `❌ <b>插件执行失败:</b> ${htmlEscape(error.message)}`,
+          text: `❌ <b>系统异常</b>\n\n🔍 <b>错误信息:</b> <code>${htmlEscape(displayError)}</code>\n\n🛠️ <b>建议操作:</b>\n• 🔄 重新尝试操作\n• 🌐 检查网络连接\n• 🔧 确认依赖工具已安装\n• 📞 联系管理员获取技术支持`,
           parseMode: "html"
         });
       }
@@ -286,7 +327,22 @@ class MusicPlugin extends Plugin {
       await msg.edit({ text: "❌ 客户端未初始化", parseMode: "html" });
       return;
     }
-    await msg.edit({ text: "🔍 正在搜索音乐...", parseMode: "html" });
+    
+    // 检测依赖
+    const deps = await checkDependencies();
+    if (!deps.ytdlp) {
+      await msg.edit({
+        text: `❌ <b>缺少必需组件</b>\n\n🔧 <b>yt-dlp 未安装</b>\n\n📦 <b>安装方法:</b>\n• <b>Python (推荐):</b>\n  <code>pip install -U yt-dlp</code>\n\n• <b>Windows:</b>\n  <code>winget install yt-dlp</code>\n\n• <b>macOS:</b>\n  <code>brew install yt-dlp</code>\n\n• <b>Linux:</b>\n  <code>sudo wget https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -O /usr/local/bin/yt-dlp</code>\n  <code>sudo chmod a+rx /usr/local/bin/yt-dlp</code>\n\n💡 <b>提示:</b> 安装后重启程序即可使用`,
+        parseMode: "html"
+      });
+      return;
+    }
+    
+    if (!deps.ffmpeg) {
+      console.log("[music] FFmpeg not installed - MP3 conversion may not work");
+    }
+    
+    await msg.edit({ text: "🔍 <b>智能搜索中...</b>\n\n🎵 正在 YouTube 上查找最佳匹配", parseMode: "html" });
 
     // Check if it's a direct link
     const urlPattern = /https?:\/\/(www\.)?(youtube\.com|youtu\.be|music\.youtube\.com)/;
@@ -299,7 +355,7 @@ class MusicPlugin extends Plugin {
       const searchResult = await downloader.searchYoutube(query);
       if (!searchResult) {
         await msg.edit({
-          text: `❌ <b>搜索失败</b>\n\n<b>查询内容:</b> <code>${htmlEscape(query)}</code>\n\n💡 <b>建议:</b>\n• 尝试使用不同的关键词\n• 检查网络连接\n• 使用完整的歌手和歌曲名称`,
+          text: `❌ <b>搜索无结果</b>\n\n🔍 <b>查询内容:</b> <code>${htmlEscape(query)}</code>\n\n🛠️ <b>解决方案:</b>\n• 🌐 <b>网络问题:</b> 启用 WARP+ 或稳定代理\n  <code>wget -N https://gitlab.com/fscarmen/warp/-/raw/main/menu.sh && bash menu.sh e</code>\n• 🔑 <b>访问限制:</b> 使用 <code>${mainPrefix}music cookie</code> 设置 YouTube Cookie (Netscape格式)\n• 📝 <b>关键词优化:</b> 尝试"歌手名+歌曲名"格式\n• 🔄 <b>重试:</b> 稍后再次尝试搜索\n\n💡 <b>提示:</b> 某些地区需要 WARP+ 才能正常访问 YouTube`,
           parseMode: "html",
         });
         return;
@@ -307,7 +363,7 @@ class MusicPlugin extends Plugin {
       url = searchResult;
     }
 
-    await msg.edit({ text: "📥 正在分析并下载最佳音质...", parseMode: "html" });
+    await msg.edit({ text: "📥 <b>开始下载</b>\n\n🎵 正在获取最佳音质版本...", parseMode: "html" });
 
     // Generate temp file path
     const safeQuery = downloader.safeFilename(query);
@@ -316,8 +372,14 @@ class MusicPlugin extends Plugin {
     // Download audio
     const success = await downloader.downloadAudio(url, tempFile);
     if (!success) {
+      const deps = await checkDependencies();
+      let ffmpegHint = "";
+      if (!deps.ffmpeg) {
+        ffmpegHint = "\n\n🎵 <b>FFmpeg 未安装 (音频转换可能失败):</b>\n• <code>apt install ffmpeg</code> (Linux)\n• <code>brew install ffmpeg</code> (macOS)\n• <code>winget install ffmpeg</code> (Windows)";
+      }
+      
       await msg.edit({
-        text: "❌ <b>下载失败</b>\n\n💡 <b>可能原因:</b>\n• 网络连接问题\n• 视频不可用或受限\n• yt-dlp 需要更新\n\n🔄 请稍后重试或使用其他链接",
+        text: `❌ <b>下载失败</b>\n\n🛠️ <b>常见解决方案:</b>\n• 🌐 <b>网络问题:</b> 启用 WARP+ 或更换网络环境\n  <code>wget -N https://gitlab.com/fscarmen/warp/-/raw/main/menu.sh && bash menu.sh e</code>\n• 🔑 <b>访问受限:</b> 使用 <code>${mainPrefix}music cookie &lt;Netscape格式Cookie&gt;</code>\n• 🚫 <b>内容限制:</b> 视频可能有地区/年龄限制\n• 🔄 <b>工具更新:</b> 确保 yt-dlp 为最新版本\n  <code>pip install -U yt-dlp</code>${ffmpegHint}\n\n💡 <b>重要提示:</b>\n• YouTube 在某些地区需要 WARP+ 访问\n• Cookie 必须是 Netscape HTTP Cookie 格式\n• 建议使用官方 YouTube 链接`,
         parseMode: "html",
       });
       return;
@@ -350,7 +412,7 @@ class MusicPlugin extends Plugin {
 
     if (downloadedFiles.length === 0) {
       await msg.edit({
-        text: `❌ <b>文件处理失败</b>\n\n下载的文件未找到\n\n<b>调试信息:</b>\n• 查询: <code>${htmlEscape(safeQuery)}</code>\n• 临时目录: <code>${htmlEscape(tempDir)}</code>\n• 目录文件: <code>${htmlEscape(files.join(", "))}</code>`,
+        text: `❌ <b>文件处理异常</b>\n\n🔍 <b>问题分析:</b>\n• 下载过程可能被中断\n• 文件格式转换失败\n• 磁盘空间不足\n\n🛠️ <b>解决建议:</b>\n• 🔄 重新尝试下载\n• 💾 检查磁盘剩余空间\n• 🌐 确保网络连接稳定\n• 🔧 更新 yt-dlp 和 FFmpeg\n\n📊 <b>调试信息:</b>\n• 查询: <code>${htmlEscape(safeQuery)}</code>\n• 临时目录文件: <code>${htmlEscape(files.slice(0, 3).join(", "))}${files.length > 3 ? "..." : ""}</code>`,
         parseMode: "html",
       });
       return;
@@ -360,7 +422,7 @@ class MusicPlugin extends Plugin {
     console.log(`Using audio file: ${audioFile}`);
 
     try {
-      await msg.edit({ text: "📤 正在发送音频文件...", parseMode: "html" });
+      await msg.edit({ text: "📤 <b>准备发送</b>\n\n🎵 正在上传高品质音频文件...", parseMode: "html" });
 
       // Clean metadata: only use user input as title and "YouTube Music" as artist
       const audioTitle = query;
@@ -387,7 +449,7 @@ class MusicPlugin extends Plugin {
       const errorMessage = error.message || String(error);
       const displayError = errorMessage.length > 100 ? errorMessage.substring(0, 100) + "..." : errorMessage;
       await msg.edit({
-        text: `❌ <b>发送音频失败</b>\n\n<b>错误信息:</b> ${htmlEscape(displayError)}\n\n💡 <b>建议:</b> 文件可能过大或格式不支持`,
+        text: `❌ <b>发送失败</b>\n\n🔍 <b>错误详情:</b> <code>${htmlEscape(displayError)}</code>\n\n🛠️ <b>可能原因:</b>\n• 📁 文件过大 (超过 Telegram 限制)\n• 🎵 音频格式不被支持\n• 🌐 网络上传中断\n• 💾 临时存储空间不足\n\n💡 <b>解决方案:</b>\n• 尝试下载较短的音频片段\n• 检查网络连接稳定性\n• 清理临时文件释放空间`,
         parseMode: "html",
       });
     } finally {
@@ -403,7 +465,7 @@ class MusicPlugin extends Plugin {
     const reply = await msg.getReplyMessage();
     if (!reply || !reply.document) {
       await msg.edit({
-        text: `❌ <b>使用错误</b>\n\n请回复一个音频文件使用此命令\n\n💡 <b>使用方法:</b> 回复音频消息后发送 <code>${mainPrefix}music save</code>`,
+        text: `❌ <b>操作错误</b>\n\n🎯 <b>正确用法:</b>\n1️⃣ 回复任意音频消息\n2️⃣ 发送 <code>${mainPrefix}music save</code>\n\n💡 <b>支持格式:</b> MP3, M4A, FLAC, WAV 等\n\n📁 <b>保存位置:</b> 本地音乐收藏夹`,
         parseMode: "html",
       });
       return;
@@ -424,7 +486,7 @@ class MusicPlugin extends Plugin {
         }
       }
 
-      await msg.edit({ text: "💾 正在保存音频到本地...", parseMode: "html" });
+      await msg.edit({ text: "💾 <b>保存中...</b>\n\n📁 正在添加到本地音乐收藏", parseMode: "html" });
 
       // Create temp file
       const tempFile = path.join(downloader.tempDirPath, `temp_save_${msg.id}.mp3`);
@@ -436,7 +498,7 @@ class MusicPlugin extends Plugin {
       const savedPath = await downloader.saveAudioLocally(tempFile, title, artist);
 
       await msg.edit({
-        text: `✅ <b>保存成功</b>\n\n<b>文件名:</b> <code>${htmlEscape(path.basename(savedPath))}</code>\n<b>位置:</b> <code>${htmlEscape(path.dirname(savedPath))}</code>`,
+        text: `✅ <b>保存完成</b>\n\n📁 <b>文件信息:</b>\n• 名称: <code>${htmlEscape(path.basename(savedPath))}</code>\n• 路径: <code>${htmlEscape(path.dirname(savedPath))}</code>\n\n🎵 <b>音频详情:</b>\n• 标题: ${htmlEscape(title)}\n• 艺术家: ${htmlEscape(artist)}\n\n💡 文件已永久保存到本地收藏`,
         parseMode: "html",
       });
       console.log(`Audio saved to: ${savedPath}`);
@@ -445,7 +507,7 @@ class MusicPlugin extends Plugin {
       const errorMessage = error.message || String(error);
       const displayError = errorMessage.length > 100 ? errorMessage.substring(0, 100) + "..." : errorMessage;
       await msg.edit({
-        text: `❌ <b>保存失败</b>\n\n<b>错误信息:</b> ${htmlEscape(displayError)}\n\n💡 <b>建议:</b> 检查磁盘空间和文件权限`,
+        text: `❌ <b>保存失败</b>\n\n🔍 <b>错误详情:</b> <code>${htmlEscape(displayError)}</code>\n\n🛠️ <b>解决方案:</b>\n• 💾 检查磁盘剩余空间\n• 🔐 确认文件夹写入权限\n• 📁 检查目标路径是否存在\n• 🔄 重新尝试保存操作`,
         parseMode: "html",
       });
     } finally {
@@ -464,7 +526,7 @@ class MusicPlugin extends Plugin {
   private async handleCookieCommand(msg: Api.Message, cookieContent: string): Promise<void> {
     if (!cookieContent) {
       await msg.edit({
-        text: `❌ <b>参数缺失</b>\n\n请提供 Cookie 内容\n\n<b>使用方法:</b> <code>${mainPrefix}music cookie &lt;cookie内容&gt;</code>`,
+        text: `❌ <b>Cookie 内容为空</b>\n\n🔑 <b>使用方法:</b>\n<code>${mainPrefix}music cookie &lt;Netscape格式Cookie&gt;</code>\n\n📋 <b>获取步骤 (推荐使用浏览器插件):</b>\n1️⃣ 登录 YouTube 网页版\n2️⃣ 安装浏览器插件 "Get cookies.txt LOCALLY"\n3️⃣ 点击插件图标，选择 "Export as Netscape"\n4️⃣ 复制导出的 Cookie 内容\n\n📝 <b>手动获取 (开发者工具):</b>\n1️⃣ 按 F12 打开开发者工具\n2️⃣ Application → Cookies → youtube.com\n3️⃣ 导出为 Netscape HTTP Cookie 格式\n\n⚠️ <b>重要:</b> 必须是 Netscape 格式，不是普通 Cookie 字符串\n💡 <b>用途:</b> 突破年龄限制、登录限制和地区限制`,
         parseMode: "html",
       });
       return;
@@ -474,12 +536,12 @@ class MusicPlugin extends Plugin {
       const success = downloader.setCookie(cookieContent);
       if (success) {
         await msg.edit({
-          text: "✅ <b>Cookie 设置成功</b>\n\n现在可以访问受限制的内容\n\n⏰ Cookie 将在重启后失效",
+          text: "✅ <b>Cookie 配置成功</b>\n\n🔓 <b>已解锁功能:</b>\n• 年龄受限内容访问\n• 需要登录的视频\n• 地区限制内容\n• 高清音质选项\n\n⏰ <b>有效期:</b> 直到程序重启\n🔒 <b>隐私:</b> 仅本地存储，不会上传",
           parseMode: "html",
         });
       } else {
         await msg.edit({
-          text: "❌ <b>Cookie 设置失败</b>\n\n请检查 Cookie 格式是否正确",
+          text: "❌ <b>Cookie 设置失败</b>\n\n🔍 <b>可能原因:</b>\n• Cookie 格式不正确\n• 包含无效字符\n• 文件写入权限不足\n\n💡 <b>建议:</b> 确保复制完整且有效的 YouTube Cookie",
           parseMode: "html",
         });
       }
@@ -488,7 +550,7 @@ class MusicPlugin extends Plugin {
       const errorMessage = error.message || String(error);
       const displayError = errorMessage.length > 100 ? errorMessage.substring(0, 100) + "..." : errorMessage;
       await msg.edit({
-        text: `❌ <b>Cookie 设置失败</b>\n\n<b>错误信息:</b> ${htmlEscape(displayError)}`,
+        text: `❌ <b>Cookie 配置异常</b>\n\n🔍 <b>错误详情:</b> <code>${htmlEscape(displayError)}</code>\n\n🛠️ <b>解决方案:</b>\n• 检查 Cookie 格式完整性\n• 确认文件系统写入权限\n• 重新获取有效的 YouTube Cookie`,
         parseMode: "html",
       });
     }
@@ -496,13 +558,13 @@ class MusicPlugin extends Plugin {
 
   private async handleClearCommand(msg: Api.Message): Promise<void> {
     try {
-      await msg.edit({ text: "🧹 正在清理临时文件...", parseMode: "html" });
+      await msg.edit({ text: "🧹 <b>清理中...</b>\n\n📁 正在清理临时下载文件", parseMode: "html" });
 
       // Clear temp files (preserve cookies.txt)
       downloader.cleanupTempFiles();
 
       await msg.edit({
-        text: "✅ <b>清理完成</b>\n\n临时文件已清理，Cookie 文件已保留",
+        text: "✅ <b>清理完成</b>\n\n🗑️ <b>已清理:</b> 所有临时下载文件\n🔒 <b>已保留:</b> YouTube Cookie 配置\n💾 <b>已释放:</b> 磁盘存储空间\n\n💡 建议定期清理以保持最佳性能",
         parseMode: "html",
       });
       console.log("Music downloader temp files cleaned");
@@ -511,7 +573,7 @@ class MusicPlugin extends Plugin {
       const errorMessage = error.message || String(error);
       const displayError = errorMessage.length > 100 ? errorMessage.substring(0, 100) + "..." : errorMessage;
       await msg.edit({
-        text: `❌ <b>清理失败</b>\n\n<b>错误信息:</b> ${htmlEscape(displayError)}`,
+        text: `❌ <b>清理异常</b>\n\n🔍 <b>错误详情:</b> <code>${htmlEscape(displayError)}</code>\n\n🛠️ <b>可能原因:</b>\n• 文件正在被其他程序使用\n• 缺少文件删除权限\n• 临时目录访问受限\n\n💡 <b>建议:</b> 手动清理或重启程序后重试`,
         parseMode: "html",
       });
     }
