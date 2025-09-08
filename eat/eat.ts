@@ -12,7 +12,7 @@ import { getPrefixes } from "@utils/pluginManager";
 
 const prefixes = getPrefixes();
 const mainPrefix = prefixes[0];
-const EAT_ASSET_PATH = createDirectoryInAssets("me");
+const EAT_ASSET_PATH = createDirectoryInAssets("eat");
 const EAT_TEMP_PATH = createDirectoryInTemp("eat");
 const YOU_AVATAR_PATH = path.join(EAT_TEMP_PATH, "you.png");
 const ME_AVATAR_PATH = path.join(EAT_TEMP_PATH, "me.png");
@@ -36,14 +36,14 @@ interface EatConfig {
   [key: string]: EntryConfig;
 }
 
-let config: EatConfig = {}; 
+let config: EatConfig = {};
 
 // + 新增此行：用于存储根据meta配置拼接好的资源基础URL
-let resourceBaseUrl = ""; 
+let resourceBaseUrl = "";
 
 // + 修改此行：请将URL替换为您新配置文件的【实际Raw地址】
 let baseConfigURL =
-  "https://raw.githubusercontent.com/YourUsername/YourRepo/main/eat/config.json";
+  "https://raw.githubusercontent.com/TeleBoxOrg/TeleBox_Plugins/refs/heads/main/eat/config.json";
 function resolveResourceUrl(path: string): string {
   if (path.startsWith("http://") || path.startsWith("https://")) {
     return path;
@@ -53,7 +53,10 @@ function resolveResourceUrl(path: string): string {
 // eat.ts (用这个版本替换整个 loadConfigResource 函数)
 
 async function loadConfigResource(url: string, forceUpdate = false) {
-  const filePath = path.join(EAT_ASSET_PATH, path.basename(new URL(url).pathname));
+  const filePath = path.join(
+    EAT_ASSET_PATH,
+    path.basename(new URL(url).pathname)
+  );
 
   const parseAndSetConfig = (content: string) => {
     const fullConfig = JSON.parse(content);
@@ -65,17 +68,21 @@ async function loadConfigResource(url: string, forceUpdate = false) {
     const { repo_owner, repo_name, branch, base_url_template } = meta;
 
     if (!repo_owner || !repo_name || !branch || !base_url_template) {
-      throw new Error("meta配置不完整, 缺少 repo_owner, repo_name, branch, 或 base_url_template 之一");
+      throw new Error(
+        "meta配置不完整, 缺少 repo_owner, repo_name, branch, 或 base_url_template 之一"
+      );
     }
 
     // 动态替换模板中的占位符
     resourceBaseUrl = base_url_template
-      .replace('${repo_owner}', repo_owner)
-      .replace('${repo_name}', repo_name)
-      .replace('${branch}', branch);
+      .replace("${repo_owner}", repo_owner)
+      .replace("${repo_name}", repo_name)
+      .replace("${branch}", branch);
 
     config = fullConfig.resources;
-    console.log(`配置加载成功，当前分支: ${branch}, 资源基础URL: ${resourceBaseUrl}`);
+    console.log(
+      `配置加载成功，当前分支: ${branch}, 资源基础URL: ${resourceBaseUrl}`
+    );
   };
 
   // 如果有缓存且不强制更新
@@ -92,7 +99,7 @@ async function loadConfigResource(url: string, forceUpdate = false) {
   // 下载最新配置
   try {
     // 注意: download的第二个参数是目录，它会自动使用URL中的文件名
-    await download(url, EAT_ASSET_PATH); 
+    await download(url, EAT_ASSET_PATH);
     const content = fs.readFileSync(filePath, "utf-8");
     parseAndSetConfig(content);
   } catch (error) {
@@ -147,7 +154,9 @@ async function iconMaskedFor(params: {
 }): Promise<sharp.OverlayOptions> {
   const { role, avatar } = params;
 
-  const maskSharp = sharp(await assetPathFor(resolveResourceUrl(role.mask))).ensureAlpha(); // ✅ 已修正
+  const maskSharp = sharp(
+    await assetPathFor(resolveResourceUrl(role.mask))
+  ).ensureAlpha(); // ✅ 已修正
   const { width, height } = await maskSharp.metadata(); // 只读一次 metadata
 
   const [iconBuffer, alphaMask] = await Promise.all([
