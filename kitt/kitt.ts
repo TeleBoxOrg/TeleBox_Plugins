@@ -129,14 +129,13 @@ function tryParseRegex(input: string): RegExp {
 }
 
 function buildCopy(task: any): string {
-  if (task?.type === "a") {
-    return `${commandName} ${task.type} ${task.args.join(" ")} ${task.remark}`;
-  }
-  return "";
+  return `${commandName} add ${task.remark}
+${task.match}
+${task.action}`;
 }
 function buildCopyCommand(task: any): string {
   const cmd = buildCopy(task);
-  return cmd?.includes("\n") ? cmd : `<code>${cmd}</code>`;
+  return cmd?.includes("\n") ? `<pre>${cmd}</pre>` : `<code>${cmd}</code>`;
 }
 async function run(text: string, msg: Api.Message, trigger?: Api.Message) {
   const cmd = await getCommandFromMessage(text);
@@ -225,6 +224,7 @@ await run('${mainPrefix}update -f', msg); await run('${mainPrefix}dme 1', msg); 
 
 ▎管理
 <code>${commandName} ls</code>, <code>${commandName} list</code>: 列出所有任务
+<code>${commandName} ls -v</code>, <code>${commandName} list -v</code>, <code>${commandName} lv</code>: 列出所有任务(详细版, ⚠️ 可能包含隐私, 酌情在公开场合使用)
 <code>${commandName} del [id]</code>, <code>${commandName} rm [id]</code>: 移除指定任务
 <code>${commandName} enable [id]</code>, <code>${commandName} on [id]</code>: 启用指定任务
 <code>${commandName} disable [id]</code>, <code>${commandName} off [id]</code>: 禁用指定任务
@@ -260,7 +260,9 @@ class KittPlugin extends Plugin {
           text: `任务 <code>${id}</code> 已添加`,
           parseMode: "html",
         });
-      } else if (["ls", "list"].includes(command)) {
+      } else if (["ls", "list", "lv"].includes(command)) {
+        const verbose =
+          command === "lv" || ["-v", "--verbose"].includes(args[2]);
         const db = await getDB();
         const tasks = db.data.tasks;
         if (tasks.length === 0) {
@@ -276,19 +278,34 @@ class KittPlugin extends Plugin {
 
         let text = "";
         if (enabledTasks.length > 0) {
-          text += `🔛 已启用的任务：\n${enabledTasks
-            .map((t) => `- [<code>${t.id}</code>] ${t.remark}`)
+          text += `🔛 已启用的任务：\n\n${enabledTasks
+            .map(
+              (t) =>
+                `- [<code>${t.id}</code>] ${t.remark}${
+                  verbose ? `\n${buildCopyCommand(t)}` : ""
+                }`
+            )
             .join("\n")}`;
         }
         if (disabledTasks.length > 0) {
           if (text) text += "\n\n";
-          text += `⏹ 已禁用的任务：\n${disabledTasks
-            .map((t) => `- [<code>${t.id}</code>] ${t.remark}`)
+          text += `⏹ 已禁用的任务：\n\n${disabledTasks
+            .map(
+              (t) =>
+                `- [<code>${t.id}</code>] ${t.remark}${
+                  verbose ? `\n${buildCopyCommand(t)}` : ""
+                }`
+            )
             .join("\n")}`;
         }
 
         await msg.edit({
-          text: text || "当前没有任何任务",
+          text:
+            `${
+              verbose
+                ? ""
+                : `💡 可使用 <code>${commandName} ls -v</code> 查看详情(⚠️ 可能包含隐私, 酌情在公开场合使用)\n\n`
+            }${text}` || "当前没有任何任务",
           parseMode: "html",
         });
       } else if (["rm", "del"].includes(command)) {
