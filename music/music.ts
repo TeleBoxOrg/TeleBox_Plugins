@@ -250,41 +250,25 @@ const downloader = new MusicDownloader();
 const help_text = `🎵 <b>YouTube 音乐下载器</b>
 
 <b>📝 功能描述:</b>
-• 🔍 <b>智能搜索</b>：自动优选歌词版和高质量音频
-• 📥 <b>高速下载</b>：支持 YouTube 链接直接下载
-• 💾 <b>本地收藏</b>：音频文件保存和管理功能
-• 🔧 <b>Cookie 支持</b>：突破年龄和地区访问限制
+智能搜索下载 YouTube 高品质音频
 
 <b>🔧 使用方法:</b>
-• <code>${mainPrefix}music &lt;关键词&gt;</code> - 智能搜索并下载音乐
-• <code>${mainPrefix}music &lt;YouTube链接&gt;</code> - 直接下载指定视频音频
-• <code>${mainPrefix}music save</code> - 回复音频消息保存到本地收藏
-• <code>${mainPrefix}music cookie &lt;Netscape格式&gt;</code> - 设置 YouTube Cookie
-• <code>${mainPrefix}music clear</code> - 清理临时文件释放空间
-• <code>${mainPrefix}music help</code> - 显示此帮助信息
+• <code>${mainPrefix}music &lt;关键词&gt;</code> - 搜索下载
+• <code>${mainPrefix}music &lt;YouTube链接&gt;</code> - 直接下载
+• <code>${mainPrefix}music save</code> - 保存音频到本地
+• <code>${mainPrefix}music cookie &lt;内容&gt;</code> - 设置Cookie
+• <code>${mainPrefix}music clear</code> - 清理临时文件
+• <code>${mainPrefix}music help</code> - 显示帮助
 
 <b>💡 示例:</b>
-• <code>${mainPrefix}music 周杰伦 晴天</code> - 搜索下载周杰伦的晴天
-• <code>${mainPrefix}music Taylor Swift Love Story</code> - 搜索英文歌曲
-• <code>${mainPrefix}music https://youtu.be/dQw4w9WgXcQ</code> - 直接下载链接
+• <code>${mainPrefix}music 周杰伦 晴天</code>
+• <code>${mainPrefix}music https://youtu.be/dQw4w9WgXcQ</code>
 
-<b>🛠️ 环境要求:</b>
-• <b>一键安装 (root环境):</b>
-  <code>sudo apt update && sudo apt install -y ffmpeg && pip3 install -U yt-dlp --break-system-packages</code>
-• <b>网络环境:</b> WARP+ 或稳定代理 (绕过地区限制)
-  <code>wget -N https://gitlab.com/fscarmen/warp/-/raw/main/menu.sh && bash menu.sh e</code>
-• <b>访问权限:</b> YouTube Cookie (Netscape 格式，突破限制)
+<b>🛠️ 一键安装:</b>
+<code>sudo apt update && sudo apt install -y ffmpeg && pip3 install -U yt-dlp --break-system-packages</code>
 
-<b>⚡ 智能特性:</b>
-• 自动优选"歌词版"或高质量音频源
-• 智能转换为 MP3 格式并嵌入完整元数据
-• 自动清理临时文件节省磁盘空间
-• 支持断点续传和网络错误自动重试
-
-<b>🔒 隐私安全:</b>
-• Cookie 配置仅本地存储，程序重启后自动清除
-• 下载文件仅保存在指定目录，不会外传
-• 不会上传、收集或泄露任何个人隐私信息`;
+<b>🌐 网络加速:</b>
+<code>wget -N https://gitlab.com/fscarmen/warp/-/raw/main/menu.sh && bash menu.sh e</code>`;
 
 class MusicPlugin extends Plugin {
   description: string = help_text;
