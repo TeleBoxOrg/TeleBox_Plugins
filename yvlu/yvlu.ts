@@ -353,7 +353,6 @@ class YvluPlugin extends Plugin {
                   thumb: ["video/webm"].includes(mimeType) ? 0 : 1,
                 });
                 if (Buffer.isBuffer(buffer)) {
-                  fs.writeFileSync("/Users/xream/Downloads/1.webm", buffer);
                   const mime =
                     mediaTypeForQuote === "sticker"
                       ? "image/webp"
