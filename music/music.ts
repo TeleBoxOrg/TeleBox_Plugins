@@ -20,13 +20,27 @@ const execAsync = promisify(exec);
 async function checkDependencies(): Promise<{ ytdlp: boolean; ffmpeg: boolean }> {
   const result = { ytdlp: false, ffmpeg: false };
   
+  // 检测 yt-dlp - 尝试多种方式
   try {
     await execAsync("yt-dlp --version");
     result.ytdlp = true;
   } catch {
-    console.log("[music] yt-dlp not found");
+    try {
+      // 尝试 Python 模块方式
+      await execAsync("python -m yt_dlp --version");
+      result.ytdlp = true;
+    } catch {
+      try {
+        // 尝试 Python3 模块方式
+        await execAsync("python3 -m yt_dlp --version");
+        result.ytdlp = true;
+      } catch {
+        console.log("[music] yt-dlp not found in PATH");
+      }
+    }
   }
   
+  // 检测 FFmpeg
   try {
     await execAsync("ffmpeg -version");
     result.ffmpeg = true;
@@ -90,11 +104,26 @@ class MusicDownloader {
   async searchYoutube(query: string): Promise<string | null> {
     try {
       const searchQuery = query.includes("歌词") ? query : `${query} 歌词版`;
-      const cmd = `yt-dlp "ytsearch:${searchQuery}" --get-id --no-playlist --no-warnings`;
       
-      const { stdout } = await execAsync(cmd);
+      // 尝试多种调用方式
+      const commands = [
+        `yt-dlp "ytsearch:${searchQuery}" --get-id --no-playlist --no-warnings`,
+        `python -m yt_dlp "ytsearch:${searchQuery}" --get-id --no-playlist --no-warnings`,
+        `python3 -m yt_dlp "ytsearch:${searchQuery}" --get-id --no-playlist --no-warnings`
+      ];
+      
+      let stdout = "";
+      for (const cmd of commands) {
+        try {
+          const result = await execAsync(cmd);
+          stdout = result.stdout;
+          break;
+        } catch {
+          continue;
+        }
+      }
+      
       const videoId = stdout.trim();
-      
       if (videoId) {
         return `https://www.youtube.com/watch?v=${videoId}`;
       }
@@ -114,11 +143,28 @@ class MusicDownloader {
         cookieArg = `--cookies "${cookieFile}"`;
       }
 
-      // Download with best audio quality and extract audio metadata
-      const cmd = `yt-dlp "${url}" -f "bestaudio[ext=m4a]/bestaudio/best[height<=480]" -x --audio-format mp3 --audio-quality 0 --embed-metadata --add-metadata -o "${outputPath}" --no-playlist --no-warnings ${cookieArg}`;
-      
-      console.log(`Executing: ${cmd}`);
-      await execAsync(cmd);
+      // Try multiple command formats
+      const commands = [
+        `yt-dlp "${url}" -f "bestaudio[ext=m4a]/bestaudio/best[height<=480]" -x --audio-format mp3 --audio-quality 0 --embed-metadata --add-metadata -o "${outputPath}" --no-playlist --no-warnings ${cookieArg}`,
+        `python -m yt_dlp "${url}" -f "bestaudio[ext=m4a]/bestaudio/best[height<=480]" -x --audio-format mp3 --audio-quality 0 --embed-metadata --add-metadata -o "${outputPath}" --no-playlist --no-warnings ${cookieArg}`,
+        `python3 -m yt_dlp "${url}" -f "bestaudio[ext=m4a]/bestaudio/best[height<=480]" -x --audio-format mp3 --audio-quality 0 --embed-metadata --add-metadata -o "${outputPath}" --no-playlist --no-warnings ${cookieArg}`
+      ];
+
+      let success = false;
+      for (const cmd of commands) {
+        try {
+          console.log(`Trying: ${cmd.split(' ')[0]}...`);
+          await execAsync(cmd);
+          success = true;
+          break;
+        } catch {
+          continue;
+        }
+      }
+
+      if (!success) {
+        return false;
+      }
 
       // Find the downloaded file (should be .mp3 now)
       const baseFileName = path.basename(outputPath).replace(".%(ext)s", "");
@@ -223,10 +269,8 @@ const help_text = `🎵 <b>YouTube 音乐下载器</b>
 • <code>${mainPrefix}music https://youtu.be/dQw4w9WgXcQ</code> - 直接下载链接
 
 <b>🛠️ 环境要求:</b>
-• <b>必需工具:</b> yt-dlp (YouTube 下载核心)
-  <code>pip install -U yt-dlp</code>
-• <b>推荐工具:</b> FFmpeg (音频格式转换)
-  <code>apt install ffmpeg</code> 或 <code>brew install ffmpeg</code>
+• <b>一键安装 (root环境):</b>
+  <code>sudo apt update && sudo apt install -y ffmpeg && pip3 install -U yt-dlp --break-system-packages</code>
 • <b>网络环境:</b> WARP+ 或稳定代理 (绕过地区限制)
   <code>wget -N https://gitlab.com/fscarmen/warp/-/raw/main/menu.sh && bash menu.sh e</code>
 • <b>访问权限:</b> YouTube Cookie (Netscape 格式，突破限制)
@@ -332,7 +376,7 @@ class MusicPlugin extends Plugin {
     const deps = await checkDependencies();
     if (!deps.ytdlp) {
       await msg.edit({
-        text: `❌ <b>缺少必需组件</b>\n\n🔧 <b>yt-dlp 未安装</b>\n\n📦 <b>安装方法:</b>\n• <b>Python (推荐):</b>\n  <code>pip install -U yt-dlp</code>\n\n• <b>Windows:</b>\n  <code>winget install yt-dlp</code>\n\n• <b>macOS:</b>\n  <code>brew install yt-dlp</code>\n\n• <b>Linux:</b>\n  <code>sudo wget https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -O /usr/local/bin/yt-dlp</code>\n  <code>sudo chmod a+rx /usr/local/bin/yt-dlp</code>\n\n💡 <b>提示:</b> 安装后重启程序即可使用`,
+        text: `❌ <b>缺少必需组件</b>\n\n🔧 <b>yt-dlp 未安装</b>\n\n📦 <b>一键安装 (root环境):</b>\n<code>sudo apt update && sudo apt install -y ffmpeg && pip3 install -U yt-dlp --break-system-packages</code>\n\n📦 <b>其他安装方式:</b>\n• <b>Windows:</b>\n  <code>winget install yt-dlp</code>\n• <b>macOS:</b>\n  <code>brew install yt-dlp</code>\n• <b>手动下载:</b>\n  <code>sudo wget https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -O /usr/local/bin/yt-dlp</code>\n  <code>sudo chmod a+rx /usr/local/bin/yt-dlp</code>\n\n💡 <b>提示:</b> 安装后重启程序即可使用`,
         parseMode: "html"
       });
       return;
@@ -379,7 +423,7 @@ class MusicPlugin extends Plugin {
       }
       
       await msg.edit({
-        text: `❌ <b>下载失败</b>\n\n🛠️ <b>常见解决方案:</b>\n• 🌐 <b>网络问题:</b> 启用 WARP+ 或更换网络环境\n  <code>wget -N https://gitlab.com/fscarmen/warp/-/raw/main/menu.sh && bash menu.sh e</code>\n• 🔑 <b>访问受限:</b> 使用 <code>${mainPrefix}music cookie &lt;Netscape格式Cookie&gt;</code>\n• 🚫 <b>内容限制:</b> 视频可能有地区/年龄限制\n• 🔄 <b>工具更新:</b> 确保 yt-dlp 为最新版本\n  <code>pip install -U yt-dlp</code>${ffmpegHint}\n\n💡 <b>重要提示:</b>\n• YouTube 在某些地区需要 WARP+ 访问\n• Cookie 必须是 Netscape HTTP Cookie 格式\n• 建议使用官方 YouTube 链接`,
+        text: `❌ <b>下载失败</b>\n\n🛠️ <b>常见解决方案:</b>\n• 🌐 <b>网络问题:</b> 启用 WARP+ 或更换网络环境\n  <code>wget -N https://gitlab.com/fscarmen/warp/-/raw/main/menu.sh && bash menu.sh e</code>\n• 🔑 <b>访问受限:</b> 使用 <code>${mainPrefix}music cookie &lt;Netscape格式Cookie&gt;</code>\n• 🚫 <b>内容限制:</b> 视频可能有地区/年龄限制\n• 🔄 <b>工具更新:</b> 确保 yt-dlp 为最新版本\n  <code>pip3 install -U yt-dlp --break-system-packages</code>${ffmpegHint}\n\n💡 <b>重要提示:</b>\n• YouTube 在某些地区需要 WARP+ 访问\n• Cookie 必须是 Netscape HTTP Cookie 格式\n• 建议使用官方 YouTube 链接`,
         parseMode: "html",
       });
       return;
