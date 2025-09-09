@@ -142,5 +142,9 @@
   "trace": {
     "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/trace/trace.ts?raw=true",
     "desc": "全局追踪点赞插件"
+  },
+  "sticker_to_pic": {
+    "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/sticker_to_pic/sticker_to_pic.ts?raw=true",
+    "desc": "表情转图片"
   }
 }
