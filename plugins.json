@@ -162,5 +162,9 @@
   "speedlink": {
     "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/speedlink/speedlink.ts?raw=true",
     "desc": "对其他服务器测速"
+  },
+  "sunremove": {
+    "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/sunremove/sunremove.ts?raw=true",
+    "desc": "定向批量解除封禁用户"
   }
 }
