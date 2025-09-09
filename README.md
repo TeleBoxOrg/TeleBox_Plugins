@@ -43,6 +43,7 @@ npm i <插件名>
 - `rate` - 货币实时汇率查询与计算  
 - `search` - 频道消息搜索工具，支持多频道配置  
 - `shift` - 智能消息转发系统，支持规则过滤和统计  
+- `speedlink` - 对其他服务器测速  
 - `speednext` - 网络速度测试工具  
 - `sticker_to_pic` - 表情转图片  
 - `trace` - 全局追踪点赞插件  
