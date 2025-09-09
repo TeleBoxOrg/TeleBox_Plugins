@@ -42,6 +42,7 @@ npm i <插件名>
 - `search` - 频道消息搜索工具，支持多频道配置  
 - `shift` - 智能消息转发系统，支持规则过滤和统计  
 - `speednext` - 网络速度测试工具  
+- `sticker_to_pic` - 表情转图片  
 - `trace` - 全局追踪点赞插件  
 - `yt-dlp` - YouTube 视频下载工具，支持多种格式  
 - `yvlu` - 为被回复用户生成语录  
