@@ -146,5 +146,9 @@
   "sticker_to_pic": {
     "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/sticker_to_pic/sticker_to_pic.ts?raw=true",
     "desc": "表情转图片"
+  },
+  "weather": {
+    "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/weather/weather.ts?raw=true",
+    "desc": "天气查询"
   }
 }
