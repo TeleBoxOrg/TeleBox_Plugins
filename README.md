@@ -52,6 +52,7 @@ npm i <插件名>
 - `speednext` - 网络速度测试工具  
 - `sticker_to_pic` - 表情转图片  
 - `sunremove` - 定向批量解除封禁用户  
+- `t` - 文字转语音  
 - `trace` - 全局追踪点赞插件  
 - `weather` - 天气查询  
 - `whois` - 域名查询插件  
