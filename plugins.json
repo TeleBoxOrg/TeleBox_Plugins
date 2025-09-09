@@ -166,5 +166,9 @@
   "sunremove": {
     "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/sunremove/sunremove.ts?raw=true",
     "desc": "定向批量解除封禁用户"
+  },
+  "whois": {
+    "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/whois/whois.ts?raw=true",
+    "desc": "域名查询插件"
   }
 }
