@@ -158,5 +158,9 @@
   "pic_to_sticker": {
     "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/pic_to_sticker/pic_to_sticker.ts?raw=true",
     "desc": "图片转表情"
+  },
+  "speedlink": {
+    "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/speedlink/speedlink.ts?raw=true",
+    "desc": "对其他服务器测速"
   }
 }
