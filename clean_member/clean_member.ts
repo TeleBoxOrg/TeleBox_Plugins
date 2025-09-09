@@ -911,8 +911,7 @@ const clean_member = async (msg: Api.Message) => {
 class CleanMemberPlugin extends Plugin {
   description: string = getHelpText();
   cmdHandlers: Record<string, (msg: Api.Message) => Promise<void>> = {
-    clean_member,
-    清理成员: clean_member,  // 中文别名
+    clean_member
   };
 }
 
