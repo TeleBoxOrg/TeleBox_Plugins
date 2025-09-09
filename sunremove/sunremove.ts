@@ -168,8 +168,7 @@ const sunremove = async (msg: Api.Message) => {
 class SunRemovePlugin extends Plugin {
   description: string = "🔓 一键解封被封禁的用户";
   cmdHandlers: Record<string, (msg: Api.Message) => Promise<void>> = {
-    sunremove,
-    解封: sunremove,  // 中文别名
+    sunremove
   };
 }
 
