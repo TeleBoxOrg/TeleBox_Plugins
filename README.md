@@ -44,6 +44,7 @@ npm i <插件名>
 - `speednext` - 网络速度测试工具  
 - `sticker_to_pic` - 表情转图片  
 - `trace` - 全局追踪点赞插件  
+- `weather` - 天气查询  
 - `yt-dlp` - YouTube 视频下载工具，支持多种格式  
 - `yvlu` - 为被回复用户生成语录  
 
