@@ -32,7 +32,11 @@ const pluginName = "yvlu";
 const commandName = `${mainPrefix}${pluginName}`;
 
 const help_text = `
+- 不包含回复
 使用 <code>${commandName} [消息数]</code> 回复一条消息(支持选择部分引用回复) ⚠️ 不得超过 5 条
+
+- 包含回复
+使用 <code>${commandName} r [消息数]</code> 回复一条消息(支持选择部分引用回复) ⚠️ 不得超过 5 条
 `;
 
 // 转换Telegram消息实体为quote-api格式
@@ -177,15 +181,24 @@ class YvluPlugin extends Plugin {
     yvlu: async (msg: Api.Message, trigger?: Api.Message) => {
       const start = Date.now();
       const args = msg.message.split(/\s+/);
-      const sub = args[1];
+      let count = 1;
+      let r = false;
+      let valid = false;
+      if (!args[1] || /^\d+$/.test(args[1])) {
+        count = parseInt(args[1]) || 1;
+        valid = true;
+      } else if (args[1] === "r") {
+        r = true;
+        count = parseInt(args[2]) || 1;
+        valid = true;
+      }
 
-      if (!sub || /^\d+$/.test(sub)) {
+      if (valid) {
         let replied = await msg.getReplyMessage();
         if (!replied) {
           await msg.edit({ text: "请回复一条消息" });
           return;
         }
-        const count = parseInt(sub) || 1;
         if (count > 5) {
           await msg.edit({ text: "太多了 哒咩" });
           return;
@@ -218,8 +231,6 @@ class YvluPlugin extends Plugin {
               await msg.edit({ text: "无法获取消息发送者信息" });
               return;
             }
-            console.log(sender);
-            console.log(JSON.stringify(sender, null, 2));
 
             // 准备用户数据
             const userId = sender.id.toString();
@@ -257,85 +268,87 @@ class YvluPlugin extends Plugin {
 
             // 处理回复引用（支持 quote header 与真实被回复消息）
             let replyBlock: any | undefined;
-            try {
-              const replyHeader: any = (message as any).replyTo;
+            if (r) {
+              try {
+                const replyHeader: any = (message as any).replyTo;
 
-              // 1) 优先使用 quote header（包含被引用文本与实体偏移）
-              if (replyHeader?.quote && replyHeader.quoteText) {
-                let replyName = "unknown";
-                let replyChatId: number | undefined = undefined;
+                // 1) 优先使用 quote header（包含被引用文本与实体偏移）
+                if (replyHeader?.quote && replyHeader.quoteText) {
+                  let replyName = "unknown";
+                  let replyChatId: number | undefined = undefined;
 
-                // 尝试拿到被回复消息以获取发送者名称
-                try {
-                  const repliedMsg = await message.getReplyMessage();
-                  if (repliedMsg) {
-                    const repliedSender = await repliedMsg.getSender();
-                    if (repliedSender) {
-                      replyChatId = Number(repliedSender.id);
-                      const rFirst =
-                        (repliedSender as any).firstName ||
-                        (repliedSender as any).title ||
-                        "";
-                      const rLast = (repliedSender as any).lastName || "";
-                      const rUser = (repliedSender as any).username || "";
-                      const composed = `${rFirst} ${rLast}`.trim();
-                      replyName = composed || rUser || "unknown";
+                  // 尝试拿到被回复消息以获取发送者名称
+                  try {
+                    const repliedMsg = await message.getReplyMessage();
+                    if (repliedMsg) {
+                      const repliedSender = await repliedMsg.getSender();
+                      if (repliedSender) {
+                        replyChatId = Number(repliedSender.id);
+                        const rFirst =
+                          (repliedSender as any).firstName ||
+                          (repliedSender as any).title ||
+                          "";
+                        const rLast = (repliedSender as any).lastName || "";
+                        const rUser = (repliedSender as any).username || "";
+                        const composed = `${rFirst} ${rLast}`.trim();
+                        replyName = composed || rUser || "unknown";
+                      }
                     }
-                  }
-                } catch {}
+                  } catch {}
 
-                // 实体
-                const revived = reviveEntities(replyHeader.quoteEntities);
-                const replyEntities = convertEntities(revived || []);
+                  // 实体
+                  const revived = reviveEntities(replyHeader.quoteEntities);
+                  const replyEntities = convertEntities(revived || []);
 
-                replyBlock = {
-                  name: replyName,
-                  text: replyHeader.quoteText,
-                  entities: replyEntities,
-                  ...(replyChatId ? { chatId: replyChatId } : {}),
-                };
-              } else if (
-                // 2) 次选：直接获取被回复消息
-                (message as any).isReply ||
-                replyHeader?.replyToMsgId
-              ) {
-                try {
-                  const repliedMsg = await message.getReplyMessage();
-                  if (repliedMsg) {
-                    const repliedSender = await repliedMsg.getSender();
-                    let replyName = "unknown";
-                    let replyChatId: number | undefined;
-                    if (repliedSender) {
-                      replyChatId = Number(repliedSender.id);
-                      const rFirst =
-                        (repliedSender as any).firstName ||
-                        (repliedSender as any).title ||
-                        "";
-                      const rLast = (repliedSender as any).lastName || "";
-                      const rUser = (repliedSender as any).username || "";
-                      const composed = `${rFirst} ${rLast}`.trim();
-                      replyName = composed || rUser || "unknown";
+                  replyBlock = {
+                    name: replyName,
+                    text: replyHeader.quoteText,
+                    entities: replyEntities,
+                    ...(replyChatId ? { chatId: replyChatId } : {}),
+                  };
+                } else if (
+                  // 2) 次选：直接获取被回复消息
+                  (message as any).isReply ||
+                  replyHeader?.replyToMsgId
+                ) {
+                  try {
+                    const repliedMsg = await message.getReplyMessage();
+                    if (repliedMsg) {
+                      const repliedSender = await repliedMsg.getSender();
+                      let replyName = "unknown";
+                      let replyChatId: number | undefined;
+                      if (repliedSender) {
+                        replyChatId = Number(repliedSender.id);
+                        const rFirst =
+                          (repliedSender as any).firstName ||
+                          (repliedSender as any).title ||
+                          "";
+                        const rLast = (repliedSender as any).lastName || "";
+                        const rUser = (repliedSender as any).username || "";
+                        const composed = `${rFirst} ${rLast}`.trim();
+                        replyName = composed || rUser || "unknown";
+                      }
+
+                      // 使用被回复消息的文本 + 实体
+                      const replyText = repliedMsg.message || "";
+                      const replyEntities = convertEntities(
+                        repliedMsg.entities || []
+                      );
+
+                      if (replyText) {
+                        replyBlock = {
+                          name: replyName,
+                          text: replyText,
+                          entities: replyEntities,
+                          ...(replyChatId ? { chatId: replyChatId } : {}),
+                        };
+                      }
                     }
-
-                    // 使用被回复消息的文本 + 实体
-                    const replyText = repliedMsg.message || "";
-                    const replyEntities = convertEntities(
-                      repliedMsg.entities || []
-                    );
-
-                    if (replyText) {
-                      replyBlock = {
-                        name: replyName,
-                        text: replyText,
-                        entities: replyEntities,
-                        ...(replyChatId ? { chatId: replyChatId } : {}),
-                      };
-                    }
-                  }
-                } catch {}
+                  } catch {}
+                }
+              } catch (e) {
+                console.warn("处理回复引用失败: ", e);
               }
-            } catch (e) {
-              console.warn("处理回复引用失败: ", e);
             }
 
             let media = undefined;
