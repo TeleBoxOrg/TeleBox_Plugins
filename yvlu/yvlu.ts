@@ -218,10 +218,13 @@ class YvluPlugin extends Plugin {
               await msg.edit({ text: "无法获取消息发送者信息" });
               return;
             }
+            console.log(sender);
+            console.log(JSON.stringify(sender, null, 2));
 
             // 准备用户数据
             const userId = sender.id.toString();
-            const firstName = (sender as any).firstName || "";
+            const firstName =
+              (sender as any).firstName || (sender as any).title || "";
             const lastName = (sender as any).lastName || "";
             const username = (sender as any).username || "";
             const emojiStatus =
@@ -269,7 +272,10 @@ class YvluPlugin extends Plugin {
                     const repliedSender = await repliedMsg.getSender();
                     if (repliedSender) {
                       replyChatId = Number(repliedSender.id);
-                      const rFirst = (repliedSender as any).firstName || "";
+                      const rFirst =
+                        (repliedSender as any).firstName ||
+                        (repliedSender as any).title ||
+                        "";
                       const rLast = (repliedSender as any).lastName || "";
                       const rUser = (repliedSender as any).username || "";
                       const composed = `${rFirst} ${rLast}`.trim();
@@ -301,7 +307,10 @@ class YvluPlugin extends Plugin {
                     let replyChatId: number | undefined;
                     if (repliedSender) {
                       replyChatId = Number(repliedSender.id);
-                      const rFirst = (repliedSender as any).firstName || "";
+                      const rFirst =
+                        (repliedSender as any).firstName ||
+                        (repliedSender as any).title ||
+                        "";
                       const rLast = (repliedSender as any).lastName || "";
                       const rUser = (repliedSender as any).username || "";
                       const composed = `${rFirst} ${rLast}`.trim();
