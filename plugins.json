@@ -182,5 +182,9 @@
   "autodel": {
     "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/autodel/autodel.ts?raw=true",
     "desc": "定时删除消息"
+  },
+  "audio_to_voice": {
+    "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/audio_to_voice/audio_to_voice.ts?raw=true",
+    "desc": "音乐转音频"
   }
 }
