@@ -140,9 +140,7 @@ class WeatherPlugin extends Plugin {
   private geocodingUrl: string = "https://geocoding-api.open-meteo.com/v1/search";
 
   cmdHandlers: Record<string, (msg: Api.Message) => Promise<void>> = {
-    weather: async (msg: Api.Message) => await this.handleWeather(msg),
-    wt: async (msg: Api.Message) => await this.handleWeather(msg),
-    天气: async (msg: Api.Message) => await this.handleWeather(msg)
+    weather: async (msg: Api.Message) => await this.handleWeather(msg)
   };
 
   private async handleWeather(msg: Api.Message): Promise<void> {
