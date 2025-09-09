@@ -15,6 +15,7 @@ npm i <插件名>
 - `autochangename` - 自动定时修改用户名插件，支持时区配置和计划任务管理  
 - `bulk_delete` - 批量删除消息工具，支持回复删除和数量删除  
 - `clean_member` - 群组成员清理工具，可按活跃度和时间筛选清理成员  
+- `clear_sticker` - 批量删除群组内贴纸  
 - `clearblocked` - 批量清理已拉黑用户  
 - `convert` - 视频转音频插件  
 - `da` - 删除群内所有消息（非管理员仅删除自己的消息）  
