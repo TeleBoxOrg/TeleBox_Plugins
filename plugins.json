@@ -194,5 +194,9 @@
   "t": {
     "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/t/t.ts?raw=true",
     "desc": "文字转语音"
+  },
+  "yinglish": {
+    "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/yinglish/yinglish.ts?raw=true",
+    "desc": "淫语翻译"
   }
 }
