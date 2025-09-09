@@ -178,5 +178,9 @@
   "clear_sticker": {
     "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/clear_sticker/clear_sticker.ts?raw=true",
     "desc": "批量删除群组内贴纸"
+  },
+  "autodel": {
+    "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/autodel/autodel.ts?raw=true",
+    "desc": "定时删除消息"
   }
 }
