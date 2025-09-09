@@ -56,6 +56,7 @@ npm i <插件名>
 - `trace` - 全局追踪点赞插件  
 - `weather` - 天气查询  
 - `whois` - 域名查询插件  
+- `yinglish` - 淫语翻译  
 - `yt-dlp` - YouTube 视频下载工具，支持多种格式  
 - `yvlu` - 为被回复用户生成语录  
 
