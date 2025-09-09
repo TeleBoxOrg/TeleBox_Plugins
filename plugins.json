@@ -137,7 +137,7 @@
   },
   "gif": {
     "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/gif/gif.ts?raw=true",
-    "desc": "GIF转贴纸插件"
+    "desc": "GIF与视频转贴纸插件"
   },
   "trace": {
     "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/trace/trace.ts?raw=true",
@@ -151,8 +151,12 @@
     "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/weather/weather.ts?raw=true",
     "desc": "天气查询"
   },
-  " atadmins": {
+  "atadmins": {
     "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/atadmins/atadmins.ts?raw=true",
-    "desc": " 一键艾特全部管理员"
+    "desc": "一键艾特全部管理员"
+  },
+  "pic_to_sticker": {
+    "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/pic_to_sticker/pic_to_sticker.ts?raw=true",
+    "desc": "图片转表情"
   }
 }
