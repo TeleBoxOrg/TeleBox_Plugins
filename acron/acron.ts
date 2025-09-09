@@ -674,7 +674,7 @@ class AcronPlugin extends Plugin {
               if (fromChatId && fromMsgId) {
                 lines.push(
                   `消息: <a href="https://t.me/c/${String(
-                    (t as any).fromChatId ?? t.fromChatId
+                    fromChatId ?? ""
                   ).replace("-100", "")}/${fromMsgId}">${fromMsgId}</a>`
                 );
               }
@@ -693,7 +693,12 @@ class AcronPlugin extends Plugin {
                   );
               }
               if (nextDt) {
-                lines.push(`下次: ${formatDate(nextDt.toJSDate())}`);
+                const dt: Date = (typeof (nextDt as any)?.toJSDate === "function")
+                  ? (nextDt as any).toJSDate()
+                  : (nextDt instanceof Date)
+                  ? nextDt
+                  : new Date(Number(nextDt));
+                lines.push(`下次: ${formatDate(dt)}`);
               }
               if (t.lastRunAt) {
                 lines.push(
