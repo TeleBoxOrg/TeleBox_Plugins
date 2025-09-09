@@ -174,5 +174,9 @@
   "getstickers": {
     "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/getstickers/getstickers.ts?raw=true",
     "desc": "下载整个贴纸包"
+  },
+  "clear_sticker": {
+    "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/clear_sticker/clear_sticker.ts?raw=true",
+    "desc": "批量删除群组内贴纸"
   }
 }
