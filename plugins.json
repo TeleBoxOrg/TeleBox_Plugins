@@ -190,5 +190,9 @@
   "copy_sticker_set": {
     "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/copy_sticker_set/copy_sticker_set.ts?raw=true",
     "desc": "复制贴纸包"
+  },
+  "t": {
+    "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/t/t.ts?raw=true",
+    "desc": "文字转语音"
   }
 }
