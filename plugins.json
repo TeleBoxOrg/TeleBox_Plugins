@@ -186,5 +186,9 @@
   "audio_to_voice": {
     "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/audio_to_voice/audio_to_voice.ts?raw=true",
     "desc": "音乐转音频"
+  },
+  "copy_sticker_set": {
+    "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/copy_sticker_set/copy_sticker_set.ts?raw=true",
+    "desc": "复制贴纸包"
   }
 }
