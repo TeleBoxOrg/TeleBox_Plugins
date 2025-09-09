@@ -1163,13 +1163,13 @@ replyMsg?: Api.Message | null): Promise<void> {
   }
 
   if (replyMsg) {
-    let processedAudio = combinedAudio;
+    let processedAudio: any = combinedAudio;
     
     if (response.audioMimeType && response.audioMimeType.includes('L16') && response.audioMimeType.includes('pcm')) {
-      processedAudio = Utils.convertToWav(combinedAudio, response.audioMimeType);
+      processedAudio = Utils.convertToWav(combinedAudio, response.audioMimeType) as any;
     }
 
-    const audioFile = Object.assign(processedAudio, {
+    const audioFile = Object.assign(processedAudio as any, {
       name: 'gemini.ogg'
     });
 
@@ -1188,13 +1188,13 @@ replyMsg?: Api.Message | null): Promise<void> {
       await msg.delete();
     } catch {}
   } else {
-    let processedAudio = combinedAudio;
+    let processedAudio: any = combinedAudio;
     
     if (response.audioMimeType && response.audioMimeType.includes('L16') && response.audioMimeType.includes('pcm')) {
-      processedAudio = Utils.convertToWav(combinedAudio, response.audioMimeType);
+      processedAudio = Utils.convertToWav(combinedAudio, response.audioMimeType) as any;
     }
 
-    const audioFile = Object.assign(processedAudio, {
+    const audioFile = Object.assign(processedAudio as any, {
       name: 'gemini.ogg'
     });
 
@@ -1263,13 +1263,13 @@ async function handleQuestionWithAudio(
         if (combinedAudio.length > 0) {
   
           if (replyMsg) {
-            let processedAudio = combinedAudio;
+            let processedAudio: any = combinedAudio;
 
             if (audioResponse.audioMimeType && audioResponse.audioMimeType.includes('L16') && audioResponse.audioMimeType.includes('pcm')) {
-              processedAudio = Utils.convertToWav(combinedAudio, audioResponse.audioMimeType);
+              processedAudio = Utils.convertToWav(combinedAudio, audioResponse.audioMimeType) as any;
             }
 
-            const audioFile = Object.assign(processedAudio, {
+            const audioFile = Object.assign(processedAudio as any, {
               name: 'gemini.ogg'
             });
 
