@@ -2,7 +2,7 @@ import { Plugin } from "@utils/pluginBase";
 import sharp from "sharp";
 import path from "path";
 import fs from "fs";
-import download from "download";
+import axios from "axios";
 import { Api } from "telegram";
 import {
   createDirectoryInAssets,
@@ -99,7 +99,10 @@ async function loadConfigResource(url: string, forceUpdate = false) {
   // 下载最新配置
   try {
     // 注意: download的第二个参数是目录，它会自动使用URL中的文件名
-    await download(url, EAT_ASSET_PATH);
+    const response = await axios.get(url, {
+      responseType: "arraybuffer",
+    });
+    fs.writeFileSync(filePath, response.data);
     const content = fs.readFileSync(filePath, "utf-8");
     parseAndSetConfig(content);
   } catch (error) {
@@ -142,7 +145,8 @@ async function assetPathFor(url: string): Promise<string> {
   const filePath = path.join(EAT_ASSET_PATH, filename);
 
   if (!fs.existsSync(filePath)) {
-    await download(url, EAT_ASSET_PATH);
+    const response = await axios.get(url, { responseType: "arraybuffer" });
+    fs.writeFileSync(filePath, response.data);
     return filePath;
   }
   return filePath;
@@ -268,10 +272,10 @@ async function sendSticker(params: {
   entry: EntryConfig;
   msg: Api.Message;
   trigger?: Api.Message;
+  isEat2: boolean;
 }) {
-  const { entry, msg, trigger } = params;
+  const { entry, msg, trigger, isEat2 } = params;
   const cmd = msg.message.slice(1).split(" ")[0];
-  const isEat2 = cmd === "eat2";
   await msg.edit({ text: `正在生成 ${entry.name} 表情包···` });
   await compositeWithEntryConfig({ entry, msg, isEat2, trigger });
   await msg.delete();
@@ -304,7 +308,11 @@ async function handleSetCommand(params: {
   });
 }
 
-const fn = async (msg: Api.Message, trigger?: Api.Message) => {
+const fn = async (
+  msg: Api.Message,
+  trigger?: Api.Message,
+  isEat2: boolean = false
+) => {
   const [, ...args] = msg.message.split(" ");
 
   if (!msg.isReply) {
@@ -326,7 +334,7 @@ const fn = async (msg: Api.Message, trigger?: Api.Message) => {
   if (args.length == 0) {
     // 说明随机情况
     const entry = getRandomEntry();
-    await sendSticker({ entry, msg, trigger });
+    await sendSticker({ entry, msg, trigger, isEat2 });
   } else {
     const stickerName = args[0];
     const entrys = Object.keys(config);
@@ -341,7 +349,7 @@ const fn = async (msg: Api.Message, trigger?: Api.Message) => {
       return;
     }
     let entry = config[stickerName];
-    await sendSticker({ entry, msg, trigger });
+    await sendSticker({ entry, msg, trigger, isEat2 });
   }
 };
 
@@ -361,8 +369,12 @@ ${mainPrefix}eat set</pre>
 class EatPlugin extends Plugin {
   description: string = `${help_text}`;
   cmdHandlers: Record<string, (msg: Api.Message) => Promise<void>> = {
-    eat: fn,
-    eat2: fn,
+    eat: async (msg, trigger?: Api.Message) => {
+      await fn(msg, trigger);
+    },
+    eat2: async (msg: Api.Message, trigger?: Api.Message) => {
+      await fn(msg, trigger, true);
+    },
   };
 }
 
