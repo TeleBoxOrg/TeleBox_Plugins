@@ -51,8 +51,8 @@
     "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/clean_member/clean_member.ts?raw=true",
     "desc": "群组成员清理工具，可按活跃度和时间筛选清理成员"
   },
-  "speednext": {
-    "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/speednext/speednext.ts?raw=true",
+  "speedtest": {
+    "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/speedtest/speedtest.ts?raw=true",
     "desc": "网络速度测试工具"
   },
   "shift": {
