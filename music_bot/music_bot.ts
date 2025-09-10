@@ -148,7 +148,7 @@ async function searchAndSendMusic(
   await client.sendFile(msg.peerId, {
     file: mediaMsg.media,
     caption: `🎵 ${keyword}`,
-    topMsgId: msg.replyTo?.replyToTopId || msg.replyTo?.replyToMsgId,
+    replyTo: msg.replyTo?.replyToTopId || msg.replyTo?.replyToMsgId,
   });
 
   try {
