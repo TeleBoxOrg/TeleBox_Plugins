@@ -212,7 +212,7 @@ class GifConverter {
       }
     }
 
-    await statusMsg.edit({ text: "📥 正在下载文件..." });
+    await statusMsg?.edit({ text: "📥 正在下载文件..." });
 
     // 下载源文件
     const timestamp = Date.now();
@@ -222,18 +222,18 @@ class GifConverter {
     try {
       await this.client.downloadMedia(sourceMsg.media!, { outputFile: inputFile });
 
-      await statusMsg.edit({ text: "🎬 正在转换为贴纸格式..." });
+      await statusMsg?.edit({ text: "🎬 正在转换为贴纸格式..." });
 
       // 使用 FFmpeg 转换为贴纸格式
       await this.convertWithFFmpeg(inputFile, outputFile);
 
-      await statusMsg.edit({ text: "📤 正在发送贴纸..." });
+      await statusMsg?.edit({ text: "📤 正在发送贴纸..." });
       await this.sendAsSticker(msg, outputFile);
-      await statusMsg.edit({ text: "✅ 贴纸转换完成！" });
+      await statusMsg?.edit({ text: "✅ 贴纸转换完成！" });
       
       // 延迟删除状态消息
       setTimeout(() => {
-        statusMsg.delete().catch(() => {});
+        statusMsg?.delete().catch(() => {});
       }, 2000);
 
     } finally {
@@ -243,9 +243,9 @@ class GifConverter {
   }
 
   private getFileSize(msg: Api.Message): number {
-    if (msg.gif) return msg.gif.size || 0;
-    if (msg.video) return msg.video.size || 0;
-    if (msg.document) return msg.document.size || 0;
+    if (msg.gif) return Number(msg.gif.size) || 0;
+    if (msg.video) return Number(msg.video.size) || 0;
+    if (msg.document) return Number(msg.document.size) || 0;
     return 0;
   }
 
@@ -255,7 +255,7 @@ class GifConverter {
     const videoAttr = msg.video.attributes?.find(
       (attr: any) => attr.className === "DocumentAttributeVideo"
     );
-    return videoAttr?.duration || 0;
+    return (videoAttr as any)?.duration || 0;
   }
 
   private async convertWithFFmpeg(inputFile: string, outputFile: string): Promise<void> {
