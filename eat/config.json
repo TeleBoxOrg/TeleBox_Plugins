@@ -72,7 +72,8 @@
       "you": {
         "x": 7,
         "y": 19,
-        "mask": "eat/maskfl.png"
+        "mask": "eat/maskfl.png",
+        "flip": true
       }
     },
     "ko": {
