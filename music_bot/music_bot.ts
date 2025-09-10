@@ -10,7 +10,7 @@ const mainPrefix = prefixes[0];
 
 const bot = "@music_v1bot";
 
-const pluginName = "musicBot";
+const pluginName = "music_bot";
 
 const commandName = `${mainPrefix}${pluginName}`;
 
@@ -163,7 +163,7 @@ function getRemarkFromMsg(msg: Api.Message | string, n: number): string {
 }
 
 class MusicBotPlugin extends Plugin {
-  description: string = `\nmusicBot\n\n${help_text}`;
+  description: string = `\n多音源音乐搜索\n${help_text}`;
   cmdHandlers: Record<
     string,
     (msg: Api.Message, trigger?: Api.Message) => Promise<void>
