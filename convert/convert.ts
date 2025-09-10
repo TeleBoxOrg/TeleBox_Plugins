@@ -210,7 +210,7 @@ class ConvertPlugin extends Plugin {
     if (reply.video) {
       isVideo = true;
       fileName = "telegram_video";
-      fileSize = reply.video.size || 0;
+      fileSize = Number(reply.video.size) || 0;
     } else if (reply.document) {
       // 检查文档是否为视频
       const mimeType = reply.document.mimeType || "";
@@ -222,7 +222,7 @@ class ConvertPlugin extends Plugin {
           /\.(mp4|avi|mkv|mov|wmv|flv|webm|m4v)$/i.test(docFileName)) {
         isVideo = true;
         fileName = docFileName;
-        fileSize = reply.document.size || 0;
+        fileSize = Number(reply.document.size) || 0;
       }
     }
 
@@ -250,8 +250,8 @@ class ConvertPlugin extends Plugin {
     // 生成临时文件路径
     const timestamp = Date.now();
     const safeFileName = converter.safeFilename(fileName);
-    const tempVideoPath = path.join(converter.tempDir, `video_${timestamp}_${safeFileName}`);
-    const tempAudioPath = path.join(converter.tempDir, `audio_${timestamp}.mp3`);
+    const tempVideoPath = path.join(converter.getTempDir(), `video_${timestamp}_${safeFileName}`);
+    const tempAudioPath = path.join(converter.getTempDir(), `audio_${timestamp}.mp3`);
 
     try {
       // 下载视频文件
