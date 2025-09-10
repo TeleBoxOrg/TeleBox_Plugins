@@ -8,16 +8,25 @@ import { sleep } from "telegram/Helpers";
 const prefixes = getPrefixes();
 const mainPrefix = prefixes[0];
 
-const bot = "@music_v1bot";
+const bots = {
+  default: "@music_v1bot",
+  vk: "@vkmusic_bot",
+};
 
 const pluginName = "music_bot";
 
 const commandName = `${mainPrefix}${pluginName}`;
 
 const help_text = `
-依赖 ${bot}
+依赖 ${Object.values(bots).join(", ")}
 
-<code>${mainPrefix}mbs 关键词</code>, <code>${commandName} search 关键词</code> 搜索音乐，关键词中包含搜索源会自动识别 例如：<code>search 洛天依 网易云</code>
+<code>${mainPrefix}mbvk 关键词</code>, <code>${commandName} vk 关键词</code> 使用 ${
+  bots.vk
+} 音乐源搜索
+
+<code>${mainPrefix}mbs 关键词</code>, <code>${commandName} search 关键词</code> 使用 ${
+  bots.default
+} 搜索音乐，关键词中包含搜索源会自动识别 例如：<code>search 洛天依 网易云</code>
 <code>${mainPrefix}mbkg 关键词</code>, <code>${commandName} kugou 关键词</code> 用酷狗源搜索
 <code>${mainPrefix}mbkw 关键词</code>, <code>${commandName} kuwo 关键词</code> 用酷我源搜索
 <code>${mainPrefix}mbqq 关键词</code>, <code>${commandName} qq 关键词</code> 用QQ音乐源搜索
@@ -27,10 +36,11 @@ const help_text = `
 async function searchAndSendMusic(
   msg: Api.Message,
   action: string,
-  keyword: string
+  keyword: string,
+  bot: string
 ) {
   if (
-    !["search", "kugou", "kuwo", "qq", "netease"].includes(action) ||
+    !["search", "kugou", "kuwo", "qq", "netease", "vk"].includes(action) ||
     !keyword
   ) {
     await msg.edit({ text: help_text, parseMode: "html" });
@@ -84,7 +94,9 @@ async function searchAndSendMusic(
   // Send search command
   const startTs = Math.floor(Date.now() / 1000);
   try {
-    await client.sendMessage(bot, { message: `/${action} ${keyword}` });
+    await client.sendMessage(bot, {
+      message: action === "vk" ? keyword : `/${action} ${keyword}`,
+    });
   } catch {
     // fallback: in case the bot only accepts plain text
     try {
@@ -173,32 +185,37 @@ class MusicBotPlugin extends Plugin {
       const parts = text.trim().split(/\s+/);
       const action = parts[1] || "";
       const keyword = getRemarkFromMsg(msg, 1);
-      await searchAndSendMusic(msg, action, keyword);
+      await searchAndSendMusic(msg, action, keyword, bots.default);
     },
     mbs: async (msg: Api.Message, trigger?: Api.Message) => {
       const action = "search";
       const keyword = getRemarkFromMsg(msg, 0);
-      await searchAndSendMusic(msg, action, keyword);
+      await searchAndSendMusic(msg, action, keyword, bots.default);
     },
     mbkw: async (msg: Api.Message, trigger?: Api.Message) => {
       const action = "kuwo";
       const keyword = getRemarkFromMsg(msg, 0);
-      await searchAndSendMusic(msg, action, keyword);
+      await searchAndSendMusic(msg, action, keyword, bots.default);
     },
     mbkg: async (msg: Api.Message, trigger?: Api.Message) => {
       const action = "kugou";
       const keyword = getRemarkFromMsg(msg, 0);
-      await searchAndSendMusic(msg, action, keyword);
+      await searchAndSendMusic(msg, action, keyword, bots.default);
     },
     mbqq: async (msg: Api.Message, trigger?: Api.Message) => {
       const action = "qq";
       const keyword = getRemarkFromMsg(msg, 0);
-      await searchAndSendMusic(msg, action, keyword);
+      await searchAndSendMusic(msg, action, keyword, bots.default);
     },
     mbne: async (msg: Api.Message, trigger?: Api.Message) => {
       const action = "netease";
       const keyword = getRemarkFromMsg(msg, 0);
-      await searchAndSendMusic(msg, action, keyword);
+      await searchAndSendMusic(msg, action, keyword, bots.default);
+    },
+    mbvk: async (msg: Api.Message, trigger?: Api.Message) => {
+      const action = "vk";
+      const keyword = getRemarkFromMsg(msg, 0);
+      await searchAndSendMusic(msg, action, keyword, bots.vk);
     },
   };
 }
