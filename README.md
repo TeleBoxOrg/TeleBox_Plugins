@@ -50,7 +50,7 @@ npm i <插件名>
 - `search` - 频道消息搜索工具，支持多频道配置  
 - `shift` - 智能消息转发系统，支持规则过滤和统计  
 - `speedlink` - 对其他服务器测速  
-- `speednext` - 网络速度测试工具  
+- `speedtest` - 网络速度测试工具  
 - `sticker_to_pic` - 表情转图片  
 - `sunremove` - 定向批量解除封禁用户  
 - `t` - 文字转语音  
