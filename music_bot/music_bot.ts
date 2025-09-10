@@ -1,0 +1,206 @@
+import axios from "axios";
+import _ from "lodash";
+import { getPrefixes } from "@utils/pluginManager";
+import { Plugin } from "@utils/pluginBase";
+import { Api } from "telegram";
+import { sleep } from "telegram/Helpers";
+
+const prefixes = getPrefixes();
+const mainPrefix = prefixes[0];
+
+const bot = "@music_v1bot";
+
+const pluginName = "musicBot";
+
+const commandName = `${mainPrefix}${pluginName}`;
+
+const help_text = `
+依赖 ${bot}
+
+<code>${mainPrefix}mbs 关键词</code>, <code>${commandName} search 关键词</code> 搜索音乐，关键词中包含搜索源会自动识别 例如：<code>search 洛天依 网易云</code>
+<code>${mainPrefix}mbkg 关键词</code>, <code>${commandName} kugou 关键词</code> 用酷狗源搜索
+<code>${mainPrefix}mbkw 关键词</code>, <code>${commandName} kuwo 关键词</code> 用酷我源搜索
+<code>${mainPrefix}mbqq 关键词</code>, <code>${commandName} qq 关键词</code> 用QQ音乐源搜索
+<code>${mainPrefix}mbne 关键词</code>, <code>${commandName} netease 关键词</code> 用网易云音乐源搜索
+`;
+
+async function searchAndSendMusic(
+  msg: Api.Message,
+  action: string,
+  keyword: string
+) {
+  if (
+    !["search", "kugou", "kuwo", "qq", "netease"].includes(action) ||
+    !keyword
+  ) {
+    await msg.edit({ text: help_text, parseMode: "html" });
+    return;
+  }
+
+  const client = msg.client;
+  if (!client) return;
+
+  // Give quick feedback
+  try {
+    await msg.edit({
+      text: `🔎 搜索中：<code>${keyword}</code>`,
+      parseMode: "html",
+    });
+  } catch {}
+
+  // Ensure bot is unblocked and muted
+  try {
+    await client.invoke(new Api.contacts.Unblock({ id: bot }));
+  } catch {}
+
+  try {
+    const inputPeer = await client.getInputEntity(bot);
+    await client.invoke(
+      new Api.account.UpdateNotifySettings({
+        peer: new Api.InputNotifyPeer({ peer: inputPeer }),
+        settings: new Api.InputPeerNotifySettings({
+          silent: true,
+          muteUntil: 2147483647, // mute for a long time
+        }),
+      })
+    );
+  } catch {}
+
+  // Try to start the bot (if never used before)
+  try {
+    await client.invoke(
+      new Api.messages.StartBot({
+        bot,
+        peer: bot,
+        startParam: "",
+      })
+    );
+  } catch {
+    try {
+      await client.sendMessage(bot, { message: "/start" });
+    } catch {}
+  }
+
+  // Send search command
+  const startTs = Math.floor(Date.now() / 1000);
+  try {
+    await client.sendMessage(bot, { message: `/${action} ${keyword}` });
+  } catch {
+    // fallback: in case the bot only accepts plain text
+    try {
+      await client.sendMessage(bot, { message: keyword });
+    } catch {}
+  }
+
+  // Wait for bot's reply that contains buttons, then click first
+  let replyWithButtons: any | undefined;
+  for (let i = 0; i < 15; i++) {
+    await sleep(700);
+    const msgs = await client.getMessages(bot, { limit: 6 });
+    for (const m of msgs.slice().reverse()) {
+      if (!m.out && (m.date || 0) >= startTs && (m.buttonCount || 0) > 0) {
+        replyWithButtons = m;
+        break;
+      }
+    }
+    if (replyWithButtons) break;
+  }
+
+  if (!replyWithButtons) {
+    await msg.edit({ text: `❌ 未找到可点击的结果按钮。` });
+    return;
+  }
+
+  try {
+    // 默认点击第一个按钮
+    await replyWithButtons.click({});
+  } catch (e) {
+    await msg.edit({
+      text: `❌ 点击按钮失败：${(e as any)?.message || e}`,
+    });
+    return;
+  }
+
+  // After clicking, wait for the next incoming message with media
+  let mediaMsg: any | undefined;
+  for (let i = 0; i < 20; i++) {
+    await sleep(700);
+    const msgs = await client.getMessages(bot, { limit: 6 });
+    for (const m of msgs.slice().reverse()) {
+      if (
+        !m.out &&
+        (m.date || 0) >= (replyWithButtons.date || startTs) &&
+        m.media
+      ) {
+        mediaMsg = m;
+        break;
+      }
+    }
+    if (mediaMsg) break;
+  }
+
+  if (!mediaMsg || !mediaMsg.media) {
+    await msg.edit({ text: `❌ 未获取到音乐文件。` });
+    return;
+  }
+
+  // Send the media back to the user without forwarding
+  await client.sendFile(msg.peerId, {
+    file: mediaMsg.media,
+    caption: `🎵 ${keyword}`,
+    topMsgId: msg.replyTo?.replyToTopId || msg.replyTo?.replyToMsgId,
+  });
+
+  try {
+    await msg.delete();
+  } catch {}
+}
+
+function getRemarkFromMsg(msg: Api.Message | string, n: number): string {
+  return (typeof msg === "string" ? msg : msg?.message || "")
+    .replace(new RegExp(`^\\S+${Array(n).fill("\\s+\\S+").join("")}`), "")
+    .trim();
+}
+
+class MusicBotPlugin extends Plugin {
+  description: string = `\nmusicBot\n\n${help_text}`;
+  cmdHandlers: Record<
+    string,
+    (msg: Api.Message, trigger?: Api.Message) => Promise<void>
+  > = {
+    musicBot: async (msg: Api.Message, trigger?: Api.Message) => {
+      const text = msg.message || "";
+      const parts = text.trim().split(/\s+/);
+      const action = parts[1] || "";
+      const keyword = getRemarkFromMsg(msg, 1);
+      await searchAndSendMusic(msg, action, keyword);
+    },
+    mbs: async (msg: Api.Message, trigger?: Api.Message) => {
+      const action = "search";
+      const keyword = getRemarkFromMsg(msg, 0);
+      await searchAndSendMusic(msg, action, keyword);
+    },
+    mbkw: async (msg: Api.Message, trigger?: Api.Message) => {
+      const action = "kuwo";
+      const keyword = getRemarkFromMsg(msg, 0);
+      await searchAndSendMusic(msg, action, keyword);
+    },
+    mbkg: async (msg: Api.Message, trigger?: Api.Message) => {
+      const action = "kugou";
+      const keyword = getRemarkFromMsg(msg, 0);
+      await searchAndSendMusic(msg, action, keyword);
+    },
+    mbqq: async (msg: Api.Message, trigger?: Api.Message) => {
+      const action = "qq";
+      const keyword = getRemarkFromMsg(msg, 0);
+      await searchAndSendMusic(msg, action, keyword);
+    },
+    mbne: async (msg: Api.Message, trigger?: Api.Message) => {
+      const action = "netease";
+      const keyword = getRemarkFromMsg(msg, 0);
+      await searchAndSendMusic(msg, action, keyword);
+    },
+  };
+}
+
+export default new MusicBotPlugin();
