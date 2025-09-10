@@ -11,7 +11,7 @@
  * - Automatic & unique encryption key generation.
  */
 
-import { Plugin } from "@utils/pluginBase";
+import { Plugin } from "../src/utils/pluginBase";
 import { Api } from "telegram";
 import { exec, execSync } from "child_process";
 import { promisify } from "util";
@@ -287,7 +287,7 @@ const speedtest = async (msg: Api.Message): Promise<void> => {
             if (!repliedMsg?.document) { await msg.edit({ text: `❌ <b>恢复失败</b>\n\n您回复的消息不包含文件。`, parseMode: "html" }); return; }
 
             await msg.edit({ text: `⚙️ 正在从备份文件恢复数据...`, parseMode: "html" });
-            const buffer = await msg.client?.downloadMedia(repliedMsg.media);
+            const buffer = repliedMsg.media ? await msg.client?.downloadMedia(repliedMsg.media) : null;
             if (buffer) {
                 if (fs.existsSync(DB_PATH)) { fs.renameSync(DB_PATH, DB_PATH + '.bak'); }
                 fs.writeFileSync(DB_PATH, buffer);
