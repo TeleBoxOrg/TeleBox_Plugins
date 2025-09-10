@@ -141,6 +141,9 @@ async function generateSpeech(text: string, referenceId: string, apiKey: string)
     return oggFile;
   } catch (error) {
     console.error("生成语音时发生错误:", error);
+    // 清理可能生成的临时文件
+    await fs.unlink(mp3File).catch(() => {});
+    await fs.unlink(oggFile).catch(() => {});
     return null;
   }
 }
@@ -215,14 +218,14 @@ async function tts(msg: Api.Message): Promise<void> {
     const resultFile = await generateSpeech(text, userConfig.defaultRoleId, userConfig.apiKey);
 
     if (resultFile) {
-      await msg.client?.sendFile(msg.chatId, {
+      await msg.client?.sendFile(msg.peerId, {
         file: resultFile,
-        voice: true,
         replyTo: msg.replyTo?.replyToMsgId,
-        commentTo: msg.replyTo?.commentToMsgId,
       });
       await msg.delete();
-      await fs.unlink(resultFile);
+      // 删除所有缓存文件
+      await fs.unlink(resultFile).catch(() => {}); // 删除 ogg 文件
+      await fs.unlink('output_audio.mp3').catch(() => {}); // 删除 mp3 文件
     } else {
       await msg.edit({
         text: "❌ <b>生成语音失败，请检查 API Key 和网络连接。</b>",
