@@ -658,6 +658,7 @@ class ChannelSearchPlugin extends Plugin {
 - 优化的模糊匹配算法`;
   cmdHandlers: Record<string, (msg: Api.Message) => Promise<void>> = {
     so,
+    search: so,
   };
 }
 
