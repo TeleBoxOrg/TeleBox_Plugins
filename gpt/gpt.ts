@@ -224,7 +224,7 @@ async function uploadImage(imagePath: string): Promise<string> {
 
   const formData = new FormData();
   const imageBuffer = await fs.promises.readFile(imagePath);
-  const imageBlob = new Blob([imageBuffer]);
+  const imageBlob = new Blob([imageBuffer as any]);
 
   formData.append("c", imageBlob, basename);
   formData.append("sunset", "120");
@@ -267,7 +267,7 @@ async function uploadImage(imagePath: string): Promise<string> {
 
 // 下载并处理图片
 async function downloadAndProcessImage(
-  client: Api.TelegramClient,
+  client: TelegramClient,
   message: Api.Message,
   infoMessage: Api.Message
 ): Promise<{ imagePath: string; imageSource: string }> {
@@ -293,9 +293,8 @@ async function downloadAndProcessImage(
 
     // 尝试下载图片
     const buffer = await client.downloadMedia(mediaMsg.media, {
-      workers: 1,
-      progressCallback: (received: number, total: number) => {
-        const percent = (received * 100) / total;
+      progressCallback: (received: any, total: any) => {
+        const percent = (Number(received) * 100) / Number(total);
         infoMessage
           .edit({
             text: `下载图片 ${percent.toFixed(1)}%`,
@@ -639,7 +638,7 @@ async function handleGptRequest(msg: Api.Message): Promise<void> {
       });
 
       await sleep(5000);
-      await confirmMsg.delete();
+      await confirmMsg?.delete();
       return;
     }
 
@@ -661,7 +660,7 @@ async function handleGptRequest(msg: Api.Message): Promise<void> {
       // 下载并处理图片
       await msg.edit({ text: "🤔 下载图片中..." });
       const { imagePath, imageSource } = await downloadAndProcessImage(
-        msg.client as Api.TelegramClient,
+        msg.client as TelegramClient,
         msg,
         msg
       );
