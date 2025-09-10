@@ -1,13 +1,14 @@
 /**
  * SpeedLink Multi-Server Management Plugin for TeleBox
  *
- * Version: 5.7.0 (Command Renamed)
+ * Version: 5.9.0 (Final & Complete)
  * Features:
- * - Renamed command to `speedlink` (alias `sl`).
- * - Safe renaming procedure with backup/restore.
+ * - Completed all help text URLs.
+ * - Fixed local speed test execution path.
+ * - Real-time feedback during first-run dependency installation.
  * - Smart, sequential, and privacy-respecting server listing.
- * - Automatically generates and saves a unique encryption key.
- * - Auto-installs dependencies on first run.
+ * - Backup and restore functionality.
+ * - Automatic & unique encryption key generation.
  */
 
 import { Plugin } from "@utils/pluginBase";
@@ -23,37 +24,24 @@ const execAsync = promisify(exec);
 
 // --- 接口与类型定义 ---
 interface ServerConfig {
-    id: number;
-    name: string;
-    host: string;
-    port: number;
-    username: string;
-    auth_method: 'password' | 'key';
-    credentials: string;
+    id: number; name: string; host: string; port: number; username: string;
+    auth_method: 'password' | 'key'; credentials: string;
 }
-
 interface SpeedtestResult {
-    isp: string;
-    server: { id: number; name: string; location: string };
-    interface: { externalIp: string; name: string };
-    ping: { latency: number; jitter: number };
-    download: { bandwidth: number; bytes: number };
-    upload: { bandwidth: number; bytes: number };
-    timestamp: string;
-    result: { url: string };
+    isp: string; server: { id: number; name: string; location: string };
+    interface: { externalIp: string; name: string }; ping: { latency: number; jitter: number };
+    download: { bandwidth: number; bytes: number }; upload: { bandwidth: number; bytes: number };
+    timestamp: string; result: { url: string };
 }
 
 // --- 依赖状态管理 ---
 let dependenciesInstalled = false;
 let isInstalling = false;
-
 try {
     require.resolve('better-sqlite3');
     execSync('command -v sshpass');
     dependenciesInstalled = true;
-} catch (e) {
-    dependenciesInstalled = false;
-}
+} catch (e) { dependenciesInstalled = false; }
 
 // --- 异步安装函数 ---
 async function installDependencies(msg: Api.Message): Promise<void> {
@@ -67,34 +55,22 @@ async function installDependencies(msg: Api.Message): Promise<void> {
         }
         try { execSync('command -v sshpass'); } catch(e) {
             console.log("[INSTALLING] 'sshpass' not found. Installing via system package manager...");
-            if (fs.existsSync('/usr/bin/apt-get')) {
-                await execAsync('sudo apt-get update && sudo apt-get install -y sshpass');
-            } else if (fs.existsSync('/usr/bin/yum')) {
-                await execAsync('sudo yum install -y sshpass');
-            } else { throw new Error('Unsupported package manager.'); }
+            if (fs.existsSync('/usr/bin/apt-get')) await execAsync('sudo apt-get update && sudo apt-get install -y sshpass');
+            else if (fs.existsSync('/usr/bin/yum')) await execAsync('sudo yum install -y sshpass');
+            else throw new Error('Unsupported package manager.');
             console.log("[SUCCESS] Installed 'sshpass'.");
         }
-        await msg.edit({
-            text: "✅ <b>依赖安装完成！</b>\n\n为了使插件生效，请现在<b>重启TeleBox</b>。\n重启后即可正常使用所有 <code>sl</code> 指令。",
-            parseMode: "html"
-        });
+        await msg.edit({ text: "✅ <b>依赖安装完成！</b>\n\n为了使插件生效，请现在<b>重启TeleBox</b>。", parseMode: "html" });
         dependenciesInstalled = false; 
     } catch (error: any) {
         console.error("[FATAL] Dependency installation failed:", error);
-        await msg.edit({
-            text: `❌ <b>依赖自动安装失败！</b>\n\n请检查服务器后台日志获取详细错误信息，并尝试手动安装依赖。`,
-            parseMode: "html"
-        });
-    } finally {
-        isInstalling = false;
-    }
+        await msg.edit({ text: `❌ <b>依赖自动安装失败！</b>\n\n请检查服务器后台日志。`, parseMode: "html" });
+    } finally { isInstalling = false; }
 }
 
 // --- 依赖加载 ---
 let Database: any = null;
-if (dependenciesInstalled) {
-    Database = require('better-sqlite3');
-}
+if (dependenciesInstalled) Database = require('better-sqlite3');
 
 // --- 辅助函数 ---
 function createDirectoryInAssets(dir: string): string {
@@ -110,17 +86,46 @@ const PLUGIN_NAME = path.basename(__filename, path.extname(__filename));
 const ASSETS_DIR = createDirectoryInAssets(PLUGIN_NAME);
 const DB_PATH = path.join(ASSETS_DIR, 'servers.db');
 const KEY_PATH = path.join(ASSETS_DIR, 'secret.key');
+const SPEEDTEST_PATH = path.join(ASSETS_DIR, "speedtest");
+const SPEEDTEST_VERSION = "1.2.0";
+
+// --- Speedtest CLI 下载器 ---
+async function downloadCli(): Promise<void> {
+    if (fs.existsSync(SPEEDTEST_PATH)) return;
+    console.log("Downloading Speedtest CLI...");
+    const platform = process.platform;
+    const arch = process.arch;
+    let filename: string;
+
+    if (platform === "linux") {
+        const archMap: { [key: string]: string } = { x64: "x86_64", arm64: "aarch64", arm: "armhf" };
+        const mappedArch = archMap[arch] || "x86_64";
+        filename = `ookla-speedtest-${SPEEDTEST_VERSION}-linux-${mappedArch}.tgz`;
+    } else { throw new Error(`Unsupported platform for auto-download: ${platform}`); }
+
+    const url = `https://install.speedtest.net/app/cli/${filename}`;
+    const response = await axios.get(url, { responseType: "arraybuffer" });
+    const tempFile = path.join(ASSETS_DIR, filename);
+    fs.writeFileSync(tempFile, response.data);
+
+    await execAsync(`tar -xzf "${tempFile}" -C "${ASSETS_DIR}"`);
+    await execAsync(`chmod +x "${SPEEDTEST_PATH}"`);
+    fs.unlinkSync(tempFile);
+
+    ["speedtest.5", "speedtest.md"].forEach(file => {
+        const filePath = path.join(ASSETS_DIR, file);
+        if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
+    });
+    console.log("Speedtest CLI downloaded and extracted successfully.");
+}
 
 // --- 自动主密钥管理 ---
 function getEncryptionKey(): string {
-  if (fs.existsSync(KEY_PATH)) {
-    return fs.readFileSync(KEY_PATH, 'utf-8');
-  } else {
-    const newKey = crypto.randomBytes(16).toString('hex');
-    fs.writeFileSync(KEY_PATH, newKey, 'utf-8');
-    console.log(`SpeedLink Plugin (${PLUGIN_NAME}): New encryption key generated.`);
-    return newKey;
-  }
+  if (fs.existsSync(KEY_PATH)) return fs.readFileSync(KEY_PATH, 'utf-8');
+  const newKey = crypto.randomBytes(16).toString('hex');
+  fs.writeFileSync(KEY_PATH, newKey, 'utf-8');
+  console.log(`SpeedLink Plugin (${PLUGIN_NAME}): New encryption key generated.`);
+  return newKey;
 }
 
 const ENCRYPTION_KEY = getEncryptionKey();
@@ -128,12 +133,7 @@ const IV_LENGTH = 16;
 let db: any = null;
 if (Database) {
     db = new Database(DB_PATH);
-    db.exec(`
-      CREATE TABLE IF NOT EXISTS servers (
-        id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL UNIQUE, host TEXT NOT NULL,
-        port INTEGER NOT NULL, username TEXT NOT NULL, auth_method TEXT NOT NULL, credentials TEXT NOT NULL
-      )
-    `);
+    db.exec(`CREATE TABLE IF NOT EXISTS servers (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL UNIQUE, host TEXT NOT NULL, port INTEGER NOT NULL, username TEXT NOT NULL, auth_method TEXT NOT NULL, credentials TEXT NOT NULL)`);
 }
 
 function encrypt(text: string): string {
@@ -150,9 +150,7 @@ function decrypt(text: string): string {
     const encryptedText = Buffer.from(textParts.join(':'), 'hex');
     const decipher = crypto.createDecipheriv('aes-256-cbc', Buffer.from(ENCRYPTION_KEY), iv);
     return Buffer.concat([decipher.update(encryptedText), decipher.final()]).toString();
-  } catch (error) {
-    throw new Error("Failed to decrypt credentials. The key file may have been changed/deleted.");
-  }
+  } catch (error) { throw new Error("Failed to decrypt credentials. The key file may have been changed/deleted."); }
 }
 
 function htmlEscape(text: string): string {
@@ -184,10 +182,7 @@ async function saveSpeedtestImage(url: string): Promise<string | null> {
     const imagePath = path.join(ASSETS_DIR, "speedtest_result.png");
     fs.writeFileSync(imagePath, response.data);
     return imagePath;
-  } catch (error) {
-    console.error("Failed to save speedtest image:", error);
-    return null;
-  }
+  } catch (error) { console.error("Failed to save speedtest image:", error); return null; }
 }
 
 const HELP_TEXT = `
@@ -196,10 +191,10 @@ const HELP_TEXT = `
 <b>⚠️ 远程服务器要求</b>
 为了测试远程服务器，您必须首先在该服务器上安装 <b>Ookla Speedtest CLI</b>。
 - <b>Debian/Ubuntu 系统:</b>
-<pre><code>curl -sL https://.../script.deb.sh | sudo bash
+<pre><code>curl -sL https://packagecloud.io/install/repositories/ookla/speedtest-cli/script.deb.sh | sudo bash
 sudo apt-get install speedtest</code></pre>
 - <b>CentOS/RHEL 系统:</b>
-<pre><code>curl -sL https://.../script.rpm.sh | sudo bash
+<pre><code>curl -sL https://packagecloud.io/install/repositories/ookla/speedtest-cli/script.rpm.sh | sudo bash
 sudo yum install speedtest</code></pre>
 ---
 <b>服务器管理指令:</b>
@@ -233,9 +228,8 @@ sudo yum install speedtest</code></pre>
 // --- 主处理函数 ---
 const speedtest = async (msg: Api.Message): Promise<void> => {
   if (!dependenciesInstalled) {
-    if (isInstalling) {
-      await msg.edit({ text: "⏳ <b>依赖已在安装中...</b>", parseMode: "html" });
-    } else {
+    if (isInstalling) await msg.edit({ text: "⏳ <b>依赖已在安装中...</b>", parseMode: "html" });
+    else {
       await msg.edit({ text: "首次运行，正在自动安装依赖...", parseMode: "html" });
       installDependencies(msg);
     }
@@ -329,18 +323,23 @@ const speedtest = async (msg: Api.Message): Promise<void> => {
     await msg.edit({ text: initialText, parseMode: "html" });
 
     try {
-        const speedtestCmd = `speedtest --accept-license --accept-gdpr -f json`;
+        const speedtestCmdBase = `--accept-license --accept-gdpr -f json`;
         let finalCommand;
 
         if (isRemote && serverConfig) {
+            const remoteSpeedtestCmd = `speedtest ${speedtestCmdBase}`;
             if (serverConfig.auth_method === 'password') {
                 const password = decrypt(serverConfig.credentials);
-                finalCommand = `sshpass -p '${password.replace(/'/g, "'\\''")}' ssh -p ${serverConfig.port} -o StrictHostKeyChecking=no -o ConnectTimeout=10 ${serverConfig.username}@${serverConfig.host} '${speedtestCmd}'`;
+                finalCommand = `sshpass -p '${password.replace(/'/g, "'\\''")}' ssh -p ${serverConfig.port} -o StrictHostKeyChecking=no -o ConnectTimeout=10 ${serverConfig.username}@${serverConfig.host} '${remoteSpeedtestCmd}'`;
             } else {
-                finalCommand = `ssh -i ${serverConfig.credentials} -p ${serverConfig.port} -o StrictHostKeyChecking=no -o ConnectTimeout=10 ${serverConfig.username}@${serverConfig.host} '${speedtestCmd}'`;
+                finalCommand = `ssh -i ${serverConfig.credentials} -p ${serverConfig.port} -o StrictHostKeyChecking=no -o ConnectTimeout=10 ${serverConfig.username}@${serverConfig.host} '${remoteSpeedtestCmd}'`;
             }
         } else {
-            finalCommand = speedtestCmd;
+            if (!fs.existsSync(SPEEDTEST_PATH)) {
+                await msg.edit({ text: "本地 Speedtest CLI 不存在，正在为您下载...", parseMode: "html" });
+                await downloadCli();
+            }
+            finalCommand = `"${SPEEDTEST_PATH}" ${speedtestCmdBase}`;
         }
         
         const { stdout } = await execAsync(finalCommand, { timeout: 300000 });
@@ -381,7 +380,7 @@ const speedtest = async (msg: Api.Message): Promise<void> => {
 
 // --- 插件类定义 ---
 class SpeedlinkPlugin extends Plugin {
-  description: string = `⚡️ 网络速度测试工具 (多服务器/自动密钥版)\n\n${HELP_TEXT}`;
+  description: string = `⚡️ 网络速度测试工具 (多服务器)\n\n${HELP_TEXT}`;
   cmdHandlers: Record<string, (msg: Api.Message) => Promise<void>> = { 
     speedlink: speedtest,
     sl: speedtest 
