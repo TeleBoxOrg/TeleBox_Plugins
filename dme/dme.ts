@@ -117,7 +117,7 @@ async function editMediaMessageToAntiRecall(
     const uploadedFile = await client.uploadFile({
       file: new CustomFile(
         "dme_troll.jpg",
-        fs.statSync(trollImagePath).size,
+        Number(fs.statSync(trollImagePath).size),
         trollImagePath
       ),
       workers: 1,

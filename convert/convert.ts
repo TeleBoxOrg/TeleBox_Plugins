@@ -80,6 +80,10 @@ class VideoConverter {
     }
   }
 
+  getTempDir(): string {
+    return this.tempDir;
+  }
+
   cleanupTempFiles(pattern?: string): void {
     try {
       const files = fs.readdirSync(this.tempDir);

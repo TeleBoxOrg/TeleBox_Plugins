@@ -182,8 +182,8 @@ class GifConverter {
       const filenameAttr = doc.attributes?.find(
         (attr: any) => attr.className === "DocumentAttributeFilename"
       );
-      if (filenameAttr) {
-        const filename = filenameAttr.fileName.toLowerCase();
+      if (filenameAttr && (filenameAttr as any).fileName) {
+        const filename = (filenameAttr as any).fileName.toLowerCase();
         return filename.endsWith(".gif") || 
                filename.endsWith(".mp4") || 
                filename.endsWith(".webm") ||

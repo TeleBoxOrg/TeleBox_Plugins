@@ -1,5 +1,5 @@
 import { Plugin } from "@utils/pluginBase";
-import { Api } from "telegram";
+import { Api, TelegramClient } from "telegram";
 import axios from "axios";
 import * as fs from "fs";
 import * as path from "path";

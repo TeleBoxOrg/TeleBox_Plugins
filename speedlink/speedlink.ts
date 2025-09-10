@@ -15,10 +15,10 @@ import { Plugin } from "@utils/pluginBase";
 import { Api } from "telegram";
 import { exec, execSync } from "child_process";
 import { promisify } from "util";
-import path from "path";
+import * as path from "path";
 import * as fs from "fs";
 import axios from "axios";
-import crypto from 'crypto';
+import * as crypto from 'crypto';
 
 const execAsync = promisify(exec);
 
