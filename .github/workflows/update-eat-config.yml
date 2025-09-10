@@ -1,4 +1,3 @@
-
 name: 'Update Config for Main Branch'
 on:
   push:
@@ -6,18 +5,22 @@ on:
       - main
 jobs:
   update-config-on-main:
+    # 仅在 ClearLuv/TeleBox_Plugins 仓库运行
     # 跳过由机器人自己产生的提交，防止无限循环
-    if: "contains(github.event.head_commit.message, '[ci skip]') == false && contains(github.event.head_commit.message, 'ci:') == false"
+    if: |
+      github.repository == 'ClearLuv/TeleBox_Plugins' &&
+      contains(github.event.head_commit.message, '[ci skip]') == false && 
+      contains(github.event.head_commit.message, 'ci:') == false
 
     runs-on: ubuntu-latest
 
     steps:
       # 步骤 1: 检出（checkout）你的代码
-      # 使用 Personal Access Token (PAT) 以确保我们有权限将修改推回代码库
+      # 使用默认的 GITHUB_TOKEN，它会自动提供
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
-          token: ${{ secrets.PAT }} # 请确保您已在仓库的 Secrets 中配置了名为 PAT 的访问令牌
+          token: ${{ secrets.GITHUB_TOKEN }} # 使用默认的 GITHUB_TOKEN
 
       # 步骤 2: 修改 eat/config.json 文件
       # 使用 jq 工具，它可以方便地处理 JSON 文件
