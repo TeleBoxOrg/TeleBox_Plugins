@@ -7,12 +7,16 @@ import { Plugin } from "@utils/pluginBase";
 import { Api } from "telegram";
 import { getGlobalClient } from "@utils/globalClient";
 import { TelegramClient } from "telegram";
-import { createDirectoryInAssets } from "@utils/pathHelpers";
+import {
+  createDirectoryInAssets,
+  createDirectoryInTemp,
+} from "@utils/pathHelpers";
 import * as fs from "fs";
 import path from "path";
 import { exec } from "child_process";
 import { promisify } from "util";
 import axios from "axios";
+import sharp from "sharp";
 
 // HTML escape function
 function htmlEscape(text: string): string {
@@ -26,6 +30,7 @@ function htmlEscape(text: string): string {
 
 const execAsync = promisify(exec);
 const ASSETS_DIR = createDirectoryInAssets("speedtest");
+const TEMP_DIR = createDirectoryInTemp("speedtest");
 const SPEEDTEST_PATH = path.join(ASSETS_DIR, "speedtest");
 const SPEEDTEST_JSON = path.join(ASSETS_DIR, "speedtest.json");
 const SPEEDTEST_VERSION = "1.2.0";
@@ -302,14 +307,55 @@ async function saveSpeedtestImage(url: string): Promise<string | null> {
   try {
     const imageUrl = url + ".png";
     const response = await axios.get(imageUrl, { responseType: "arraybuffer" });
-
-    const tempDir = createDirectoryInAssets("temp");
-    const imagePath = path.join(tempDir, "speedtest.png");
+    const imagePath = path.join(TEMP_DIR, "speedtest.png");
     fs.writeFileSync(imagePath, response.data);
 
     return imagePath;
   } catch (error: any) {
     console.error("Failed to save speedtest image:", error);
+    return null;
+  }
+}
+
+async function convertImageToStickerWebp(
+  srcPath: string
+): Promise<string | null> {
+  try {
+    if (!fs.existsSync(srcPath)) return null;
+    const stickerPath = path.join(
+      TEMP_DIR,
+      `speedtest_sticker_${Date.now()}_${Math.random()
+        .toString(36)
+        .slice(2, 8)}.webp`
+    );
+
+    // Resize to 512x512 and convert to webp for sticker
+    await sharp(srcPath)
+      .resize(512, 512, {
+        fit: "contain",
+        background: { r: 0, g: 0, b: 0, alpha: 0 },
+      })
+      .webp({ quality: 85, effort: 5 })
+      .toFile(stickerPath);
+
+    // Basic size check for Telegram sticker (~512KB)
+    try {
+      const { size } = fs.statSync(stickerPath);
+      if (size > 512 * 1024) {
+        // Try recompress at lower quality
+        await sharp(srcPath)
+          .resize(512, 512, {
+            fit: "contain",
+            background: { r: 0, g: 0, b: 0, alpha: 0 },
+          })
+          .webp({ quality: 65, effort: 6 })
+          .toFile(stickerPath);
+      }
+    } catch {}
+
+    return stickerPath;
+  } catch (e) {
+    console.error("Failed to convert image to sticker:", e);
     return null;
   }
 }
@@ -468,6 +514,42 @@ const speedtest = async (msg: Api.Message) => {
             }
           } catch (imageError) {
             console.error("Failed to send image:", imageError);
+            // 图片发送失败时，尝试转换为贴纸发送
+            try {
+              const fallbackImagePath = path.join(TEMP_DIR, "speedtest.png");
+              const hasImage = fs.existsSync(fallbackImagePath);
+              const stickerPath = hasImage
+                ? await convertImageToStickerWebp(fallbackImagePath)
+                : null;
+
+              if (stickerPath && fs.existsSync(stickerPath)) {
+                const client = await getGlobalClient();
+                await client.sendFile(msg.peerId!, {
+                  file: stickerPath,
+                  forceDocument: false,
+                  attributes: [
+                    new Api.DocumentAttributeSticker({
+                      alt: "speedtest",
+                      stickerset: new Api.InputStickerSetEmpty(),
+                    }),
+                  ],
+                });
+
+                // 清理临时文件并删除命令消息
+                try {
+                  if (fs.existsSync(fallbackImagePath))
+                    fs.unlinkSync(fallbackImagePath);
+                } catch {}
+                try {
+                  if (fs.existsSync(stickerPath)) fs.unlinkSync(stickerPath);
+                } catch {}
+                // await msg.delete();
+                await msg.edit({ text: description, parseMode: "html" });
+                return;
+              }
+            } catch (stickerError) {
+              console.error("Failed to send sticker fallback:", stickerError);
+            }
           }
         }
 
