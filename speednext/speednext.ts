@@ -94,7 +94,68 @@ interface ServerInfo {
   name: string;
   location: string;
 }
+async function fillRoundedCorners(
+  inputPath: string,
+  outPath?: string,
+  bgColor: string = "#212338",
+  borderPx: number = 14
+) {
+  const meta = await sharp(inputPath).metadata();
 
+  // Choose an output path if not provided
+  const output =
+    outPath ??
+    (() => {
+      const dir = path.dirname(inputPath);
+      const ext =
+        meta.format === "jpeg" || meta.format === "jpg" ? ".jpg" : ".png";
+      const base = path.basename(inputPath, path.extname(inputPath));
+      return path.join(dir, `${base}.filled${ext}`);
+    })();
+
+  const width = meta.width ?? 0;
+  const height = meta.height ?? 0;
+  if (!width || !height) {
+    throw new Error("Unable to read image dimensions");
+  }
+
+  // Clamp border so remaining area stays at least 1x1
+  const maxInset = Math.floor((Math.min(width, height) - 1) / 2);
+  const inset = Math.max(0, Math.min(borderPx, maxInset));
+  const cropW = width - inset * 2;
+  const cropH = height - inset * 2;
+
+  // Background canvas with original dimensions
+  const background = sharp({
+    create: {
+      width,
+      height,
+      channels: 4,
+      background: bgColor,
+    },
+  });
+
+  // Inner cropped image (removes the outer border)
+  const innerBuf = await sharp(inputPath)
+    .extract({ left: inset, top: inset, width: cropW, height: cropH })
+    .toBuffer();
+
+  // Center the inner image on the background
+  const left = Math.floor((width - cropW) / 2);
+  const top = Math.floor((height - cropH) / 2);
+
+  let composed = background.composite([{ input: innerBuf, left, top }]);
+
+  // Encode based on original format; default to PNG if unknown
+  if (meta.format === "jpeg" || meta.format === "jpg") {
+    composed = composed.jpeg({ quality: 95 });
+  } else if (meta.format === "png" || !meta.format) {
+    composed = composed.png({ compressionLevel: 9 });
+  }
+
+  await composed.toFile(output);
+  return { output };
+}
 function ensureDirectories(): void {
   // createDirectoryInAssets already ensures directory exists
   // No additional action needed
@@ -357,7 +418,17 @@ async function saveSpeedtestImage(url: string): Promise<string | null> {
     const imageUrl = url + ".png";
     const response = await axios.get(imageUrl, { responseType: "arraybuffer" });
     const imagePath = path.join(TEMP_DIR, "speedtest.png");
+    const filledImagePath = path.join(TEMP_DIR, "speedtest_filled.png");
     fs.writeFileSync(imagePath, response.data);
+
+    const bgColor = "#212338";
+    const borderPx = 14;
+    try {
+      await fillRoundedCorners(imagePath, filledImagePath, bgColor, borderPx);
+      return filledImagePath;
+    } catch (err) {
+      console.error("Failed to fill rounded corners:", err);
+    }
 
     return imagePath;
   } catch (error: any) {
