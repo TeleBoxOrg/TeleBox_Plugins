@@ -40,6 +40,7 @@ npm i <插件名>
 - `lottery` - 抽奖系统，支持群组抽奖活动管理  
 - `moyu` - 摸鱼日报  
 - `music` - YouTube 音乐搜索和下载工具  
+- `music_bot` - 多音源音乐搜索  
 - `netease` - 网易云音乐搜索和播放功能  
 - `news` - 每日新闻插件  
 - `pic_to_sticker` - 图片转表情  
