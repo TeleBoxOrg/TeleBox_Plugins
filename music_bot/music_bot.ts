@@ -168,7 +168,7 @@ class MusicBotPlugin extends Plugin {
     string,
     (msg: Api.Message, trigger?: Api.Message) => Promise<void>
   > = {
-    musicBot: async (msg: Api.Message, trigger?: Api.Message) => {
+    music_bot: async (msg: Api.Message, trigger?: Api.Message) => {
       const text = msg.message || "";
       const parts = text.trim().split(/\s+/);
       const action = parts[1] || "";
