@@ -117,7 +117,7 @@ async function editMediaMessageToAntiRecall(
     const uploadedFile = await client.uploadFile({
       file: new CustomFile(
         "dme_troll.jpg",
-        Number(fs.statSync(trollImagePath).size),
+        fs.statSync(trollImagePath).size,
         trollImagePath
       ),
       workers: 1,
@@ -421,7 +421,7 @@ const dme = async (msg: Api.Message) => {
   // 显示帮助文档（仅在明确请求时）
   if (showHelp) {
     console.log("[DME] 用户请求帮助文档");
-    console.log(dmePlugin.description);
+    console.log(new DmePlugin().description);
     return;
   }
 
