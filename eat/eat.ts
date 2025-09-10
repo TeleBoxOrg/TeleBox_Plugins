@@ -23,6 +23,7 @@ interface RoleConfig {
   y: number;
   mask: string;
   brightness?: number;
+  flip?: boolean;
 }
 
 interface EntryConfig {
@@ -163,8 +164,14 @@ async function iconMaskedFor(params: {
   ).ensureAlpha(); // ✅ 已修正
   const { width, height } = await maskSharp.metadata(); // 只读一次 metadata
 
+  let iconSharp = sharp(avatar).resize(width, height);
+
+  if (role.flip) {
+    iconSharp = iconSharp.flip(); // 如果 role.flip 为真，就上下颠倒
+  }
+
   const [iconBuffer, alphaMask] = await Promise.all([
-    sharp(avatar).resize(width, height).toBuffer(),
+    iconSharp.toBuffer(),
     maskSharp.clone().extractChannel("alpha").toBuffer(),
   ]);
 
