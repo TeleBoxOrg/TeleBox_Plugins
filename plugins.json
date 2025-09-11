@@ -51,8 +51,8 @@
     "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/clean_member/clean_member.ts?raw=true",
     "desc": "群组成员清理工具，可按活跃度和时间筛选清理成员"
   },
-  "speednext": {
-    "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/speednext/speednext.ts?raw=true",
+  "speedtest": {
+    "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/speedtest/speedtest.ts?raw=true",
     "desc": "网络速度测试工具"
   },
   "shift": {
@@ -202,5 +202,9 @@
   "yinglish": {
     "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/yinglish/yinglish.ts?raw=true",
     "desc": "淫语翻译"
+  },
+  "manage_admin": {
+    "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/manage_admin/manage_admin.ts?raw=true",
+    "desc": "管理管理员"
   }
 }

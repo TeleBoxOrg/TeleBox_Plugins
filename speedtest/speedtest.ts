@@ -7,13 +7,34 @@ import { Plugin } from "@utils/pluginBase";
 import { Api } from "telegram";
 import { getGlobalClient } from "@utils/globalClient";
 import { TelegramClient } from "telegram";
-import { createDirectoryInAssets } from "@utils/pathHelpers";
+import {
+  createDirectoryInAssets,
+  createDirectoryInTemp,
+} from "@utils/pathHelpers";
 import * as fs from "fs";
 import path from "path";
 import { exec } from "child_process";
 import { promisify } from "util";
 import axios from "axios";
+import sharp from "sharp";
+import { getPrefixes } from "@utils/pluginManager";
 
+const prefixes = getPrefixes();
+const mainPrefix = prefixes[0];
+
+const pluginName = "speedtest";
+
+const commandName = `${mainPrefix}${pluginName}`;
+
+const help_txt = `<b>使用方法:</b>
+<code>${commandName}</code> - 开始速度测试
+<code>${commandName} [服务器ID]</code> - 使用指定服务器测试
+<code>${commandName} list</code> - 显示可用服务器列表
+<code>${commandName} set [ID]</code> - 设置默认服务器
+<code>${commandName} type photo/sticker/file/txt</code> - 设置优先使用的消息类型
+<code>${commandName} clear</code> - 清除默认服务器
+<code>${commandName} config</code> - 显示配置信息
+<code>${commandName} update</code> - 更新 Speedtest CLI`;
 // HTML escape function
 function htmlEscape(text: string): string {
   return text
@@ -26,9 +47,18 @@ function htmlEscape(text: string): string {
 
 const execAsync = promisify(exec);
 const ASSETS_DIR = createDirectoryInAssets("speedtest");
+const TEMP_DIR = createDirectoryInTemp("speedtest");
 const SPEEDTEST_PATH = path.join(ASSETS_DIR, "speedtest");
 const SPEEDTEST_JSON = path.join(ASSETS_DIR, "speedtest.json");
 const SPEEDTEST_VERSION = "1.2.0";
+
+type MessageType = "photo" | "sticker" | "file" | "txt";
+const DEFAULT_ORDER: MessageType[] = ["photo", "sticker", "file", "txt"];
+
+interface SpeedtestConfig {
+  default_server_id?: number | null;
+  preferred_type?: MessageType;
+}
 
 interface SpeedtestResult {
   isp: string;
@@ -64,44 +94,129 @@ interface ServerInfo {
   name: string;
   location: string;
 }
+async function fillRoundedCorners(
+  inputPath: string,
+  outPath?: string,
+  bgColor: string = "#212338",
+  borderPx: number = 14
+) {
+  const meta = await sharp(inputPath).metadata();
 
+  // Choose an output path if not provided
+  const output =
+    outPath ??
+    (() => {
+      const dir = path.dirname(inputPath);
+      const ext =
+        meta.format === "jpeg" || meta.format === "jpg" ? ".jpg" : ".png";
+      const base = path.basename(inputPath, path.extname(inputPath));
+      return path.join(dir, `${base}.filled${ext}`);
+    })();
+
+  const width = meta.width ?? 0;
+  const height = meta.height ?? 0;
+  if (!width || !height) {
+    throw new Error("Unable to read image dimensions");
+  }
+
+  // Clamp border so remaining area stays at least 1x1
+  const maxInset = Math.floor((Math.min(width, height) - 1) / 2);
+  const inset = Math.max(0, Math.min(borderPx, maxInset));
+  const cropW = width - inset * 2;
+  const cropH = height - inset * 2;
+
+  // Background canvas with original dimensions
+  const background = sharp({
+    create: {
+      width,
+      height,
+      channels: 4,
+      background: bgColor,
+    },
+  });
+
+  // Inner cropped image (removes the outer border)
+  const innerBuf = await sharp(inputPath)
+    .extract({ left: inset, top: inset, width: cropW, height: cropH })
+    .toBuffer();
+
+  // Center the inner image on the background
+  const left = Math.floor((width - cropW) / 2);
+  const top = Math.floor((height - cropH) / 2);
+
+  let composed = background.composite([{ input: innerBuf, left, top }]);
+
+  // Encode based on original format; default to PNG if unknown
+  if (meta.format === "jpeg" || meta.format === "jpg") {
+    composed = composed.jpeg({ quality: 95 });
+  } else if (meta.format === "png" || !meta.format) {
+    composed = composed.png({ compressionLevel: 9 });
+  }
+
+  await composed.toFile(output);
+  return { output };
+}
 function ensureDirectories(): void {
   // createDirectoryInAssets already ensures directory exists
   // No additional action needed
 }
 
-function getDefaultServer(): number | null {
+function readConfig(): SpeedtestConfig {
   try {
     if (fs.existsSync(SPEEDTEST_JSON)) {
       const data = JSON.parse(fs.readFileSync(SPEEDTEST_JSON, "utf8"));
-      return data.default_server_id || null;
+      return data as SpeedtestConfig;
     }
   } catch (error: any) {
-    console.error("Failed to read default server:", error);
+    console.error("Failed to read config:", error);
   }
-  return null;
+  return {};
+}
+
+function writeConfig(patch: Partial<SpeedtestConfig>): void {
+  try {
+    ensureDirectories();
+    const current = readConfig();
+    const next = { ...current, ...patch };
+    fs.writeFileSync(SPEEDTEST_JSON, JSON.stringify(next));
+  } catch (error: any) {
+    console.error("Failed to write config:", error);
+  }
+}
+
+function getDefaultServer(): number | null {
+  const cfg = readConfig();
+  return cfg.default_server_id ?? null;
 }
 
 function saveDefaultServer(serverId: number | null): void {
-  try {
-    ensureDirectories();
-    fs.writeFileSync(
-      SPEEDTEST_JSON,
-      JSON.stringify({ default_server_id: serverId })
-    );
-  } catch (error: any) {
-    console.error("Failed to save default server:", error);
-  }
+  writeConfig({ default_server_id: serverId });
 }
 
 function removeDefaultServer(): void {
   try {
-    if (fs.existsSync(SPEEDTEST_JSON)) {
-      fs.unlinkSync(SPEEDTEST_JSON);
-    }
+    // Only clear default_server_id while preserving other settings
+    const cfg = readConfig();
+    delete cfg.default_server_id;
+    fs.writeFileSync(SPEEDTEST_JSON, JSON.stringify(cfg));
   } catch (error: any) {
     console.error("Failed to remove default server:", error);
   }
+}
+
+function getPreferredType(): MessageType | null {
+  const cfg = readConfig();
+  return (cfg.preferred_type as MessageType) || null;
+}
+
+function savePreferredType(t: MessageType): void {
+  writeConfig({ preferred_type: t });
+}
+
+function getMessageOrder(): MessageType[] {
+  const preferred = getPreferredType();
+  if (!preferred) return DEFAULT_ORDER.slice();
+  return [preferred, ...DEFAULT_ORDER.filter((x) => x !== preferred)];
 }
 
 async function downloadCli(): Promise<void> {
@@ -302,14 +417,65 @@ async function saveSpeedtestImage(url: string): Promise<string | null> {
   try {
     const imageUrl = url + ".png";
     const response = await axios.get(imageUrl, { responseType: "arraybuffer" });
-
-    const tempDir = createDirectoryInAssets("temp");
-    const imagePath = path.join(tempDir, "speedtest.png");
+    const imagePath = path.join(TEMP_DIR, "speedtest.png");
+    const filledImagePath = path.join(TEMP_DIR, "speedtest_filled.png");
     fs.writeFileSync(imagePath, response.data);
+
+    const bgColor = "#212338";
+    const borderPx = 14;
+    try {
+      await fillRoundedCorners(imagePath, filledImagePath, bgColor, borderPx);
+      return filledImagePath;
+    } catch (err) {
+      console.error("Failed to fill rounded corners:", err);
+    }
 
     return imagePath;
   } catch (error: any) {
     console.error("Failed to save speedtest image:", error);
+    return null;
+  }
+}
+
+async function convertImageToStickerWebp(
+  srcPath: string
+): Promise<string | null> {
+  try {
+    if (!fs.existsSync(srcPath)) return null;
+    const stickerPath = path.join(
+      TEMP_DIR,
+      `speedtest_sticker_${Date.now()}_${Math.random()
+        .toString(36)
+        .slice(2, 8)}.webp`
+    );
+
+    // Resize to 512x512 and convert to webp for sticker
+    await sharp(srcPath)
+      .resize(512, 512, {
+        fit: "contain",
+        background: { r: 0, g: 0, b: 0, alpha: 0 },
+      })
+      .webp({ quality: 85, effort: 5 })
+      .toFile(stickerPath);
+
+    // Basic size check for Telegram sticker (~512KB)
+    try {
+      const { size } = fs.statSync(stickerPath);
+      if (size > 512 * 1024) {
+        // Try recompress at lower quality
+        await sharp(srcPath)
+          .resize(512, 512, {
+            fit: "contain",
+            background: { r: 0, g: 0, b: 0, alpha: 0 },
+          })
+          .webp({ quality: 65, effort: 6 })
+          .toFile(stickerPath);
+      }
+    } catch {}
+
+    return stickerPath;
+  } catch (e) {
+    console.error("Failed to convert image to sticker:", e);
     return null;
   }
 }
@@ -368,8 +534,27 @@ const speedtest = async (msg: Api.Message) => {
       });
     } else if (command === "config") {
       const defaultServer = getDefaultServer() || "Auto";
+      const typePref = getPreferredType() || "默认(photo→sticker→file→txt)";
       await msg.edit({
-        text: `<blockquote><b>⚡️SPEEDTEST by OOKLA</b></blockquote>\n<code>默认服务器: ${defaultServer}</code>\n<code>Speedtest® CLI: ${SPEEDTEST_VERSION}</code>`,
+        text: `<blockquote><b>⚡️SPEEDTEST by OOKLA</b></blockquote>\n<code>默认服务器: ${defaultServer}</code>\n<code>优先类型: ${typePref}</code>\n<code>Speedtest® CLI: ${SPEEDTEST_VERSION}</code>`,
+        parseMode: "html",
+      });
+    } else if (command === "type") {
+      const t = (args[1] || "").toLowerCase();
+      const valid: MessageType[] = ["photo", "sticker", "file", "txt"];
+      if (!valid.includes(t as MessageType)) {
+        await msg.edit({
+          text: `❌ <b>参数错误</b>\n\n<code>${commandName} type photo/sticker/file/txt</code> - 设置优先使用的消息类型`,
+          parseMode: "html",
+        });
+        return;
+      }
+      savePreferredType(t as MessageType);
+      const order = getMessageOrder();
+      await msg.edit({
+        text: `<blockquote><b>⚡️SPEEDTEST by OOKLA</b></blockquote>\n<code>优先类型已设置为: ${t}</code>\n<code>当前顺序: ${order.join(
+          " → "
+        )}</code>`,
         parseMode: "html",
       });
     } else if (command === "update") {
@@ -450,28 +635,86 @@ const speedtest = async (msg: Api.Message) => {
             .replace("Z", "")}</code>`,
         ].join("\n");
 
-        // 尝试发送图片
-        if (result.result?.url) {
+        // 根据优先顺序发送
+        const order = getMessageOrder();
+        const trySend = async (type: MessageType): Promise<boolean> => {
           try {
+            if (type === "txt") {
+              await msg.edit({ text: description, parseMode: "html" });
+              return true;
+            }
+
+            // 需要图片的类型先确保图片存在
+            if (!result.result?.url) return false;
             const imagePath = await saveSpeedtestImage(result.result.url);
-            if (imagePath && fs.existsSync(imagePath)) {
+            if (!imagePath || !fs.existsSync(imagePath)) return false;
+
+            if (type === "photo") {
               await msg.client?.sendFile(msg.peerId, {
                 file: imagePath,
                 caption: description,
                 parseMode: "html",
               });
-
-              // 删除原消息和临时文件
-              await msg.delete();
-              fs.unlinkSync(imagePath);
-              return;
+              try {
+                await msg.delete();
+              } catch {}
+              try {
+                fs.unlinkSync(imagePath);
+              } catch {}
+              return true;
+            } else if (type === "file") {
+              await msg.client?.sendFile(msg.peerId, {
+                file: imagePath,
+                caption: description,
+                parseMode: "html",
+                forceDocument: true,
+              });
+              try {
+                await msg.delete();
+              } catch {}
+              try {
+                fs.unlinkSync(imagePath);
+              } catch {}
+              return true;
+            } else if (type === "sticker") {
+              // 转为贴纸发送
+              const stickerPath = await convertImageToStickerWebp(imagePath);
+              if (stickerPath && fs.existsSync(stickerPath)) {
+                const client = await getGlobalClient();
+                await client.sendFile(msg.peerId!, {
+                  file: stickerPath,
+                  forceDocument: false,
+                  attributes: [
+                    new Api.DocumentAttributeSticker({
+                      alt: "speedtest",
+                      stickerset: new Api.InputStickerSetEmpty(),
+                    }),
+                  ],
+                });
+                // 清理临时文件
+                try {
+                  fs.unlinkSync(imagePath);
+                } catch {}
+                try {
+                  fs.unlinkSync(stickerPath);
+                } catch {}
+                // 同时展示文字说明
+                await msg.edit({ text: description, parseMode: "html" });
+                return true;
+              }
             }
-          } catch (imageError) {
-            console.error("Failed to send image:", imageError);
+          } catch (e) {
+            console.error(`Send as ${type} failed:`, e);
           }
+          return false;
+        };
+
+        for (const t of order) {
+          const ok = await trySend(t);
+          if (ok) return;
         }
 
-        // 如果图片发送失败，发送文本
+        // 兜底为文本
         await msg.edit({ text: description, parseMode: "html" });
       } catch (error) {
         await msg.edit({
@@ -483,14 +726,7 @@ const speedtest = async (msg: Api.Message) => {
       }
     } else {
       await msg.edit({
-        text: `❌ <b>参数错误</b>\n\n<b>使用方法:</b>
-<code>s</code> - 开始速度测试
-<code>s [服务器ID]</code> - 使用指定服务器测试
-<code>s list</code> - 显示可用服务器列表
-<code>s set [ID]</code> - 设置默认服务器
-<code>s clear</code> - 清除默认服务器
-<code>s config</code> - 显示配置信息
-<code>s update</code> - 更新 Speedtest CLI`,
+        text: `❌ <b>参数错误</b>\n\n${help_txt}`,
         parseMode: "html",
       });
     }
@@ -511,7 +747,7 @@ const speedtest = async (msg: Api.Message) => {
 };
 
 class SpeednextPlugin extends Plugin {
-  description: string = `⚡️ 网络速度测试工具 | SpeedTest by Ookla`;
+  description: string = `⚡️ 网络速度测试工具 | SpeedTest by Ookla\n${help_txt}`;
   cmdHandlers: Record<string, (msg: Api.Message) => Promise<void>> = {
     speedtest,
     st: speedtest,
