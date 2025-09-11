@@ -206,5 +206,13 @@
   "manage_admin": {
     "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/manage_admin/manage_admin.ts?raw=true",
     "desc": "管理管理员"
+  },
+  "bizhi": {
+    "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/bizhi/bizhi.ts?raw=true",
+    "desc": "发送一张壁纸"
+  },
+  "httpcat": {
+    "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/httpcat/httpcat.ts?raw=true",
+    "desc": "发送一张http状态码主题的猫猫图片"
   }
 }
