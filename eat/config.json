@@ -190,6 +190,15 @@
         "mask": "eat/maskxm.png"
       }
     },
+    "xt": {
+      "name": "虾头！",
+      "url": "eat/eatxt.png",
+      "you": {
+        "x": 68,
+        "y": 202,
+        "mask": "eat/maskxt.png"
+      }
+    },    
     "xyy": {
       "name": "性压抑了",
       "url": "eat/eatxyy.png",
