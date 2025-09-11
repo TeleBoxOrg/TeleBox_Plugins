@@ -4,7 +4,7 @@ import { exec } from "child_process";
 import util from "util";
 import fs from "fs";
 import path from "path";
-import download from "download";
+import axios from "axios";
 import { Converter } from "opencc-js";
 
 const execPromise = util.promisify(exec);
@@ -17,6 +17,34 @@ const YTDLP_PATH = path.join(BIN_DIR, "yt-dlp");
 
 // --- 初始化简繁转换器 ---
 const toSimplified = Converter({ from: "tw", to: "cn" });
+
+function normalizeTextForFile(text: string): string {
+  // 统一空白、去除不可见字符
+  let s = (text || "")
+    .replace(/[\u200B-\u200D\uFEFF]/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  // 替换常见破折/连接符为普通连字符
+  s = s.replace(/[–—‐‑‒⁃−➖﹘﹣]/g, "-");
+  // 去掉两侧多余连接符
+  s = s.replace(/^[-_\s]+|[-_\s]+$/g, "");
+  // 禁止文件名字符
+  s = s.replace(/[\\/\?%\*:|"<>]/g, "_");
+  // 折叠多余的下划线或空格
+  s = s.replace(/[ _]{2,}/g, " ");
+  // 限长，避免极端超长
+  if (s.length > 120) s = s.slice(0, 118) + "…";
+  // Windows 特殊尾字符
+  s = s.replace(/[ .]+$/g, "");
+  return s || "未知";
+}
+
+function buildNormalizedFileName(artist: string, title: string): string {
+  const a = normalizeTextForFile(artist);
+  const t = normalizeTextForFile(title);
+  // 文件名格式：Title - Artist
+  return `${t} - ${a}`;
+}
 
 async function ensureYtDlpExists(msg: Api.Message): Promise<void> {
   if (fs.existsSync(YTDLP_PATH)) {
@@ -34,7 +62,15 @@ async function ensureYtDlpExists(msg: Api.Message): Promise<void> {
     await msg.edit({ text: toSimplified("正在下载 yt-dlp...") });
     const ytdlpUrl =
       "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp";
-    await download(ytdlpUrl, BIN_DIR, { filename: "yt-dlp" });
+    // 使用 axios 下载二进制并写入本地
+    const response = await axios.get(ytdlpUrl, { responseType: "stream" });
+    await new Promise<void>((resolve, reject) => {
+      const writer = fs.createWriteStream(YTDLP_PATH);
+      response.data.pipe(writer);
+      writer.on("finish", () => resolve());
+      writer.on("error", (err) => reject(err));
+      response.data.on("error", (err: any) => reject(err));
+    });
     await msg.edit({ text: toSimplified("配置中...") });
     fs.chmodSync(YTDLP_PATH, 0o755);
     await msg.edit({ text: toSimplified("yt-dlp 安装成功！") });
@@ -227,10 +263,12 @@ async function downloadAndUploadSong(
   artistName = toSimplified(artistName);
   // --- 修改结束 ---
 
-  const cleanFileName = `${artistName} - ${songTitle}`.replace(
-    /[\/\\?%*:|"<>]/g,
-    "_"
-  );
+  const hasValidMeta =
+    Boolean(artistName && songTitle) &&
+    !/(未知艺术家|未知歌曲|未知)/.test(`${artistName}${songTitle}`);
+  const cleanFileName = hasValidMeta
+    ? buildNormalizedFileName(artistName, songTitle)
+    : normalizeTextForFile(toSimplified(videoInfo.title || songQuery));
   const outputTemplate = path.join(
     DOWNLOAD_TEMP_PATH,
     `${cleanFileName}.%(ext)s`
@@ -239,7 +277,7 @@ async function downloadAndUploadSong(
   const escapedTitle = songTitle.replace(/"/g, '\\"');
   const escapedArtist = artistName.replace(/"/g, '\\"');
 
-  const command = `${YTDLP_PATH} "ytsearch1:${songQuery}" -x --audio-format mp3 --audio-quality 0 --embed-thumbnail -o "${outputTemplate}" --metadata "title=${escapedTitle}" --metadata "artist=${escapedArtist}" --no-warnings`;
+  const command = `${YTDLP_PATH} "ytsearch1:${songQuery}" -x --audio-format mp3 --audio-quality 0 --embed-thumbnail --write-thumbnail --convert-thumbnails jpg -o "${outputTemplate}" --metadata "title=${escapedTitle}" --metadata "artist=${escapedArtist}" --no-warnings`;
 
   try {
     // 此处无需再用 toSimplified 包裹，因为变量已经转换过了
@@ -270,9 +308,22 @@ async function downloadAndUploadSong(
 
     await msg.edit({ text: toSimplified("正在上传音频文件...") });
 
+    // 尝试查找封面缩略图
+    const thumbJpg = path.join(DOWNLOAD_TEMP_PATH, `${cleanFileName}.jpg`);
+    const thumbWebp = path.join(DOWNLOAD_TEMP_PATH, `${cleanFileName}.webp`);
+    const thumbPng = path.join(DOWNLOAD_TEMP_PATH, `${cleanFileName}.png`);
+    const thumbPath = fs.existsSync(thumbJpg)
+      ? thumbJpg
+      : fs.existsSync(thumbWebp)
+      ? thumbWebp
+      : fs.existsSync(thumbPng)
+      ? thumbPng
+      : undefined;
+
     await msg.client
       ?.sendFile(msg.peerId, {
         file: downloadedFilePath,
+        thumb: thumbPath,
         // caption: caption,
       })
       .catch((uploadError) => {
@@ -281,11 +332,17 @@ async function downloadAndUploadSong(
           file: downloadedFilePath,
           caption: caption,
           forceDocument: true,
+          thumb: thumbPath,
         });
       });
 
     await msg.delete();
     fs.unlinkSync(downloadedFilePath);
+    if (thumbPath && fs.existsSync(thumbPath)) {
+      try {
+        fs.unlinkSync(thumbPath);
+      } catch {}
+    }
   } catch (error: any) {
     console.error("Download error:", error);
     throw error;
@@ -300,12 +357,12 @@ const yt = async (msg: Api.Message) => {
       text: toSimplified(
         "YouTube 音乐下载器使用方法\n\n" +
           "基本用法:\n" +
-          ".yt <歌曲名称> 或 .yt <歌曲名> <歌手>\n\n" +
+          ".yt <搜索关键词>\n\n" +
           "强制指定元数据:\n" +
-          "使用 `歌名-歌手` 或 `歌名 歌手` 格式可获得最精准的文件名和标签。\n\n" +
+          "推荐使用 `歌名-歌手` 格式强制设定；空格分隔易误判，默认不再采用。\n\n" +
           "示例:\n" +
           ".yt Shape of You-Ed Sheeran\n" +
-          ".yt 周杰伦 晴天\n" +
+          ".yt 周杰伦-晴天\n" +
           ".yt 辞九门回忆"
       ),
     });
@@ -325,16 +382,10 @@ const yt = async (msg: Api.Message) => {
     let preferredTitle: string | undefined;
     let preferredArtist: string | undefined;
 
-    if (searchQuery.includes("-")) {
-      const parts = searchQuery.split("-");
-      preferredTitle = parts[0].trim();
-      preferredArtist = parts.slice(1).join("-").trim();
-    } else {
-      const parts = searchQuery.split(" ").filter((p) => p.length > 0);
-      if (parts.length > 1) {
-        preferredArtist = parts.pop()?.trim();
-        preferredTitle = parts.join(" ").trim();
-      }
+    const sepParts = searchQuery.split(/\s*[-–—|·\/\\]\s*/g);
+    if (sepParts.length >= 2) {
+      preferredTitle = sepParts[0].trim();
+      preferredArtist = sepParts.slice(1).join(" ").trim();
     }
 
     if (!preferredTitle || !preferredArtist) {
