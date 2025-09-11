@@ -1,8 +1,3 @@
-/**
- * SunRemove - 一键解封被封禁的用户
- * 移植自 PagerMaid 的 sunremove.py
- */
-
 import { Plugin } from "@utils/pluginBase";
 import { Api } from "telegram";
 import { getGlobalClient } from "@utils/globalClient";
@@ -12,20 +7,13 @@ import { getBannedUsers, unbanUser } from "@utils/banUtils";
 const prefixes = getPrefixes();
 const mainPrefix = prefixes[0];
 
-// HTML转义函数
 const htmlEscape = (text: string): string => 
   text.replace(/[&<>"']/g, m => ({ 
     '&': '&amp;', '<': '&lt;', '>': '&gt;', 
     '"': '&quot;', "'": '&#x27;' 
   }[m] || m));
 
-// 延迟函数
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
-
-
-/**
- * 主命令处理函数
- */
 const sunremove = async (msg: Api.Message) => {
   const client = await getGlobalClient();
   if (!client) {
@@ -33,7 +21,6 @@ const sunremove = async (msg: Api.Message) => {
     return;
   }
 
-  // 检查是否在群组中
   if (!msg.isChannel && !msg.isGroup) {
     await msg.edit({ 
       text: "❌ <b>此命令只能在群组中使用</b>", 
@@ -42,20 +29,15 @@ const sunremove = async (msg: Api.Message) => {
     return;
   }
 
-  // 参数解析 (acron.ts 模式)
   const lines = msg.text?.trim()?.split(/\r?\n/g) || [];
   const parts = lines?.[0]?.split(/\s+/) || [];
   const [, ...args] = parts;
   
-  let mode = "mine";  // 默认只解封自己封禁的
-  let num = 0;
+  let mode = "mine";
   
   if (args.length > 0) {
     if (args[0] === "all") {
       mode = "all";
-    } else if (args[0] === "random" && args[1] && !isNaN(parseInt(args[1]))) {
-      mode = "random";
-      num = parseInt(args[1]);
     } else if (args[0] === "help" || args[0] === "h") {
       await msg.edit({
         text: `<b>🔓 一键解封工具</b>
@@ -63,7 +45,6 @@ const sunremove = async (msg: Api.Message) => {
 <b>用法:</b>
 • <code>${mainPrefix}sunremove</code> - 解封自己封禁的用户
 • <code>${mainPrefix}sunremove all</code> - 解封所有被封禁的用户
-• <code>${mainPrefix}sunremove random 5</code> - 随机解封5个用户
 
 <b>说明:</b>
 此命令用于批量解封被封禁的群组成员，解封后用户可以重新加入群组。`,
@@ -73,32 +54,21 @@ const sunremove = async (msg: Api.Message) => {
     }
   }
 
-  // 获取当前用户ID
   const me = await client.getMe();
   const myId = Number(me.id);
   
-  // 获取群组实体
   const chatEntity = msg.peerId;
   
-  // 更新状态
   await msg.edit({ 
     text: `🔍 正在获取被封禁用户列表...`, 
     parseMode: "html" 
   });
   
-  // 获取被封禁的用户
   let bannedUsers = await getBannedUsers(client, chatEntity);
   
-  // 根据模式过滤
   if (mode === "mine") {
     bannedUsers = bannedUsers.filter(u => u.kickedBy === myId);
-  } else if (mode === "random" && num > 0) {
-    // 随机选择指定数量
-    bannedUsers = bannedUsers
-      .sort(() => Math.random() - 0.5)
-      .slice(0, num);
   }
-  // mode === "all" 不需要过滤
   
   if (bannedUsers.length === 0) {
     await msg.edit({ 
@@ -110,13 +80,21 @@ const sunremove = async (msg: Api.Message) => {
     return;
   }
   
-  // 更新状态
   await msg.edit({ 
     text: `⚡ 正在解封 ${bannedUsers.length} 个用户...`, 
     parseMode: "html" 
   });
   
-  // 批量解封
+  let progressMsg: Api.Message | null = null;
+  try {
+    progressMsg = await client.sendMessage("me", {
+      message: `🔓 <b>解封任务进度</b>\n\n群组: ${msg.chat?.title || "未知"}\n总数: ${bannedUsers.length} 人\n进度: 0/${bannedUsers.length}`,
+      parseMode: "html"
+    });
+  } catch (e) {
+    console.error("发送进度消息失败:", e);
+  }
+  
   let successCount = 0;
   let failedCount = 0;
   const failedUsers: string[] = [];
@@ -130,27 +108,48 @@ const sunremove = async (msg: Api.Message) => {
       failedUsers.push(`${user.firstName}(${user.id})`);
     }
     
-    // 每解封5个用户更新一次状态
-    if ((successCount + failedCount) % 5 === 0) {
-      await msg.edit({
-        text: `⚡ 解封进度: ${successCount + failedCount}/${bannedUsers.length}`,
-        parseMode: "html"
-      });
+    if (progressMsg && (successCount + failedCount) % 5 === 0) {
+      try {
+        await client.editMessage("me", {
+          message: progressMsg.id,
+          text: `🔓 <b>解封任务进度</b>\n\n群组: ${msg.chat?.title || "未知"}\n总数: ${bannedUsers.length} 人\n进度: ${successCount + failedCount}/${bannedUsers.length}\n\n✅ 成功: ${successCount}\n❌ 失败: ${failedCount}`,
+          parseMode: "html"
+        });
+      } catch (e) {
+        console.error("更新进度消息失败:", e);
+      }
     }
     
-    // 添加延迟避免频率限制
     await sleep(500);
   }
   
-  // 显示最终结果
+  if (progressMsg) {
+    try {
+      let finalText = `🔓 <b>解封任务完成</b>\n\n群组: ${msg.chat?.title || "未知"}\n总数: ${bannedUsers.length} 人\n\n`;
+      if (failedCount > 0) {
+        finalText += `✅ 成功: ${successCount} 人\n❌ 失败: ${failedCount} 人\n`;
+        if (failedUsers.length <= 5) {
+          finalText += `\n失败用户: ${failedUsers.map(u => htmlEscape(u)).join(", ")}`;
+        }
+      } else {
+        finalText += `✅ 已成功解封所有 ${successCount} 人`;
+      }
+      
+      await client.editMessage("me", {
+        message: progressMsg.id,
+        text: finalText,
+        parseMode: "html"
+      });
+    } catch (e) {
+      console.error("更新最终结果失败:", e);
+    }
+  }
+  
   let resultText = "";
   if (failedCount > 0) {
     resultText = `✅ <b>解封完成</b>\n\n` +
       `成功: <code>${successCount}</code> 人\n` +
-      `失败: <code>${failedCount}</code> 人\n`;
-    if (failedUsers.length <= 5) {
-      resultText += `失败用户: ${failedUsers.map(u => htmlEscape(u)).join(", ")}`;
-    }
+      `失败: <code>${failedCount}</code> 人`;
   } else {
     resultText = `✅ <b>解封完成</b>\n\n已成功解封 <code>${successCount}</code> 人`;
   }
@@ -160,7 +159,6 @@ const sunremove = async (msg: Api.Message) => {
     parseMode: "html"
   });
   
-  // 5秒后删除消息
   await sleep(5000);
   await msg.delete();
 };
