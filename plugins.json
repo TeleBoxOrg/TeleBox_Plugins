@@ -214,5 +214,9 @@
   "httpcat": {
     "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/httpcat/httpcat.ts?raw=true",
     "desc": "发送一张http状态码主题的猫猫图片"
+  },
+  "oxost": {
+    "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/oxost/oxost.ts?raw=true",
+    "desc": "回复聊天中的文件与媒体 得到一个临时的下载链接"
   }
 }
