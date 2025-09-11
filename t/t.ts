@@ -141,9 +141,6 @@ async function generateSpeech(text: string, referenceId: string, apiKey: string)
     return oggFile;
   } catch (error) {
     console.error("生成语音时发生错误:", error);
-    // 清理可能生成的临时文件
-    await fs.unlink(mp3File).catch(() => {});
-    await fs.unlink(oggFile).catch(() => {});
     return null;
   }
 }
@@ -191,7 +188,21 @@ async function tts(msg: Api.Message): Promise<void> {
   const lines = msg.text?.trim()?.split(/\r?\n/g) || [];
   const parts = lines?.[0]?.split(/\s+/) || [];
   const [, ...args] = parts;
-  const text = args.join(" ").trim();
+  let text = args.join(" ").trim(); // <<< [修改] 将 const 改为 let
+
+  // <<< [新增] 如果没有直接提供文本，并且是回复消息，则获取被回复消息的文本
+  if (!text && msg.replyTo?.replyToMsgId) {
+    try {
+      const repliedMsg = await msg.getReplyMessage();
+      if (repliedMsg && repliedMsg.text) {
+        text = repliedMsg.text;
+      }
+    } catch (error) {
+      console.error("获取被回复的消息失败:", error);
+      // 如果获取失败，text 仍然是空的，后续逻辑会处理
+    }
+  }
+  // <<< [新增结束]
 
   try {
     const userData = await loadUserData();
@@ -205,27 +216,29 @@ async function tts(msg: Api.Message): Promise<void> {
       return;
     }
 
+    // <<< [修改] 更新了这里的提示信息
     if (!text) {
       await msg.edit({
-        text: "❌ <b>请提供要转换的文本。</b>\n\n<b>用法：</b><code>.t 文本内容</code>",
+        text: "❌ <b>请提供要转换的文本，或使用 <code>.t</code> 回复一条消息。</b>\n\n<b>用法：</b><code>.t 文本内容</code>",
         parseMode: "html"
       });
       return;
     }
+    // <<< [修改结束]
 
     await msg.edit({ text: "🔄 正在生成语音..." });
 
     const resultFile = await generateSpeech(text, userConfig.defaultRoleId, userConfig.apiKey);
 
     if (resultFile) {
-      await msg.client?.sendFile(msg.peerId, {
+      await msg.client?.sendFile(msg.chatId, {
         file: resultFile,
+        voice: true,
         replyTo: msg.replyTo?.replyToMsgId,
+        commentTo: msg.replyTo?.commentToMsgId,
       });
       await msg.delete();
-      // 删除所有缓存文件
-      await fs.unlink(resultFile).catch(() => {}); // 删除 ogg 文件
-      await fs.unlink('output_audio.mp3').catch(() => {}); // 删除 mp3 文件
+      await fs.unlink(resultFile);
     } else {
       await msg.edit({
         text: "❌ <b>生成语音失败，请检查 API Key 和网络连接。</b>",
@@ -352,12 +365,13 @@ class TTSPlugin extends Plugin {
   description: string = `
 🚀 <b>文字转语音插件</b>
 <b>使用方法:</b>
-• <code>.t &lt;文本&gt;</code> - 将文本转换为语音
+• <code>.t &lt;文本&gt;</code> - 将文本转换为语音 (可回复消息)
 • <code>.tk &lt;APIKey&gt;</code> - 设置你的 API Key
 • <code>.ts &lt;角色名&gt;</code> - 设置默认语音角色
 
 <b>示例:</b>
 • <code>.t 大家好，我是雷军</code>
+• (回复某条消息) <code>.t</code>
 • <code>.tk my-private-api-key</code>
 • <code>.ts 影视飓风</code>
   `;
