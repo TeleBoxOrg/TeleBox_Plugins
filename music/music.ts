@@ -448,7 +448,7 @@ class MusicDownloader {
   private tempDir: string;
 
   constructor() {
-    this${mainPrefix}musicDir = createDirectoryInAssets("music_cache");
+    this.musicDir = createDirectoryInAssets("music_cache");
     this.tempDir = createDirectoryInTemp("music");
     this.ensureDirectories();
     // 同步 lowdb 中的 Cookie 到文件（若存在）
@@ -456,8 +456,8 @@ class MusicDownloader {
   }
 
   private ensureDirectories(): void {
-    if (!fs.existsSync(this${mainPrefix}musicDir)) {
-      fs.mkdirSync(this${mainPrefix}musicDir, { recursive: true });
+    if (!fs.existsSync(this.musicDir)) {
+      fs.mkdirSync(this.musicDir, { recursive: true });
     }
     if (!fs.existsSync(this.tempDir)) {
       fs.mkdirSync(this.tempDir, { recursive: true });
@@ -662,7 +662,7 @@ class MusicDownloader {
     const safeTitle = this.safeFilename(title);
     const safeArtist = this.safeFilename(artist);
     const filename = `${safeArtist}_${safeTitle}.mp3`;
-    const targetPath = path.join(this${mainPrefix}musicDir, filename);
+    const targetPath = path.join(this.musicDir, filename);
 
     // Copy file to music directory
     fs.copyFileSync(tempFile, targetPath);
