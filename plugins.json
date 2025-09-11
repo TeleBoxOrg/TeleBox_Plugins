@@ -202,5 +202,9 @@
   "yinglish": {
     "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/yinglish/yinglish.ts?raw=true",
     "desc": "淫语翻译"
+  },
+  "manage_admin": {
+    "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/manage_admin/manage_admin.ts?raw=true",
+    "desc": "管理管理员"
   }
 }
