@@ -67,7 +67,6 @@ class BizhiPlugin extends Plugin {
         );
         await client.sendFile(msg.peerId, {
           file,
-          caption: `壁纸分类：${lx || "随机"}`,
           replyTo: msg.id,
         });
         await msg.delete();
