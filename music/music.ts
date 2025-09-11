@@ -481,10 +481,10 @@ class MusicDownloader {
       const cookie = db.data[YTDLP_CONFIG_KEYS.COOKIE];
       if (cookie && typeof cookie === "string" && cookie.trim()) {
         const cookieFile = path.join(this.tempDir, "cookies.txt");
-        if (!fs.existsSync(cookieFile)) {
-          fs.writeFileSync(cookieFile, cookie, "utf-8");
-          console.log("[music] 从 lowdb 恢复 yt-dlp Cookie");
-        }
+        // if (!fs.existsSync(cookieFile)) {
+        fs.writeFileSync(cookieFile, cookie, "utf-8");
+        console.log("[music] 从 lowdb 恢复 yt-dlp Cookie");
+        // }
       }
     } catch (e) {
       console.debug("[music] 无法从 lowdb 同步 Cookie:", e);
@@ -1225,19 +1225,53 @@ class MusicPlugin extends Plugin {
     msg: Api.Message,
     cookieContent: string
   ): Promise<void> {
-    if (!cookieContent) {
-      await msg.edit({
-        text: `❌ <b>Cookie 内容为空</b>\n\n🔑 <b>使用方法:</b>\n<code>${mainPrefix}music cookie &lt;Netscape格式Cookie&gt;</code>\n\n📋 <b>获取步骤 (推荐使用浏览器插件):</b>\n1️⃣ 登录 YouTube 网页版\n2️⃣ 安装浏览器插件 "Get cookies.txt LOCALLY"\n3️⃣ 点击插件图标，选择 "Export as Netscape"\n4️⃣ 复制导出的 Cookie 内容\n\n📝 <b>手动获取 (开发者工具):</b>\n1️⃣ 按 F12 打开开发者工具\n2️⃣ Application → Cookies → youtube.com\n3️⃣ 导出为 Netscape HTTP Cookie 格式\n\n⚠️ <b>重要:</b> 必须是 Netscape 格式，不是普通 Cookie 字符串\n💡 <b>用途:</b> 突破年龄限制、登录限制和地区限制`,
-        parseMode: "html",
-      });
-      return;
-    }
-
     try {
+      // 若命令中未直接携带内容，尝试从回复中读取（文本或文件）
+      if (!cookieContent) {
+        const client = await getGlobalClient();
+        const reply = await msg.getReplyMessage();
+        if (reply) {
+          // 优先从文本中获取
+          const replyText =
+            (reply as any)?.text || (reply as any)?.message || "";
+          if (replyText?.trim()) {
+            cookieContent = replyText.trim();
+          } else if (reply.document) {
+            // 回复中是一个文件，尝试下载
+            await msg.edit({
+              text: "📥 <b>读取 Cookie 文件...</b>",
+              parseMode: "html",
+            });
+            const tempCookiePath = path.join(
+              downloader.tempDirPath,
+              `temp_cookie_${msg.id}.txt`
+            );
+            await client?.downloadMedia(reply, { outputFile: tempCookiePath });
+            try {
+              cookieContent = fs.readFileSync(tempCookiePath, "utf-8");
+            } finally {
+              // 清理临时文件
+              try {
+                if (fs.existsSync(tempCookiePath))
+                  fs.unlinkSync(tempCookiePath);
+              } catch {}
+            }
+          }
+        }
+      }
+
+      if (!cookieContent) {
+        await msg.edit({
+          text: `❌ <b>Cookie 内容为空</b>\n\n🔑 <b>使用方法:</b>\n<code>${mainPrefix}music cookie &lt;Netscape格式Cookie&gt;</code>\n或回复一条包含 Cookie 的文本/文件后发送 <code>${mainPrefix}music cookie</code>\n\n📋 <b>获取步骤 (推荐使用浏览器插件):</b>\n1️⃣ 登录 YouTube 网页版\n2️⃣ 安装浏览器插件 "Get cookies.txt LOCALLY"\n3️⃣ 点击插件图标，选择 "Export as Netscape"\n4️⃣ 复制导出的 Cookie 内容\n\n📝 <b>手动获取 (开发者工具):</b>\n1️⃣ 按 F12 打开开发者工具\n2️⃣ Application → Cookies → youtube.com\n3️⃣ 导出为 Netscape HTTP Cookie 格式\n\n⚠️ <b>重要:</b> 必须是 Netscape 格式，不是普通 Cookie 字符串\n💡 <b>用途:</b> 突破年龄限制、登录限制和地区限制`,
+          parseMode: "html",
+        });
+        return;
+      }
+
       const success = await downloader.setCookie(cookieContent);
       if (success) {
         await msg.edit({
-          text: "✅ <b>Cookie 配置成功</b>\n\n🔓 <b>已解锁功能:</b>\n• 年龄受限内容访问\n• 需要登录的视频\n• 地区限制内容\n• 高清音质选项\n\n⏰ <b>有效期:</b> 持久保存 (lowdb)\n🔁 <b>重启:</b> 将自动恢复到 cookies.txt\n🔒 <b>隐私:</b> 仅本地存储，不会上传",
+          text: `✅ <b>Cookie 配置成功</b>\n\n🔓 <b>已解锁功能:</b>\n• 年龄受限内容访问\n• 需要登录的视频\n• 地区限制内容\n• 高清音质选项\n\n💾 <b>已保存</b>\n⏰ <b>持久化:</b> 已同步到配置 (lowdb)\n🔒 <b>隐私:</b> 仅本地存储，不会上传`,
           parseMode: "html",
         });
       } else {
