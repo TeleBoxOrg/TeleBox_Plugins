@@ -53,6 +53,7 @@ const GEMINI_CONFIG_KEYS = {
 } as const;
 const YTDLP_CONFIG_KEYS = {
   COOKIE: "music_ytdlp_cookie",
+  PROXY: "music_ytdlp_proxy",
 } as const;
 
 // 默认配置
@@ -496,11 +497,22 @@ class MusicDownloader {
       // 直接使用传入的查询，不再额外添加关键词
       const searchQuery = query;
 
+      // 读取代理配置，供 yt-dlp 使用
+      let proxyArg = "";
+      try {
+        const db = await getDB();
+        const proxy = String(db.data[YTDLP_CONFIG_KEYS.PROXY] || "").trim();
+        if (proxy) {
+          const safeProxy = proxy.replace(/["`$]/g, "");
+          proxyArg = ` --proxy \"${safeProxy}\"`;
+        }
+      } catch {}
+
       // 尝试多种调用方式
       const commands = [
-        `yt-dlp "ytsearch:${searchQuery}" --get-id --no-playlist --no-warnings`,
-        `python -m yt_dlp "ytsearch:${searchQuery}" --get-id --no-playlist --no-warnings`,
-        `python3 -m yt_dlp "ytsearch:${searchQuery}" --get-id --no-playlist --no-warnings`,
+        `yt-dlp "ytsearch:${searchQuery}" --get-id --no-playlist --no-warnings${proxyArg}`,
+        `python -m yt_dlp "ytsearch:${searchQuery}" --get-id --no-playlist --no-warnings${proxyArg}`,
+        `python3 -m yt_dlp "ytsearch:${searchQuery}" --get-id --no-playlist --no-warnings${proxyArg}`,
       ];
 
       let stdout = "";
@@ -595,11 +607,22 @@ class MusicDownloader {
       const thumbnailArgs =
         " --embed-thumbnail --write-thumbnail --convert-thumbnails jpg";
 
+      // 读取代理配置
+      let proxyArg = "";
+      try {
+        const db = await getDB();
+        const proxy = String(db.data[YTDLP_CONFIG_KEYS.PROXY] || "").trim();
+        if (proxy) {
+          const safeProxy = proxy.replace(/["`$]/g, "");
+          proxyArg = ` --proxy \"${safeProxy}\"`;
+        }
+      } catch {}
+
       // Try multiple command formats
       const commands = [
-        `yt-dlp "${url}" -f "bestaudio[ext=m4a]/bestaudio/best[height<=480]" -x --audio-format mp3 --audio-quality 0 --embed-metadata --add-metadata${thumbnailArgs} -o "${outputPath}" --no-playlist --no-warnings ${cookieArg}${metadataArgs}`,
-        `python -m yt_dlp "${url}" -f "bestaudio[ext=m4a]/bestaudio/best[height<=480]" -x --audio-format mp3 --audio-quality 0 --embed-metadata --add-metadata${thumbnailArgs} -o "${outputPath}" --no-playlist --no-warnings ${cookieArg}${metadataArgs}`,
-        `python3 -m yt_dlp "${url}" -f "bestaudio[ext=m4a]/bestaudio/best[height<=480]" -x --audio-format mp3 --audio-quality 0 --embed-metadata --add-metadata${thumbnailArgs} -o "${outputPath}" --no-playlist --no-warnings ${cookieArg}${metadataArgs}`,
+        `yt-dlp "${url}" -f "bestaudio[ext=m4a]/bestaudio/best[height<=480]" -x --audio-format mp3 --audio-quality 0 --embed-metadata --add-metadata${thumbnailArgs} -o "${outputPath}" --no-playlist --no-warnings ${cookieArg}${metadataArgs}${proxyArg}`,
+        `python -m yt_dlp "${url}" -f "bestaudio[ext=m4a]/bestaudio/best[height<=480]" -x --audio-format mp3 --audio-quality 0 --embed-metadata --add-metadata${thumbnailArgs} -o "${outputPath}" --no-playlist --no-warnings ${cookieArg}${metadataArgs}${proxyArg}`,
+        `python3 -m yt_dlp "${url}" -f "bestaudio[ext=m4a]/bestaudio/best[height<=480]" -x --audio-format mp3 --audio-quality 0 --embed-metadata --add-metadata${thumbnailArgs} -o "${outputPath}" --no-playlist --no-warnings ${cookieArg}${metadataArgs}${proxyArg}`,
       ];
 
       let success = false;
@@ -722,11 +745,12 @@ const help_text = `🎵 <b>YouTube 音乐下载器</b>
 • <code>${mainPrefix}music &lt;关键词&gt;</code> - 搜索下载音乐
 • <code>${mainPrefix}music &lt;YouTube链接&gt;</code> - 直接下载
 • <code>${mainPrefix}music save</code> - 保存音频到本地
-• <code>${mainPrefix}music cookie &lt;内容&gt;</code> - 设置Cookie
+• <code>${mainPrefix}music cookie &lt;内容&gt;</code> - 设置 Cookie
+• <code>${mainPrefix}music proxy &lt;URL&gt;</code> - 设置 yt-dlp 代理
 • <code>${mainPrefix}music clear</code> - 清理临时文件
-• <code>${mainPrefix}music apikey &lt;密钥&gt;</code> - 设置Gemini API Key
-• <code>${mainPrefix}music model &lt;名称&gt;</code> - 设置Gemini模型
-• <code>${mainPrefix}music baseurl &lt;地址&gt;</code> - 设置Gemini Base URL
+• <code>${mainPrefix}music apikey &lt;密钥&gt;</code> - 设置 Gemini API Key
+• <code>${mainPrefix}music model &lt;名称&gt;</code> - 设置 Gemini 模型
+• <code>${mainPrefix}music baseurl &lt;地址&gt;</code> - 设置 Gemini Base URL
 • <code>${mainPrefix}music config</code> - 查看当前配置
 • <code>${mainPrefix}music help</code> - 显示帮助
 
@@ -735,7 +759,9 @@ const help_text = `🎵 <b>YouTube 音乐下载器</b>
 • <code>${mainPrefix}music 周杰伦 晴天</code>
 
 <b>🌐 网络加速:</b>
-<code>wget -N https://gitlab.com/fscarmen/warp/-/raw/main/menu.sh && bash menu.sh e</code>`;
+安装 WireProxy 解决方案 <code>wget -N https://gitlab.com/fscarmen/warp/-/raw/main/menu.sh && bash menu.sh w</code> 然后设置 <code>proxy</code> 为 <code>socks5://127.0.0.1:40000</code>
+或
+安装 iptables + dnsmasq + ipset 分流流媒体方案 <code>wget -N https://gitlab.com/fscarmen/warp/-/raw/main/menu.sh && bash menu.sh e</code>`;
 
 class MusicPlugin extends Plugin {
   description: string = help_text;
@@ -786,6 +812,13 @@ class MusicPlugin extends Plugin {
         if (sub === "cookie") {
           const cookieContent = getArgFromMsg(msg, 1);
           await this.handleCookieCommand(msg, cookieContent);
+          return;
+        }
+
+        // 代理设置功能
+        if (sub === "proxy") {
+          const proxyValue = args.slice(1).join(" ").trim();
+          await this.handleProxyCommand(msg, proxyValue);
           return;
         }
 
@@ -1296,6 +1329,65 @@ class MusicPlugin extends Plugin {
     }
   }
 
+  private async handleProxyCommand(
+    msg: Api.Message,
+    proxyValue: string
+  ): Promise<void> {
+    try {
+      const db = await getDB();
+
+      // 查询当前
+      if (!proxyValue) {
+        const current = String(db.data[YTDLP_CONFIG_KEYS.PROXY] || "").trim();
+        await msg.edit({
+          text: `🌐 <b>yt-dlp 代理</b>\n\n当前: <code>${htmlEscape(
+            current || "未设置"
+          )}</code>\n\n设置: <code>${mainPrefix}music proxy &lt;URL&gt;</code>\n示例: <code>${mainPrefix}music proxy http://127.0.0.1:7890</code>\n支持: http, https, socks5`,
+          parseMode: "html",
+        });
+        return;
+      }
+
+      // 清除
+      if (["clear", "off", "none"].includes(proxyValue.toLowerCase())) {
+        db.data[YTDLP_CONFIG_KEYS.PROXY] = "";
+        await db.write();
+        await msg.edit({
+          text: "✅ <b>代理已清除</b>\n\nyt-dlp 将不再使用代理",
+          parseMode: "html",
+        });
+        return;
+      }
+
+      // 基础校验与保存
+      const safe = proxyValue.trim();
+      if (!/^\w+:\/\//.test(safe)) {
+        await msg.edit({
+          text: `❌ <b>URL 格式无效</b>\n\n示例: <code>http://127.0.0.1:7890</code> 或 <code>socks5://127.0.0.1:1080</code>`,
+          parseMode: "html",
+        });
+        return;
+      }
+
+      db.data[YTDLP_CONFIG_KEYS.PROXY] = safe;
+      await db.write();
+      await msg.edit({
+        text: `✅ <b>代理已设置</b>\n\n当前: <code>${htmlEscape(
+          safe
+        )}</code>\n\n说明: 将在所有 yt-dlp 调用中附加 <code>--proxy</code>`,
+        parseMode: "html",
+      });
+    } catch (error: any) {
+      const msgText = error?.message ? String(error.message) : String(error);
+      await msg.edit({
+        text: `❌ <b>代理设置失败</b>\n\n错误: <code>${htmlEscape(
+          msgText.substring(0, 120)
+        )}</code>`,
+        parseMode: "html",
+      });
+    }
+  }
+
   private async handleModelCommand(
     msg: Api.Message,
     model: string
@@ -1362,6 +1454,7 @@ class MusicPlugin extends Plugin {
       db.data[YTDLP_CONFIG_KEYS.COOKIE] &&
         String(db.data[YTDLP_CONFIG_KEYS.COOKIE]).trim()
     );
+    const proxy = String(db.data[YTDLP_CONFIG_KEYS.PROXY] || "").trim();
 
     const maskedKey = apiKey
       ? apiKey.substring(0, 8) + "..." + apiKey.substring(apiKey.length - 4)
@@ -1376,7 +1469,9 @@ class MusicPlugin extends Plugin {
         model
       )}</code>\n\n🍪 <b>yt-dlp Cookie</b>\n• 状态: ${
         hasCookie ? "<b>已配置</b>" : "<b>未配置</b>"
-      }`,
+      }\n\n🌐 <b>yt-dlp Proxy</b>\n• 当前: <code>${htmlEscape(
+        proxy || "未设置"
+      )}</code>`,
       parseMode: "html",
     });
   }
