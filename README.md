@@ -38,6 +38,7 @@ npm i <插件名>
 - `kitt` - 高级触发器: 匹配 -> 执行, 高度自定义, 逻辑自由  
 - `komari` - Komari 服务器监控插件，获取节点状态和资源信息  
 - `lottery` - 抽奖系统，支持群组抽奖活动管理  
+- `manage_admin` - 管理管理员  
 - `moyu` - 摸鱼日报  
 - `music` - YouTube 音乐搜索和下载工具  
 - `music_bot` - 多音源音乐搜索  
