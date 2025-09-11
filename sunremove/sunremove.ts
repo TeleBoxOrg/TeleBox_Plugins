@@ -87,8 +87,10 @@ const sunremove = async (msg: Api.Message) => {
   
   let progressMsg: Api.Message | null = null;
   try {
+    const chat = await client.getEntity(chatEntity);
+    const chatTitle = 'title' in chat ? chat.title : "未知群组";
     progressMsg = await client.sendMessage("me", {
-      message: `🔓 <b>解封任务进度</b>\n\n群组: ${msg.chat?.title || "未知"}\n总数: ${bannedUsers.length} 人\n进度: 0/${bannedUsers.length}`,
+      message: `🔓 <b>解封任务进度</b>\n\n群组: ${chatTitle}\n总数: ${bannedUsers.length} 人\n进度: 0/${bannedUsers.length}`,
       parseMode: "html"
     });
   } catch (e) {
@@ -110,9 +112,11 @@ const sunremove = async (msg: Api.Message) => {
     
     if (progressMsg && (successCount + failedCount) % 5 === 0) {
       try {
+        const chat = await client.getEntity(chatEntity);
+        const chatTitle = 'title' in chat ? chat.title : "未知群组";
         await client.editMessage("me", {
           message: progressMsg.id,
-          text: `🔓 <b>解封任务进度</b>\n\n群组: ${msg.chat?.title || "未知"}\n总数: ${bannedUsers.length} 人\n进度: ${successCount + failedCount}/${bannedUsers.length}\n\n✅ 成功: ${successCount}\n❌ 失败: ${failedCount}`,
+          text: `🔓 <b>解封任务进度</b>\n\n群组: ${chatTitle}\n总数: ${bannedUsers.length} 人\n进度: ${successCount + failedCount}/${bannedUsers.length}\n\n✅ 成功: ${successCount}\n❌ 失败: ${failedCount}`,
           parseMode: "html"
         });
       } catch (e) {
@@ -125,7 +129,9 @@ const sunremove = async (msg: Api.Message) => {
   
   if (progressMsg) {
     try {
-      let finalText = `🔓 <b>解封任务完成</b>\n\n群组: ${msg.chat?.title || "未知"}\n总数: ${bannedUsers.length} 人\n\n`;
+      const chat = await client.getEntity(chatEntity);
+      const chatTitle = 'title' in chat ? chat.title : "未知群组";
+      let finalText = `🔓 <b>解封任务完成</b>\n\n群组: ${chatTitle}\n总数: ${bannedUsers.length} 人\n\n`;
       if (failedCount > 0) {
         finalText += `✅ 成功: ${successCount} 人\n❌ 失败: ${failedCount} 人\n`;
         if (failedUsers.length <= 5) {
