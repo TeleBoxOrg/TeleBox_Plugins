@@ -203,10 +203,19 @@ class Crazy4Plugin extends Plugin {
         // 发送随机文案
         const randomIndex = Math.floor(Math.random() * crazy4_data.length);
         const randomText = crazy4_data[randomIndex];
-        await msg.edit({ 
-          text: `${htmlEscape(randomText)}`,
-          parseMode: "html" 
+        
+        // 检查原消息是否在回复其他消息
+        const replyToMsgId = msg.replyToMsgId;
+        
+        // 发送新消息，如果原消息是回复，则新消息也回复同一条
+        await client.sendMessage(msg.peerId, {
+          message: `${htmlEscape(randomText)}`,
+          parseMode: "html",
+          replyTo: replyToMsgId // 保持原有的回复关系
         });
+        
+        // 删除原命令消息
+        await msg.delete({ revoke: true });
 
       } catch (error: any) {
         console.error("[crazy4] 插件执行失败:", error);
