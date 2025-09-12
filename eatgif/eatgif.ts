@@ -65,6 +65,7 @@ async function assetBufferFor(filePath: string): Promise<Buffer> {
     return buffer;
   }
   const res = await axios.get(url, { responseType: "arraybuffer" });
+  fs.mkdirSync(path.dirname(localPath), {recursive: true})
   fs.writeFileSync(localPath, res.data);
   return res.data;
 }
