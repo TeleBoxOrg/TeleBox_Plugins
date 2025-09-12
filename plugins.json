@@ -226,5 +226,9 @@
   "crazy4": {
     "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/crazy4/crazy4.ts?raw=true",
     "desc": "疯狂星期四文案"
+  },
+  "encode": {
+    "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/encode/encode.ts?raw=true",
+    "desc": "简单的编码解码插件"
   }
 }
