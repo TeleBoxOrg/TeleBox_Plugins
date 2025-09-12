@@ -1,0 +1,35 @@
+{
+  "desc": "逗逗你呀～～",
+  "width": 512,
+  "height": 512,
+  "res": [
+    {
+      "url": "dd/dd1.png",
+      "delay": 100,
+      "you": {
+        "x": 104,
+        "y": 84,
+        "mask": "dd/head1.png"
+      }
+    },
+    {
+      "url": "dd/dd2.png",
+      "delay": 100,
+      "you": {
+        "x": 105,
+        "y": 82,
+        "mask": "dd/head2.png",
+        "rotate": 90
+      }
+    },
+    {
+      "url": "dd/dd3.png",
+      "delay": 100,
+      "you": {
+        "x": 107,
+        "y": 83,
+        "mask": "dd/head3.png"
+      }
+    }
+  ]
+}
