@@ -234,5 +234,9 @@
   "ids": {
     "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/ids/ids.ts?raw=true",
     "desc": "用户信息显示以及跳转链接"
+  },
+  "eatgif": {
+    "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/eatgif/eatgif.ts?raw=true",
+    "desc": "生成\"吃掉\"动图表情包"
   }
 }
