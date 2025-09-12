@@ -25,6 +25,7 @@ interface AllUserData {
 }
 
 const dataFilePath = path.join(createDirectoryInAssets("tts-plugin"), DATA_FILE_NAME);
+const cacheDir = createDirectoryInAssets("tts-plugin/cache");
 
 async function loadUserData(): Promise<AllUserData> {
   try {
@@ -109,10 +110,12 @@ function cleanTextForTTS(text: string): string {
     return cleanedText.trim();
 }
 
-async function generateSpeech(text: string, referenceId: string, apiKey: string): Promise<string | null> {
+async function generateSpeech(text: string, referenceId: string, apiKey: string): Promise<{ oggFile: string; mp3File: string } | null> {
   const api_url = 'https://api.fish.audio/v1/tts';
-  const mp3File = 'output_audio.mp3';
-  const oggFile = 'output.ogg';
+  // 仅用于当前请求的临时文件，不做持久缓存
+  const unique = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  const mp3File = path.join(cacheDir, `tts-${unique}.mp3`);
+  const oggFile = path.join(cacheDir, `tts-${unique}.ogg`);
 
   try {
     const response = await axios.post(api_url, { text, reference_id: referenceId }, {
@@ -120,9 +123,17 @@ async function generateSpeech(text: string, referenceId: string, apiKey: string)
       responseType: 'arraybuffer',
     });
     await fs.writeFile(mp3File, response.data);
-    await execPromise(`ffmpeg -y -i ${mp3File} -c:a libopus -b:a 64k -vbr on ${oggFile}`);
-    return oggFile;
+
+    // 使用 ffmpeg 将 mp3 转 opus 语音（ogg）
+    const quotedIn = mp3File.replace(/"/g, '\\"');
+    const quotedOut = oggFile.replace(/"/g, '\\"');
+    await execPromise(`ffmpeg -y -i "${quotedIn}" -c:a libopus -b:a 64k -vbr on "${quotedOut}"`);
+
+    return { oggFile, mp3File };
   } catch (error: any) {
+    // 清理可能已产生的临时文件
+    try { await fs.unlink(oggFile); } catch {}
+    try { await fs.unlink(mp3File); } catch {}
     console.error(`语音生成或转换失败: ${error.message}`);
     return null;
   }
@@ -199,14 +210,20 @@ async function tts(msg: Api.Message): Promise<void> {
     const resultFile = await generateSpeech(cleanedText, userConfig.defaultRoleId, userConfig.apiKey);
 
     if (resultFile) {
-      await msg.client?.sendFile(msg.chatId, {
-        file: resultFile,
-        voice: true,
-        replyTo: msg.replyTo?.replyToMsgId,
-        commentTo: msg.replyTo?.commentToMsgId,
+      await msg.client?.sendFile(msg.peerId, {
+        file: resultFile.oggFile,
+        replyTo: msg.id,
+        attributes: [new (Api as any).DocumentAttributeAudio({ duration: 0, voice: true })],
       });
+      // 发送完成后清理缓存文件（按用户要求）
+      try {
+        // 优先删除已发送的 ogg，再尝试删除 mp3
+        try { await fs.unlink(resultFile.oggFile); } catch {}
+        try { await fs.unlink(resultFile.mp3File); } catch {}
+      } catch (e) {
+        console.warn('[TTSPlugin] 缓存清理失败:', e);
+      }
       await msg.delete();
-      await fs.unlink(resultFile);
     } else {
       await msg.edit({ text: "❌ <b>生成语音失败，可能是API Key有误、余额不足或网络问题。</b>", parseMode: "html" });
     }
