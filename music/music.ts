@@ -1,7 +1,7 @@
 /**
  * Music Plugin for TeleBox
  * Professional YouTube audio downloader with AI-enhanced search
- * @version 3.0.0
+ * @version 5.0.0
  * @author TeleBox Team
  */
 
@@ -94,6 +94,7 @@ interface SongInfo {
   artist: string;
   album?: string;
   thumbnail?: string;
+  duration?: number; // 单位：秒
 }
 
 // ==================== Dependency Manager ====================
@@ -207,6 +208,51 @@ class Utils {
     const mins = Math.floor(seconds / 60);
     const secs = seconds % 60;
     return `${mins}:${secs.toString().padStart(2, "0")}`;
+  }
+
+  // 解析多种时长表示："mm:ss"、"hh:mm:ss"、"225"、"225s"、"3分45秒"
+  static parseDuration(input: string): number | undefined {
+    if (!input) return undefined;
+    const txt = String(input).trim();
+
+    // 纯数字（秒）或带 s 后缀
+    const secNum = /^\d+(?:\.\d+)?s?$/i;
+    if (secNum.test(txt)) {
+      const v = parseFloat(txt.replace(/s$/i, ""));
+      return Number.isFinite(v) ? Math.round(v) : undefined;
+    }
+
+    // 中文格式：3分45秒 / 1小时2分3秒
+    const zh = /(?:(\d+)\s*小时)?\s*(?:(\d+)\s*分)?\s*(?:(\d+)\s*秒)?/;
+    const zhMatch = txt.match(zh);
+    if (zhMatch && (zhMatch[1] || zhMatch[2] || zhMatch[3])) {
+      const h = parseInt(zhMatch[1] || "0", 10);
+      const m = parseInt(zhMatch[2] || "0", 10);
+      const s = parseInt(zhMatch[3] || "0", 10);
+      return h * 3600 + m * 60 + s;
+    }
+
+    // 冒号分隔：hh:mm:ss 或 mm:ss
+    const parts = txt
+      .split(":")
+      .map((p) => p.trim())
+      .filter(Boolean);
+    if (parts.length === 2 || parts.length === 3) {
+      const nums = parts.map((p) => parseInt(p, 10));
+      if (nums.every((n) => Number.isFinite(n))) {
+        let h = 0,
+          m = 0,
+          s = 0;
+        if (nums.length === 3) {
+          [h, m, s] = nums as [number, number, number];
+        } else {
+          [m, s] = nums as [number, number];
+        }
+        return h * 3600 + m * 60 + s;
+      }
+    }
+
+    return undefined;
   }
 }
 
@@ -448,18 +494,20 @@ class GeminiClient {
     const model = await ConfigManager.get(CONFIG.KEYS.MODEL);
     const url = `${this.baseUrl}/v1beta/models/${model}:generateContent`;
 
-    const systemPrompt = `只输出以下5行格式，不要任何其他内容。如果信息不存在则该行留空：
+    const systemPrompt = `只输出以下4行，且不要任何其他内容。若未知则留空：
 
 歌曲名: 
 歌手: 
-专辑: `;
+专辑: 
+时长: `;
 
     const userPrompt = `精准识别这个查询的歌曲信息："${query}"
 要求：
 1. 自动纠正拼写错误和识别简称
 2. 返回最广为人知的版本
 3. 歌手必须是原唱或最火的演唱者
-4. 只填写确定的信息，如果没有找到歌曲则用用户输入作为歌曲名`;
+4. 只填写确定的信息，如果没有找到歌曲则用用户输入作为歌曲名
+5. 时长格式可为 秒数 或 mm:ss 或 hh:mm:ss（尽量准确）`;
 
     const headers: Record<string, string> = {
       "x-goog-api-key": this.apiKey,
@@ -706,11 +754,13 @@ async function extractSongInfo(
   title: string;
   artist: string;
   album?: string;
+  duration?: number;
 }> {
   const lines = geminiResponse.split("\n").map((line) => line.trim());
   let title = "";
   let artist = "";
   let album = "";
+  let durationSec: number | undefined;
 
   for (const line of lines) {
     if (line.startsWith("歌曲名:") || line.startsWith("歌曲名：")) {
@@ -719,6 +769,17 @@ async function extractSongInfo(
       artist = line.replace(/歌手[:：]\s*/, "").trim();
     } else if (line.startsWith("专辑:") || line.startsWith("专辑：")) {
       album = line.replace(/专辑[:：]\s*/, "").trim();
+    } else if (
+      line.startsWith("时长:") ||
+      line.startsWith("时长：") ||
+      line.startsWith("时长(秒):") ||
+      line.startsWith("时长(秒)：")
+    ) {
+      const raw = line.replace(/时长(?:\(秒\))?[:：]\s*/, "").trim();
+      const parsed = Utils.parseDuration(raw);
+      if (typeof parsed === "number" && parsed > 0) {
+        durationSec = parsed;
+      }
     }
   }
 
@@ -727,6 +788,7 @@ async function extractSongInfo(
     title: title || userInput, // 如果没有识别到歌曲名，使用用户输入
     artist: artist || "Youtube Music", // 如果没有识别到歌手，使用 Youtube Music
     album: album || undefined,
+    duration: durationSec,
   };
 }
 
@@ -777,7 +839,7 @@ class Downloader {
     return result;
   }
 
-  async search(query: string): Promise<string | null> {
+  async search(query: string, minDurationSec?: number): Promise<string | null> {
     try {
       const cookie = await ConfigManager.get(CONFIG.KEYS.COOKIE);
       const proxy = await ConfigManager.get(CONFIG.KEYS.PROXY);
@@ -787,7 +849,8 @@ class Downloader {
 
       // Try multiple search methods
       const commands = [];
-      const baseCmd = `"ytsearch:${safeQuery}" --get-id --no-playlist --no-warnings`;
+      // 使用 ytsearch5 以获取多个候选，并输出 JSON 供筛选
+      const baseCmd = `"ytsearch5:${safeQuery}" --dump-json --no-warnings --skip-download`;
 
       // Add authentication parameters
       let authParams = "";
@@ -808,17 +871,127 @@ class Downloader {
       let stdout = "";
       for (const cmd of commands) {
         try {
-          const result = await execAsync(cmd);
+          // 增加maxBuffer以处理更多搜索结果的输出
+          const result = await execAsync(cmd, { maxBuffer: 10 * 1024 * 1024 }); // 10MB
           stdout = result.stdout;
           console.log(`[Music] Search successful with: ${cmd.split(" ")[0]}`);
           break;
         } catch (error) {
+          console.error(error);
           console.log(`[Music] Search failed with: ${cmd.split(" ")[0]}`);
         }
       }
 
-      const videoId = stdout.trim().split("\n")[0]; // Get first result
-      return videoId ? `https://www.youtube.com/watch?v=${videoId}` : null;
+      if (!stdout.trim()) return null;
+
+      // 解析 JSON 行
+      type Cand = {
+        id?: string;
+        title?: string;
+        uploader?: string;
+        duration?: number;
+        webpage_url?: string;
+        url?: string;
+      };
+      const lines = stdout
+        .split(/\r?\n/)
+        .map((l) => l.trim())
+        .filter(Boolean);
+
+      const items: Cand[] = [];
+      for (const line of lines) {
+        try {
+          const obj = JSON.parse(line);
+          if (obj && typeof obj === "object") {
+            if (Array.isArray(obj.entries)) {
+              for (const e of obj.entries) {
+                items.push(e as Cand);
+              }
+            } else {
+              items.push(obj as Cand);
+            }
+          }
+        } catch {
+          // 忽略非 JSON 行
+        }
+      }
+
+      if (!items.length) return null;
+
+      // 构建候选含 URL + 时长
+      let candidates = items
+        .map((it) => {
+          const id = it.id;
+          const url =
+            it.webpage_url ||
+            (it.url && /^https?:/.test(it.url)
+              ? it.url
+              : id
+              ? `https://www.youtube.com/watch?v=${id}`
+              : undefined);
+          const dur = typeof it.duration === "number" ? it.duration : undefined;
+          return url
+            ? {
+                url,
+                id,
+                duration: dur,
+                title: it.title || "",
+                uploader: it.uploader || "",
+              }
+            : null;
+        })
+        .filter(Boolean) as {
+        url: string;
+        id?: string;
+        duration?: number;
+        title: string;
+        uploader: string;
+      }[];
+
+      // 过滤掉时长超过 13 分钟的候选
+      candidates = candidates.filter(
+        (c) =>
+          typeof c.duration === "number" && (c.duration as number) <= 13 * 60
+      );
+
+      if (!candidates.length) return null;
+
+      // 优先选择标题中包含"動態歌詞"的视频
+      const dynamicLyricsCandidates = candidates.filter(c => 
+        c.title.includes("動態歌詞") || c.title.includes("动态歌词")
+      );
+      
+      if (dynamicLyricsCandidates.length > 0) {
+        console.log(`[Music] 找到${dynamicLyricsCandidates.length}个動態歌詞候选`);
+        candidates = dynamicLyricsCandidates;
+      }
+
+      // 若提供期望时长，仅在 duration >= 期望时长 的视频中选择最接近者
+      if (typeof minDurationSec === "number" && minDurationSec > 0) {
+        const eligible = candidates.filter(
+          (c) =>
+            typeof c.duration === "number" &&
+            (c.duration as number) >= minDurationSec
+        );
+        if (!eligible.length) {
+          console.log(`[Music] 没有满足时长要求的结果 (>= ${minDurationSec}s)`);
+          // return null;
+        }
+        eligible.sort(
+          (a, b) =>
+            a.duration! - minDurationSec - (b.duration! - minDurationSec)
+        );
+        const best = eligible[0];
+        console.log(
+          `[Music] 选中候选: ${best.title} (${best.duration ?? "?"}s)`
+        );
+        return best.url;
+      }
+
+      // 否则返回第一个候选
+      const selected = candidates[0];
+      console.log(`[Music] 选中候选: ${selected.title} (${selected.duration ?? "?"}s)`);
+      return selected.url;
     } catch (error) {
       console.error("[Music] Search error:", error);
       return null;
@@ -1708,15 +1881,20 @@ ${apiKey ? "✅" : "⚪"} <b>AI搜索:</b> ${apiKey ? "已启用" : "未配置"}
         const recognitionText = metadata.album
           ? `${metadata.artist} - ${metadata.title} - ${metadata.album}`
           : `${metadata.artist} - ${metadata.title}`;
+        const durText = metadata.duration
+          ? Utils.formatDuration(metadata.duration)
+          : "未知";
 
         await statusMsg.edit({
-          text: `🤖 <b>AI 识别结果:</b> ${Utils.escape(recognitionText)}`,
+          text: `🤖 <b>AI 识别结果:</b> ${Utils.escape(
+            recognitionText
+          )}\n⏱️ <b>时长:</b> <code>${Utils.escape(durText)}</code>`,
           parseMode: "html",
         });
 
         // 使用 yt-dlp 搜索，加入"動態歌詞"关键词
         const searchQuery = `${recognitionText} 動態歌詞`;
-        url = await this.downloader.search(searchQuery);
+        url = await this.downloader.search(searchQuery, metadata.duration);
       }
 
       if (!url) {
@@ -1767,7 +1945,9 @@ ${apiKey ? "✅" : "⚪"} <b>AI搜索:</b> ${apiKey ? "已启用" : "未配置"}
         attributes: [
           new Api.DocumentAttributeAudio({
             voice: false,
-            duration: 0,
+            duration: metadata?.duration
+              ? Math.max(0, Math.floor(metadata.duration))
+              : 0,
             title: metadata?.title || "Audio",
             performer: metadata?.artist || "Unknown Artist",
             waveform: undefined,
