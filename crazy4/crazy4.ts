@@ -204,7 +204,7 @@ class Crazy4Plugin extends Plugin {
         const randomIndex = Math.floor(Math.random() * crazy4_data.length);
         const randomText = crazy4_data[randomIndex];
         await msg.edit({ 
-          text: `🍗 <b>疯狂星期四文案</b>\n\n${htmlEscape(randomText)}`,
+          text: `${htmlEscape(randomText)}`,
           parseMode: "html" 
         });
 
