@@ -980,8 +980,8 @@ class Downloader {
 
       // 直接返回第一个符合时长要求的结果
       for (const candidate of candidates) {
-        // 检查时长是否符合要求（不超过6分钟）
-        if (typeof candidate.duration === "number" && candidate.duration <= 6 * 60) {
+        // 检查时长是否符合要求（不超过15分钟）
+        if (typeof candidate.duration === "number" && candidate.duration <= 15 * 60) {
           console.log(`[Music] 选中第一个结果: ${candidate.title} (时长: ${candidate.duration}s)`);
           return candidate.url;
         }
