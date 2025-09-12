@@ -68,10 +68,13 @@ const CONFIG = {
     BASE_URL: "music_gemini_base_url",
     MODEL: "music_gemini_model",
     AUDIO_QUALITY: "music_audio_quality",
+    TEMPERATURE: "music_gemini_temperature",
+    TOP_P: "music_gemini_top_p",
+    TOP_K: "music_gemini_top_k",
   },
 };
 
-// 默认配置（仅包含我们允许的5个顶级键）
+// 默认配置（包含所有配置键）
 const DEFAULT_CONFIG: Record<string, string> = {
   [CONFIG.KEYS.BASE_URL]: "https://generativelanguage.googleapis.com",
   [CONFIG.KEYS.MODEL]: "gemini-2.0-flash",
@@ -79,6 +82,9 @@ const DEFAULT_CONFIG: Record<string, string> = {
   [CONFIG.KEYS.API]: "",
   [CONFIG.KEYS.PROXY]: "",
   [CONFIG.KEYS.AUDIO_QUALITY]: "", // 空则不指定，保持最佳可用
+  [CONFIG.KEYS.TEMPERATURE]: "0.1", // 低温度提高准确性
+  [CONFIG.KEYS.TOP_P]: "0.8", // 适中的核采样
+  [CONFIG.KEYS.TOP_K]: "10", // 限制候选词提高准确性
 };
 
 // ==================== Types ====================
@@ -357,13 +363,17 @@ class ConfigManager {
   static async getAll(): Promise<Record<string, any>> {
     await this.init();
     if (!this.db) return {};
-    // 仅导出我们关心的5个键，优先顶级，其次兼容历史结构
+    // 导出所有配置键，优先顶级，其次兼容历史结构
     const keys = [
       CONFIG.KEYS.BASE_URL,
       CONFIG.KEYS.MODEL,
       CONFIG.KEYS.COOKIE,
       CONFIG.KEYS.API,
       CONFIG.KEYS.PROXY,
+      CONFIG.KEYS.AUDIO_QUALITY,
+      CONFIG.KEYS.TEMPERATURE,
+      CONFIG.KEYS.TOP_P,
+      CONFIG.KEYS.TOP_K,
     ];
     const result: Record<string, any> = {};
     for (const k of keys) {
@@ -493,6 +503,13 @@ class GeminiClient {
   async searchMusic(query: string): Promise<string> {
     const model = await ConfigManager.get(CONFIG.KEYS.MODEL);
     const url = `${this.baseUrl}/v1beta/models/${model}:generateContent`;
+    
+    // 获取准确率调节参数
+    const temperature = parseFloat(await ConfigManager.get(CONFIG.KEYS.TEMPERATURE, "0.1"));
+    const topP = parseFloat(await ConfigManager.get(CONFIG.KEYS.TOP_P, "0.5"));
+    const topK = parseInt(await ConfigManager.get(CONFIG.KEYS.TOP_K, "5"), 10);
+    
+    console.log(`[Music] Gemini参数: temperature=${temperature}, topP=${topP}, topK=${topK}`);
 
     const systemPrompt = `只输出以下4行，且不要任何其他内容。若未知则留空：
 
@@ -501,13 +518,12 @@ class GeminiClient {
 专辑: 
 时长: `;
 
-    const userPrompt = `精准识别这个查询的歌曲歌手和歌曲名，如果用户提供则优先用户输入："${query}"
+    const userPrompt = `精准识别这个查询的歌曲歌手和歌曲名，如果用户提供则优先用户："${query}"
 要求：
 1. 自动纠正拼写错误和识别简称
-2. 返回最广为人知的版本
 3. 歌手必须是最火的演唱者
 4. 只填写确定的信息，如果没有找到歌曲则用用户输入作为歌曲名
-5. 时长格式可为 秒数 或 mm:ss 或 hh:mm:ss（搜索网络歌曲数据库给出最准确的时长）`;
+5. 时长格式可为 秒数 或 mm:ss 或 hh:mm:ss（尽量准确）`;
 
     const headers: Record<string, string> = {
       "x-goog-api-key": this.apiKey,
@@ -521,7 +537,12 @@ class GeminiClient {
         },
       ],
       systemInstruction: { parts: [{ text: systemPrompt }] },
-      generationConfig: {},
+      generationConfig: {
+        temperature: temperature,
+        topP: topP,
+        topK: topK,
+        maxOutputTokens: 200,
+      },
       tools: [{ googleSearch: {} }],
       safetySettings: [
         "HARM_CATEGORY_HATE_SPEECH",
@@ -975,6 +996,11 @@ class Downloader {
         if (title.includes("歌词版") || title.includes("歌詞版") || 
             title.includes("動態歌詞") || title.includes("动态歌词")) {
           score += 3;
+        }
+        
+        // Lyrics 关键词高权重加分
+        if (title.includes("lyrics")) {
+          score += 10;
         }
         
         // 官方频道或知名上传者加分
