@@ -1,8 +1,8 @@
 /**
- * Music downloader plugin for TeleBox
- *
- * Provides YouTube music search and download functionality with native TeleBox integration.
- * Enhanced with Gemini AI for intelligent music metadata extraction.
+ * Music Plugin for TeleBox
+ * Professional YouTube audio downloader with AI-enhanced search
+ * @version 3.0.0
+ * @author TeleBox Team
  */
 
 import { Plugin } from "@utils/pluginBase";
@@ -15,82 +15,334 @@ import {
 import { Api } from "telegram";
 import * as fs from "fs";
 import * as path from "path";
-import { exec } from "child_process";
+import { exec, spawn } from "child_process";
 import { promisify } from "util";
 import * as https from "https";
 import * as http from "http";
 import { JSONFilePreset } from "lowdb/node";
 
-const pluginName = "music";
-
-// 获取命令前缀
-const prefixes = getPrefixes();
-const mainPrefix = prefixes[0];
-
-const commandName = `${mainPrefix}${pluginName}`;
-
-const filePath = path.join(
-  createDirectoryInAssets(`${pluginName}`),
-  `${pluginName}_config.json`
-);
-type MusicDB = Record<string, any>;
-async function getDB() {
-  const db = await JSONFilePreset<MusicDB>(filePath, {});
-  return db;
-}
-function getArgFromMsg(msg: Api.Message | string, n: number): string {
-  return (typeof msg === "string" ? msg : msg?.message || "")
-    .replace(new RegExp(`^\\S+${Array(n).fill("\\s+\\S+").join("")}`), "")
-    .trim();
-}
 const execAsync = promisify(exec);
 
-// Gemini 与 yt-dlp 配置键
-const GEMINI_CONFIG_KEYS = {
-  API_KEY: "music_gemini_api_key",
-  BASE_URL: "music_gemini_base_url",
-  MODEL: "music_gemini_model",
-} as const;
-const YTDLP_CONFIG_KEYS = {
-  COOKIE: "music_ytdlp_cookie",
-  PROXY: "music_ytdlp_proxy",
-} as const;
+// HTML转义函数
+const htmlEscape = (text: string): string =>
+  text.replace(
+    /[&<>"']/g,
+    (m) =>
+      ({
+        "&": "&amp;",
+        "<": "&lt;",
+        ">": "&gt;",
+        '"': "&quot;",
+        "'": "&#x27;",
+      }[m] || m)
+  );
 
-// 默认配置
-const GEMINI_DEFAULT_CONFIG = {
-  [GEMINI_CONFIG_KEYS.BASE_URL]: "https://generativelanguage.googleapis.com",
-  [GEMINI_CONFIG_KEYS.MODEL]: "gemini-2.0-flash",
+// 消息长度限制
+const MAX_MESSAGE_LENGTH = 4096;
+
+// 获取命令前缀，参考 kitt.ts
+const prefixes = getPrefixes();
+const mainPrefix = prefixes[0];
+const pluginName = "music";
+const commandName = `${mainPrefix}${pluginName}`;
+
+// ==================== Configuration ====================
+const CONFIG = {
+  PATHS: {
+    CONFIG: path.join(
+      createDirectoryInAssets(`${pluginName}`),
+      `${pluginName}_config.json`
+    ),
+    TEMP: createDirectoryInTemp("music"),
+    // 移除缓存目录，禁用缓存功能
+  },
+  DEFAULTS: {
+    API_URL: "https://generativelanguage.googleapis.com",
+    MODEL: "gemini-2.0-flash",
+    TIMEOUT: 30000,
+  },
+  KEYS: {
+    API: "music_gemini_api_key",
+    COOKIE: "music_ytdlp_cookie",
+    PROXY: "music_ytdlp_proxy",
+    BASE_URL: "music_gemini_base_url",
+    MODEL: "music_gemini_model",
+  },
 };
 
-// Gemini 配置管理器 (lowdb)
-class GeminiConfigManager {
-  static async get(key: string, defaultValue?: string): Promise<string> {
-    try {
-      const db = await getDB();
-      const val = db.data[key];
-      if (val !== undefined && val !== "") return String(val);
-    } catch (error) {
-      console.error("[music] 读取配置失败:", error);
+// 默认配置（仅包含我们允许的5个顶级键）
+const DEFAULT_CONFIG: Record<string, string> = {
+  [CONFIG.KEYS.BASE_URL]: "https://generativelanguage.googleapis.com",
+  [CONFIG.KEYS.MODEL]: "gemini-2.0-flash",
+  [CONFIG.KEYS.COOKIE]: "",
+  [CONFIG.KEYS.API]: "",
+  [CONFIG.KEYS.PROXY]: "",
+};
+
+// ==================== Types ====================
+// 历史版本存储为分组字段，这里保留兼容；新版本统一为顶级键存储
+type LegacyConfigData = {
+  apiKeys?: Record<string, string>;
+  cookies?: Record<string, string>;
+  settings?: Record<string, any>;
+} & Record<string, any>;
+
+interface SongInfo {
+  title: string;
+  artist: string;
+  album?: string;
+  thumbnail?: string;
+}
+
+// ==================== Dependency Manager ====================
+class DependencyManager {
+  // 依赖通过项目 package.json 管理，避免运行时安装
+  private static requiredPackages: string[] = [];
+
+  static async checkAndInstallDependencies(): Promise<boolean> {
+    for (const pkg of this.requiredPackages) {
+      if (!this.isPackageInstalled(pkg)) {
+        console.log(`[music] Installing ${pkg}...`);
+        try {
+          await execAsync(`npm install ${pkg}`);
+          console.log(`[music] ${pkg} installed successfully`);
+        } catch (error) {
+          console.error(`[music] Failed to install ${pkg}:`, error);
+          return false;
+        }
+      }
     }
-    return (
-      defaultValue ??
-      (GEMINI_DEFAULT_CONFIG as Record<string, string>)[key] ??
-      ""
+    return true;
+  }
+
+  private static async isPackageInstalled(
+    packageName: string
+  ): Promise<boolean> {
+    try {
+      const packagePath = path.join(process.cwd(), "node_modules", packageName);
+      await fs.promises.access(packagePath, fs.constants.F_OK);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  static async checkYtDlp(): Promise<boolean> {
+    const commands = [
+      "yt-dlp --version",
+      "python3 -m yt_dlp --version",
+      "python -m yt_dlp --version",
+    ];
+
+    for (const cmd of commands) {
+      try {
+        await execAsync(cmd);
+        console.log(`[music] yt-dlp found: ${cmd}`);
+        return true;
+      } catch {
+        continue;
+      }
+    }
+    return false;
+  }
+
+  static async checkFfmpeg(): Promise<boolean> {
+    try {
+      await execAsync("ffmpeg -version");
+      console.log("[Music] FFmpeg 已就绪");
+      return true;
+    } catch {
+      console.log("[Music] FFmpeg 未找到");
+      return false;
+    }
+  }
+}
+
+// ==================== Utilities ====================
+class Utils {
+  static escape(text: string): string {
+    return text.replace(
+      /[&<>"']/g,
+      (m) =>
+        ({
+          "&": "&amp;",
+          "<": "&lt;",
+          ">": "&gt;",
+          '"': "&quot;",
+          "'": "&#x27;",
+        }[m] || m)
     );
   }
 
-  static async set(key: string, value: string): Promise<void> {
+  static sanitizeFilename(name: string): string {
+    return name
+      .replace(/[^\w\s-]/g, "")
+      .replace(/\s+/g, "_")
+      .substring(0, 50);
+  }
+
+  static async fileExists(path: string): Promise<boolean> {
     try {
-      const db = await getDB();
-      db.data[key] = value;
-      await db.write();
+      await fs.promises.access(path);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  static formatSize(bytes: number): string {
+    const units = ["B", "KB", "MB", "GB"];
+    let size = bytes;
+    let unitIndex = 0;
+    while (size >= 1024 && unitIndex < units.length - 1) {
+      size /= 1024;
+      unitIndex++;
+    }
+    return `${size.toFixed(2)} ${units[unitIndex]}`;
+  }
+
+  static formatDuration(seconds: number): string {
+    const mins = Math.floor(seconds / 60);
+    const secs = seconds % 60;
+    return `${mins}:${secs.toString().padStart(2, "0")}`;
+  }
+}
+
+// ==================== Configuration Manager ====================
+class ConfigManager {
+  private static db: any = null;
+  private static initialized = false;
+
+  private static async init(): Promise<void> {
+    if (this.initialized) return;
+
+    try {
+      // 确保目录存在
+      const configDir = path.dirname(CONFIG.PATHS.CONFIG);
+      if (!fs.existsSync(configDir)) {
+        fs.mkdirSync(configDir, { recursive: true });
+      }
+
+      // 文件不存在时以扁平结构初始化
+      const defaultData: Record<string, any> = { ...DEFAULT_CONFIG };
+
+      this.db = await JSONFilePreset<LegacyConfigData>(
+        CONFIG.PATHS.CONFIG,
+        defaultData
+      );
+      this.initialized = true;
+      console.log("[music] 配置管理器初始化成功 (lowdb)");
     } catch (error) {
-      console.error("[music] 保存配置失败:", error);
+      console.error("[music] 初始化配置失败:", error);
+    }
+  }
+
+  static async get(key: string, defaultValue?: string): Promise<string> {
+    await this.init();
+    if (!this.db) {
+      return defaultValue || DEFAULT_CONFIG[key] || "";
+    }
+
+    // 优先读取顶级键
+    if (
+      Object.prototype.hasOwnProperty.call(this.db.data, key) &&
+      typeof this.db.data[key] !== "undefined"
+    ) {
+      return this.db.data[key] ?? defaultValue ?? DEFAULT_CONFIG[key] ?? "";
+    }
+
+    // 兼容历史结构
+    try {
+      const legacy = this.db.data as LegacyConfigData;
+      if (legacy.settings && typeof legacy.settings[key] !== "undefined") {
+        return (
+          legacy.settings[key] ?? defaultValue ?? DEFAULT_CONFIG[key] ?? ""
+        );
+      }
+      if (key === CONFIG.KEYS.API && legacy.apiKeys) {
+        return legacy.apiKeys[key] ?? defaultValue ?? "";
+      }
+      if (key === CONFIG.KEYS.COOKIE && legacy.cookies) {
+        return legacy.cookies[key] ?? defaultValue ?? "";
+      }
+      // 历史遗留别名
+      if (key === CONFIG.KEYS.API && legacy.settings?.apikey) {
+        return legacy.settings.apikey ?? defaultValue ?? "";
+      }
+    } catch {}
+
+    return defaultValue || DEFAULT_CONFIG[key] || "";
+  }
+
+  static async set(key: string, value: string): Promise<boolean> {
+    await this.init();
+    if (!this.db) return false;
+
+    try {
+      // 统一以顶级键存储（不迁移历史数据，仅写入新键）
+      this.db.data[key] = value;
+
+      await this.db.write(); // 自动保存
+      return true;
+    } catch (error) {
+      console.error(`[music] 设置配置失败 ${key}:`, error);
+      return false;
+    }
+  }
+
+  static async remove(key: string): Promise<boolean> {
+    await this.init();
+    if (!this.db) return false;
+
+    try {
+      if (Object.prototype.hasOwnProperty.call(this.db.data, key)) {
+        delete this.db.data[key];
+      }
+      await this.db.write();
+      return true;
+    } catch (error) {
+      console.error(`[Music] Failed to remove ${key}:`, error);
+      return false;
+    }
+  }
+
+  static async getAll(): Promise<Record<string, any>> {
+    await this.init();
+    if (!this.db) return {};
+    // 仅导出我们关心的5个键，优先顶级，其次兼容历史结构
+    const keys = [
+      CONFIG.KEYS.BASE_URL,
+      CONFIG.KEYS.MODEL,
+      CONFIG.KEYS.COOKIE,
+      CONFIG.KEYS.API,
+      CONFIG.KEYS.PROXY,
+    ];
+    const result: Record<string, any> = {};
+    for (const k of keys) {
+      result[k] = await this.get(k, DEFAULT_CONFIG[k] ?? "");
+    }
+    return result;
+  }
+
+  static async delete(key: string): Promise<boolean> {
+    await this.init();
+    if (!this.db) return false;
+
+    try {
+      if (Object.prototype.hasOwnProperty.call(this.db.data, key)) {
+        delete this.db.data[key];
+      }
+
+      await this.db.write(); // 自动保存
+      return true;
+    } catch (error) {
+      console.error(`[music] 删除配置失败 ${key}:`, error);
+      return false;
     }
   }
 }
 
-// HTTP 客户端
+// ==================== HTTP Client ====================
 class HttpClient {
   static cleanResponseText(text: string): string {
     if (!text) return text;
@@ -180,34 +432,32 @@ class HttpClient {
   }
 }
 
-// Gemini 客户端
+// ==================== Gemini Client ====================
 class GeminiClient {
   private apiKey: string;
   private baseUrl: string;
 
   constructor(apiKey: string, baseUrl?: string | null) {
     this.apiKey = apiKey;
-    this.baseUrl =
-      baseUrl ?? GEMINI_DEFAULT_CONFIG[GEMINI_CONFIG_KEYS.BASE_URL];
+    this.baseUrl = baseUrl ?? DEFAULT_CONFIG[CONFIG.KEYS.BASE_URL];
   }
 
   async searchMusic(query: string): Promise<string> {
-    const model = await GeminiConfigManager.get(GEMINI_CONFIG_KEYS.MODEL);
+    const model = await ConfigManager.get(CONFIG.KEYS.MODEL);
     const url = `${this.baseUrl}/v1beta/models/${model}:generateContent`;
 
-    // 内置提示词，专门用于音乐元数据提取
-    const systemPrompt = `你是一个专业的音乐信息助手。用户会提供歌曲相关的查询，你需要返回准确的歌曲元数据信息。
-请严格按照以下格式返回信息，不要包含任何其他内容：
+    const systemPrompt = `只输出以下5行格式，不要任何其他内容。如果信息不存在则该行留空：
 
-歌曲名: [歌曲名称]
-歌手: [演唱者姓名]
-专辑: [专辑名称]
-发行时间: [发行日期]
-流派: [音乐流派]
+歌曲名: 
+歌手: 
+专辑: `;
 
-如果某些信息不确定，请使用"未知"。请确保返回最广为人知的版本信息。`;
-
-    const userPrompt = `${query} 这首歌曲最火的演唱者，以及一些歌曲元数信息，要能够写入歌曲的格式，不允许有其他信息`;
+    const userPrompt = `精准识别这个查询的歌曲信息："${query}"
+要求：
+1. 自动纠正拼写错误和识别简称
+2. 返回最广为人知的版本
+3. 歌手必须是原唱或最火的演唱者
+4. 只填写确定的信息，如果没有找到歌曲则用用户输入作为歌曲名`;
 
     const headers: Record<string, string> = {
       "x-goog-api-key": this.apiKey,
@@ -252,1356 +502,1311 @@ class GeminiClient {
   }
 }
 
-// 从 Gemini 响应中提取歌曲信息
-function extractSongInfo(geminiResponse: string): {
+// ==================== Cookie Converter ====================
+class CookieConverter {
+  // 检测并转换各种格式的 Cookie 为 Netscape 格式
+  static convertToNetscape(input: string): string {
+    // 清理输入
+    input = input.trim();
+
+    // 1. 如果已经是 Netscape 格式（包含制表符分隔的7个字段）
+    if (this.isNetscapeFormat(input)) {
+      return input;
+    }
+
+    // 2. JSON 格式的 Cookie（从浏览器开发者工具导出）
+    if (this.isJsonFormat(input)) {
+      return this.convertJsonToNetscape(input);
+    }
+
+    // 3. 浏览器 Cookie 字符串格式（key=value; key2=value2）
+    if (this.isBrowserStringFormat(input)) {
+      return this.convertBrowserStringToNetscape(input);
+    }
+
+    // 4. EditThisCookie 扩展格式
+    if (this.isEditThisCookieFormat(input)) {
+      return this.convertEditThisCookieToNetscape(input);
+    }
+
+    // 5. 简单的 key=value 对（每行一个）
+    if (this.isSimpleKeyValueFormat(input)) {
+      return this.convertSimpleKeyValueToNetscape(input);
+    }
+
+    // 如果无法识别格式，尝试作为 Netscape 格式返回
+    return input;
+  }
+
+  private static isNetscapeFormat(input: string): boolean {
+    const lines = input
+      .split("\n")
+      .filter((line) => line.trim() && !line.startsWith("#"));
+    if (lines.length === 0) return false;
+
+    // Netscape 格式每行应该有 7 个制表符分隔的字段
+    return lines.every((line) => {
+      const fields = line.split("\t");
+      return fields.length === 7;
+    });
+  }
+
+  private static isJsonFormat(input: string): boolean {
+    try {
+      const parsed = JSON.parse(input);
+      return (
+        Array.isArray(parsed) &&
+        parsed.length > 0 &&
+        parsed[0].hasOwnProperty("name") &&
+        parsed[0].hasOwnProperty("value")
+      );
+    } catch {
+      return false;
+    }
+  }
+
+  private static convertJsonToNetscape(input: string): string {
+    try {
+      const cookies = JSON.parse(input);
+      const netscapeLines: string[] = [
+        "# Netscape HTTP Cookie File",
+        "# This file was generated by TeleBox Music Plugin",
+        "",
+      ];
+
+      for (const cookie of cookies) {
+        const domain = cookie.domain || ".youtube.com";
+        const flag = domain.startsWith(".") ? "TRUE" : "FALSE";
+        const path = cookie.path || "/";
+        const secure = cookie.secure ? "TRUE" : "FALSE";
+        const expiry =
+          cookie.expirationDate ||
+          cookie.expires ||
+          Math.floor(Date.now() / 1000) + 31536000; // 1 year from now
+        const name = cookie.name || "";
+        const value = cookie.value || "";
+
+        if (name && value) {
+          netscapeLines.push(
+            `${domain}\t${flag}\t${path}\t${secure}\t${expiry}\t${name}\t${value}`
+          );
+        }
+      }
+
+      return netscapeLines.join("\n");
+    } catch (error) {
+      console.error("Failed to convert JSON to Netscape:", error);
+      return input;
+    }
+  }
+
+  private static isBrowserStringFormat(input: string): boolean {
+    // 检查是否包含 key=value; 格式
+    return input.includes("=") && (input.includes(";") || input.includes("="));
+  }
+
+  private static convertBrowserStringToNetscape(input: string): string {
+    const netscapeLines: string[] = [
+      "# Netscape HTTP Cookie File",
+      "# This file was generated by TeleBox Music Plugin",
+      "",
+    ];
+
+    // 分割 cookie 字符串
+    const cookies = input.split(/;\s*/).filter((c) => c.includes("="));
+
+    for (const cookie of cookies) {
+      const [name, ...valueParts] = cookie.split("=");
+      const value = valueParts.join("="); // 处理值中包含 = 的情况
+
+      if (name && value) {
+        // YouTube cookies 默认设置
+        const domain = ".youtube.com";
+        const flag = "TRUE";
+        const path = "/";
+        const secure = "TRUE";
+        const expiry = Math.floor(Date.now() / 1000) + 31536000; // 1 year
+
+        netscapeLines.push(
+          `${domain}\t${flag}\t${path}\t${secure}\t${expiry}\t${name.trim()}\t${value.trim()}`
+        );
+      }
+    }
+
+    return netscapeLines.join("\n");
+  }
+
+  private static isEditThisCookieFormat(input: string): boolean {
+    // EditThisCookie 通常导出为带特定字段的 JSON
+    try {
+      const parsed = JSON.parse(input);
+      return (
+        Array.isArray(parsed) &&
+        parsed.length > 0 &&
+        (parsed[0].hasOwnProperty("storeId") ||
+          parsed[0].hasOwnProperty("sameSite"))
+      );
+    } catch {
+      return false;
+    }
+  }
+
+  private static convertEditThisCookieToNetscape(input: string): string {
+    // 使用相同的 JSON 转换逻辑
+    return this.convertJsonToNetscape(input);
+  }
+
+  private static isSimpleKeyValueFormat(input: string): boolean {
+    const lines = input.split("\n").filter((line) => line.trim());
+    return (
+      lines.length > 0 &&
+      lines.every((line) => {
+        return line.includes("=") && !line.includes("\t");
+      })
+    );
+  }
+
+  private static convertSimpleKeyValueToNetscape(input: string): string {
+    const netscapeLines: string[] = [
+      "# Netscape HTTP Cookie File",
+      "# This file was generated by TeleBox Music Plugin",
+      "",
+    ];
+
+    const lines = input.split("\n").filter((line) => line.trim());
+
+    for (const line of lines) {
+      const [name, ...valueParts] = line.split("=");
+      const value = valueParts.join("=");
+
+      if (name && value) {
+        const domain = ".youtube.com";
+        const flag = "TRUE";
+        const path = "/";
+        const secure = "TRUE";
+        const expiry = Math.floor(Date.now() / 1000) + 31536000;
+
+        netscapeLines.push(
+          `${domain}\t${flag}\t${path}\t${secure}\t${expiry}\t${name.trim()}\t${value.trim()}`
+        );
+      }
+    }
+
+    return netscapeLines.join("\n");
+  }
+}
+
+// ==================== Helper Functions ====================
+async function extractSongInfo(
+  geminiResponse: string,
+  userInput: string
+): Promise<{
   title: string;
   artist: string;
   album?: string;
-  date?: string;
-  genre?: string;
-} {
-  const lines = geminiResponse.split("\n");
+}> {
+  const lines = geminiResponse.split("\n").map((line) => line.trim());
   let title = "";
   let artist = "";
   let album = "";
-  let date = "";
-  let genre = "";
 
   for (const line of lines) {
-    if (line.includes("歌曲名:") || line.includes("歌曲名：")) {
+    if (line.startsWith("歌曲名:") || line.startsWith("歌曲名：")) {
       title = line.replace(/歌曲名[:：]\s*/, "").trim();
-    } else if (line.includes("歌手:") || line.includes("歌手：")) {
+    } else if (line.startsWith("歌手:") || line.startsWith("歌手：")) {
       artist = line.replace(/歌手[:：]\s*/, "").trim();
-    } else if (line.includes("专辑:") || line.includes("专辑：")) {
+    } else if (line.startsWith("专辑:") || line.startsWith("专辑：")) {
       album = line.replace(/专辑[:：]\s*/, "").trim();
-    } else if (line.includes("发行时间:") || line.includes("发行时间：")) {
-      date = line.replace(/发行时间[:：]\s*/, "").trim();
-    } else if (line.includes("流派:") || line.includes("流派：")) {
-      genre = line.replace(/流派[:：]\s*/, "").trim();
     }
   }
 
-  // 如果没有找到，尝试其他格式
-  if (!title && geminiResponse.includes("《")) {
-    const match = geminiResponse.match(/《([^》]+)》/);
-    if (match) title = match[1];
-  }
-
+  // 返回结果，空值不返回
   return {
-    title: title || "未知歌曲",
-    artist: artist || "未知歌手",
-    album: album && album !== "未知" ? album : undefined,
-    date: date && date !== "未知" ? date : undefined,
-    genre: genre && genre !== "未知" ? genre : undefined,
+    title: title || userInput, // 如果没有识别到歌曲名，使用用户输入
+    artist: artist || "Youtube Music", // 如果没有识别到歌手，使用 Youtube Music
+    album: album || undefined,
   };
 }
 
-// 检测并自动安装依赖工具
-async function checkAndInstallDependencies(
-  msg?: Api.Message
-): Promise<{ ytdlp: boolean; ffmpeg: boolean }> {
-  const result = { ytdlp: false, ffmpeg: false };
-
-  // 检测 yt-dlp - 尝试多种方式
-  try {
-    await execAsync("yt-dlp --version");
-    result.ytdlp = true;
-  } catch {
-    try {
-      // 尝试 Python 模块方式
-      await execAsync("python -m yt_dlp --version");
-      result.ytdlp = true;
-    } catch {
-      try {
-        // 尝试 Python3 模块方式
-        await execAsync("python3 -m yt_dlp --version");
-        result.ytdlp = true;
-      } catch {
-        console.log("[music] yt-dlp not found, attempting to install...");
-
-        // 尝试自动安装 yt-dlp
-        if (msg) {
-          await msg.edit({
-            text: "🔧 <b>正在自动安装 yt-dlp...</b>\n\n⏳ 请稍候，首次运行需要安装依赖",
-            parseMode: "html",
-          });
-        }
-
-        try {
-          // 尝试使用 pip3 安装
-          await execAsync("pip3 install -U yt-dlp --break-system-packages", {
-            timeout: 60000,
-          });
-          console.log("[music] yt-dlp installed successfully via pip3");
-          result.ytdlp = true;
-        } catch {
-          try {
-            // 如果失败，尝试不带 --break-system-packages
-            await execAsync("pip3 install -U yt-dlp", { timeout: 60000 });
-            console.log(
-              "[music] yt-dlp installed successfully via pip3 (without break-system-packages)"
-            );
-            result.ytdlp = true;
-          } catch (error) {
-            console.error("[music] Failed to install yt-dlp:", error);
-          }
-        }
-      }
-    }
-  }
-
-  // 检测 FFmpeg
-  try {
-    await execAsync("ffmpeg -version");
-    result.ffmpeg = true;
-  } catch {
-    console.log("[music] FFmpeg not found, attempting to install...");
-
-    // 尝试自动安装 FFmpeg
-    if (msg) {
-      await msg.edit({
-        text: "🔧 <b>正在自动安装 FFmpeg...</b>\n\n⏳ 音频转换需要此组件",
-        parseMode: "html",
-      });
-    }
-
-    try {
-      // 检测系统类型并安装
-      if (process.platform === "linux") {
-        try {
-          // 尝试使用 apt (Debian/Ubuntu)
-          await execAsync("sudo apt update && sudo apt install -y ffmpeg", {
-            timeout: 120000,
-          });
-          console.log("[music] FFmpeg installed successfully via apt");
-          result.ffmpeg = true;
-        } catch {
-          try {
-            // 尝试使用 yum (CentOS/RHEL)
-            await execAsync("sudo yum install -y ffmpeg", { timeout: 120000 });
-            console.log("[music] FFmpeg installed successfully via yum");
-            result.ffmpeg = true;
-          } catch {
-            console.log("[music] Could not install FFmpeg automatically");
-          }
-        }
-      } else if (process.platform === "darwin") {
-        // macOS
-        try {
-          await execAsync("brew install ffmpeg", { timeout: 120000 });
-          console.log("[music] FFmpeg installed successfully via brew");
-          result.ffmpeg = true;
-        } catch {
-          console.log("[music] Could not install FFmpeg via brew");
-        }
-      } else if (process.platform === "win32") {
-        // Windows
-        try {
-          await execAsync("winget install ffmpeg", { timeout: 120000 });
-          console.log("[music] FFmpeg installed successfully via winget");
-          result.ffmpeg = true;
-        } catch {
-          console.log("[music] Could not install FFmpeg via winget");
-        }
-      }
-    } catch (error) {
-      console.error("[music] Failed to install FFmpeg:", error);
-    }
-  }
-
-  // 如果成功安装了依赖，显示成功消息
-  if (msg && result.ytdlp && result.ffmpeg) {
-    await msg.edit({
-      text: "✅ <b>依赖安装完成</b>\n\n🎵 音乐下载器已准备就绪",
-      parseMode: "html",
-    });
-    await new Promise((resolve) => setTimeout(resolve, 1500)); // 短暂显示成功消息
-  }
-
-  return result;
-}
-
-// HTML转义函数
-const htmlEscape = (text: string): string =>
-  text.replace(
-    /[&<>"']/g,
-    (m) =>
-      ({
-        "&": "&amp;",
-        "<": "&lt;",
-        ">": "&gt;",
-        '"': "&quot;",
-        "'": "&#x27;",
-      }[m] || m)
-  );
-
-interface AudioFormat {
-  format_id: string;
-  ext: string;
-  abr?: number;
-  tbr?: number;
-  acodec: string;
-  vcodec?: string;
-}
-
-class MusicDownloader {
-  private musicDir: string;
+// ==================== Downloader ====================
+class Downloader {
   private tempDir: string;
 
   constructor() {
-    this.musicDir = createDirectoryInAssets("music_cache");
-    this.tempDir = createDirectoryInTemp("music");
+    this.tempDir = CONFIG.PATHS.TEMP;
     this.ensureDirectories();
-    // 同步 lowdb 中的 Cookie 到文件（若存在）
-    this.syncCookieFromDBToFile().catch(() => {});
   }
 
   private ensureDirectories(): void {
-    if (!fs.existsSync(this.musicDir)) {
-      fs.mkdirSync(this.musicDir, { recursive: true });
-    }
     if (!fs.existsSync(this.tempDir)) {
       fs.mkdirSync(this.tempDir, { recursive: true });
     }
   }
 
-  safeFilename(filename: string): string {
-    return filename
-      .replace(/[^\w\s-]/g, "")
-      .replace(/\s+/g, "_")
-      .substring(0, 50);
-  }
+  async checkDependencies(): Promise<{ ytdlp: boolean; ffmpeg: boolean }> {
+    const result = { ytdlp: false, ffmpeg: false };
 
-  get tempDirPath(): string {
-    return this.tempDir;
-  }
+    // Check yt-dlp with multiple methods
+    const ytdlpCommands = [
+      "yt-dlp --version",
+      "python3 -m yt_dlp --version",
+      "python -m yt_dlp --version",
+      "youtube-dl --version", // Fallback to youtube-dl
+    ];
 
-  private async syncCookieFromDBToFile(): Promise<void> {
-    try {
-      const db = await getDB();
-      const cookie = db.data[YTDLP_CONFIG_KEYS.COOKIE];
-      if (cookie && typeof cookie === "string" && cookie.trim()) {
-        const cookieFile = path.join(this.tempDir, "cookies.txt");
-        // if (!fs.existsSync(cookieFile)) {
-        fs.writeFileSync(cookieFile, cookie, "utf-8");
-        console.log("[music] 从 lowdb 恢复 yt-dlp Cookie");
-        // }
-      }
-    } catch (e) {
-      console.debug("[music] 无法从 lowdb 同步 Cookie:", e);
-    }
-  }
-
-  async searchYoutube(query: string): Promise<string | null> {
-    try {
-      // 直接使用传入的查询，不再额外添加关键词
-      const searchQuery = query;
-
-      // 读取代理配置，供 yt-dlp 使用
-      let proxyArg = "";
+    for (const cmd of ytdlpCommands) {
       try {
-        const db = await getDB();
-        const proxy = String(db.data[YTDLP_CONFIG_KEYS.PROXY] || "").trim();
-        if (proxy) {
-          const safeProxy = proxy.replace(/["`$]/g, "");
-          proxyArg = ` --proxy \"${safeProxy}\"`;
-        }
+        await execAsync(cmd);
+        result.ytdlp = true;
+        console.log(`[Music] Found yt-dlp via: ${cmd.split(" ")[0]}`);
+        break;
       } catch {}
+    }
 
-      // 尝试多种调用方式
-      const commands = [
-        `yt-dlp "ytsearch:${searchQuery}" --get-id --no-playlist --no-warnings${proxyArg}`,
-        `python -m yt_dlp "ytsearch:${searchQuery}" --get-id --no-playlist --no-warnings${proxyArg}`,
-        `python3 -m yt_dlp "ytsearch:${searchQuery}" --get-id --no-playlist --no-warnings${proxyArg}`,
-      ];
+    // Check FFmpeg
+    try {
+      await execAsync("ffmpeg -version");
+      result.ffmpeg = true;
+      // 静默检查，不输出日志
+    } catch {
+      console.log("[Music] FFmpeg 未找到，音频处理功能受限");
+    }
+
+    return result;
+  }
+
+  async search(query: string): Promise<string | null> {
+    try {
+      const cookie = await ConfigManager.get(CONFIG.KEYS.COOKIE);
+      const proxy = await ConfigManager.get(CONFIG.KEYS.PROXY);
+
+      // Escape query for shell
+      const safeQuery = query.replace(/"/g, '\\"');
+
+      // Try multiple search methods
+      const commands = [];
+      const baseCmd = `"ytsearch:${safeQuery}" --get-id --no-playlist --no-warnings`;
+
+      // Add authentication parameters
+      let authParams = "";
+      if (cookie && cookie.trim()) {
+        const cookieFile = path.join(this.tempDir, "cookies.txt");
+        await fs.promises.writeFile(cookieFile, this.convertCookie(cookie));
+        authParams += ` --cookies "${cookieFile}"`;
+      }
+      if (proxy) authParams += ` --proxy "${proxy}"`;
+
+      // Build command list with fallbacks
+      commands.push(
+        `yt-dlp ${baseCmd} --prefer-insecure --legacy-server-connect${authParams}`
+      );
+      commands.push(`python3 -m yt_dlp ${baseCmd}${authParams}`);
+      commands.push(`python -m yt_dlp ${baseCmd}${authParams}`);
 
       let stdout = "";
       for (const cmd of commands) {
         try {
           const result = await execAsync(cmd);
           stdout = result.stdout;
+          console.log(`[Music] Search successful with: ${cmd.split(" ")[0]}`);
           break;
-        } catch {
-          continue;
+        } catch (error) {
+          console.log(`[Music] Search failed with: ${cmd.split(" ")[0]}`);
         }
       }
 
-      const videoId = stdout.trim();
-      if (videoId) {
-        return `https://www.youtube.com/watch?v=${videoId}`;
-      }
-      return null;
+      const videoId = stdout.trim().split("\n")[0]; // Get first result
+      return videoId ? `https://www.youtube.com/watch?v=${videoId}` : null;
     } catch (error) {
-      console.error("YouTube search failed:", error);
+      console.error("[Music] Search error:", error);
       return null;
     }
   }
 
-  async downloadAudio(
-    url: string,
-    outputPath: string,
-    metadata?: {
-      title?: string;
-      artist?: string;
-      album?: string;
-      date?: string;
-      genre?: string;
+  private convertCookie(cookie: string): string {
+    // Simple cookie format converter
+    if (cookie.includes("\t")) {
+      // Already in Netscape format
+      return cookie;
     }
-  ): Promise<boolean> {
+
+    // Convert from key=value format to Netscape
+    const lines = ["# Netscape HTTP Cookie File", ""];
+    const pairs = cookie.split(/;\s*/).filter((p) => p.includes("="));
+
+    for (const pair of pairs) {
+      const [name, value] = pair.split("=");
+      if (name && value) {
+        // YouTube cookie defaults
+        lines.push(
+          `.youtube.com\tTRUE\t/\tTRUE\t${
+            Math.floor(Date.now() / 1000) + 31536000
+          }\t${name.trim()}\t${value.trim()}`
+        );
+      }
+    }
+
+    return lines.join("\n");
+  }
+
+  async download(
+    url: string,
+    metadata?: SongInfo
+  ): Promise<{ audioPath: string | null; thumbnailPath?: string }> {
     try {
-      const cookieFile = path.join(this.tempDir, "cookies.txt");
-      // 若本地 cookies.txt 不存在，则尝试从 lowdb 恢复
-      if (!fs.existsSync(cookieFile)) {
-        try {
-          const db = await getDB();
-          const cookie = db.data[YTDLP_CONFIG_KEYS.COOKIE];
-          if (cookie && typeof cookie === "string" && cookie.trim()) {
-            fs.writeFileSync(cookieFile, cookie, "utf-8");
-            console.log("[music] 已从 lowdb 写入 cookies.txt");
-          }
-        } catch (e) {
-          console.debug("[music] 恢复 Cookie 失败:", e);
-        }
-      }
-      let cookieArg = "";
-
-      if (fs.existsSync(cookieFile)) {
-        cookieArg = `--cookies "${cookieFile}"`;
-      }
-
-      // 构建元数据参数
-      let metadataArgs = "";
-      if (metadata) {
-        // 清洗元数据，移除可能导致问题的字符
-        const cleanValue = (val: string) =>
-          val.replace(/"/g, "").replace(/'/g, "").replace(/\\/g, "");
-
-        if (metadata.title) {
-          metadataArgs += ` --postprocessor-args "-metadata title='${cleanValue(
+      const filename = metadata
+        ? `${Utils.sanitizeFilename(metadata.artist)}_${Utils.sanitizeFilename(
             metadata.title
-          )}'"`;
+          )}`
+        : `download_${Date.now()}`;
+
+      // 每次下载到临时目录，确保全新下载
+      const timestamp = Date.now();
+      const outputPath = path.join(
+        this.tempDir,
+        `${filename}_${timestamp}.%(ext)s`
+      );
+      const thumbnailPath = path.join(
+        this.tempDir,
+        `${filename}_${timestamp}_thumb.jpg`
+      );
+      const cookie = await ConfigManager.get(CONFIG.KEYS.COOKIE);
+      const proxy = await ConfigManager.get(CONFIG.KEYS.PROXY);
+
+      // Prepare authentication
+      let authParams = "";
+      if (cookie && cookie.trim()) {
+        const cookieFile = path.join(this.tempDir, "cookies.txt");
+        await fs.promises.writeFile(cookieFile, this.convertCookie(cookie));
+        authParams += ` --cookies "${cookieFile}"`;
+      }
+      if (proxy) authParams += ` --proxy "${proxy}"`;
+
+      // 先获取视频信息和缩略图
+      let hasThumbnail = false;
+      let videoInfo: any = null;
+
+      // 获取视频元数据
+      try {
+        const infoCmd = `yt-dlp --dump-json --no-warnings${authParams} "${url}"`;
+        const { stdout } = await execAsync(infoCmd);
+        videoInfo = JSON.parse(stdout);
+
+        // 从视频信息中补充元数据（不覆盖已有的）
+        if (videoInfo) {
+          // 如果没有传入元数据，从视频信息创建
+          if (!metadata) {
+            metadata = {
+              title: videoInfo.title || videoInfo.track || "Unknown",
+              artist:
+                videoInfo.artist ||
+                videoInfo.uploader ||
+                videoInfo.channel ||
+                "Unknown Artist",
+              album: videoInfo.album || undefined,
+            };
+          } else {
+            // 如果已有元数据（比如从AI获取的），只补充缺失的字段
+            if (!metadata.title && videoInfo.title) {
+              metadata.title = videoInfo.title;
+            }
+            if (metadata.artist === "Unknown Artist" && videoInfo.artist) {
+              metadata.artist = videoInfo.artist;
+            }
+            if (!metadata.album && videoInfo.album) {
+              metadata.album = videoInfo.album;
+            }
+          }
+          console.log(
+            `[music] 元数据: ${metadata.artist} - ${metadata.title}${
+              metadata.album ? " - " + metadata.album : ""
+            }`
+          );
         }
-        if (metadata.artist) {
-          metadataArgs += ` --postprocessor-args "-metadata artist='${cleanValue(
-            metadata.artist
-          )}'"`;
-        }
-        if (metadata.album) {
-          metadataArgs += ` --postprocessor-args "-metadata album='${cleanValue(
-            metadata.album
-          )}'"`;
-        }
-        if (metadata.date) {
-          metadataArgs += ` --postprocessor-args "-metadata date='${cleanValue(
-            metadata.date
-          )}'"`;
-        }
-        if (metadata.genre) {
-          metadataArgs += ` --postprocessor-args "-metadata genre='${cleanValue(
-            metadata.genre
-          )}'"`;
-        }
+      } catch (error) {
+        console.log("[music] 无法获取视频信息，使用已有元数据");
       }
 
-      // 添加缩略图参数
-      const thumbnailArgs =
-        " --embed-thumbnail --write-thumbnail --convert-thumbnails jpg";
-
-      // 读取代理配置
-      let proxyArg = "";
+      // 下载缩略图
       try {
-        const db = await getDB();
-        const proxy = String(db.data[YTDLP_CONFIG_KEYS.PROXY] || "").trim();
-        if (proxy) {
-          const safeProxy = proxy.replace(/["`$]/g, "");
-          proxyArg = ` --proxy \"${safeProxy}\"`;
-        }
-      } catch {}
+        const thumbCmd = `yt-dlp --write-thumbnail --skip-download -o "${thumbnailPath.replace(
+          ".jpg",
+          ""
+        )}"${authParams} "${url}"`;
+        await execAsync(thumbCmd);
 
-      // Try multiple command formats
+        // 检查各种可能的缩略图格式
+        const possibleExts = [".jpg", ".jpeg", ".png", ".webp"];
+        for (const ext of possibleExts) {
+          const possiblePath = thumbnailPath.replace(".jpg", ext);
+          if (fs.existsSync(possiblePath)) {
+            // 如果不是jpg，转换为jpg
+            if (ext !== ".jpg") {
+              await execAsync(
+                `ffmpeg -i "${possiblePath}" -vf "scale=320:320:force_original_aspect_ratio=increase,crop=320:320" "${thumbnailPath}" -y`
+              );
+              fs.unlinkSync(possiblePath);
+            } else {
+              // 调整大小为正方形
+              await execAsync(
+                `ffmpeg -i "${possiblePath}" -vf "scale=320:320:force_original_aspect_ratio=increase,crop=320:320" "${thumbnailPath}_temp.jpg" -y`
+              );
+              fs.renameSync(`${thumbnailPath}_temp.jpg`, thumbnailPath);
+            }
+            hasThumbnail = true;
+            console.log(`[music] 缩略图已下载: ${thumbnailPath}`);
+            break;
+          }
+        }
+      } catch (error) {
+        console.log("[music] 缩略图下载失败，继续下载音频");
+      }
+
+      // Build command list with fallbacks - 优化音频格式选择
       const commands = [
-        `yt-dlp "${url}" -f "bestaudio[ext=m4a]/bestaudio/best[height<=480]" -x --audio-format mp3 --audio-quality 0 --embed-metadata --add-metadata${thumbnailArgs} -o "${outputPath}" --no-playlist --no-warnings ${cookieArg}${metadataArgs}${proxyArg}`,
-        `python -m yt_dlp "${url}" -f "bestaudio[ext=m4a]/bestaudio/best[height<=480]" -x --audio-format mp3 --audio-quality 0 --embed-metadata --add-metadata${thumbnailArgs} -o "${outputPath}" --no-playlist --no-warnings ${cookieArg}${metadataArgs}${proxyArg}`,
-        `python3 -m yt_dlp "${url}" -f "bestaudio[ext=m4a]/bestaudio/best[height<=480]" -x --audio-format mp3 --audio-quality 0 --embed-metadata --add-metadata${thumbnailArgs} -o "${outputPath}" --no-playlist --no-warnings ${cookieArg}${metadataArgs}${proxyArg}`,
+        // 优先下载最高质量的音频
+        `yt-dlp -x --audio-format best --audio-quality 0 --extract-audio --embed-metadata --add-metadata -o "${outputPath}" --prefer-insecure --legacy-server-connect${authParams} "${url}"`,
+        // Python 模块方式
+        `python3 -m yt_dlp -x --audio-format best --audio-quality 0 --extract-audio --embed-metadata --add-metadata -o "${outputPath}"${authParams} "${url}"`,
+        `python -m yt_dlp -x --audio-format best --audio-quality 0 --extract-audio --embed-metadata --add-metadata -o "${outputPath}"${authParams} "${url}"`,
       ];
 
+      // 尝试多种下载策略
       let success = false;
+      let lastError: any = null;
+
       for (const cmd of commands) {
         try {
-          console.log(`Trying: ${cmd.split(" ")[0]}...`);
-          await execAsync(cmd);
+          console.log(`[music] 尝试下载命令: ${cmd.split(" ")[0]}`);
+          const { stdout, stderr } = await execAsync(cmd);
+          console.log(`[music] 下载成功`);
           success = true;
           break;
-        } catch {
+        } catch (error: any) {
+          lastError = error;
+          console.log(`[music] 下载失败: ${error.message}`);
           continue;
         }
       }
 
       if (!success) {
-        return false;
+        console.error("[music] 所有下载策略失败:", lastError?.message);
+        return { audioPath: null };
       }
 
-      // Find the downloaded file (should be .mp3 now)
-      const baseFileName = path.basename(outputPath).replace(".%(ext)s", "");
-      const outputDir = path.dirname(outputPath);
-      const files = fs
-        .readdirSync(outputDir)
-        .filter((f) => f.startsWith(baseFileName) && f.endsWith(".mp3"));
+      // 查找下载的文件（按音质优先级排序）
+      const files = await fs.promises.readdir(this.tempDir);
+      const audioExtensions = [
+        ".flac",
+        ".wav",
+        ".m4a",
+        ".opus",
+        ".aac",
+        ".mp3",
+        ".ogg",
+        ".webm",
+      ];
 
-      if (files.length > 0) {
-        console.log(`Downloaded audio file: ${files[0]}`);
-        return true;
+      // 按优先级查找文件
+      for (const ext of audioExtensions) {
+        const audioFile = files.find((f) => {
+          const hasFilename = f.startsWith(filename);
+          const hasExt = f.toLowerCase().endsWith(ext);
+          return hasFilename && hasExt;
+        });
+
+        if (audioFile) {
+          const filePath = path.join(this.tempDir, audioFile);
+          const stats = await fs.promises.stat(filePath);
+          const formatInfo = this.getFormatInfo(ext);
+          console.log(
+            `[music] 下载完成: ${audioFile} (${Utils.formatSize(
+              stats.size
+            )}, ${formatInfo})`
+          );
+
+          // 嵌入元数据和封面
+          const finalPath = await this.embedMetadata(
+            filePath,
+            metadata,
+            hasThumbnail ? thumbnailPath : undefined
+          );
+
+          return {
+            audioPath: finalPath,
+            thumbnailPath: hasThumbnail ? thumbnailPath : undefined,
+          };
+        }
       }
 
-      // Fallback: check for any audio files with similar name
-      const allFiles = fs
-        .readdirSync(outputDir)
-        .filter(
-          (f) =>
-            f.includes(baseFileName.substring(0, 10)) &&
-            (f.endsWith(".mp3") ||
-              f.endsWith(".m4a") ||
-              f.endsWith(".webm") ||
-              f.endsWith(".opus"))
-        );
-
-      if (allFiles.length > 0) {
-        console.log(`Found fallback audio file: ${allFiles[0]}`);
-        return true;
-      }
-
-      return false;
+      return { audioPath: null };
     } catch (error) {
-      console.error("Audio download failed:", error);
-      return false;
+      console.error("[music] 下载失败:", error);
+      return { audioPath: null };
     }
   }
 
-  async saveAudioLocally(
-    tempFile: string,
-    title: string,
-    artist: string
+  private getFormatInfo(ext: string): string {
+    const formatMap: Record<string, string> = {
+      ".flac": "FLAC无损",
+      ".wav": "WAV无损",
+      ".m4a": "M4A高质量",
+      ".opus": "OPUS高效",
+      ".aac": "AAC高质量",
+      ".mp3": "MP3兼容",
+      ".ogg": "OGG开源",
+      ".webm": "WebM",
+    };
+    return formatMap[ext] || ext.toUpperCase();
+  }
+
+  private async embedMetadata(
+    audioPath: string,
+    metadata?: SongInfo,
+    thumbnailPath?: string
   ): Promise<string> {
-    const safeTitle = this.safeFilename(title);
-    const safeArtist = this.safeFilename(artist);
-    const filename = `${safeArtist}_${safeTitle}.mp3`;
-    const targetPath = path.join(this.musicDir, filename);
+    // 如果没有元数据和封面，直接返回原文件
+    if (!metadata && !thumbnailPath) {
+      console.log("[music] 没有元数据和封面，跳过嵌入");
+      return audioPath;
+    }
 
-    // Copy file to music directory
-    fs.copyFileSync(tempFile, targetPath);
+    // 打印要嵌入的元数据
+    if (metadata) {
+      console.log("[music] 准备嵌入元数据:");
+      console.log(`  - 标题: ${metadata.title || "无"}`);
+      console.log(`  - 艺术家: ${metadata.artist || "无"}`);
+      console.log(`  - 专辑: ${metadata.album || "无"}`);
+    }
 
-    return targetPath;
-  }
+    // OPUS 格式特殊处理 - 转换为 MP3 以确保兼容性
+    const ext = path.extname(audioPath).toLowerCase();
+    if (ext === ".opus") {
+      console.log("[music] OPUS 格式：转换为 MP3 以确保 Telegram 兼容性");
+      const mp3Path = await this.embedMetadataOnly(audioPath, metadata);
 
-  async setCookie(cookieContent: string): Promise<boolean> {
+      // 如果有缩略图，为 MP3 嵌入封面
+      if (
+        thumbnailPath &&
+        fs.existsSync(thumbnailPath) &&
+        mp3Path.endsWith(".mp3")
+      ) {
+        return this.embedCoverToMp3(mp3Path, metadata, thumbnailPath);
+      }
+      return mp3Path;
+    }
+
     try {
-      const cookieFile = path.join(this.tempDir, "cookies.txt");
-      fs.writeFileSync(cookieFile, cookieContent, "utf-8");
-      // 同步到 lowdb 持久化
-      const db = await getDB();
-      db.data[YTDLP_CONFIG_KEYS.COOKIE] = cookieContent;
-      await db.write();
-      return true;
+      const ext = path.extname(audioPath).toLowerCase();
+      const outputPath = audioPath.replace(ext, `_tagged${ext}`);
+
+      // 构建FFmpeg命令 - 添加静默模式
+      let ffmpegCmd = `ffmpeg -loglevel error -i "${audioPath}"`;
+
+      // 添加封面（如果有）
+      if (thumbnailPath && fs.existsSync(thumbnailPath)) {
+        ffmpegCmd += ` -i "${thumbnailPath}"`;
+      }
+
+      // 复制音频流 - 保持原始编码
+      ffmpegCmd += " -c:a copy";
+
+      // 添加元数据
+      if (metadata) {
+        if (metadata.title && metadata.title !== "Unknown") {
+          ffmpegCmd += ` -metadata title="${metadata.title.replace(
+            /"/g,
+            '\\"'
+          )}"`;
+          console.log(`[music] 添加标题: ${metadata.title}`);
+        }
+        if (metadata.artist && metadata.artist !== "Unknown Artist") {
+          ffmpegCmd += ` -metadata artist="${metadata.artist.replace(
+            /"/g,
+            '\\"'
+          )}"`;
+          console.log(`[music] 添加艺术家: ${metadata.artist}`);
+        }
+        if (metadata.album) {
+          ffmpegCmd += ` -metadata album="${metadata.album.replace(
+            /"/g,
+            '\\"'
+          )}"`;
+          console.log(`[music] 添加专辑: ${metadata.album}`);
+        }
+        // 添加更多元数据
+        ffmpegCmd += ` -metadata comment="Downloaded by TeleBox Music Plugin"`;
+        ffmpegCmd += ` -metadata date="${new Date().getFullYear()}"`;
+      }
+
+      // 嵌入封面
+      if (thumbnailPath && fs.existsSync(thumbnailPath)) {
+        // 对于不同格式使用不同的封面嵌入方法
+        if (ext === ".mp3") {
+          ffmpegCmd +=
+            " -map 0:a -map 1:v -c:v mjpeg -disposition:v attached_pic";
+        } else if (ext === ".m4a" || ext === ".mp4" || ext === ".aac") {
+          ffmpegCmd +=
+            " -map 0:a -map 1:v -c:v copy -disposition:v attached_pic";
+        } else if (ext === ".flac") {
+          ffmpegCmd +=
+            " -map 0:a -map 1:v -c:v png -disposition:v attached_pic";
+        } else if (ext === ".opus") {
+          // OPUS 格式保持原始格式，不嵌入封面避免格式转换
+          ffmpegCmd += " -map 0:a -c:a copy";
+          // OPUS 格式的封面需要特殊处理，暂时跳过
+          console.log("[music] OPUS 格式暂不支持封面嵌入，保持原始格式");
+        } else if (ext === ".ogg") {
+          // OGG Vorbis 格式
+          ffmpegCmd += " -map 0:a";
+        } else {
+          // 其他格式尝试标准方法
+          ffmpegCmd += " -map 0:a";
+          if (thumbnailPath) {
+            ffmpegCmd += " -map 1:v -c:v copy -disposition:v attached_pic";
+          }
+        }
+      } else {
+        // 没有封面时只映射音频流
+        ffmpegCmd += " -map 0:a";
+      }
+
+      // 输出文件 - 保持原始格式扩展名
+      const finalExt = ext === ".opus" ? ".opus" : ext;
+      ffmpegCmd += ` -f ${
+        ext === ".opus" ? "opus" : "auto"
+      } -y "${outputPath}"`;
+
+      console.log("[music] 正在嵌入元数据和封面...");
+      const { stderr } = await execAsync(ffmpegCmd);
+
+      // 检查输出文件是否创建成功
+      if (!fs.existsSync(outputPath)) {
+        console.error("[music] FFmpeg 输出文件未创建");
+        if (stderr) console.error("[music] FFmpeg 错误:", stderr);
+        return audioPath;
+      }
+
+      // 检查新文件大小
+      const newSize = fs.statSync(outputPath).size;
+      if (newSize === 0) {
+        console.error("[music] FFmpeg 输出文件为空");
+        fs.unlinkSync(outputPath);
+        return audioPath;
+      }
+
+      // 删除原文件，重命名新文件
+      fs.unlinkSync(audioPath);
+      fs.renameSync(outputPath, audioPath);
+
+      console.log("[music] 元数据和封面嵌入成功");
+      return audioPath;
     } catch (error) {
-      console.error("Failed to set cookie:", error);
-      return false;
+      console.error("[music] 元数据嵌入失败:", error);
+      // 如果失败，返回原文件
+      return audioPath;
     }
   }
 
-  cleanupTempFiles(pattern?: string): void {
+  private async embedMetadataOnly(
+    audioPath: string,
+    metadata?: SongInfo
+  ): Promise<string> {
+    // OPUS 格式转换为 MP3 以确保 Telegram 兼容性
+    if (!metadata) {
+      console.log("[music] OPUS: 没有元数据，跳过嵌入");
+      return audioPath;
+    }
+
+    console.log("[music] OPUS 转换为 MP3 并嵌入元数据...");
+
     try {
-      const files = fs.readdirSync(this.tempDir);
+      const ext = path.extname(audioPath).toLowerCase();
+      // 转换为 MP3 格式
+      const outputPath = audioPath.replace(ext, "_converted.mp3");
+
+      // 使用 FFmpeg 转换为 MP3 并嵌入元数据
+      let ffmpegCmd = `ffmpeg -loglevel error -i "${audioPath}"`;
+
+      // 设置 MP3 编码参数 - 高质量
+      ffmpegCmd += " -c:a libmp3lame -b:a 320k";
+
+      // 添加元数据
+      if (metadata.title && metadata.title !== "Unknown") {
+        ffmpegCmd += ` -metadata title="${metadata.title.replace(
+          /"/g,
+          '\\"'
+        )}"`;
+        console.log(`[music] 添加标题: ${metadata.title}`);
+      }
+      if (metadata.artist && metadata.artist !== "Unknown Artist") {
+        ffmpegCmd += ` -metadata artist="${metadata.artist.replace(
+          /"/g,
+          '\\"'
+        )}"`;
+        console.log(`[music] 添加艺术家: ${metadata.artist}`);
+      }
+      if (metadata.album) {
+        ffmpegCmd += ` -metadata album="${metadata.album.replace(
+          /"/g,
+          '\\"'
+        )}"`;
+        console.log(`[music] 添加专辑: ${metadata.album}`);
+      }
+
+      // 添加 ID3v2 标签版本
+      ffmpegCmd += " -id3v2_version 3";
+
+      // 输出文件
+      ffmpegCmd += ` -y "${outputPath}"`;
+
+      console.log("[music] 执行 FFmpeg 转换命令...");
+      const { stderr } = await execAsync(ffmpegCmd);
+      if (stderr) {
+        console.log("[music] FFmpeg 输出:", stderr);
+      }
+
+      // 验证输出文件
+      if (!fs.existsSync(outputPath) || fs.statSync(outputPath).size === 0) {
+        console.error("[music] 转换失败");
+        return audioPath;
+      }
+
+      // 删除原 OPUS 文件
+      fs.unlinkSync(audioPath);
+
+      const newSize = fs.statSync(outputPath).size;
+      console.log(`[music] OPUS 转 MP3 成功 (${Utils.formatSize(newSize)})`);
+      return outputPath;
+    } catch (error) {
+      console.error("[music] OPUS 转换错误:", error);
+      return audioPath;
+    }
+  }
+
+  private async embedCoverToMp3(
+    mp3Path: string,
+    metadata?: SongInfo,
+    thumbnailPath?: string
+  ): Promise<string> {
+    // 为 MP3 文件嵌入封面
+    if (!thumbnailPath || !fs.existsSync(thumbnailPath)) {
+      return mp3Path;
+    }
+
+    try {
+      const outputPath = mp3Path.replace(".mp3", "_final.mp3");
+
+      // 使用 FFmpeg 嵌入封面
+      let ffmpegCmd = `ffmpeg -loglevel error -i "${mp3Path}" -i "${thumbnailPath}"`;
+      ffmpegCmd += " -map 0:a -map 1:v";
+      ffmpegCmd += " -c:a copy -c:v mjpeg";
+      ffmpegCmd += " -disposition:v attached_pic";
+
+      // 保留元数据
+      if (metadata) {
+        if (metadata.title) {
+          ffmpegCmd += ` -metadata title="${metadata.title.replace(
+            /"/g,
+            '\\"'
+          )}"`;
+        }
+        if (metadata.artist) {
+          ffmpegCmd += ` -metadata artist="${metadata.artist.replace(
+            /"/g,
+            '\\"'
+          )}"`;
+        }
+        if (metadata.album) {
+          ffmpegCmd += ` -metadata album="${metadata.album.replace(
+            /"/g,
+            '\\"'
+          )}"`;
+        }
+      }
+
+      ffmpegCmd += " -id3v2_version 3";
+      ffmpegCmd += ` -y "${outputPath}"`;
+
+      console.log("[music] 嵌入封面到 MP3...");
+      await execAsync(ffmpegCmd);
+
+      if (fs.existsSync(outputPath)) {
+        fs.unlinkSync(mp3Path);
+        console.log("[music] MP3 封面嵌入成功");
+        return outputPath;
+      }
+
+      return mp3Path;
+    } catch (error) {
+      console.error("[music] MP3 封面嵌入失败:", error);
+      return mp3Path;
+    }
+  }
+
+  async cleanCache(hours: number = 24): Promise<void> {
+    // 清理临时文件，而不是缓存
+    const now = Date.now();
+    const maxAge = hours * 60 * 60 * 1000;
+
+    try {
+      const files = await fs.promises.readdir(this.tempDir);
       for (const file of files) {
-        // Skip cookies.txt
-        if (file === "cookies.txt") continue;
-
-        // If pattern provided, only delete matching files
-        if (pattern && !file.includes(pattern)) continue;
-
         const filePath = path.join(this.tempDir, file);
-        try {
-          fs.unlinkSync(filePath);
-          console.debug(`Cleaned up: ${file}`);
-        } catch (err) {
-          console.debug(`Failed to delete ${file}:`, err);
+        const stats = await fs.promises.stat(filePath);
+        if (now - stats.mtimeMs > maxAge) {
+          await fs.promises.unlink(filePath);
+          console.log(`[music] Cleaned old temp file: ${file}`);
         }
       }
     } catch (error) {
-      console.debug("Error cleaning temp files:", error);
+      console.error("[music] Clean temp files error:", error);
     }
   }
 }
 
-// Global downloader instance
-const downloader = new MusicDownloader();
-
-// 帮助文档
-const help_text = `🎵 <b>YouTube 音乐下载器</b>
-
-<b>📝 功能描述:</b>
-智能搜索下载 YouTube 高品质音频
-
-<b>🔧 使用方法:</b>
-• <code>${mainPrefix}music &lt;关键词&gt;</code> - 搜索下载音乐
-• <code>${mainPrefix}music &lt;YouTube链接&gt;</code> - 直接下载
-• <code>${mainPrefix}music save</code> - 保存音频到本地
-• <code>${mainPrefix}music cookie &lt;内容&gt;</code> - 设置 Cookie
-• <code>${mainPrefix}music proxy &lt;URL&gt;</code> - 设置 yt-dlp 代理
-• <code>${mainPrefix}music clear</code> - 清理临时文件
-• <code>${mainPrefix}music apikey &lt;密钥&gt;</code> - 设置 Gemini API Key
-• <code>${mainPrefix}music model &lt;名称&gt;</code> - 设置 Gemini 模型
-• <code>${mainPrefix}music baseurl &lt;地址&gt;</code> - 设置 Gemini Base URL
-• <code>${mainPrefix}music config</code> - 查看当前配置
-• <code>${mainPrefix}music help</code> - 显示帮助
-
-<b>💡 示例:</b>
-• <code>${mainPrefix}music 美人鱼 林俊杰</code>
-• <code>${mainPrefix}music 周杰伦 晴天</code>
-
-<b>🌐 网络加速:</b>
-安装 WireProxy 解决方案 <code>wget -N https://gitlab.com/fscarmen/warp/-/raw/main/menu.sh && bash menu.sh w</code> 然后设置 <code>proxy</code> 为 <code>socks5://127.0.0.1:40000</code>
-或
-安装 iptables + dnsmasq + ipset 分流流媒体方案 <code>wget -N https://gitlab.com/fscarmen/warp/-/raw/main/menu.sh && bash menu.sh e</code>`;
-
+// ==================== Main Plugin ====================
 class MusicPlugin extends Plugin {
-  description: string = help_text;
+  private static initialized = false;
+  private downloader: Downloader;
 
-  cmdHandlers: Record<
-    string,
-    (msg: Api.Message, trigger?: Api.Message) => Promise<void>
-  > = {
-    music: async (msg: Api.Message, trigger?: Api.Message) => {
-      const client = await getGlobalClient();
-      if (!client) {
-        await msg.edit({ text: "❌ 客户端未初始化", parseMode: "html" });
-        return;
-      }
+  async initialize(): Promise<void> {
+    if (MusicPlugin.initialized) return;
 
-      // 参数解析（严格按acron.ts模式）
-      const lines = msg.text?.trim()?.split(/\r?\n/g) || [];
-      const parts = lines?.[0]?.split(/\s+/) || [];
-      const [, ...args] = parts; // 跳过命令本身
-      const sub = (args[0] || "").toLowerCase();
+    console.log("[music] 初始化 Music Plugin...");
 
-      try {
-        // 无参数时显示错误提示
-        if (!sub) {
-          await msg.edit({
-            text: `❌ <b>缺少参数</b>\n\n🎯 <b>快速开始：</b>\n• <code>${mainPrefix}music 歌手名 歌曲名</code>\n• <code>${mainPrefix}music help</code> 查看完整说明\n\n💡 <b>提示：</b> 支持中英文搜索和 YouTube 链接`,
-            parseMode: "html",
-          });
-          return;
-        }
+    // 检查并安装依赖
+    const depsInstalled = await DependencyManager.checkAndInstallDependencies();
+    if (!depsInstalled) {
+      console.error("[music] 依赖安装失败");
+    }
 
-        // 明确请求帮助时才显示
-        if (sub === "help" || sub === "h") {
-          await msg.edit({
-            text: help_text,
-            parseMode: "html",
-          });
-          return;
-        }
+    // 检查 yt-dlp
+    const ytdlpAvailable = await DependencyManager.checkYtDlp();
+    if (!ytdlpAvailable) {
+      console.warn("[music] yt-dlp 未安装，请手动安装: pip install yt-dlp");
+    }
 
-        // 保存功能
-        if (sub === "save") {
-          await this.handleSaveCommand(msg);
-          return;
-        }
+    const ffmpegInstalled = await DependencyManager.checkFfmpeg();
+    if (!ffmpegInstalled) {
+      console.warn("[music] ffmpeg 未安装，音频转换功能受限");
+    }
 
-        // Cookie设置功能
-        if (sub === "cookie") {
-          const cookieContent = getArgFromMsg(msg, 1);
-          await this.handleCookieCommand(msg, cookieContent);
-          return;
-        }
+    MusicPlugin.initialized = true;
+  }
 
-        // 代理设置功能
-        if (sub === "proxy") {
-          const proxyValue = args.slice(1).join(" ").trim();
-          await this.handleProxyCommand(msg, proxyValue);
-          return;
-        }
+  public name = "music";
+  public description: string;
+  public cmdHandlers: Record<string, (msg: Api.Message) => Promise<void>>;
 
-        // Gemini API Key 设置功能
-        if (sub === "apikey") {
-          const apiKey = args.slice(1).join(" ").trim();
-          await this.handleApiKeyCommand(msg, apiKey);
-          return;
-        }
+  constructor() {
+    super();
+    this.description = `🎵 <b>音乐下载助手</b>
 
-        // 清理功能
-        if (sub === "clear") {
-          await this.handleClearCommand(msg);
-          return;
-        }
+<b>使用方法：</b>
+<code>${commandName} 周杰伦 晴天</code> - 搜索下载
+<code>${commandName} https://...</code> - 链接下载
 
-        // 设置 Gemini 模型
-        if (sub === "model") {
-          const model = args.slice(1).join(" ").trim();
-          await this.handleModelCommand(msg, model);
-          return;
-        }
+<b>配置管理：</b>
+<code>${commandName} config</code> - 查看当前配置
+<code>${commandName} set cookie [值]</code> - 设置YouTube Cookie
+<code>${commandName} set proxy [地址]</code> - 设置代理服务器
+<code>${commandName} set api_key [密钥]</code> - 设置Gemini API Key
+<code>${commandName} set base_url [地址]</code> - 设置Gemini Base URL
+<code>${commandName} set model [模型]</code> - 设置Gemini模型
+<code>${commandName} clear</code> - 清理临时文件
 
-        // 设置 Gemini Base URL
-        if (sub === "baseurl") {
-          const url = args.slice(1).join(" ").trim();
-          await this.handleBaseUrlCommand(msg, url);
-          return;
-        }
+<b>配置说明：</b>
+• <code>cookie</code> - 绕过地区限制，提升下载成功率
+• <code>proxy</code> - 网络代理地址 (如: socks5://127.0.0.1:1080)
 
-        // 显示配置
-        if (sub === "config") {
-          await this.handleConfigCommand(msg);
-          return;
-        }
+<b>解决YouTube访问问题：</b>
 
-        // 默认为音乐搜索下载
-        const query = args.join(" ").trim();
-        if (!query) {
-          await msg.edit({
-            text: `❌ <b>搜索内容为空</b>\n\n🎯 <b>正确用法：</b>\n<code>${mainPrefix}music &lt;关键词或YouTube链接&gt;</code>\n\n💡 <b>示例：</b>\n• <code>${mainPrefix}music 周杰伦 稻香</code>\n• <code>${mainPrefix}music https://youtu.be/xxxxx</code>`,
-            parseMode: "html",
-          });
-          return;
-        }
+🚀 <b>方案1 - WARP+ (推荐)：</b>
+<pre>wget -N https://gitlab.com/fscarmen/warp/-/raw/main/menu.sh && bash menu.sh e</pre>
 
-        await this.handleMusicDownload(msg, query);
-      } catch (error: any) {
-        console.error("[music] 插件执行失败:", error);
-        const errorMsg = error.message || String(error);
-        const displayError =
-          errorMsg.length > 150 ? errorMsg.substring(0, 150) + "..." : errorMsg;
-        await msg.edit({
-          text: `❌ <b>系统异常</b>\n\n🔍 <b>错误信息:</b> <code>${htmlEscape(
-            displayError
-          )}</code>\n\n🛠️ <b>建议操作:</b>\n• 🔄 重新尝试操作\n• 🌐 检查网络连接\n• 🔧 确认依赖工具已安装\n• 📞 联系管理员获取技术支持`,
-          parseMode: "html",
-        });
-      }
-    },
-  };
+🔧 <b>方案2 - WireProxy：</b>
+<pre># 安装 WireProxy
+wget -N https://gitlab.com/fscarmen/warp/-/raw/main/menu.sh && bash menu.sh w
 
-  private async handleMusicDownload(
-    msg: Api.Message,
-    query: string
-  ): Promise<void> {
-    const client = await getGlobalClient();
-    if (!client) {
-      await msg.edit({ text: "❌ 客户端未初始化", parseMode: "html" });
+# 配置代理（WireProxy 默认端口 40000）
+${commandName} set proxy socks5://127.0.0.1:40000</pre>
+
+💡 <i>直接输入歌名即可快速搜索下载</i>`;
+
+    this.downloader = new Downloader();
+    this.downloader.cleanCache().catch(() => {});
+
+    // 注册命令处理器
+    this.cmdHandlers = {
+      music: this.execute.bind(this),
+    };
+  }
+
+  async execute(msg: Api.Message): Promise<void> {
+    const args = msg.text?.split(" ").slice(1) || [];
+
+    if (!args.length || args[0] === "help") {
+      // 编辑原消息而不是回复
+      await msg.edit({ text: this.description, parseMode: "html" });
       return;
     }
 
-    // 检测并自动安装依赖
-    const deps = await checkAndInstallDependencies(msg);
-    if (!deps.ytdlp) {
+    const command = args[0].toLowerCase();
+
+    switch (command) {
+      case "config":
+        await this.handleConfig(msg);
+        break;
+
+      case "set":
+        await this.handleSet(msg, args.slice(1));
+        break;
+
+      case "clear":
+        await this.handleClear(msg);
+        break;
+
+      default:
+        await this.handleDownload(msg, args.join(" "));
+    }
+  }
+
+  private async handleConfig(msg: Api.Message): Promise<void> {
+    const cookie = await ConfigManager.get(CONFIG.KEYS.COOKIE);
+    const proxy = await ConfigManager.get(CONFIG.KEYS.PROXY);
+    const apiKey = await ConfigManager.get(CONFIG.KEYS.API);
+    const baseUrl = await ConfigManager.get(CONFIG.KEYS.BASE_URL);
+    const model = await ConfigManager.get(CONFIG.KEYS.MODEL);
+
+    const status = `⚙️ <b>当前配置</b>
+
+${cookie ? "✅" : "⚪"} <b>Cookie:</b> ${cookie ? "已设置" : "未设置"}
+${proxy ? "✅" : "⚪"} <b>代理:</b> ${proxy ? Utils.escape(proxy) : "未配置"}
+${apiKey ? "✅" : "⚪"} <b>AI搜索:</b> ${apiKey ? "已启用" : "未配置"}
+🔧 <b>Gemini Base URL:</b> <code>${Utils.escape(baseUrl || "")}</code>
+🧠 <b>Gemini Model:</b> <code>${Utils.escape(model || "")}</code>
+
+💡 <i>使用 <code>${commandName} set [配置项] [值]</code> 修改配置</i>`;
+
+    // 编辑原消息而不是回复
+    await msg.edit({ text: status, parseMode: "html" });
+  }
+
+  private async handleSet(msg: Api.Message, args: string[]): Promise<void> {
+    if (args.length < 2) {
+      // 编辑原消息而不是回复
       await msg.edit({
-        text: `❌ <b>依赖安装失败</b>\n\n🔧 <b>yt-dlp 需要手动安装</b>\n\n📦 <b>一键安装命令:</b>\n<code>sudo apt update && sudo apt install -y ffmpeg && pip3 install -U yt-dlp --break-system-packages</code>\n\n📦 <b>其他安装方式:</b>\n• <b>Windows:</b>\n  <code>winget install yt-dlp</code>\n• <b>macOS:</b>\n  <code>brew install yt-dlp</code>\n• <b>手动下载:</b>\n  <code>sudo wget https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -O /usr/local/bin/yt-dlp</code>\n  <code>sudo chmod a+rx /usr/local/bin/yt-dlp</code>\n\n💡 <b>提示:</b> 安装后重新运行命令即可使用`,
+        text: `❌ <b>参数不足</b>
+
+<b>正确格式：</b>
+<code>${commandName} set cookie [YouTube Cookie]</code>
+<code>${commandName} set proxy [代理地址]</code>
+<code>${commandName} set api_key [Gemini API密钥]</code>
+<code>${commandName} set base_url [Gemini Base URL]</code>
+<code>${commandName} set model [Gemini 模型]</code>
+
+<b>代理配置示例：</b>
+<code>${commandName} set proxy socks5://127.0.0.1:1080</code>
+<code>${commandName} set proxy http://127.0.0.1:8080</code>
+<code>${commandName} set proxy socks5://127.0.0.1:40000</code> (WireProxy)`,
         parseMode: "html",
       });
       return;
     }
 
-    if (!deps.ffmpeg) {
-      console.log("[music] FFmpeg not installed - MP3 conversion may not work");
-      // 继续执行，但可能无法转换格式
-    }
+    const [rawKey, ...valueParts] = args;
+    const value = valueParts.join(" ");
 
-    // Check if it's a direct link
-    const urlPattern =
-      /https?:\/\/(www\.)?(youtube\.com|youtu\.be|music\.youtube\.com)/;
-    let url: string;
-    let finalSearchQuery = query;
-    let songInfo: {
-      title: string;
-      artist: string;
-      album?: string;
-      date?: string;
-      genre?: string;
-    } | null = null;
+    // 将用户友好键映射为内部存储键
+    const keyMap: Record<string, string> = {
+      cookie: CONFIG.KEYS.COOKIE,
+      proxy: CONFIG.KEYS.PROXY,
+      api_key: CONFIG.KEYS.API,
+      base_url: CONFIG.KEYS.BASE_URL,
+      baseurl: CONFIG.KEYS.BASE_URL,
+      model: CONFIG.KEYS.MODEL,
+    };
+    const normalized = keyMap[rawKey.toLowerCase()] || rawKey;
 
-    if (urlPattern.test(query)) {
-      url = query;
+    const success = await ConfigManager.set(normalized, value);
+
+    if (success) {
+      // 根据不同的配置项给出友好提示
+      let successMsg = `✅ <b>配置已更新</b>\n\n`;
+
+      switch (rawKey.toLowerCase()) {
+        case "cookie":
+          successMsg += `🍪 YouTube Cookie 已设置\n现在可以绕过地区限制了`;
+          break;
+        case "proxy":
+          successMsg += `🌐 代理服务器已配置\n地址: <code>${Utils.escape(
+            value
+          )}</code>`;
+          break;
+        case "api_key":
+          successMsg += `🤖 AI 搜索功能已启用\n可以更智能地搜索音乐了`;
+          break;
+        case "base_url":
+        case "baseurl":
+          successMsg += `🔧 Gemini Base URL 已设置\n地址: <code>${Utils.escape(
+            value
+          )}</code>`;
+          break;
+        case "model":
+          successMsg += `🧠 Gemini 模型已设置\n模型: <code>${Utils.escape(
+            value
+          )}</code>`;
+          break;
+        default:
+          successMsg += `<code>${Utils.escape(rawKey)}</code> 已成功设置`;
+      }
+
+      await msg.edit({
+        text: successMsg,
+        parseMode: "html",
+      });
     } else {
-      // 尝试使用 Gemini AI 获取歌曲信息
-      const apiKey = await GeminiConfigManager.get(GEMINI_CONFIG_KEYS.API_KEY);
-      if (apiKey) {
-        try {
-          await msg.edit({
-            text: "🤖 <b>AI 分析中...</b>\n\n🎵 正在识别歌曲信息",
-            parseMode: "html",
-          });
-
-          const baseUrl = await GeminiConfigManager.get(
-            GEMINI_CONFIG_KEYS.BASE_URL
-          );
-          const geminiClient = new GeminiClient(apiKey, baseUrl || undefined);
-          const geminiResponse = await geminiClient.searchMusic(query);
-
-          // 提取歌曲信息
-          songInfo = extractSongInfo(geminiResponse);
-
-          // 显示识别结果
-          let infoText = `🤖 <b>AI 识别结果</b>\n\n🎵 歌曲: ${htmlEscape(
-            songInfo.title
-          )}\n🎤 歌手: ${htmlEscape(songInfo.artist)}`;
-          if (songInfo.album)
-            infoText += `\n💿 专辑: ${htmlEscape(songInfo.album)}`;
-          if (songInfo.date)
-            infoText += `\n📅 发行: ${htmlEscape(songInfo.date)}`;
-          if (songInfo.genre)
-            infoText += `\n🎭 流派: ${htmlEscape(songInfo.genre)}`;
-          infoText += `\n\n🔍 正在搜索歌词版...`;
-
-          await msg.edit({ text: infoText, parseMode: "html" });
-
-          // 使用提取的信息构建更精准的搜索查询
-          finalSearchQuery = `${songInfo.title} ${songInfo.artist} 动态歌词 歌词版`;
-          console.log(`[music] AI 优化搜索: ${finalSearchQuery}`);
-        } catch (error: any) {
-          console.log(
-            "[music] Gemini AI 处理失败，使用原始查询:",
-            error.message
-          );
-          // 如果 AI 失败，继续使用原始查询
-          await msg.edit({
-            text: "🔍 <b>搜索中...</b>\n\n🎵 正在 YouTube 上查找最佳匹配",
-            parseMode: "html",
-          });
-        }
-      } else {
-        // 没有设置 API Key，直接进行搜索
-        await msg.edit({
-          text: "🔍 <b>搜索中...</b>\n\n🎵 正在 YouTube 上查找最佳匹配",
-          parseMode: "html",
-        });
-      }
-
-      // Search YouTube
-      const searchResult = await downloader.searchYoutube(finalSearchQuery);
-      if (!searchResult) {
-        await msg.edit({
-          text: `❌ <b>搜索无结果</b>\n\n🔍 <b>查询内容:</b> <code>${htmlEscape(
-            query
-          )}</code>\n\n🛠️ <b>解决方案:</b>\n• 🤖 <b>启用AI:</b> 使用 <code>${mainPrefix}music apikey</code> 设置 Gemini API\n• 🌐 <b>网络问题:</b> 启用 WARP+ 或稳定代理\n  <code>wget -N https://gitlab.com/fscarmen/warp/-/raw/main/menu.sh && bash menu.sh e</code>\n• 🔑 <b>访问限制:</b> 使用 <code>${mainPrefix}music cookie</code> 设置 YouTube Cookie\n• 📝 <b>关键词优化:</b> 尝试"歌手名+歌曲名"格式\n• 🔄 <b>重试:</b> 稍后再次尝试搜索\n\n💡 <b>提示:</b> 某些地区需要 WARP+ 才能正常访问 YouTube`,
-          parseMode: "html",
-        });
-        return;
-      }
-      url = searchResult;
-    }
-
-    await msg.edit({
-      text: "📥 <b>开始下载</b>\n\n🎵 正在获取最佳音质版本...",
-      parseMode: "html",
-    });
-
-    // Generate temp file path
-    const safeQuery = downloader.safeFilename(query);
-    const tempFile = path.join(downloader.tempDirPath, `${safeQuery}.%(ext)s`);
-
-    // Download audio with metadata if available
-    const success = await downloader.downloadAudio(
-      url,
-      tempFile,
-      songInfo || undefined
-    );
-    if (!success) {
-      const deps = await checkAndInstallDependencies();
-      let ffmpegHint = "";
-      if (!deps.ffmpeg) {
-        ffmpegHint =
-          "\n\n🎵 <b>FFmpeg 未安装 (音频转换可能失败):</b>\n• <code>apt install ffmpeg</code> (Linux)\n• <code>brew install ffmpeg</code> (macOS)\n• <code>winget install ffmpeg</code> (Windows)";
-      }
-
       await msg.edit({
-        text: `❌ <b>下载失败</b>\n\n🛠️ <b>常见解决方案:</b>\n• 🌐 <b>网络问题:</b> 启用 WARP+ 或更换网络环境\n  <code>wget -N https://gitlab.com/fscarmen/warp/-/raw/main/menu.sh && bash menu.sh e</code>\n• 🔑 <b>访问受限:</b> 使用 <code>${mainPrefix}music cookie &lt;Netscape格式Cookie&gt;</code>\n• 🚫 <b>内容限制:</b> 视频可能有地区/年龄限制\n• 🔄 <b>工具更新:</b> 确保 yt-dlp 为最新版本\n  <code>pip3 install -U yt-dlp --break-system-packages</code>${ffmpegHint}\n\n💡 <b>重要提示:</b>\n• YouTube 在某些地区需要 WARP+ 访问\n• Cookie 必须是 Netscape HTTP Cookie 格式\n• 建议使用官方 YouTube 链接`,
-        parseMode: "html",
-      });
-      return;
-    }
-
-    // Find downloaded file
-    const tempDir = downloader.tempDirPath;
-    const files = fs.readdirSync(tempDir);
-
-    // Look for MP3 files first, then fallback to other formats
-    let downloadedFiles = files.filter(
-      (file) => file.startsWith(safeQuery) && file.endsWith(".mp3")
-    );
-
-    if (downloadedFiles.length === 0) {
-      // Fallback to any audio format
-      downloadedFiles = files.filter(
-        (file) =>
-          file.startsWith(safeQuery) &&
-          (file.endsWith(".m4a") ||
-            file.endsWith(".webm") ||
-            file.endsWith(".opus") ||
-            file.endsWith(".mp3"))
-      );
-    }
-
-    if (downloadedFiles.length === 0) {
-      // Final fallback: look for any file containing part of the query
-      downloadedFiles = files.filter(
-        (file) =>
-          file.includes(safeQuery.substring(0, 10)) &&
-          (file.endsWith(".mp3") ||
-            file.endsWith(".m4a") ||
-            file.endsWith(".webm") ||
-            file.endsWith(".opus"))
-      );
-    }
-
-    if (downloadedFiles.length === 0) {
-      await msg.edit({
-        text: `❌ <b>文件处理异常</b>\n\n🔍 <b>问题分析:</b>\n• 下载过程可能被中断\n• 文件格式转换失败\n• 磁盘空间不足\n\n🛠️ <b>解决建议:</b>\n• 🔄 重新尝试下载\n• 💾 检查磁盘剩余空间\n• 🌐 确保网络连接稳定\n• 🔧 更新 yt-dlp 和 FFmpeg\n\n📊 <b>调试信息:</b>\n• 查询: <code>${htmlEscape(
-          safeQuery
-        )}</code>\n• 临时目录文件: <code>${htmlEscape(
-          files.slice(0, 3).join(", ")
-        )}${files.length > 3 ? "..." : ""}</code>`,
-        parseMode: "html",
-      });
-      return;
-    }
-
-    const audioFile = path.join(tempDir, downloadedFiles[0]);
-    console.log(`Using audio file: ${audioFile}`);
-
-    try {
-      await msg.edit({
-        text: "📤 <b>准备发送</b>\n\n🎵 正在上传高品质音频文件...",
-        parseMode: "html",
-      });
-
-      // 使用AI提供的元数据，如果没有AI数据则使用清洗后的默认值
-      let audioTitle = query;
-      let audioPerformer = "YouTube Music";
-
-      if (songInfo) {
-        // 如果有AI识别的元数据，使用它们
-        audioTitle = songInfo.title;
-        audioPerformer = songInfo.artist;
-      } else {
-        // 没有AI数据时，清洗用户输入作为歌曲名
-        audioTitle = query.trim();
-        audioPerformer = "YouTube Music";
-      }
-
-      // 查找缩略图文件
-      const baseFileName = path.basename(audioFile, ".mp3");
-      const audioDir = path.dirname(audioFile);
-      const thumbJpg = path.join(audioDir, `${baseFileName}.jpg`);
-      const thumbWebp = path.join(audioDir, `${baseFileName}.webp`);
-      const thumbPng = path.join(audioDir, `${baseFileName}.png`);
-
-      let thumbPath: string | undefined;
-      if (fs.existsSync(thumbJpg)) {
-        thumbPath = thumbJpg;
-        console.log(`[music] 找到缩略图: ${thumbJpg}`);
-      } else if (fs.existsSync(thumbWebp)) {
-        thumbPath = thumbWebp;
-        console.log(`[music] 找到缩略图: ${thumbWebp}`);
-      } else if (fs.existsSync(thumbPng)) {
-        thumbPath = thumbPng;
-        console.log(`[music] 找到缩略图: ${thumbPng}`);
-      } else {
-        console.log(`[music] 未找到缩略图`);
-      }
-
-      // Send audio file with clean metadata and thumbnail
-      await client.sendFile(msg.peerId, {
-        file: audioFile,
-        thumb: thumbPath,
-        attributes: [
-          new Api.DocumentAttributeAudio({
-            duration: 0,
-            title: audioTitle,
-            performer: audioPerformer,
-          }),
-        ],
-        replyTo: msg.replyToMsgId,
-        forceDocument: false,
-      });
-
-      await msg.delete();
-      console.log(`Successfully sent audio: ${query}`);
-    } catch (error: any) {
-      console.error("Failed to send audio:", error);
-      const errorMessage = error.message || String(error);
-      const displayError =
-        errorMessage.length > 100
-          ? errorMessage.substring(0, 100) + "..."
-          : errorMessage;
-      await msg.edit({
-        text: `❌ <b>发送失败</b>\n\n🔍 <b>错误详情:</b> <code>${htmlEscape(
-          displayError
-        )}</code>\n\n🛠️ <b>可能原因:</b>\n• 📁 文件过大 (超过 Telegram 限制)\n• 🎵 音频格式不被支持\n• 🌐 网络上传中断\n• 💾 临时存储空间不足\n\n💡 <b>解决方案:</b>\n• 尝试下载较短的音频片段\n• 检查网络连接稳定性\n• 清理临时文件释放空间`,
-        parseMode: "html",
-      });
-    } finally {
-      // Cleanup temp files including thumbnails
-      downloader.cleanupTempFiles(safeQuery);
-
-      // 额外清理缩略图文件
-      const tempDir = downloader.tempDirPath;
-      const thumbnailPatterns = [".jpg", ".webp", ".png"];
-      for (const pattern of thumbnailPatterns) {
-        try {
-          const files = fs
-            .readdirSync(tempDir)
-            .filter((f) => f.includes(safeQuery) && f.endsWith(pattern));
-          for (const file of files) {
-            const filePath = path.join(tempDir, file);
-            if (fs.existsSync(filePath)) {
-              fs.unlinkSync(filePath);
-              console.log(`[music] 清理缩略图: ${file}`);
-            }
-          }
-        } catch {
-          // 忽略清理错误
-        }
-      }
-    }
-  }
-
-  private async handleSaveCommand(msg: Api.Message): Promise<void> {
-    const client = await getGlobalClient();
-    if (!client) return;
-
-    const reply = await msg.getReplyMessage();
-    if (!reply || !reply.document) {
-      await msg.edit({
-        text: `❌ <b>操作错误</b>\n\n🎯 <b>正确用法:</b>\n1️⃣ 回复任意音频消息\n2️⃣ 发送 <code>${mainPrefix}music save</code>\n\n💡 <b>支持格式:</b> MP3, M4A, FLAC, WAV 等\n\n📁 <b>保存位置:</b> 本地音乐收藏夹`,
-        parseMode: "html",
-      });
-      return;
-    }
-
-    try {
-      // Get file info
-      let title = "Unknown";
-      let artist = "Unknown";
-
-      if (reply.document.attributes) {
-        for (const attr of reply.document.attributes) {
-          if (attr instanceof Api.DocumentAttributeAudio) {
-            title = attr.title || "Unknown";
-            artist = attr.performer || "Unknown";
-            break;
-          }
-        }
-      }
-
-      await msg.edit({
-        text: "💾 <b>保存中...</b>\n\n📁 正在添加到本地音乐收藏",
-        parseMode: "html",
-      });
-
-      // Create temp file
-      const tempFile = path.join(
-        downloader.tempDirPath,
-        `temp_save_${msg.id}.mp3`
-      );
-
-      // Download file to temp location
-      await client.downloadMedia(reply, { outputFile: tempFile });
-
-      // Save to local storage
-      const savedPath = await downloader.saveAudioLocally(
-        tempFile,
-        title,
-        artist
-      );
-
-      await msg.edit({
-        text: `✅ <b>保存完成</b>\n\n📁 <b>文件信息:</b>\n• 名称: <code>${htmlEscape(
-          path.basename(savedPath)
-        )}</code>\n• 路径: <code>${htmlEscape(
-          path.dirname(savedPath)
-        )}</code>\n\n🎵 <b>音频详情:</b>\n• 标题: ${htmlEscape(
-          title
-        )}\n• 艺术家: ${htmlEscape(artist)}\n\n💡 文件已永久保存到本地收藏`,
-        parseMode: "html",
-      });
-      console.log(`Audio saved to: ${savedPath}`);
-    } catch (error: any) {
-      console.error("Save command failed:", error);
-      const errorMessage = error.message || String(error);
-      const displayError =
-        errorMessage.length > 100
-          ? errorMessage.substring(0, 100) + "..."
-          : errorMessage;
-      await msg.edit({
-        text: `❌ <b>保存失败</b>\n\n🔍 <b>错误详情:</b> <code>${htmlEscape(
-          displayError
-        )}</code>\n\n🛠️ <b>解决方案:</b>\n• 💾 检查磁盘剩余空间\n• 🔐 确认文件夹写入权限\n• 📁 检查目标路径是否存在\n• 🔄 重新尝试保存操作`,
-        parseMode: "html",
-      });
-    } finally {
-      // Cleanup temp file
-      try {
-        const tempFile = path.join(
-          downloader.tempDirPath,
-          `temp_save_${msg.id}.mp3`
-        );
-        if (fs.existsSync(tempFile)) {
-          fs.unlinkSync(tempFile);
-        }
-      } catch {
-        // Ignore cleanup errors
-      }
-    }
-  }
-
-  private async handleCookieCommand(
-    msg: Api.Message,
-    cookieContent: string
-  ): Promise<void> {
-    try {
-      // 若命令中未直接携带内容，尝试从回复中读取（文本或文件）
-      if (!cookieContent) {
-        const client = await getGlobalClient();
-        const reply = await msg.getReplyMessage();
-        if (reply) {
-          // 优先从文本中获取
-          const replyText =
-            (reply as any)?.text || (reply as any)?.message || "";
-          if (replyText?.trim()) {
-            cookieContent = replyText.trim();
-          } else if (reply.document) {
-            // 回复中是一个文件，尝试下载
-            await msg.edit({
-              text: "📥 <b>读取 Cookie 文件...</b>",
-              parseMode: "html",
-            });
-            const tempCookiePath = path.join(
-              downloader.tempDirPath,
-              `temp_cookie_${msg.id}.txt`
-            );
-            await client?.downloadMedia(reply, { outputFile: tempCookiePath });
-            try {
-              cookieContent = fs.readFileSync(tempCookiePath, "utf-8");
-            } finally {
-              // 清理临时文件
-              try {
-                if (fs.existsSync(tempCookiePath))
-                  fs.unlinkSync(tempCookiePath);
-              } catch {}
-            }
-          }
-        }
-      }
-
-      if (!cookieContent) {
-        await msg.edit({
-          text: `❌ <b>Cookie 内容为空</b>\n\n🔑 <b>使用方法:</b>\n<code>${mainPrefix}music cookie &lt;Netscape格式Cookie&gt;</code>\n或回复一条包含 Cookie 的文本/文件后发送 <code>${mainPrefix}music cookie</code>\n\n📋 <b>获取步骤 (推荐使用浏览器插件):</b>\n1️⃣ 登录 YouTube 网页版\n2️⃣ 安装浏览器插件 "Get cookies.txt LOCALLY"\n3️⃣ 点击插件图标，选择 "Export as Netscape"\n4️⃣ 复制导出的 Cookie 内容\n\n📝 <b>手动获取 (开发者工具):</b>\n1️⃣ 按 F12 打开开发者工具\n2️⃣ Application → Cookies → youtube.com\n3️⃣ 导出为 Netscape HTTP Cookie 格式\n\n⚠️ <b>重要:</b> 必须是 Netscape 格式，不是普通 Cookie 字符串\n💡 <b>用途:</b> 突破年龄限制、登录限制和地区限制`,
-          parseMode: "html",
-        });
-        return;
-      }
-
-      const success = await downloader.setCookie(cookieContent);
-      if (success) {
-        await msg.edit({
-          text: `✅ <b>Cookie 配置成功</b>\n\n🔓 <b>已解锁功能:</b>\n• 年龄受限内容访问\n• 需要登录的视频\n• 地区限制内容\n• 高清音质选项\n\n💾 <b>已保存</b>\n⏰ <b>持久化:</b> 已同步到配置 (lowdb)\n🔒 <b>隐私:</b> 仅本地存储，不会上传`,
-          parseMode: "html",
-        });
-      } else {
-        await msg.edit({
-          text: "❌ <b>Cookie 设置失败</b>\n\n🔍 <b>可能原因:</b>\n• Cookie 格式不正确\n• 包含无效字符\n• 文件写入权限不足\n\n💡 <b>建议:</b> 确保复制完整且有效的 YouTube Cookie",
-          parseMode: "html",
-        });
-      }
-    } catch (error: any) {
-      console.error("Cookie command failed:", error);
-      const errorMessage = error.message || String(error);
-      const displayError =
-        errorMessage.length > 100
-          ? errorMessage.substring(0, 100) + "..."
-          : errorMessage;
-      await msg.edit({
-        text: `❌ <b>Cookie 配置异常</b>\n\n🔍 <b>错误详情:</b> <code>${htmlEscape(
-          displayError
-        )}</code>\n\n🛠️ <b>解决方案:</b>\n• 检查 Cookie 格式完整性\n• 确认文件系统写入权限\n• 重新获取有效的 YouTube Cookie`,
-        parseMode: "html",
-      });
-    }
-  }
-
-  private async handleProxyCommand(
-    msg: Api.Message,
-    proxyValue: string
-  ): Promise<void> {
-    try {
-      const db = await getDB();
-
-      // 查询当前
-      if (!proxyValue) {
-        const current = String(db.data[YTDLP_CONFIG_KEYS.PROXY] || "").trim();
-        await msg.edit({
-          text: `🌐 <b>yt-dlp 代理</b>\n\n当前: <code>${htmlEscape(
-            current || "未设置"
-          )}</code>\n\n设置: <code>${mainPrefix}music proxy &lt;URL&gt;</code>\n示例: <code>${mainPrefix}music proxy http://127.0.0.1:7890</code>\n支持: http, https, socks5`,
-          parseMode: "html",
-        });
-        return;
-      }
-
-      // 清除
-      if (["clear", "off", "none"].includes(proxyValue.toLowerCase())) {
-        db.data[YTDLP_CONFIG_KEYS.PROXY] = "";
-        await db.write();
-        await msg.edit({
-          text: "✅ <b>代理已清除</b>\n\nyt-dlp 将不再使用代理",
-          parseMode: "html",
-        });
-        return;
-      }
-
-      // 基础校验与保存
-      const safe = proxyValue.trim();
-      if (!/^\w+:\/\//.test(safe)) {
-        await msg.edit({
-          text: `❌ <b>URL 格式无效</b>\n\n示例: <code>http://127.0.0.1:7890</code> 或 <code>socks5://127.0.0.1:1080</code>`,
-          parseMode: "html",
-        });
-        return;
-      }
-
-      db.data[YTDLP_CONFIG_KEYS.PROXY] = safe;
-      await db.write();
-      await msg.edit({
-        text: `✅ <b>代理已设置</b>\n\n当前: <code>${htmlEscape(
-          safe
-        )}</code>\n\n说明: 将在所有 yt-dlp 调用中附加 <code>--proxy</code>`,
-        parseMode: "html",
-      });
-    } catch (error: any) {
-      const msgText = error?.message ? String(error.message) : String(error);
-      await msg.edit({
-        text: `❌ <b>代理设置失败</b>\n\n错误: <code>${htmlEscape(
-          msgText.substring(0, 120)
+        text: `❌ <b>配置失败</b>\n\n无法设置 <code>${Utils.escape(
+          rawKey
         )}</code>`,
         parseMode: "html",
       });
     }
   }
 
-  private async handleModelCommand(
-    msg: Api.Message,
-    model: string
-  ): Promise<void> {
-    if (!model) {
-      const current = await GeminiConfigManager.get(GEMINI_CONFIG_KEYS.MODEL);
-      await msg.edit({
-        text: `🧠 <b>Gemini 模型</b>\n\n当前: <code>${htmlEscape(
-          current
-        )}</code>\n\n设置: <code>${mainPrefix}music model &lt;名称&gt;</code>\n示例: <code>${mainPrefix}music model gemini-2.0-flash</code>`,
-        parseMode: "html",
-      });
-      return;
-    }
-    await GeminiConfigManager.set(GEMINI_CONFIG_KEYS.MODEL, model);
+  private async handleClear(msg: Api.Message): Promise<void> {
+    // 编辑原消息而不是回复
     await msg.edit({
-      text: `✅ <b>Gemini 模型已更新</b>\n\n🧠 当前: <code>${htmlEscape(
-        model
-      )}</code>`,
+      text: "🧹 <b>正在清理...</b>",
+      parseMode: "html",
+    });
+
+    await this.downloader.cleanCache(0);
+
+    await msg.edit({
+      text: "✨ <b>清理完成</b>\n\n临时文件已全部删除",
       parseMode: "html",
     });
   }
 
-  private async handleBaseUrlCommand(
-    msg: Api.Message,
-    baseUrl: string
-  ): Promise<void> {
-    if (!baseUrl) {
-      const current = await GeminiConfigManager.get(
-        GEMINI_CONFIG_KEYS.BASE_URL
-      );
-      await msg.edit({
-        text: `🌐 <b>Gemini Base URL</b>\n\n当前: <code>${htmlEscape(
-          current
-        )}</code>\n\n设置: <code>${mainPrefix}music baseurl &lt;地址&gt;</code>\n示例: <code>${mainPrefix}music baseurl https://generativelanguage.googleapis.com</code>`,
-        parseMode: "html",
-      });
+  private async handleDownload(msg: Api.Message, query: string): Promise<void> {
+    // 确保插件已初始化
+    await this.initialize();
+
+    const client = await getGlobalClient();
+    if (!client) {
+      // 编辑原消息而不是回复
+      await msg.edit({ text: "❌ <b>客户端未初始化</b>", parseMode: "html" });
       return;
     }
 
-    if (!/^https?:\/\//i.test(baseUrl)) {
+    // 检查 yt-dlp 是否可用
+    const ytdlpAvailable = await DependencyManager.checkYtDlp();
+    if (!ytdlpAvailable) {
       await msg.edit({
-        text: `❌ <b>URL 格式无效</b>\n\n示例: <code>https://generativelanguage.googleapis.com</code>`,
+        text: "❌ <b>缺少必要组件</b>\n\n请安装 yt-dlp：\n<code>pip install yt-dlp</code>",
         parseMode: "html",
       });
       return;
     }
 
-    await GeminiConfigManager.set(GEMINI_CONFIG_KEYS.BASE_URL, baseUrl);
+    // Check dependencies
+    const deps = await this.downloader.checkDependencies();
+    if (!deps.ytdlp) {
+      await msg.edit({
+        text: "❌ <b>缺少下载器</b>\n\n请先安装 yt-dlp",
+        parseMode: "html",
+      });
+      return;
+    }
+
+    // 先编辑原消息显示处理中
     await msg.edit({
-      text: `✅ <b>Base URL 已更新</b>\n\n🌐 当前: <code>${htmlEscape(
-        baseUrl
-      )}</code>`,
+      text: "🎵 <b>处理中...</b>",
       parseMode: "html",
     });
-  }
 
-  private async handleConfigCommand(msg: Api.Message): Promise<void> {
-    const apiKey = await GeminiConfigManager.get(GEMINI_CONFIG_KEYS.API_KEY);
-    const baseUrl = await GeminiConfigManager.get(GEMINI_CONFIG_KEYS.BASE_URL);
-    const model = await GeminiConfigManager.get(GEMINI_CONFIG_KEYS.MODEL);
-    const db = await getDB();
-    const hasCookie = Boolean(
-      db.data[YTDLP_CONFIG_KEYS.COOKIE] &&
-        String(db.data[YTDLP_CONFIG_KEYS.COOKIE]).trim()
-    );
-    const proxy = String(db.data[YTDLP_CONFIG_KEYS.PROXY] || "").trim();
+    // 创建一个状态消息用于后续更新
+    const statusMsg = msg;
 
-    const maskedKey = apiKey
-      ? apiKey.substring(0, 8) + "..." + apiKey.substring(apiKey.length - 4)
-      : "未设置";
-
-    await msg.edit({
-      text: `⚙️ <b>Music 配置</b>\n\n🤖 <b>Gemini</b>\n• API Key: <code>${htmlEscape(
-        maskedKey
-      )}</code>\n• Base URL: <code>${htmlEscape(
-        baseUrl
-      )}</code>\n• Model: <code>${htmlEscape(
-        model
-      )}</code>\n\n🍪 <b>yt-dlp Cookie</b>\n• 状态: ${
-        hasCookie ? "<b>已配置</b>" : "<b>未配置</b>"
-      }\n\n🌐 <b>yt-dlp Proxy</b>\n• 当前: <code>${htmlEscape(
-        proxy || "未设置"
-      )}</code>`,
-      parseMode: "html",
-    });
-  }
-
-  private async handleClearCommand(msg: Api.Message): Promise<void> {
     try {
-      await msg.edit({
-        text: "🧹 <b>清理中...</b>\n\n📁 正在清理临时下载文件",
-        parseMode: "html",
-      });
+      let url: string | null = null;
+      let metadata: SongInfo | undefined;
 
-      // Clear temp files (preserve cookies.txt)
-      downloader.cleanupTempFiles();
-
-      await msg.edit({
-        text: "✅ <b>清理完成</b>\n\n🗑️ <b>已清理:</b> 所有临时下载文件\n🔒 <b>已保留:</b> YouTube Cookie 配置\n💾 <b>已释放:</b> 磁盘存储空间\n\n💡 建议定期清理以保持最佳性能",
-        parseMode: "html",
-      });
-      console.log("Music downloader temp files cleaned");
-    } catch (error: any) {
-      console.error("Clear command failed:", error);
-      const errorMessage = error.message || String(error);
-      const displayError =
-        errorMessage.length > 100
-          ? errorMessage.substring(0, 100) + "..."
-          : errorMessage;
-      await msg.edit({
-        text: `❌ <b>清理异常</b>\n\n🔍 <b>错误详情:</b> <code>${htmlEscape(
-          displayError
-        )}</code>\n\n🛠️ <b>可能原因:</b>\n• 文件正在被其他程序使用\n• 缺少文件删除权限\n• 临时目录访问受限\n\n💡 <b>建议:</b> 手动清理或重启程序后重试`,
-        parseMode: "html",
-      });
-    }
-  }
-
-  private async handleApiKeyCommand(
-    msg: Api.Message,
-    apiKey: string
-  ): Promise<void> {
-    if (!apiKey) {
-      // 显示当前配置状态
-      const currentKey = await GeminiConfigManager.get(
-        GEMINI_CONFIG_KEYS.API_KEY
-      );
-      const baseUrl = await GeminiConfigManager.get(
-        GEMINI_CONFIG_KEYS.BASE_URL
-      );
-      const model = await GeminiConfigManager.get(GEMINI_CONFIG_KEYS.MODEL);
-
-      if (currentKey) {
-        const maskedKey =
-          currentKey.substring(0, 8) +
-          "..." +
-          currentKey.substring(currentKey.length - 4);
-        await msg.edit({
-          text: `🤖 <b>Gemini AI 配置</b>\n\n🔑 <b>API Key:</b> <code>${maskedKey}</code>\n🌐 <b>Base URL:</b> <code>${htmlEscape(
-            baseUrl
-          )}</code>\n🧠 <b>模型:</b> <code>${htmlEscape(
-            model
-          )}</code>\n\n✅ AI 功能已启用\n\n💡 <b>使用方法:</b>\n• 更新密钥: <code>${mainPrefix}music apikey &lt;新密钥&gt;</code>\n• 清除密钥: <code>${mainPrefix}music apikey clear</code>`,
-          parseMode: "html",
-        });
+      // Check if input is URL
+      if (query.includes("youtube.com") || query.includes("youtu.be")) {
+        url = query;
       } else {
-        await msg.edit({
-          text: `🤖 <b>Gemini AI 未配置</b>\n\n❌ 当前未设置 API Key\n\n🔧 <b>设置方法:</b>\n<code>${mainPrefix}music apikey &lt;你的API密钥&gt;</code>\n\n📝 <b>获取 API Key:</b>\n1. 访问 <a href="https://aistudio.google.com/app/apikey">Google AI Studio</a>\n2. 登录 Google 账号\n3. 点击 "Create API Key"\n4. 复制生成的密钥\n\n🎯 <b>AI 功能优势:</b>\n• 智能识别歌曲最火版本\n• 自动提取准确的歌曲信息\n• 精准搜索歌词版视频\n• 提升搜索成功率`,
+        // 解析查询获取元数据（可能使用 AI）
+        metadata = await this.parseQuery(query);
+        console.log(
+          `[music] 查询解析结果: ${metadata.artist} - ${metadata.title}`
+        );
+
+        // 显示AI识别结果
+        const recognitionText = metadata.album
+          ? `${metadata.artist} - ${metadata.title} - ${metadata.album}`
+          : `${metadata.artist} - ${metadata.title}`;
+
+        await statusMsg.edit({
+          text: `🤖 <b>AI 识别结果:</b> ${Utils.escape(recognitionText)}`,
+          parseMode: "html",
+        });
+
+        // 使用 yt-dlp 搜索，加入"動態歌詞"关键词
+        const searchQuery = `${recognitionText} 動態歌詞`;
+        url = await this.downloader.search(searchQuery);
+      }
+
+      if (!url) {
+        await statusMsg.edit({
+          text: "😔 <b>未找到相关音乐</b>\n\n请尝试更换关键词",
+          parseMode: "html",
+        });
+        return;
+      }
+
+      // Download
+      await statusMsg.edit({
+        text: `⬇️ <b>下载中...</b>`,
+        parseMode: "html",
+      });
+
+      // 传递元数据给下载器
+      console.log(
+        `[music] 开始下载，元数据: ${metadata?.artist || "无"} - ${
+          metadata?.title || "无"
+        }`
+      );
+      const downloadResult = await this.downloader.download(url, metadata);
+
+      if (!downloadResult.audioPath) {
+        await statusMsg.edit({
+          text: `❌ <b>下载失败</b>\n\n请检查链接或稍后重试`,
+          parseMode: "html",
+        });
+        return;
+      }
+
+      // Upload
+      await statusMsg.edit({
+        text: `📤 <b>上传中...</b>`,
+        parseMode: "html",
+      });
+
+      const stats = await fs.promises.stat(downloadResult.audioPath);
+
+      // 准备发送参数
+      const fileName = path.basename(downloadResult.audioPath);
+      const sendParams: any = {
+        file: downloadResult.audioPath,
+        replyTo: msg.id,
+        forceDocument: false, // 作为音频发送而不是文档
+        // 不添加 caption，只发送音频文件
+        attributes: [
+          new Api.DocumentAttributeAudio({
+            voice: false,
+            duration: 0,
+            title: metadata?.title || "Audio",
+            performer: metadata?.artist || "Unknown Artist",
+            waveform: undefined,
+          }),
+          new Api.DocumentAttributeFilename({
+            fileName: fileName,
+          }),
+        ],
+      };
+
+      // 如果有缩略图，添加到发送参数中
+      if (
+        downloadResult.thumbnailPath &&
+        fs.existsSync(downloadResult.thumbnailPath)
+      ) {
+        sendParams.thumb = downloadResult.thumbnailPath;
+      }
+
+      // 发送音频文件，元数据和缩略图已嵌入
+      await client.sendFile(msg.chatId!, sendParams);
+
+      // 删除状态消息
+      await statusMsg.delete();
+
+      // 清理临时文件
+      setTimeout(() => {
+        try {
+          if (
+            downloadResult.audioPath &&
+            fs.existsSync(downloadResult.audioPath)
+          ) {
+            fs.unlinkSync(downloadResult.audioPath);
+          }
+          if (
+            downloadResult.thumbnailPath &&
+            fs.existsSync(downloadResult.thumbnailPath)
+          ) {
+            fs.unlinkSync(downloadResult.thumbnailPath);
+          }
+        } catch (error) {
+          console.log("[music] 清理临时文件失败:", error);
+        }
+      }, 5000);
+    } catch (error: any) {
+      if (statusMsg) {
+        await statusMsg.edit({
+          text: `❌ <b>Error:</b> ${Utils.escape(
+            error.message || "Unknown error"
+          )}`,
           parseMode: "html",
         });
       }
-      return;
+    }
+  }
+
+  private async parseQuery(query: string): Promise<SongInfo> {
+    // 改进的查询解析，支持多种格式
+    // 格式1: "歌手 - 歌名"
+    // 格式2: "歌名 歌手"
+    // 格式3: "歌名"
+
+    // 尝试解析 "歌手 - 歌名" 格式
+    if (query.includes(" - ")) {
+      const parts = query.split(" - ");
+      return {
+        artist: parts[0].trim(),
+        title: parts[1].trim(),
+        album: parts[2]?.trim(), // 支持 "歌手 - 歌名 - 专辑" 格式
+      };
     }
 
-    // 清除 API Key
-    if (apiKey.toLowerCase() === "clear") {
-      await GeminiConfigManager.set(GEMINI_CONFIG_KEYS.API_KEY, "");
-      await msg.edit({
-        text: `✅ <b>API Key 已清除</b>\n\n🔒 Gemini AI 功能已禁用\n\n💡 重新启用: <code>${mainPrefix}music apikey &lt;密钥&gt;</code>`,
-        parseMode: "html",
-      });
-      return;
-    }
-
-    // 验证 API Key 格式
-    if (apiKey.length < 20 || !/^[A-Za-z0-9_-]+$/.test(apiKey)) {
-      await msg.edit({
-        text: `❌ <b>API Key 格式无效</b>\n\n🔍 <b>问题:</b> 密钥格式不正确\n\n📝 <b>正确格式:</b>\n• 长度至少 20 个字符\n• 只包含字母、数字、下划线和连字符\n\n💡 <b>提示:</b> 请从 Google AI Studio 复制完整的 API Key`,
-        parseMode: "html",
-      });
-      return;
-    }
-
-    // 测试 API Key
-    try {
-      await msg.edit({
-        text: "🔄 <b>验证 API Key...</b>\n\n🤖 正在连接 Gemini AI 服务",
-        parseMode: "html",
-      });
-
-      const baseUrl = await GeminiConfigManager.get(
-        GEMINI_CONFIG_KEYS.BASE_URL
-      );
-      const testClient = new GeminiClient(apiKey, baseUrl || undefined);
-      await testClient.searchMusic("测试");
-
-      // 保存配置
-      await GeminiConfigManager.set(GEMINI_CONFIG_KEYS.API_KEY, apiKey);
-
-      await msg.edit({
-        text: `✅ <b>API Key 配置成功</b>\n\n🤖 Gemini AI 功能已启用\n\n🎯 <b>已解锁功能:</b>\n• 智能歌曲识别\n• 自动元数据提取\n• 精准歌词版搜索\n• AI 增强搜索\n\n💡 <b>使用示例:</b>\n<code>${mainPrefix}music 美人鱼 林俊杰</code>\n\nAI 将自动识别并搜索最佳版本！`,
-        parseMode: "html",
-      });
-    } catch (error: any) {
-      console.error("[music] API Key 验证失败:", error);
-      const errorMsg = error.message || String(error);
-
-      let errorHint = "";
-      if (errorMsg.includes("403") || errorMsg.includes("401")) {
-        errorHint = "\n\n🔑 可能是无效的 API Key";
-      } else if (errorMsg.includes("429")) {
-        errorHint = "\n\n⏱️ API 配额已用完";
-      } else if (errorMsg.includes("网络")) {
-        errorHint = "\n\n🌐 网络连接问题";
+    // 尝试使用 AI 解析（如果配置了 API key）
+    const apiKey = await ConfigManager.get(CONFIG.KEYS.API);
+    if (apiKey) {
+      try {
+        console.log("[music] 使用 AI 解析歌曲信息...");
+        const baseUrl = await ConfigManager.get(CONFIG.KEYS.BASE_URL);
+        const gemini = new GeminiClient(apiKey, baseUrl);
+        const aiResponse = await gemini.searchMusic(query);
+        const songInfo = await extractSongInfo(aiResponse, query);
+        console.log(
+          `[music] AI 识别结果: ${songInfo.artist} - ${songInfo.title}${
+            songInfo.album ? " - " + songInfo.album : ""
+          }`
+        );
+        return songInfo;
+      } catch (error) {
+        console.log("[music] AI 解析失败，使用默认解析:", error);
       }
-
-      await msg.edit({
-        text: `❌ <b>API Key 验证失败</b>\n\n🔍 <b>错误:</b> <code>${htmlEscape(
-          errorMsg.substring(0, 100)
-        )}</code>${errorHint}\n\n🛠️ <b>解决方案:</b>\n• 确认 API Key 正确无误\n• 检查网络连接\n• 确认 API 配额未用完\n• 重新生成新的 API Key\n\n📝 <b>获取新密钥:</b>\n<a href="https://aistudio.google.com/app/apikey">Google AI Studio</a>`,
-        parseMode: "html",
-      });
+    } else {
+      console.log("[music] 未配置 Gemini API，使用默认解析");
     }
+
+    // 默认解析
+    return {
+      title: query,
+      artist: "Unknown Artist",
+    };
   }
 }
 
