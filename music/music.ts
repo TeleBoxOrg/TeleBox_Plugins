@@ -67,6 +67,7 @@ const CONFIG = {
     PROXY: "music_ytdlp_proxy",
     BASE_URL: "music_gemini_base_url",
     MODEL: "music_gemini_model",
+    AUDIO_QUALITY: "music_audio_quality",
   },
 };
 
@@ -77,6 +78,7 @@ const DEFAULT_CONFIG: Record<string, string> = {
   [CONFIG.KEYS.COOKIE]: "",
   [CONFIG.KEYS.API]: "",
   [CONFIG.KEYS.PROXY]: "",
+  [CONFIG.KEYS.AUDIO_QUALITY]: "", // 空则不指定，保持最佳可用
 };
 
 // ==================== Types ====================
@@ -231,7 +233,7 @@ class ConfigManager {
         defaultData
       );
       this.initialized = true;
-      console.log("[music] 配置管理器初始化成功 (lowdb)");
+      // console.log("[music] 配置管理器初始化成功 (lowdb)");
     } catch (error) {
       console.error("[music] 初始化配置失败:", error);
     }
@@ -962,13 +964,23 @@ class Downloader {
         console.log("[music] 缩略图下载失败，继续下载音频");
       }
 
+      // 读取用户配置的音频质量（可为空）
+      const configuredQuality = await ConfigManager.get(
+        CONFIG.KEYS.AUDIO_QUALITY
+      );
+      const qualityArg = configuredQuality
+        ? ` --audio-quality ${configuredQuality}`
+        : "";
+      // 用户显式设置音质时，使用 mp3 以确保质量参数生效；否则保持最佳可用格式
+      const audioFormat = configuredQuality ? "mp3" : "best";
+
       // Build command list with fallbacks - 优化音频格式选择
       const commands = [
         // 优先下载最高质量的音频
-        `yt-dlp -x --audio-format best --audio-quality 0 --extract-audio --embed-metadata --add-metadata -o "${outputPath}" --prefer-insecure --legacy-server-connect${authParams} "${url}"`,
+        `yt-dlp -x --audio-format ${audioFormat}${qualityArg} --extract-audio --embed-metadata --add-metadata -o "${outputPath}" --prefer-insecure --legacy-server-connect${authParams} "${url}"`,
         // Python 模块方式
-        `python3 -m yt_dlp -x --audio-format best --audio-quality 0 --extract-audio --embed-metadata --add-metadata -o "${outputPath}"${authParams} "${url}"`,
-        `python -m yt_dlp -x --audio-format best --audio-quality 0 --extract-audio --embed-metadata --add-metadata -o "${outputPath}"${authParams} "${url}"`,
+        `python3 -m yt_dlp -x --audio-format ${audioFormat}${qualityArg} --extract-audio --embed-metadata --add-metadata -o "${outputPath}"${authParams} "${url}"`,
+        `python -m yt_dlp -x --audio-format ${audioFormat}${qualityArg} --extract-audio --embed-metadata --add-metadata -o "${outputPath}"${authParams} "${url}"`,
       ];
 
       // 尝试多种下载策略
@@ -1171,11 +1183,9 @@ class Downloader {
         ffmpegCmd += " -map 0:a";
       }
 
-      // 输出文件 - 保持原始格式扩展名
-      const finalExt = ext === ".opus" ? ".opus" : ext;
-      ffmpegCmd += ` -f ${
-        ext === ".opus" ? "opus" : "auto"
-      } -y "${outputPath}"`;
+      // 输出文件 - 让 FFmpeg 根据扩展名自动选择容器
+      // 这里不再强制使用 `-f auto`（无效），仅在特殊需要时才指定格式。
+      ffmpegCmd += ` -y "${outputPath}"`;
 
       console.log("[music] 正在嵌入元数据和封面...");
       const { stderr } = await execAsync(ffmpegCmd);
@@ -1414,11 +1424,13 @@ class MusicPlugin extends Plugin {
 <code>${commandName} set api_key [密钥]</code> - 设置Gemini API Key
 <code>${commandName} set base_url [地址]</code> - 设置Gemini Base URL
 <code>${commandName} set model [模型]</code> - 设置Gemini模型
+<code>${commandName} set quality [音质]</code> - 自定义音频质量 (如: 320k / 192k / 0..10)
 <code>${commandName} clear</code> - 清理临时文件
 
 <b>配置说明：</b>
 • <code>cookie</code> - 绕过地区限制，提升下载成功率
 • <code>proxy</code> - 网络代理地址 (如: socks5://127.0.0.1:1080)
+• <code>quality</code> - 音质：支持 <code>320k/256k/192k/128k</code> 等比特率，或 <code>0..10</code> (VBR，数字越小越好)
 
 <b>解决YouTube访问问题：</b>
 
@@ -1478,12 +1490,14 @@ ${commandName} set proxy socks5://127.0.0.1:40000</pre>
     const apiKey = await ConfigManager.get(CONFIG.KEYS.API);
     const baseUrl = await ConfigManager.get(CONFIG.KEYS.BASE_URL);
     const model = await ConfigManager.get(CONFIG.KEYS.MODEL);
+    const quality = await ConfigManager.get(CONFIG.KEYS.AUDIO_QUALITY);
 
     const status = `⚙️ <b>当前配置</b>
 
 ${cookie ? "✅" : "⚪"} <b>Cookie:</b> ${cookie ? "已设置" : "未设置"}
 ${proxy ? "✅" : "⚪"} <b>代理:</b> ${proxy ? Utils.escape(proxy) : "未配置"}
 ${apiKey ? "✅" : "⚪"} <b>AI搜索:</b> ${apiKey ? "已启用" : "未配置"}
+🎚️ <b>音频质量:</b> <code>${Utils.escape(quality || "自动(最佳可用)")}</code>
 🔧 <b>Gemini Base URL:</b> <code>${Utils.escape(baseUrl || "")}</code>
 🧠 <b>Gemini Model:</b> <code>${Utils.escape(model || "")}</code>
 
@@ -1505,11 +1519,17 @@ ${apiKey ? "✅" : "⚪"} <b>AI搜索:</b> ${apiKey ? "已启用" : "未配置"}
 <code>${commandName} set api_key [Gemini API密钥]</code>
 <code>${commandName} set base_url [Gemini Base URL]</code>
 <code>${commandName} set model [Gemini 模型]</code>
+<code>${commandName} set quality [音质]</code>
 
 <b>代理配置示例：</b>
 <code>${commandName} set proxy socks5://127.0.0.1:1080</code>
 <code>${commandName} set proxy http://127.0.0.1:8080</code>
-<code>${commandName} set proxy socks5://127.0.0.1:40000</code> (WireProxy)`,
+<code>${commandName} set proxy socks5://127.0.0.1:40000</code> (WireProxy)
+
+<b>音质示例：</b>
+<code>${commandName} set quality 320k</code>
+<code>${commandName} set quality 192k</code>
+<code>${commandName} set quality 0</code> (VBR 最高质量)`,
         parseMode: "html",
       });
       return;
@@ -1526,10 +1546,44 @@ ${apiKey ? "✅" : "⚪"} <b>AI搜索:</b> ${apiKey ? "已启用" : "未配置"}
       base_url: CONFIG.KEYS.BASE_URL,
       baseurl: CONFIG.KEYS.BASE_URL,
       model: CONFIG.KEYS.MODEL,
+      quality: CONFIG.KEYS.AUDIO_QUALITY,
     };
     const normalized = keyMap[rawKey.toLowerCase()] || rawKey;
 
-    const success = await ConfigManager.set(normalized, value);
+    // 针对音质做输入规范化与校验
+    let finalValue = value;
+    if (normalized === CONFIG.KEYS.AUDIO_QUALITY) {
+      const v = value.trim().toLowerCase();
+      // 接受 0..10 或 Xk / Xkbps / Xkb
+      const vbrMatch = /^(?:[0-9]|10)$/.test(v);
+      const kbpsMatch = /^(\d{2,3})\s*(k|kb|kbps)?$/.exec(v);
+      if (vbrMatch) {
+        finalValue = v; // VBR 等级
+      } else if (kbpsMatch) {
+        // 规范化为 128k 格式
+        const kb = parseInt(kbpsMatch[1], 10);
+        if ([64, 96, 128, 160, 192, 256, 320].includes(kb)) {
+          finalValue = `${kb}k`;
+        } else {
+          await msg.edit({
+            text: `❌ <b>音质无效</b>\n\n支持 <code>0..10</code> 或 <code>128k/192k/256k/320k</code>`,
+            parseMode: "html",
+          });
+          return;
+        }
+      } else if (v === "" || v === "auto" || v === "best") {
+        // 清空 = 自动(最佳可用)
+        finalValue = "";
+      } else {
+        await msg.edit({
+          text: `❌ <b>音质无效</b>\n\n支持 <code>0..10</code> 或 <code>128k/192k/256k/320k</code>`,
+          parseMode: "html",
+        });
+        return;
+      }
+    }
+
+    const success = await ConfigManager.set(normalized, finalValue);
 
     if (success) {
       // 根据不同的配置项给出友好提示
@@ -1556,6 +1610,11 @@ ${apiKey ? "✅" : "⚪"} <b>AI搜索:</b> ${apiKey ? "已启用" : "未配置"}
         case "model":
           successMsg += `🧠 Gemini 模型已设置\n模型: <code>${Utils.escape(
             value
+          )}</code>`;
+          break;
+        case "quality":
+          successMsg += `🎚️ 音质已设置\n当前: <code>${Utils.escape(
+            finalValue || "自动(最佳可用)"
           )}</code>`;
           break;
         default:
