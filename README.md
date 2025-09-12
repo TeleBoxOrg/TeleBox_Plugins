@@ -46,6 +46,7 @@ npm i <插件名>
 - `music_bot` - 多音源音乐搜索  
 - `netease` - 网易云音乐搜索和播放功能  
 - `news` - 每日新闻插件  
+- `oxost` - 回复聊天中的文件与媒体 得到一个临时的下载链接  
 - `pic_to_sticker` - 图片转表情  
 - `q` - 消息引用生成器，通过 QuotLyBot 制作引用图片  
 - `qr` - QR 二维码插件  
