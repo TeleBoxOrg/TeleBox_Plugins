@@ -1,7 +1,7 @@
 /**
  * Music Plugin for TeleBox
  * Professional YouTube audio downloader with AI-enhanced search
- * @version 5.0.0
+ * @version 3.0.0
  * @author TeleBox Team
  */
 
@@ -501,13 +501,13 @@ class GeminiClient {
 专辑: 
 时长: `;
 
-    const userPrompt = `精准识别这个查询的歌曲信息："${query}"
+    const userPrompt = `精准识别这个查询的歌曲歌手和歌曲名，如果用户提供则优先用户输入："${query}"
 要求：
 1. 自动纠正拼写错误和识别简称
 2. 返回最广为人知的版本
-3. 歌手必须是原唱或最火的演唱者
+3. 歌手必须是最火的演唱者
 4. 只填写确定的信息，如果没有找到歌曲则用用户输入作为歌曲名
-5. 时长格式可为 秒数 或 mm:ss 或 hh:mm:ss（尽量准确）`;
+5. 时长格式可为 秒数 或 mm:ss 或 hh:mm:ss（搜索网络歌曲数据库给出最准确的时长）`;
 
     const headers: Record<string, string> = {
       "x-goog-api-key": this.apiKey,
@@ -956,15 +956,46 @@ class Downloader {
 
       if (!candidates.length) return null;
 
-      // 优先选择标题中包含"動態歌詞"的视频
-      const dynamicLyricsCandidates = candidates.filter(c => 
-        c.title.includes("動態歌詞") || c.title.includes("动态歌词")
-      );
+      // 智能选择最匹配的候选视频
+      const scoredCandidates = candidates.map(candidate => {
+        let score = 0;
+        const title = candidate.title.toLowerCase();
+        
+        // 从搜索查询中提取歌手和歌曲信息
+        const queryParts = query.toLowerCase().split(/[-–—\s]+/).filter((p: string) => p.trim());
+        
+        // 计算歌手和歌曲名匹配度
+        for (const part of queryParts) {
+          if (part.trim() && title.includes(part.trim())) {
+            score += 10; // 每个匹配的关键词加10分
+          }
+        }
+        
+        // 歌词版加分（优先级较低）
+        if (title.includes("歌词版") || title.includes("歌詞版") || 
+            title.includes("動態歌詞") || title.includes("动态歌词")) {
+          score += 3;
+        }
+        
+        // 官方频道或知名上传者加分
+        const uploader = candidate.uploader?.toLowerCase() || "";
+        if (uploader.includes("official") || uploader.includes("vevo") || 
+            uploader.includes("music") || uploader.includes("records")) {
+          score += 2;
+        }
+        
+        return { ...candidate, score };
+      });
       
-      if (dynamicLyricsCandidates.length > 0) {
-        console.log(`[Music] 找到${dynamicLyricsCandidates.length}个動態歌詞候选`);
-        candidates = dynamicLyricsCandidates;
-      }
+      // 按分数排序，分数高的优先
+      scoredCandidates.sort((a, b) => b.score - a.score);
+      
+      console.log(`[Music] 候选排序结果:`);
+      scoredCandidates.slice(0, 3).forEach((c, i) => {
+        console.log(`  ${i + 1}. ${c.title} (分数: ${c.score}, 时长: ${c.duration}s)`);
+      });
+      
+      candidates = scoredCandidates;
 
       // 若提供期望时长，仅在 duration >= 期望时长 的视频中选择最接近者
       if (typeof minDurationSec === "number" && minDurationSec > 0) {
