@@ -230,5 +230,9 @@
   "encode": {
     "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/encode/encode.ts?raw=true",
     "desc": "简单的编码解码插件"
+  },
+  "ids": {
+    "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/ids/ids.ts?raw=true",
+    "desc": "用户信息显示以及跳转链接"
   }
 }
