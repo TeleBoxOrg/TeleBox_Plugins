@@ -1,6 +1,6 @@
 
 import axios from "axios";
-import FormData from "form-data";
+// 不再需要 form-data 依赖，Axios 会自动序列化对象为 FormData
 import { getPrefixes } from "@utils/pluginManager";
 import { Plugin } from "@utils/pluginBase";
 import { Api } from "telegram";
@@ -139,13 +139,12 @@ class Ox0Plugin extends Plugin {
         debugInfo += `buffer[0:32]: <code>${buffer.slice(0,32).toString('hex')}</code>\n`;
         debugInfo += `expires: <code>${htmlEscape(expires || "")}</code> secret: <code>${secret ? "1" : "0"}</code>\n`;
 
-        const form = new FormData();
-        form.append("file", buffer, { filename });
+        // 使用 Node.js 原生 FormData（无需 form-data 依赖）
+        const form = new globalThis.FormData();
+  form.append("file", new Blob([buffer], { type: "application/octet-stream" }), filename);
         if (expires) form.append("expires", expires);
         if (secret) form.append("secret", "1");
-  const headers = form.getHeaders ? form.getHeaders() : {};
-  // 伪造 User-Agent，模拟 curl/浏览器
-  headers['User-Agent'] = 'curl/8.0.1';
+  const headers = { 'User-Agent': 'curl/8.0.1' };
   debugInfo += `headers: <code>${JSON.stringify(headers)}</code>\n`;
 
         try {
