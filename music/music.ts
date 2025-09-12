@@ -511,19 +511,19 @@ class GeminiClient {
     
     console.log(`[Music] Gemini参数: temperature=${temperature}, topP=${topP}, topK=${topK}`);
 
-    const systemPrompt = `只输出以下4行，且不要任何其他内容。若未知则留空：
+    const systemPrompt = `只输出以下3行，且不要任何其他内容。若未知则留空：
 
 歌曲名: 
 歌手: 
-专辑: 
-时长: `;
+专辑: `;
 
-    const userPrompt = `精准识别这个查询的歌曲歌手和歌曲名，如果用户提供则优先用户："${query}"
+    const userPrompt = `精准识别这个查询的歌曲信息："${query}"
 要求：
-1. 自动纠正拼写错误和识别简称
-3. 歌手必须是最火的演唱者
+1. 自动纠正拼写错误和识别拼音繁体
+2. 返回最广为人知的版本
+3. 歌手必须是最准确的演唱者，不能有任何错误
 4. 只填写确定的信息，如果没有找到歌曲则用用户输入作为歌曲名
-5. 时长格式可为 秒数 或 mm:ss 或 hh:mm:ss（尽量准确）`;
+5. 歌手名和歌曲名必须转换为繁体中文输出`;
 
     const headers: Record<string, string> = {
       "x-goog-api-key": this.apiKey,
@@ -790,17 +790,6 @@ async function extractSongInfo(
       artist = line.replace(/歌手[:：]\s*/, "").trim();
     } else if (line.startsWith("专辑:") || line.startsWith("专辑：")) {
       album = line.replace(/专辑[:：]\s*/, "").trim();
-    } else if (
-      line.startsWith("时长:") ||
-      line.startsWith("时长：") ||
-      line.startsWith("时长(秒):") ||
-      line.startsWith("时长(秒)：")
-    ) {
-      const raw = line.replace(/时长(?:\(秒\))?[:：]\s*/, "").trim();
-      const parsed = Utils.parseDuration(raw);
-      if (typeof parsed === "number" && parsed > 0) {
-        durationSec = parsed;
-      }
     }
   }
 
@@ -865,13 +854,33 @@ class Downloader {
       const cookie = await ConfigManager.get(CONFIG.KEYS.COOKIE);
       const proxy = await ConfigManager.get(CONFIG.KEYS.PROXY);
 
+      // 使用AI识别歌手和歌曲名，构建最终搜索词
+      let finalQuery = query;
+      try {
+        const apiKey = await ConfigManager.get(CONFIG.KEYS.API);
+        if (apiKey && apiKey.trim()) {
+          const baseUrl = await ConfigManager.get(CONFIG.KEYS.BASE_URL);
+          const gemini = new GeminiClient(apiKey, baseUrl);
+          const aiResponse = await gemini.searchMusic(query);
+          const songInfo = await extractSongInfo(aiResponse, query);
+          
+          // 构建搜索词：歌手 + 歌曲名 + Lyrics
+          if (songInfo.artist && songInfo.title) {
+            finalQuery = `${songInfo.artist} ${songInfo.title} Lyrics`;
+            console.log(`[Music] AI构建搜索词: ${finalQuery}`);
+          }
+        }
+      } catch (error) {
+        console.log(`[Music] AI识别失败，使用原始搜索词: ${error}`);
+      }
+
       // Escape query for shell
-      const safeQuery = query.replace(/"/g, '\\"');
+      const safeQuery = finalQuery.replace(/"/g, '\\"');
 
       // Try multiple search methods
       const commands = [];
-      // 使用 ytsearch5 以获取多个候选，并输出 JSON 供筛选
-      const baseCmd = `"ytsearch5:${safeQuery}" --dump-json --no-warnings --skip-download`;
+      // 使用 ytsearch1 获取第一个结果，并输出 JSON 供筛选
+      const baseCmd = `"ytsearch1:${safeQuery}" --dump-json --no-warnings --skip-download`;
 
       // Add authentication parameters
       let authParams = "";
@@ -969,86 +978,17 @@ class Downloader {
         uploader: string;
       }[];
 
-      // 过滤掉时长超过 13 分钟的候选
-      candidates = candidates.filter(
-        (c) =>
-          typeof c.duration === "number" && (c.duration as number) <= 13 * 60
-      );
-
-      if (!candidates.length) return null;
-
-      // 智能选择最匹配的候选视频
-      const scoredCandidates = candidates.map(candidate => {
-        let score = 0;
-        const title = candidate.title.toLowerCase();
-        
-        // 从搜索查询中提取歌手和歌曲信息
-        const queryParts = query.toLowerCase().split(/[-–—\s]+/).filter((p: string) => p.trim());
-        
-        // 计算歌手和歌曲名匹配度
-        for (const part of queryParts) {
-          if (part.trim() && title.includes(part.trim())) {
-            score += 10; // 每个匹配的关键词加10分
-          }
+      // 直接返回第一个符合时长要求的结果
+      for (const candidate of candidates) {
+        // 检查时长是否符合要求（不超过6分钟）
+        if (typeof candidate.duration === "number" && candidate.duration <= 6 * 60) {
+          console.log(`[Music] 选中第一个结果: ${candidate.title} (时长: ${candidate.duration}s)`);
+          return candidate.url;
         }
-        
-        // 歌词版加分（优先级较低）
-        if (title.includes("歌词版") || title.includes("歌詞版") || 
-            title.includes("動態歌詞") || title.includes("动态歌词")) {
-          score += 3;
-        }
-        
-        // Lyrics 关键词高权重加分
-        if (title.includes("lyrics")) {
-          score += 10;
-        }
-        
-        // 官方频道或知名上传者加分
-        const uploader = candidate.uploader?.toLowerCase() || "";
-        if (uploader.includes("official") || uploader.includes("vevo") || 
-            uploader.includes("music") || uploader.includes("records")) {
-          score += 2;
-        }
-        
-        return { ...candidate, score };
-      });
-      
-      // 按分数排序，分数高的优先
-      scoredCandidates.sort((a, b) => b.score - a.score);
-      
-      console.log(`[Music] 候选排序结果:`);
-      scoredCandidates.slice(0, 3).forEach((c, i) => {
-        console.log(`  ${i + 1}. ${c.title} (分数: ${c.score}, 时长: ${c.duration}s)`);
-      });
-      
-      candidates = scoredCandidates;
-
-      // 若提供期望时长，仅在 duration >= 期望时长 的视频中选择最接近者
-      if (typeof minDurationSec === "number" && minDurationSec > 0) {
-        const eligible = candidates.filter(
-          (c) =>
-            typeof c.duration === "number" &&
-            (c.duration as number) >= minDurationSec
-        );
-        if (!eligible.length) {
-          console.log(`[Music] 没有满足时长要求的结果 (>= ${minDurationSec}s)`);
-          // return null;
-        }
-        eligible.sort(
-          (a, b) =>
-            a.duration! - minDurationSec - (b.duration! - minDurationSec)
-        );
-        const best = eligible[0];
-        console.log(
-          `[Music] 选中候选: ${best.title} (${best.duration ?? "?"}s)`
-        );
-        return best.url;
       }
 
-      // 否则返回第一个候选
-      const selected = candidates[0];
-      console.log(`[Music] 选中候选: ${selected.title} (${selected.duration ?? "?"}s)`);
-      return selected.url;
+      console.log(`[Music] 没有找到符合时长要求的结果`);
+      return null;
     } catch (error) {
       console.error("[Music] Search error:", error);
       return null;
@@ -1938,14 +1878,9 @@ ${apiKey ? "✅" : "⚪"} <b>AI搜索:</b> ${apiKey ? "已启用" : "未配置"}
         const recognitionText = metadata.album
           ? `${metadata.artist} - ${metadata.title} - ${metadata.album}`
           : `${metadata.artist} - ${metadata.title}`;
-        const durText = metadata.duration
-          ? Utils.formatDuration(metadata.duration)
-          : "未知";
 
         await statusMsg.edit({
-          text: `🤖 <b>AI 识别结果:</b> ${Utils.escape(
-            recognitionText
-          )}\n⏱️ <b>时长:</b> <code>${Utils.escape(durText)}</code>`,
+          text: `🤖 <b>AI 识别结果:</b> ${Utils.escape(recognitionText)}`,
           parseMode: "html",
         });
 
