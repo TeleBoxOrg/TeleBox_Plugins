@@ -222,5 +222,9 @@
   "cosplay": {
     "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/cosplay/cosplay.ts?raw=true",
     "desc": "获取随机cos写真"
+  },
+  "crazy4": {
+    "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/crazy4/crazy4.ts?raw=true",
+    "desc": "疯狂星期四文案"
   }
 }
