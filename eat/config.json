@@ -85,6 +85,15 @@
         "flip": true
       }
     },
+    "gb": {
+      "name": "gangbang",
+      "url": "eat/eatgb.png",
+      "you": {
+        "x": 675,
+        "y": 400,
+        "mask": "eat/maskgb.png"
+      }
+    },
     "ko": {
       "name": "升龙拳",
       "url": "https://github.com/FoKit/PagerMaid_Plugins/raw/modify/eat/eatko.png",
