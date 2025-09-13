@@ -23,7 +23,7 @@
       "you": {
         "x": 75,
         "y": 316,
-        "mask": "dr/you.png",
+        "mask": "dr/you.png"
       },
       "me": {
         "x": 102,
