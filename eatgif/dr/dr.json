@@ -1,0 +1,147 @@
+{
+  "desc": "想要了吧",
+  "width": 460,
+  "height": 512,
+  "res": [
+    {
+      "url": "dr/dr1.png",
+      "delay": 60,
+      "you": {
+        "x": 76,
+        "y": 317,
+        "mask": "dr/you.png"
+      },
+      "me": {
+        "x": 116,
+        "y": 127,
+        "mask": "dr/me.png"
+      }
+    },
+    {
+      "url": "dr/dr2.png",
+      "delay": 60,
+      "you": {
+        "x": 75,
+        "y": 316,
+        "mask": "dr/you.png"
+      },
+      "me": {
+        "x": 102,
+        "y": 137,
+        "mask": "dr/me.png"
+      }
+    },
+    {
+      "url": "dr/dr3.png",
+      "delay": 60,
+      "you": {
+        "x": 71,
+        "y": 323,
+        "mask": "dr/you.png"
+      },
+      "me": {
+        "x": 98,
+        "y": 146,
+        "mask": "dr/me.png"
+      }
+    },
+    {
+      "url": "dr/dr4.png",
+      "delay": 60,
+      "you": {
+        "x": 71,
+        "y": 323,
+        "mask": "dr/you.png"
+      },
+      "me": {
+        "x": 105,
+        "y": 147,
+        "mask": "dr/me.png"
+      }
+    },
+    {
+      "url": "dr/dr5.png",
+      "delay": 60,
+      "you": {
+        "x": 71,
+        "y": 323,
+        "mask": "dr/you.png"
+      },
+      "me": {
+        "x": 105,
+        "y": 141,
+        "mask": "dr/me.png"
+      }
+    },
+    {
+      "url": "dr/dr6.png",
+      "delay": 60,
+      "you": {
+        "x": 71,
+        "y": 323,
+        "mask": "dr/you.png"
+      },
+      "me": {
+        "x": 110,
+        "y": 136,
+        "mask": "dr/me.png"
+      }
+    },
+    {
+      "url": "dr/dr7.png",
+      "delay": 60,
+      "you": {
+        "x": 71,
+        "y": 323,
+        "mask": "dr/you.png"
+      },
+      "me": {
+        "x": 114,
+        "y": 142,
+        "mask": "dr/me.png"
+      }
+    },
+    {
+      "url": "dr/dr8.png",
+      "delay": 60,
+      "you": {
+        "x": 72,
+        "y": 323,
+        "mask": "dr/you.png"
+      },
+      "me": {
+        "x": 106,
+        "y": 147,
+        "mask": "dr/me.png"
+      }
+    },
+    {
+      "url": "dr/dr9.png",
+      "delay": 60,
+      "you": {
+        "x": 70,
+        "y": 323,
+        "mask": "dr/you.png"
+      },
+      "me": {
+        "x": 101,
+        "y": 142,
+        "mask": "dr/me.png"
+      }
+    },
+    {
+      "url": "dr/dr10.png",
+      "delay": 60,
+      "you": {
+        "x": 73,
+        "y": 323,
+        "mask": "dr/you.png"
+      },
+      "me": {
+        "x": 112,
+        "y": 143,
+        "mask": "dr/me.png"
+      }
+    }     
+  ]
+}
