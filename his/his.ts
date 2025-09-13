@@ -1,8 +1,8 @@
 /**
- * Message history query plugin for TeleBox
+ * 消息历史查询插件 - 查询指定用户或频道在群内的发言历史
  * 
- * Queries message history of specified users or channels in groups.
- * Converted from Pagermaid_Telethon plugin by @tom-snow (@caiji_shiwo)
+ * @author TeleBox Team
+ * @version 2.0.0
  */
 
 import { Plugin } from "@utils/pluginBase";
@@ -14,118 +14,59 @@ import { Api } from "telegram";
 const prefixes = getPrefixes();
 const mainPrefix = prefixes[0];
 
-// HTML转义函数
+// HTML转义函数（必需）
 const htmlEscape = (text: string): string => 
   text.replace(/[&<>"']/g, m => ({ 
     '&': '&amp;', '<': '&lt;', '>': '&gt;', 
     '"': '&quot;', "'": '&#x27;' 
   }[m] || m));
 
-// 多语言支持
-interface LanguageDict {
-  help: string;
-  processing: string;
-  media: Record<string, string>;
-  service: Record<string, string>;
-  query_success: string;
-  no_messages: string;
-  invalid_params: string;
-  error_prefix: string;
-}
+// 帮助文本定义（必需）
+const help_text = `📜 <b>消息历史查询</b>
 
-const LANGUAGES: Record<string, LanguageDict> = {
-  "zh-cn": {
-    help: `📜 <b>消息历史查询</b>
+<b>使用方法：</b>
+• <code>${mainPrefix}his</code> - 回复消息时查询该用户历史
+• <code>${mainPrefix}his &lt;目标&gt;</code> - 查询目标的消息历史
+• <code>${mainPrefix}his &lt;目标&gt; &lt;数量&gt;</code> - 查询指定数量消息
+• <code>${mainPrefix}his &lt;数量&gt;</code> - 回复消息时查询指定数量
 
-<b>📝 功能描述:</b>
-• 查询指定用户或频道在群内的发言历史
-• 支持按数量限制查询结果
-• 自动生成消息链接（如果可用）
-
-<b>🔧 使用方法:</b>
-• <code>.his &lt;目标&gt;</code> - 查询目标的消息历史
-• <code>.his &lt;目标&gt; -n &lt;数量&gt;</code> - 限制查询数量
-• <code>.his -n &lt;数量&gt;</code> - 回复消息时查询发送者历史
-
-<b>💡 示例:</b>
-• <code>.his @username</code>
-• <code>.his 123456789 -n 10</code>
-• 回复消息后使用 <code>.his -n 5</code>
-
-<b>⚠️ 注意事项:</b>
-• 仅限群组使用
-• 目标可以是用户名、用户ID或频道ID
-• 最多查询30条消息`,
-    processing: "🔍 正在查询消息历史...",
-    media: {
-      "AUDIO": "[音频]:", "DOCUMENT": "[文档]:", "PHOTO": "[图片]:",
-      "STICKER": "[贴纸]:", "VIDEO": "[视频]:", "ANIMATION": "[动画表情]:",
-      "VOICE": "[语音]:", "VIDEO_NOTE": "[视频备注]:", "CONTACT": "[联系人]:",
-      "LOCATION": "[位置]:", "VENUE": "[场地]:", "POLL": "[投票]:",
-      "WEB_PAGE": "[网页]:", "DICE": "[骰子]:", "GAME": "[游戏]:",
-    },
-    service: {
-      "service": "[服务消息]: ", "PINNED_MESSAGE": "置顶了: ", "NEW_CHAT_TITLE": "新的群组名字: ",
-    },
-    query_success: "查询历史消息完成. 群组id: {chat_id} 目标: {entity}",
-    no_messages: "未找到该用户的消息记录",
-    invalid_params: "❌ 参数错误",
-    error_prefix: "❌ 查询失败:"
-  },
-  "en": {
-    help: `📜 <b>Message History Query</b>
-
-<b>📝 Description:</b>
-• Query message history of specified users or channels in groups
-• Support limiting query results by count
-• Auto-generate message links (if available)
-
-<b>🔧 Usage:</b>
-• <code>${mainPrefix}his &lt;entity&gt;</code> - Query entity's message history
-• <code>${mainPrefix}his &lt;entity&gt; -n &lt;num&gt;</code> - Limit query count
-• <code>${mainPrefix}his -n &lt;num&gt;</code> - Query sender history when replying
-
-<b>💡 Examples:</b>
+<b>示例：</b>
+• 回复消息后：<code>${mainPrefix}his</code>
 • <code>${mainPrefix}his @username</code>
-• <code>${mainPrefix}his 123456789 -n 10</code>
-• Reply to message and use <code>${mainPrefix}his -n 5</code>
+• <code>${mainPrefix}his 123456789 10</code>
+• 回复消息后：<code>${mainPrefix}his 5</code>
 
-<b>⚠️ Notes:</b>
-• Groups only
-• Admin permission required
-• Entity can be username, user ID, or channel ID
-• Maximum 30 messages`,
-    processing: "🔍 Querying message history...",
-    media: {
-      "AUDIO": "[AUDIO]:", "DOCUMENT": "[DOCUMENT]:", "PHOTO": "[PHOTO]:",
-      "STICKER": "[STICKER]:", "VIDEO": "[VIDEO]:", "ANIMATION": "[ANIMATION]:",
-      "VOICE": "[VOICE]:", "VIDEO_NOTE": "[VIDEO_NOTE]:", "CONTACT": "[CONTACT]:",
-      "LOCATION": "[LOCATION]:", "VENUE": "[VENUE]:", "POLL": "[POLL]:",
-      "WEB_PAGE": "[WEB_PAGE]:", "DICE": "[DICE]:", "GAME": "[GAME]:",
-    },
-    service: {
-      "service": "[Service_Message]: ", "PINNED_MESSAGE": "Pinned: ", "NEW_CHAT_TITLE": "New chat title: ",
-    },
-    query_success: "Query completed. chat_id: {chat_id} entity: {entity}",
-    no_messages: "No messages found for this entity",
-    invalid_params: "❌ Invalid parameters",
-    error_prefix: "❌ Query failed:"
-  }
+<b>注意事项：</b>
+• 仅限群组使用
+• 默认查询30条消息
+• 目标可以是用户名、用户ID或频道ID`;
+
+
+// 媒体类型映射
+const MEDIA_TYPES: Record<string, string> = {
+  "AUDIO": "[音频]",
+  "DOCUMENT": "[文档]",
+  "PHOTO": "[图片]",
+  "STICKER": "[贴纸]",
+  "VIDEO": "[视频]",
+  "ANIMATION": "[动画]",
+  "VOICE": "[语音]",
+  "VIDEO_NOTE": "[视频消息]",
+  "CONTACT": "[联系人]",
+  "LOCATION": "[位置]",
+  "VENUE": "[地点]",
+  "POLL": "[投票]",
+  "WEB_PAGE": "[网页]",
+  "DICE": "[骰子]",
+  "GAME": "[游戏]"
 };
 
 class HisPlugin extends Plugin {
-  description = () => {
-    const mainPrefix = getPrefixes()[0];
-    return `查询指定用户或频道在群内的发言历史 (仅限群组使用)`;
-  };
+  // 必须在 description 中引用 help_text
+  description: string = `消息历史查询插件\n\n${help_text}`;
   
-  private readonly MAX_COUNT = 30;
-  private lang: LanguageDict;
-
   constructor() {
     super();
-    // 默认使用中文，可根据需要扩展语言检测
-    this.lang = LANGUAGES["zh-cn"];
   }
 
   cmdHandlers: Record<string, (msg: Api.Message, trigger?: Api.Message) => Promise<void>> = {
@@ -136,145 +77,120 @@ class HisPlugin extends Plugin {
         return;
       }
 
-      // 检查是否在群组中
-      if (!msg.isGroup) {
-        await msg.edit({
-          text: "❌ 此命令仅限群组使用",
-          parseMode: "html"
-        });
-        return;
-      }
-
-      // 参数解析（严格按acron.ts模式）
+      // 简单参数解析
       const lines = msg.text?.trim()?.split(/\r?\n/g) || [];
       const parts = lines?.[0]?.split(/\s+/) || [];
       const [, ...args] = parts; // 跳过命令本身
-      const sub = (args[0] || "").toLowerCase();
 
       try {
-        // 无参数时报错而不是显示帮助
-        if (!sub) {
+        const DEFAULT_COUNT = 30;
+        
+        // 处理帮助命令
+        if (args[0] === "help" || args[0] === "h") {
+          await msg.edit({ text: help_text, parseMode: "html" });
+          return;
+        }
+
+        // 无参数时的处理
+        if (args.length === 0) {
+          // 如果是回复消息，则查询被回复者
           if (msg.isReply) {
-            // 如果是回复消息，则查询被回复者
-            await this.handleReplyQuery(msg, client);
+            const reply = await msg.getReplyMessage();
+            if (reply && reply.senderId) {
+              const target = reply.senderId.toString();
+              await this.queryHistory(msg, target, DEFAULT_COUNT, client);
+              return;
+            }
+          }
+          
+          // 否则显示错误提示
+          await msg.edit({
+            text: `❌ <b>参数不足</b>\n\n💡 使用 <code>${mainPrefix}his help</code> 查看帮助`,
+            parseMode: "html"
+          });
+          return;
+        }
+
+        // 一个参数的情况
+        if (args.length === 1) {
+          const arg = args[0];
+          const num = parseInt(arg);
+          
+          // 如果是数字且在回复消息的情况下，作为数量参数
+          if (!isNaN(num) && num > 0 && msg.isReply) {
+            const reply = await msg.getReplyMessage();
+            if (reply && reply.senderId) {
+              const target = reply.senderId.toString();
+              const count = Math.min(num, 100); // 最大限制100条
+              await this.queryHistory(msg, target, count, client);
+              return;
+            }
+          }
+          
+          // 否则作为目标参数
+          const target = this.parseEntity(arg);
+          await this.queryHistory(msg, target, DEFAULT_COUNT, client);
+          return;
+        }
+
+        // 两个参数的情况：目标 + 数量
+        if (args.length === 2) {
+          const target = this.parseEntity(args[0]);
+          const num = parseInt(args[1]);
+          
+          if (isNaN(num) || num <= 0) {
+            await msg.edit({
+              text: "❌ 无效的数量参数",
+              parseMode: "html"
+            });
             return;
           }
-          await msg.edit({
-            text: "❌ 参数错误\n\n请提供要查询的目标（用户名或ID）",
-            parseMode: "html"
-          });
+          
+          const count = Math.min(num, 100); // 最大限制100条
+          await this.queryHistory(msg, target, count, client);
           return;
         }
 
-        // 明确请求帮助时显示
-        if (sub === "help" || sub === "h") {
-          const helpText = `📜 <b>消息历史查询</b>
-
-<b>📝 功能描述:</b>
-• 查询指定用户或频道在群内的发言历史
-• 支持按数量限制查询结果
-• 自动生成消息链接（如果可用）
-
-<b>🔧 使用方法:</b>
-• <code>${mainPrefix}his &lt;目标&gt;</code> - 查询目标的消息历史
-• <code>${mainPrefix}his &lt;目标&gt; -n &lt;数量&gt;</code> - 限制查询数量
-• <code>${mainPrefix}his -n &lt;数量&gt;</code> - 回复消息时查询发送者历史
-• <code>${mainPrefix}his help</code> - 显示帮助信息
-
-<b>💡 示例:</b>
-• <code>${mainPrefix}his @username</code>
-• <code>${mainPrefix}his 123456789 -n 10</code>
-• 回复消息后使用 <code>${mainPrefix}his -n 5</code>
-
-<b>⚠️ 注意事项:</b>
-• 仅限群组使用
-• 目标可以是用户名、用户ID或频道ID
-• 最多查询30条消息`;
-          await msg.edit({
-            text: helpText,
-            parseMode: "html"
-          });
-          return;
-        }
-
-        await this.handleHistoryQuery(msg, args, client, trigger);
+        // 参数过多
+        await msg.edit({
+          text: `❌ <b>参数过多</b>\n\n💡 使用 <code>${mainPrefix}his help</code> 查看帮助`,
+          parseMode: "html"
+        });
+        return;
 
       } catch (error: any) {
         console.error("[his] 插件执行失败:", error);
+        
+        // 处理特定错误类型
+        if (error.message?.includes("FLOOD_WAIT")) {
+          const waitTime = parseInt(error.message.match(/\d+/)?.[0] || "60");
+          await msg.edit({
+            text: `⏳ <b>请求过于频繁</b>\n\n需要等待 ${waitTime} 秒后重试`,
+            parseMode: "html"
+          });
+          return;
+        }
+        
+        if (error.message?.includes("MESSAGE_TOO_LONG")) {
+          await msg.edit({
+            text: "❌ <b>消息过长</b>\n\n请减少查询数量",
+            parseMode: "html"
+          });
+          return;
+        }
+        
+        // 通用错误处理
         await msg.edit({
-          text: `❌ 查询失败: ${htmlEscape(error.message || "未知错误")}`,
+          text: `❌ <b>操作失败:</b> ${htmlEscape(error.message || "未知错误")}`,
           parseMode: "html"
         });
       }
     }
   };
 
-  private async handleReplyQuery(msg: Api.Message, client: any): Promise<void> {
-    const reply = await msg.getReplyMessage();
-    if (!reply) {
-      await msg.edit({
-        text: "❌ 无法获取回复的消息",
-        parseMode: "html"
-      });
-      return;
-    }
-    
-    const targetEntity = reply.senderId!;
-    await this.queryHistory(msg, targetEntity.toString(), this.MAX_COUNT, client);
-  }
 
-  private async handleHistoryQuery(msg: Api.Message, args: string[], client: any, trigger?: Api.Message): Promise<void> {
-    let targetEntity: any = "";
-    let num = this.MAX_COUNT;
-
-    // 解析参数
-    if (args.length === 3 && args[1] === "-n") {
-      // format: his <entity> -n <num>
-      targetEntity = this.parseEntity(args[0]);
-      const parsedNum = parseInt(args[2]);
-      if (isNaN(parsedNum) || parsedNum <= 0) {
-        await msg.edit({
-          text: "❌ 无效的数量参数",
-          parseMode: "html"
-        });
-        return;
-      }
-      num = Math.min(parsedNum, this.MAX_COUNT);
-    } else if (args.length === 1) {
-      // format: his <entity>
-      targetEntity = this.parseEntity(args[0]);
-    } else if (args.length === 2 && args[0] === "-n" && msg.isReply) {
-      // format: his -n <num> (reply to message)
-      const reply = await msg.getReplyMessage();
-      if (!reply) {
-        await msg.edit({
-          text: "❌ 无法获取回复的消息",
-          parseMode: "html"
-        });
-        return;
-      }
-      targetEntity = reply.senderId!.toString();
-      const parsedNum = parseInt(args[1]);
-      if (isNaN(parsedNum) || parsedNum <= 0) {
-        await msg.edit({
-          text: "❌ 无效的数量参数",
-          parseMode: "html"
-        });
-        return;
-      }
-      num = Math.min(parsedNum, this.MAX_COUNT);
-    } else {
-      await msg.edit({
-        text: "❌ 参数格式错误\n\n使用 <code>.his help</code> 查看帮助",
-        parseMode: "html"
-      });
-      return;
-    }
-
-    await this.queryHistory(msg, targetEntity, num, client, trigger);
-  }
-
-  private async queryHistory(msg: Api.Message, targetEntity: any, num: number, client: any, trigger?: Api.Message): Promise<void> {
+  // 查询历史消息
+  private async queryHistory(msg: Api.Message, targetEntity: any, num: number, client: any): Promise<void> {
     const chatId = msg.peerId;
 
     // 显示处理中消息
@@ -328,14 +244,22 @@ class HisPlugin extends Plugin {
 
         // 处理媒体消息
         if (message.media) {
-          messageText = this.processMediaMessage(message, messageText);
+          messageText = await this.processMediaMessage(message, messageText);
         }
 
         // 处理服务消息
         if (message.className === "MessageService") {
           const action = message.action;
-          const serviceText = action.className.replace("MessageAction", "");
-          messageText = this.lang.service.service + serviceText;
+          if (action.className === "MessageActionPinMessage") {
+            const pinnedMessage = (action as any).message;
+            messageText = "[置顶消息] " + pinnedMessage;
+          } else if (action.className === "MessageActionChatEditTitle") {
+            const newTitle = (action as any).title;
+            messageText = "[修改群名] " + newTitle;
+          } else {
+            const serviceText = action.className.replace("MessageAction", "");
+            messageText = "[服务消息] " + serviceText;
+          }
         }
 
         if (!messageText) {
@@ -424,21 +348,16 @@ class HisPlugin extends Plugin {
     }
   }
 
-  private parseEntity(argStr: string): string | number {
-    // 尝试解析为数字ID
-    const num = parseInt(argStr);
-    if (!isNaN(num)) {
-      return num;
-    }
-    // 否则作为用户名返回
-    return argStr;
-  }
-
-  private processMediaMessage(message: any, mediaCaption: string): string {
+  // 处理媒体消息
+  private async processMediaMessage(message: any, mediaCaption: string): Promise<string> {
+    // 简化版本：总是显示媒体类型
+    const showMediaType = true;
+    if (!showMediaType) return mediaCaption;
+    
     const media = message.media;
     
     if (media.className === "MessageMediaPhoto") {
-      return this.lang.media.PHOTO + mediaCaption;
+      return MEDIA_TYPES.PHOTO + " " + mediaCaption;
     } else if (media.className === "MessageMediaDocument") {
       const doc = media.document;
       const attributes = doc.attributes || [];
@@ -449,27 +368,38 @@ class HisPlugin extends Plugin {
       const isSticker = attributes.some((attr: any) => attr.className === "DocumentAttributeSticker");
       const isAnimation = attributes.some((attr: any) => attr.className === "DocumentAttributeAnimated");
 
-      if (isSticker) return this.lang.media.STICKER + mediaCaption;
-      if (isAnimation) return this.lang.media.ANIMATION + mediaCaption;
-      if (isVideo) return this.lang.media.VIDEO + mediaCaption;
-      if (isVoice) return this.lang.media.VOICE + mediaCaption;
-      if (isAudio) return this.lang.media.AUDIO + mediaCaption;
-      return this.lang.media.DOCUMENT + mediaCaption;
+      if (isSticker) return MEDIA_TYPES.STICKER + " " + mediaCaption;
+      if (isAnimation) return MEDIA_TYPES.ANIMATION + " " + mediaCaption;
+      if (isVideo) return MEDIA_TYPES.VIDEO + " " + mediaCaption;
+      if (isVoice) return MEDIA_TYPES.VOICE + " " + mediaCaption;
+      if (isAudio) return MEDIA_TYPES.AUDIO + " " + mediaCaption;
+      return MEDIA_TYPES.DOCUMENT + " " + mediaCaption;
     } else if (media.className === "MessageMediaContact") {
-      return this.lang.media.CONTACT + mediaCaption;
+      return MEDIA_TYPES.CONTACT + " " + mediaCaption;
     } else if (media.className === "MessageMediaGeo" || media.className === "MessageMediaVenue") {
-      return this.lang.media.LOCATION + mediaCaption;
+      return MEDIA_TYPES.LOCATION + " " + mediaCaption;
     } else if (media.className === "MessageMediaPoll") {
-      return this.lang.media.POLL + mediaCaption;
+      return MEDIA_TYPES.POLL + " " + mediaCaption;
     } else if (media.className === "MessageMediaWebPage") {
-      return this.lang.media.WEB_PAGE + mediaCaption;
+      return MEDIA_TYPES.WEB_PAGE + " " + mediaCaption;
     } else if (media.className === "MessageMediaDice") {
-      return this.lang.media.DICE + mediaCaption;
+      return MEDIA_TYPES.DICE + " " + mediaCaption;
     } else if (media.className === "MessageMediaGame") {
-      return this.lang.media.GAME + mediaCaption;
+      return MEDIA_TYPES.GAME + " " + mediaCaption;
     }
 
     return mediaCaption;
+  }
+  
+  // 解析实体参数
+  private parseEntity(argStr: string): string | number {
+    // 尝试解析为数字ID
+    const num = parseInt(argStr);
+    if (!isNaN(num)) {
+      return num;
+    }
+    // 否则作为用户名返回
+    return argStr;
   }
 }
 
