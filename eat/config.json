@@ -172,6 +172,15 @@
         "mask": "eat/masktlg.png"
       }
     },
+    "wg": {
+      "name": "why are you gay",
+      "url": "eat/eatwg.jpg",
+      "you": {
+        "x": 35,
+        "y": 80,
+        "mask": "eat/maskwg.png"
+      }
+    },
     "wyy": {
       "name": "网抑云时间",
       "url": "eat/eatwyy.png",
