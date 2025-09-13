@@ -51,12 +51,6 @@ const sunremove = async (msg: Api.Message) => {
   const sub = (args[0] || "").toLowerCase();
 
   try {
-    // 无参数时显示帮助
-    if (!sub) {
-      await msg.edit({ text: help_text, parseMode: "html" });
-      return;
-    }
-
     // 处理 help 在前的情况：.sunremove help [subcommand]
     if (sub === "help" || sub === "h") {
       await msg.edit({ text: help_text, parseMode: "html" });
@@ -82,7 +76,7 @@ const sunremove = async (msg: Api.Message) => {
     let mode = "mine";
     if (sub === "all") {
       mode = "all";
-    } else if (sub !== "") {
+    } else if (sub !== "" && sub !== "help" && sub !== "h") {
       // 未知命令
       await msg.edit({
         text: `❌ <b>未知命令:</b> <code>${htmlEscape(sub)}</code>\n\n💡 使用 <code>${mainPrefix}sunremove help</code> 查看帮助`,
@@ -90,6 +84,7 @@ const sunremove = async (msg: Api.Message) => {
       });
       return;
     }
+    // 无参数时执行默认操作（mode = "mine"）
 
     const me = await client.getMe();
   const myId = Number(me.id);
