@@ -5,49 +5,49 @@
   "res": [
     {
       "url": "rf/rf1.png",
-      "delay": 60,
+      "delay": 200,
       "you": {
         "x": 296,
-        "y": -1,
+        "y": 15,
         "mask": "rf/you.png"
       },
       "me": {
-        "x": -1,
-        "y": 196,
+        "x": -13,
+        "y": 185,
         "mask": "rf/me.png"
       }
     },
     {
       "url": "rf/rf2.png",
-      "delay": 60,
+      "delay": 200,
       "you": {
-        "x": 308,
+        "x": 297,
         "y": 26,
         "mask": "rf/you.png"
       },
       "me": {
-        "x": 0,
-        "y": 198,
+        "x": 4,
+        "y": 181,
         "mask": "rf/me.png"
       }
     },
     {
       "url": "rf/rf3.png",
-      "delay": 60,
+      "delay": 200,
       "you": {
-        "x": 315,
-        "y": 305,
+        "x": 272,
+        "y": 21,
         "mask": "rf/you.png"
       },
       "me": {
-        "x": 110,
-        "y": -21,
+        "x": -16,
+        "y": 225,
         "mask": "rf/me.png"
       }
     },
     {
       "url": "rf/rf4.png",
-      "delay": 60,
+      "delay": 200,
       "you": {
         "x": 321,
         "y": 303,
@@ -61,7 +61,7 @@
     },
     {
       "url": "rf/rf5.png",
-      "delay": 60,
+      "delay": 200,
       "you": {
         "x": 298,
         "y": 303,
@@ -75,63 +75,7 @@
     },
     {
       "url": "rf/rf6.png",
-      "delay": 60,
-      "you": {
-        "x": 298,
-        "y": 303,
-        "mask": "rf/you.png"
-      },
-      "me": {
-        "x": 116,
-        "y": -1,
-        "mask": "rf/me.png"
-      }
-    },
-    {
-      "url": "rf/rf7.png",
-      "delay": 60,
-      "you": {
-        "x": 9,
-        "y": 54,
-        "mask": "rf/you.png"
-      },
-      "me": {
-        "x": 222,
-        "y": 310,
-        "mask": "rf/me.png"
-      }
-    },
-    {
-      "url": "rf/rf8.png",
-      "delay": 60,
-      "you": {
-        "x": 15,
-        "y": 316,
-        "mask": "rf/you.png"
-      },
-      "me": {
-        "x": 324,
-        "y": 106,
-        "mask": "rf/me.png"
-      }
-    },
-    {
-      "url": "rf/rf9.png",
-      "delay": 60,
-      "you": {
-        "x": 24,
-        "y": 299,
-        "mask": "rf/you.png"
-      },
-      "me": {
-        "x": 300,
-        "y": 117,
-        "mask": "rf/me.png"
-      }
-    },
-    {
-      "url": "rf/rf10.png",
-      "delay": 60,
+      "delay": 200,
       "you": {
         "x": 300,
         "y": 273,
@@ -141,13 +85,55 @@
         "x": 74,
         "y": -1,
         "mask": "rf/me.png"
-       }
+      }
     },
     {
-      "url": "rf/rf11.png",
-      "delay": 60,
+      "url": "rf/rf7.png",
+      "delay": 200,
       "you": {
-        "x": 0,
+        "x": 16,
+        "y": 317,
+        "mask": "rf/you.png"
+      },
+      "me": {
+        "x": 324,
+        "y": 106,
+        "mask": "rf/me.png"
+      }
+    },
+    {
+      "url": "rf/rf8.png",
+      "delay": 200,
+      "you": {
+        "x": 25,
+        "y": 300,
+        "mask": "rf/you.png"
+      },
+      "me": {
+        "x": 300,
+        "y": 117,
+        "mask": "rf/me.png"
+      }
+    },
+    {
+      "url": "rf/rf9.png",
+      "delay": 200,
+      "you": {
+        "x": 49,
+        "y": 310,
+        "mask": "rf/you.png"
+      },
+      "me": {
+        "x": 306,
+        "y": 75,
+        "mask": "rf/me.png"
+      }
+    },
+    {
+      "url": "rf/rf10.png",
+      "delay": 200,
+      "you": {
+        "x": 1,
         "y": 16,
         "mask": "rf/you.png"
       },
@@ -158,15 +144,29 @@
        }
     },
     {
-      "url": "rf/rf12.png",
-      "delay": 60,
+      "url": "rf/rf11.png",
+      "delay": 200,
       "you": {
-        "x": 0,
-        "y": 16,
+        "x": 19,
+        "y": 34,
         "mask": "rf/you.png"
       },
       "me": {
-        "x": 198,
+        "x": 185,
+        "y": 302,
+        "mask": "rf/me.png"
+       }
+    },
+    {
+      "url": "rf/rf12.png",
+      "delay": 200,
+      "you": {
+        "x": 9,
+        "y": 55,
+        "mask": "rf/you.png"
+      },
+      "me": {
+        "x": 222,
         "y": 310,
         "mask": "rf/me.png"
       }
