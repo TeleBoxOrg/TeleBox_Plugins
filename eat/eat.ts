@@ -156,7 +156,7 @@ async function iconMaskedFor(params: {
 
 async function downloadProfilePhoto(msg: Api.Message): Promise<Buffer | null> {
   const replied = await msg.getReplyMessage();
-  const fromId = replied?.fromId;
+  const fromId = replied?.sender?.id;
   if (!fromId) {
     await msg.edit({ text: "无法获取对方头像" });
     return null;
