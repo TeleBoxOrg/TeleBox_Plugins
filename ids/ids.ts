@@ -51,8 +51,14 @@ class IdsPlugin extends Plugin {
       const target = args[0] || "";
 
       try {
-        // 处理帮助命令
+        // 处理帮助命令（help 在前的情况）
         if (target === "help" || target === "h") {
+          await msg.edit({ text: help_text, parseMode: "html" });
+          return;
+        }
+
+        // 处理 help 在后的情况：.ids [参数] help
+        if (args[1] && (args[1].toLowerCase() === "help" || args[1].toLowerCase() === "h")) {
           await msg.edit({ text: help_text, parseMode: "html" });
           return;
         }
@@ -105,12 +111,34 @@ class IdsPlugin extends Plugin {
         
         // 格式化并显示结果
         const result = this.formatUserInfo(userInfo);
-        await msg.edit({ text: result, parseMode: "html" });
+        
+        // 检查消息长度限制
+        await this.sendLongMessage(msg, result);
 
       } catch (error: any) {
         console.error("[ids] 插件执行失败:", error);
+        
+        // 处理特定错误类型
+        if (error.message?.includes("FLOOD_WAIT")) {
+          const waitTime = parseInt(error.message.match(/\d+/)?.[0] || "60");
+          await msg.edit({
+            text: `⏳ <b>请求过于频繁</b>\n\n需要等待 ${waitTime} 秒后重试`,
+            parseMode: "html"
+          });
+          return;
+        }
+        
+        if (error.message?.includes("MESSAGE_TOO_LONG")) {
+          await msg.edit({
+            text: "❌ <b>消息过长</b>\n\n请减少内容长度或使用文件发送",
+            parseMode: "html"
+          });
+          return;
+        }
+        
+        // 通用错误处理
         await msg.edit({
-          text: `❌ <b>查询失败:</b> ${htmlEscape(error.message)}`,
+          text: `❌ <b>查询失败:</b> ${htmlEscape(error.message || "未知错误")}`,
           parseMode: "html"
         });
       }
@@ -250,6 +278,53 @@ class IdsPlugin extends Plugin {
     } catch (error) {
       console.log("获取DC信息失败:", error);
       return "未知";
+    }
+  }
+
+  // 发送长消息（消息长度检查）
+  private async sendLongMessage(msg: Api.Message, text: string): Promise<void> {
+    const MAX_MESSAGE_LENGTH = 4096;
+    
+    if (text.length <= MAX_MESSAGE_LENGTH) {
+      await msg.edit({ text: text, parseMode: "html" });
+      return;
+    }
+    
+    // 分割长消息
+    const parts: string[] = [];
+    let currentPart = "";
+    const lines = text.split("\n");
+    
+    for (const line of lines) {
+      if (currentPart.length + line.length + 1 > MAX_MESSAGE_LENGTH) {
+        parts.push(currentPart);
+        currentPart = line;
+      } else {
+        currentPart += (currentPart ? "\n" : "") + line;
+      }
+    }
+    
+    if (currentPart) {
+      parts.push(currentPart);
+    }
+    
+    // 发送分割后的消息
+    if (parts.length === 1) {
+      await msg.edit({ text: parts[0], parseMode: "html" });
+    } else {
+      // 编辑第一部分
+      await msg.edit({ 
+        text: parts[0] + "\n\n📄 (1/" + parts.length + ")", 
+        parseMode: "html" 
+      });
+      
+      // 发送剩余部分
+      for (let i = 1; i < parts.length; i++) {
+        await msg.reply({ 
+          message: parts[i] + "\n\n📄 (" + (i + 1) + "/" + parts.length + ")",
+          parseMode: "html" 
+        });
+      }
     }
   }
 
