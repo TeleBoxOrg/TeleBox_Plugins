@@ -1,7 +1,7 @@
 /**
  * SpeedLink Multi-Server Management Plugin for TeleBox
  *
- * Version: 5.9.0 (Final & Complete)
+ * Version: 5.9.2 (Fixed)
  * Features:
  * - Completed all help text URLs.
  * - Fixed local speed test execution path.
@@ -367,7 +367,9 @@ sudo yum install speedtest</code></pre>
 <b>执行测速指令:</b>
 
 - <b>远程测速:</b> <code>sl &lt;显示序号&gt;</code>
-- <b>本机测速:</b> <code>sl local</code>
+- <b>本机测速:</b> <code>sl</code>
+- <b>多服务器测速:</b> <code>sl 1 3 5</code>
+- <b>全部测速:</b> <code>sl all</code>
 ---
 <b>备份与恢复:</b>
 
@@ -397,9 +399,10 @@ const speedtest = async (msg: Api.Message): Promise<void> => {
   }
 
   const args = msg.message.slice(2).split(" ").slice(1);
-  const command = args[0] || "";
 
   try {
+    const command = args[0] || "";
+    // --- 服务器管理指令 ---
     if (
       command === "add" ||
       command === "list" ||
@@ -571,27 +574,152 @@ const speedtest = async (msg: Api.Message): Promise<void> => {
       return;
     }
 
-    // --- Speed Test Execution ---
+    // --- Speed Test Execution Logic ---
+    const allServers: ServerConfig[] = db
+      .prepare("SELECT * FROM servers ORDER BY id")
+      .all();
+    let targetServers: (ServerConfig | null)[] = []; // null represents local test
+
+    // Case 1: `sl all` or `sl 1 2 3 ...` (Multi-server test)
+    const isAllTest = command === "all";
+    const isMultiTest =
+      args.length > 0 && args.every((arg) => !isNaN(parseInt(arg)));
+
+    if (isAllTest || isMultiTest) {
+      if (isAllTest) {
+        targetServers = allServers;
+      } else {
+        targetServers = args
+          .map((arg) => {
+            const displayId = parseInt(arg);
+            return allServers[displayId - 1] || null;
+          })
+          .filter((s): s is ServerConfig => s !== null);
+      }
+
+      if (targetServers.length === 0) {
+        await msg.edit({
+          text: "❌ 未找到任何有效的服务器进行测速。",
+          parseMode: "html",
+        });
+        return;
+      }
+
+      await msg.edit({
+        text: `🚀 准备就绪，即将开始 **${targetServers.length}** 个服务器的测速任务...`,
+        parseMode: "html",
+      });
+
+      for (const server of targetServers) {
+        if (!server) continue; // Should not happen with the filter, but for type safety
+        
+        const statusMsg = await msg.reply({
+          message: `⚡️ [${targetServers.indexOf(server) + 1}/${
+            targetServers.length
+          }] 正在为 <b>${htmlEscape(server.name)}</b> 进行远程测速...`,
+          parseMode: "html",
+        });
+
+        try {
+          const speedtestCmdBase = `--accept-license --accept-gdpr -f json`;
+          const remoteSpeedtestCmd = `speedtest ${speedtestCmdBase}`;
+          let finalCommand;
+
+          if (server.auth_method === "password") {
+            const password = decrypt(server.credentials);
+            finalCommand = `sshpass -p '${password.replace(
+              /'/g,
+              "'\\''"
+            )}' ssh -p ${server.port} -o StrictHostKeyChecking=no -o ConnectTimeout=10 ${
+              server.username
+            }@${server.host} '${remoteSpeedtestCmd}'`;
+          } else {
+            finalCommand = `ssh -i ${server.credentials} -p ${server.port} -o StrictHostKeyChecking=no -o ConnectTimeout=10 ${server.username}@${server.host} '${remoteSpeedtestCmd}'`;
+          }
+
+          const { stdout } = await execAsync(finalCommand, {
+            timeout: 300000,
+          });
+          const jsonStartIndex = stdout.indexOf("{");
+          if (jsonStartIndex === -1)
+            throw new Error("Speedtest did not return valid JSON.");
+          const result: SpeedtestResult = JSON.parse(
+            stdout.substring(jsonStartIndex)
+          );
+
+          const { asInfo, ccFlag } = await getIpApi(
+            result.interface.externalIp
+          );
+
+          // FIX: Expanded the caption to include all details for remote tests.
+          const caption = [
+            `<b>${htmlEscape(server.name)}</b> ${ccFlag}`,
+            `<code>Name</code>  <code>${htmlEscape(result.isp)} ${asInfo}</code>`,
+            `<code>Node</code>  <code>${result.server.id} - ${htmlEscape(
+              result.server.name
+            )} - ${htmlEscape(result.server.location)}</code>`,
+            `<code>Conn</code>  <code>Multi - IPv${
+              result.interface.externalIp.includes(":") ? "6" : "4"
+            } - ${htmlEscape(result.interface.name)}</code>`,
+            `<code>Ping</code>  <code>⇔${result.ping.latency.toFixed(
+              3
+            )}ms ±${result.ping.jitter.toFixed(3)}ms</code>`,
+            `<code>Rate</code>  <code>↓${await unitConvert(
+              result.download.bandwidth
+            )} ↑${await unitConvert(result.upload.bandwidth)}</code>`,
+            `<code>Data</code>  <code>↓${await unitConvert(
+              result.download.bytes,
+              true
+            )} ↑${await unitConvert(result.upload.bytes, true)}</code>`,
+            `<code>Time</code>  <code>${result.timestamp
+              .replace("T", " ")
+              .replace("Z", "")}</code>`,
+          ].join("\n");
+
+          const imagePath = await saveSpeedtestImage(result.result.url);
+          if (imagePath && fs.existsSync(imagePath)) {
+            await msg.client?.sendFile(msg.peerId, {
+              file: imagePath,
+              caption: caption,
+              parseMode: "html",
+              replyTo: msg,
+            });
+            fs.unlinkSync(imagePath);
+          } else {
+            await statusMsg.edit({ text: caption, parseMode: "html" });
+          }
+          await statusMsg.delete();
+        } catch (error: any) {
+          let errorMsg = String(error.stderr || error.message || error);
+          await statusMsg.edit({
+            text: `❌ <b>${htmlEscape(
+              server.name
+            )}</b> 测速失败\n\n<code>${htmlEscape(errorMsg)}</code>`,
+            parseMode: "html",
+          });
+        }
+      }
+      await msg.delete(); // Delete the original `sl all` or `sl 1 3 5` message
+      return;
+    }
+
+    // Case 2: `sl` (local test) or `sl 1` (single server test)
     let isRemote = false;
     let serverConfig: ServerConfig | null = null;
     let initialText: string;
 
-    if (command === "" || command === "local") {
+    if (command === "") {
       isRemote = false;
       initialText = "⚡️ 正在进行<b>本机</b>速度测试...";
     } else if (!isNaN(parseInt(command))) {
       isRemote = true;
       const displayId = parseInt(command);
-      if (displayId < 1) {
-        await msg.edit({ text: "❌ 请提供有效的显示序号。" });
-        return;
-      }
-      const servers: ServerConfig[] = db
-        .prepare("SELECT * FROM servers ORDER BY id")
-        .all();
-      serverConfig = servers[displayId - 1];
+      serverConfig = allServers[displayId - 1];
       if (!serverConfig) {
-        await msg.edit({ text: `❌ 未找到显示序号为 ${displayId} 的服务器。` });
+        await msg.edit({
+          text: `❌ 未找到显示序号为 ${displayId} 的服务器。`,
+          parseMode: "html",
+        });
         return;
       }
       initialText = `⚡️ 正在为服务器 <b>${htmlEscape(
@@ -646,7 +774,6 @@ const speedtest = async (msg: Api.Message): Promise<void> => {
       );
 
       const { asInfo, ccFlag } = await getIpApi(result.interface.externalIp);
-
       const caption = [
         `<b>⚡️SPEEDTEST by OOKLA</b> ${ccFlag}`,
         `<code>Name</code>  <code>${htmlEscape(result.isp)} ${asInfo}</code>`,

@@ -14,6 +14,29 @@ const htmlEscape = (text: string): string =>
   }[m] || m));
 
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+
+// 帮助文档
+const help_text = `🔓 <b>一键解封工具</b>
+
+<b>命令格式：</b>
+<code>${mainPrefix}sunremove [子命令] [参数]</code>
+
+<b>可用命令：</b>
+• <code>${mainPrefix}sunremove</code> - 解封自己封禁的实体
+• <code>${mainPrefix}sunremove all</code> - 解封所有被封禁的实体
+• <code>${mainPrefix}sunremove help</code> - 显示此帮助
+
+<b>支持类型：</b>
+👤 用户 - 普通用户账号
+📢 频道 - Telegram 频道
+💬 群组 - Telegram 群组
+
+<b>说明：</b>
+此命令用于批量解封被封禁的群组成员、频道和群组，解封后这些实体可以重新加入群组。
+
+<b>使用示例：</b>
+<code>${mainPrefix}sunremove</code> - 解封我封禁的实体
+<code>${mainPrefix}sunremove all</code> - 解封所有实体`;
 const sunremove = async (msg: Api.Message) => {
   const client = await getGlobalClient();
   if (!client) {
@@ -21,45 +44,49 @@ const sunremove = async (msg: Api.Message) => {
     return;
   }
 
-  if (!msg.isChannel && !msg.isGroup) {
-    await msg.edit({ 
-      text: "❌ <b>此命令只能在群组中使用</b>", 
-      parseMode: "html" 
-    });
-    return;
-  }
-
+  // 标准参数解析
   const lines = msg.text?.trim()?.split(/\r?\n/g) || [];
   const parts = lines?.[0]?.split(/\s+/) || [];
   const [, ...args] = parts;
-  
-  let mode = "mine";
-  
-  if (args.length > 0) {
-    if (args[0] === "all") {
+  const sub = (args[0] || "").toLowerCase();
+
+  try {
+    // 处理 help 在前的情况：.sunremove help [subcommand]
+    if (sub === "help" || sub === "h") {
+      await msg.edit({ text: help_text, parseMode: "html" });
+      return;
+    }
+
+    // 处理 help 在后的情况：.sunremove [subcommand] help
+    if (args[1] && (args[1].toLowerCase() === "help" || args[1].toLowerCase() === "h")) {
+      await msg.edit({ text: help_text, parseMode: "html" });
+      return;
+    }
+
+    // 检查是否在群组中
+    if (!msg.isChannel && !msg.isGroup) {
+      await msg.edit({ 
+        text: "❌ <b>此命令只能在群组中使用</b>", 
+        parseMode: "html" 
+      });
+      return;
+    }
+
+    // 处理具体的子命令
+    let mode = "mine";
+    if (sub === "all") {
       mode = "all";
-    } else if (args[0] === "help" || args[0] === "h") {
+    } else if (sub !== "" && sub !== "help" && sub !== "h") {
+      // 未知命令
       await msg.edit({
-        text: `<b>🔓 一键解封工具</b>
-
-<b>用法:</b>
-• <code>${mainPrefix}sunremove</code> - 解封自己封禁的实体
-• <code>${mainPrefix}sunremove all</code> - 解封所有被封禁的实体
-
-<b>支持类型:</b>
-👤 用户 - 普通用户账号
-📢 频道 - Telegram 频道
-💬 群组 - Telegram 群组
-
-<b>说明:</b>
-此命令用于批量解封被封禁的群组成员、频道和群组，解封后这些实体可以重新加入群组。`,
+        text: `❌ <b>未知命令:</b> <code>${htmlEscape(sub)}</code>\n\n💡 使用 <code>${mainPrefix}sunremove help</code> 查看帮助`,
         parseMode: "html"
       });
       return;
     }
-  }
+    // 无参数时执行默认操作（mode = "mine"）
 
-  const me = await client.getMe();
+    const me = await client.getMe();
   const myId = Number(me.id);
   
   const chatEntity = msg.peerId;
@@ -197,12 +224,20 @@ const sunremove = async (msg: Api.Message) => {
     parseMode: "html"
   });
   
-  await sleep(5000);
-  await msg.delete();
+    await sleep(5000);
+    await msg.delete();
+
+  } catch (error: any) {
+    console.error("[sunremove] 插件执行失败:", error);
+    await msg.edit({
+      text: `❌ <b>插件执行失败:</b> ${htmlEscape(error.message || "未知错误")}`,
+      parseMode: "html"
+    });
+  }
 };
 
 class SunRemovePlugin extends Plugin {
-  description: string = "🔓 一键解封被封禁的用户/频道/群组";
+  description: string = `一键解封工具\n\n${help_text}`;
   cmdHandlers: Record<string, (msg: Api.Message) => Promise<void>> = {
     sunremove
   };
