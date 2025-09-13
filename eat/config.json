@@ -208,6 +208,15 @@
         "mask": "eat/maskxm.png"
       }
     },
+    "xd": {
+      "name": "心动",
+      "url": "eat/eatxd.jpg",
+      "you": {
+        "x": 46,
+        "y": 68,
+        "mask": "eat/maskxd.png"
+      }
+    },
     "xt": {
       "name": "虾头！",
       "url": "eat/eatxt.png",
