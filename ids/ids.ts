@@ -200,17 +200,57 @@ class IdsPlugin extends Plugin {
       console.log("获取完整用户信息失败:", error);
     }
 
-    // 尝试获取DC信息
-    try {
-      const dcInfo = await client.invoke(new Api.help.GetNearestDc());
-      // 这里只能获取到当前客户端的DC，用户的DC需要其他方法
-      // 暂时设为未知
-      info.dc = "未知";
-    } catch (error) {
-      info.dc = "未知";
-    }
+    // 尝试获取DC信息（多种方法）
+    info.dc = await this.getUserDC(client, userId, user);
+    
 
     return info;
+  }
+
+  // 获取用户DC信息（多种方法尝试）
+  private async getUserDC(client: any, userId: number, user: any): Promise<string> {
+    try {
+      // 方法1: 通过头像获取DC（最可靠的方法）
+      const fullUserForDc = await client.invoke(new Api.users.GetFullUser({
+        id: userId
+      }));
+      
+      if (fullUserForDc.users && fullUserForDc.users.length > 0) {
+        const userForDc = fullUserForDc.users[0];
+        
+        // 检查用户是否有头像
+        if (userForDc.photo && userForDc.photo.className !== "UserProfilePhotoEmpty") {
+          const photo = userForDc.photo as Api.UserProfilePhoto;
+          return `DC${photo.dcId}`;
+        }
+      }
+
+      // 方法2: 尝试从用户对象直接获取（某些情况下可能存在）
+      if (user && user.photo && user.photo.className !== "UserProfilePhotoEmpty") {
+        const photo = user.photo as Api.UserProfilePhoto;
+        return `DC${photo.dcId}`;
+      }
+
+      // 方法3: 对于机器人，尝试通过getEntity获取更多信息
+      if (user && user.bot) {
+        try {
+          const botEntity = await client.getEntity(userId);
+          if (botEntity.photo && botEntity.photo.className !== "UserProfilePhotoEmpty") {
+            const photo = botEntity.photo as Api.UserProfilePhoto;
+            return `DC${photo.dcId}`;
+          }
+        } catch (error) {
+          console.log("机器人DC获取失败:", error);
+        }
+      }
+
+      // 如果所有方法都失败，返回相应的提示
+      return "无头像";
+      
+    } catch (error) {
+      console.log("获取DC信息失败:", error);
+      return "未知";
+    }
   }
 
   // 格式化用户信息显示
