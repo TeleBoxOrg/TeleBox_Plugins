@@ -1,0 +1,175 @@
+{
+  "desc": "日翻你",
+  "width": 512,
+  "height": 512,
+  "res": [
+    {
+      "url": "rf/rf1.png",
+      "delay": 60,
+      "you": {
+        "x": 296,
+        "y": -1,
+        "mask": "rf/you.png"
+      },
+      "me": {
+        "x": -1,
+        "y": 196,
+        "mask": "rf/me.png"
+      }
+    },
+    {
+      "url": "rf/rf2.png",
+      "delay": 60,
+      "you": {
+        "x": 308,
+        "y": 26,
+        "mask": "rf/you.png"
+      },
+      "me": {
+        "x": 0,
+        "y": 198,
+        "mask": "rf/me.png"
+      }
+    },
+    {
+      "url": "rf/rf3.png",
+      "delay": 60,
+      "you": {
+        "x": 315,
+        "y": 305,
+        "mask": "rf/you.png"
+      },
+      "me": {
+        "x": 110,
+        "y": -21,
+        "mask": "rf/me.png"
+      }
+    },
+    {
+      "url": "rf/rf4.png",
+      "delay": 60,
+      "you": {
+        "x": 321,
+        "y": 303,
+        "mask": "rf/you.png"
+      },
+      "me": {
+        "x": 116,
+        "y": -18,
+        "mask": "rf/me.png"
+      }
+    },
+    {
+      "url": "rf/rf5.png",
+      "delay": 60,
+      "you": {
+        "x": 298,
+        "y": 303,
+        "mask": "rf/you.png"
+      },
+      "me": {
+        "x": 116,
+        "y": -1,
+        "mask": "rf/me.png"
+      }
+    },
+    {
+      "url": "rf/rf6.png",
+      "delay": 60,
+      "you": {
+        "x": 298,
+        "y": 303,
+        "mask": "rf/you.png"
+      },
+      "me": {
+        "x": 116,
+        "y": -1,
+        "mask": "rf/me.png"
+      }
+    },
+    {
+      "url": "rf/rf7.png",
+      "delay": 60,
+      "you": {
+        "x": 9,
+        "y": 54,
+        "mask": "rf/you.png"
+      },
+      "me": {
+        "x": 222,
+        "y": 310,
+        "mask": "rf/me.png"
+      }
+    },
+    {
+      "url": "rf/rf8.png",
+      "delay": 60,
+      "you": {
+        "x": 15,
+        "y": 316,
+        "mask": "rf/you.png"
+      },
+      "me": {
+        "x": 324,
+        "y": 106,
+        "mask": "rf/me.png"
+      }
+    },
+    {
+      "url": "rf/rf9.png",
+      "delay": 60,
+      "you": {
+        "x": 24,
+        "y": 299,
+        "mask": "rf/you.png"
+      },
+      "me": {
+        "x": 300,
+        "y": 117,
+        "mask": "rf/me.png"
+      }
+    },
+    {
+      "url": "rf/rf10.png",
+      "delay": 60,
+      "you": {
+        "x": 300,
+        "y": 273,
+        "mask": "rf/you.png"
+      },
+      "me": {
+        "x": 74,
+        "y": -1,
+        "mask": "rf/me.png"
+       }
+    },
+    {
+      "url": "rf/rf11.png",
+      "delay": 60,
+      "you": {
+        "x": 0,
+        "y": 16,
+        "mask": "rf/you.png"
+      },
+      "me": {
+        "x": 198,
+        "y": 310,
+        "mask": "rf/me.png"
+       }
+    },
+    {
+      "url": "rf/rf12.png",
+      "delay": 60,
+      "you": {
+        "x": 0,
+        "y": 16,
+        "mask": "rf/you.png"
+      },
+      "me": {
+        "x": 198,
+        "y": 310,
+        "mask": "rf/me.png"
+      }
+    }     
+  ]
+}
