@@ -261,6 +261,7 @@ const help_text = `🔐 <b>SSH管理插件</b>
 • <code>${mainPrefix}ssh pwauth on/off</code> - 开启/关闭密码登录
 • <code>${mainPrefix}ssh keyauth on/off</code> - 开启/关闭密钥登录  
 • <code>${mainPrefix}ssh rootlogin on/off/keyonly</code> - 控制root登录方式
+• <code>${mainPrefix}ssh enableroot &lt;密码&gt;</code> - 启用root账户直接登录
 • <code>${mainPrefix}ssh open &lt;端口&gt;</code> - 开放防火墙端口
 • <code>${mainPrefix}ssh close &lt;端口&gt;</code> - 关闭防火墙端口
 • <code>${mainPrefix}ssh restart</code> - 重启SSH服务
@@ -377,6 +378,10 @@ class SSHPlugin extends Plugin {
 
         case "rootlogin":
           await this.toggleRootLogin(msg, args[1]);
+          break;
+
+        case "enableroot":
+          await this.enableRootAccount(msg, args.slice(1));
           break;
 
         case "open":
@@ -874,10 +879,24 @@ class SSHPlugin extends Plugin {
           
           if (userList.length === 0) {
             await msg.edit({
-              text: `⚠️ <b>安全警告</b>\n\n检测到系统中没有普通用户账户！\n完全禁用root登录可能导致无法访问服务器。\n\n💡 <b>建议选择:</b>\n• 使用 <code>${mainPrefix}ssh rootlogin keyonly</code> (推荐)\n• 先创建普通用户再禁用root\n\n<b>继续禁用请再次确认:</b>\n<code>${mainPrefix}ssh rootlogin off</code>`,
+              text: `⚠️ <b>检测到没有普通用户账户</b>\n\n正在自动创建备用管理员账户以确保系统可访问...`,
               parseMode: "html"
             });
-            return;
+            
+            // 自动创建备用用户
+            const backupUser = await this.createBackupUser(msg);
+            if (!backupUser) {
+              await msg.edit({
+                text: `❌ <b>创建备用用户失败</b>\n\n建议使用 <code>${mainPrefix}ssh rootlogin keyonly</code> 而不是完全禁用\n\n如需手动创建用户后再禁用root:\n<code>${mainPrefix}ssh rootlogin off</code>`,
+                parseMode: "html"
+              });
+              return;
+            }
+            
+            await msg.edit({
+              text: `✅ <b>备用管理员账户已创建</b>\n\n用户名: <code>${backupUser.username}</code>\n密码: <code>${backupUser.password}</code>\n\n继续禁用root登录...`,
+              parseMode: "html"
+            });
           }
         } catch {
           // 检查失败时给出警告
@@ -918,6 +937,85 @@ class SSHPlugin extends Plugin {
       });
     } catch (error: any) {
       throw new Error(`配置Root登录失败: ${error.message}`);
+    }
+  }
+
+  // 启用root账户直接登录
+  private async enableRootAccount(msg: Api.Message, args: string[]): Promise<void> {
+    const password = args.join(" ").trim();
+    
+    if (!password) {
+      await msg.edit({
+        text: `❌ <b>请提供root密码</b>\n\n示例: <code>${mainPrefix}ssh enableroot 新密码123</code>\n\n⚠️ <b>说明:</b> 此命令会启用root账户并设置密码，允许直接SSH登录root`,
+        parseMode: "html"
+      });
+      return;
+    }
+
+    if (!validatePassword(password)) {
+      await msg.edit({
+        text: "❌ <b>密码不符合要求</b>\n\n• 密码长度至少8位\n• 建议包含数字、字母、特殊字符",
+        parseMode: "html"
+      });
+      return;
+    }
+
+    await msg.edit({ text: "🔄 正在启用root账户直接登录...", parseMode: "html" });
+
+    try {
+      // 1. 解锁root账户
+      await execAsync(`sudo passwd -u root`);
+      
+      // 2. 设置root密码
+      const escapedPassword = shellEscape(password);
+      await execAsync(`echo 'root:${escapedPassword}' | sudo chpasswd`);
+      
+      // 3. 确保SSH允许root登录
+      const currentConfig = await modifySSHConfig("PermitRootLogin", "yes");
+      
+      // 4. 确保密码登录开启
+      await modifySSHConfig("PasswordAuthentication", "yes", false);
+      
+      // 5. 重启SSH服务
+      const restartResult = await restartSSHService();
+      if (!restartResult.success) {
+        throw new Error("无法重启SSH服务");
+      }
+      
+      await msg.edit({
+        text: `✅ <b>Root账户已启用</b>\n\n🔑 Root密码: <code>${htmlEscape(password)}</code>\n🔓 账户状态: 已解锁\n🚪 SSH登录: 已允许\n📄 备份文件: /etc/ssh/sshd_config.backup.${currentConfig}\n\n✨ <b>现在可以直接用root登录SSH了！</b>\n\n⚠️ <b>安全提示:</b>\n• 建议设置复杂密码\n• 考虑配置SSH密钥登录\n• 可用 <code>${mainPrefix}ssh rootlogin keyonly</code> 提升安全性`,
+        parseMode: "html"
+      });
+      
+    } catch (error: any) {
+      throw new Error(`启用root账户失败: ${error.message}`);
+    }
+  }
+
+  // 创建备用用户账户
+  private async createBackupUser(msg: Api.Message): Promise<{ username: string; password: string } | null> {
+    try {
+      // 生成随机用户名和密码
+      const timestamp = Date.now().toString().slice(-6);
+      const username = `admin${timestamp}`;
+      const password = Math.random().toString(36).slice(-12) + "A1!";
+      
+      await msg.edit({ text: "🔄 正在创建备用管理员账户...", parseMode: "html" });
+      
+      // 创建用户
+      await execAsync(`sudo useradd -m -s /bin/bash ${username}`);
+      
+      // 设置密码
+      const escapedPassword = shellEscape(password);
+      await execAsync(`echo '${username}:${escapedPassword}' | sudo chpasswd`);
+      
+      // 添加到sudo组
+      await execAsync(`sudo usermod -aG sudo ${username}`);
+      
+      return { username, password };
+    } catch (error) {
+      console.error("[ssh] 创建备用用户失败:", error);
+      return null;
     }
   }
 
