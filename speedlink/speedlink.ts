@@ -23,7 +23,7 @@ import sharp from "sharp";
 import {
   createDirectoryInAssets,
   createDirectoryInTemp,
-} from "@utils/pathHelpers";
+} from "../src/utils/pathHelpers";
 
 async function fillRoundedCorners(
   inputPath: string,
@@ -117,7 +117,7 @@ try {
   require.resolve("better-sqlite3");
   execSync("command -v sshpass");
   dependenciesInstalled = true;
-} catch (e) {
+} catch (e: any) {
   dependenciesInstalled = false;
 }
 
@@ -128,7 +128,7 @@ async function installDependencies(msg: Api.Message): Promise<void> {
     console.log("SpeedLink Plugin: Starting async dependency installation...");
     try {
       require.resolve("better-sqlite3");
-    } catch (e) {
+    } catch (e: any) {
       console.log(
         "[INSTALLING] 'better-sqlite3' not found. Installing via npm..."
       );
@@ -137,7 +137,7 @@ async function installDependencies(msg: Api.Message): Promise<void> {
     }
     try {
       execSync("command -v sshpass");
-    } catch (e) {
+    } catch (e: any) {
       console.log(
         "[INSTALLING] 'sshpass' not found. Installing via system package manager..."
       );
@@ -261,7 +261,7 @@ function decrypt(text: string): string {
       decipher.update(encryptedText),
       decipher.final(),
     ]).toString();
-  } catch (error) {
+  } catch (error: any) {
     throw new Error(
       "Failed to decrypt credentials. The key file may have been changed/deleted."
     );
@@ -309,7 +309,7 @@ async function getIpApi(ip: string) {
         )
       : "";
     return { asInfo, ccFlag };
-  } catch {
+  } catch (error: any) {
     return { asInfo: "", ccFlag: "" };
   }
 }
@@ -327,12 +327,12 @@ async function saveSpeedtestImage(url: string): Promise<string | null> {
     try {
       await fillRoundedCorners(imagePath, filledImagePath, bgColor, borderPx);
       return filledImagePath;
-    } catch (err) {
+    } catch (err: any) {
       console.error("Failed to fill rounded corners:", err);
     }
 
     return imagePath;
-  } catch (error) {
+  } catch (error: any) {
     console.error("Failed to save speedtest image:", error);
     return null;
   }
@@ -686,17 +686,23 @@ const speedtest = async (msg: Api.Message): Promise<void> => {
             });
             fs.unlinkSync(imagePath);
           } else {
-            await statusMsg.edit({ text: caption, parseMode: "html" });
+            if (statusMsg) {
+              await statusMsg.edit({ text: caption, parseMode: "html" });
+            }
           }
-          await statusMsg.delete();
+          if (statusMsg) {
+            await statusMsg.delete();
+          }
         } catch (error: any) {
           let errorMsg = String(error.stderr || error.message || error);
-          await statusMsg.edit({
-            text: `❌ <b>${htmlEscape(
-              server.name
-            )}</b> 测速失败\n\n<code>${htmlEscape(errorMsg)}</code>`,
-            parseMode: "html",
-          });
+          if (statusMsg) {
+            await statusMsg.edit({
+              text: `❌ <b>${htmlEscape(
+                server.name
+              )}</b> 测速失败\n\n<code>${htmlEscape(errorMsg)}</code>`,
+              parseMode: "html",
+            });
+          }
         }
       }
       await msg.delete(); // Delete the original `sl all` or `sl 1 3 5` message
