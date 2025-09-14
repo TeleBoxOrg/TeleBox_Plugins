@@ -94,6 +94,15 @@
         "mask": "eat/maskgb.png"
       }
     },
+    "gyx": {
+      "name": "帮忙盖一下",
+      "url": "eat/eatgyx.jpg",
+      "you": {
+        "x": 86,
+        "y": 206,
+        "mask": "eat/maskgyx.png"
+      }
+    },
     "hy": {
       "name": "你很勇喔",
       "url": "eat/eathy.png",
