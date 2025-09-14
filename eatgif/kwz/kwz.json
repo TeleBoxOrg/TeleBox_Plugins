@@ -4,7 +4,7 @@
   "height": 300,
   "res": [
     {
-      "url": "kwz/kwz1.png",
+      "url": "kwz/kwz21.png",
       "delay": 80,
       "me": {
         "x": 101,
@@ -13,7 +13,7 @@
       }
     },
     {
-      "url": "kwz/kwz2.png",
+      "url": "kwz/kwz20.png",
       "delay": 80,
       "me": {
         "x": 101,
@@ -22,7 +22,7 @@
       }
     },
     {
-      "url": "kwz/kwz3.png",
+      "url": "kwz/kwz19.png",
       "delay": 80,
       "me": {
         "x": 100,
@@ -31,7 +31,7 @@
       }
     },
     {
-      "url": "kwz/kwz4.png",
+      "url": "kwz/kwz18.png",
       "delay": 80,
       "me": {
         "x": 100,
@@ -40,7 +40,7 @@
       }
     },
     {
-      "url": "kwz/kwz5.png",
+      "url": "kwz/kwz17.png",
       "delay": 80,
       "me": {
         "x": 104,
@@ -49,7 +49,7 @@
       }
     },
     {
-      "url": "kwz/kwz6.png",
+      "url": "kwz/kwz16.png",
       "delay": 80,
       "me": {
         "x": 108,
@@ -58,7 +58,7 @@
       }
     },
     {
-      "url": "kwz/kwz7.png",
+      "url": "kwz/kwz15.png",
       "delay": 80,
       "me": {
         "x": 114,
@@ -67,7 +67,7 @@
       }
     },
     {
-      "url": "kwz/kwz8.png",
+      "url": "kwz/kwz14.png",
       "delay": 80,
       "me": {
         "x": 119,
@@ -76,7 +76,7 @@
       }
     },
     {
-      "url": "kwz/kwz9.png",
+      "url": "kwz/kwz13.png",
       "delay": 80,
       "me": {
         "x": 121,
@@ -85,7 +85,7 @@
       }
     },
     {
-      "url": "kwz/kwz10.png",
+      "url": "kwz/kwz12.png",
       "delay": 80,
       "me": {
         "x": 119,
@@ -103,7 +103,7 @@
        }
     },
     {
-      "url": "kwz/kwz12.png",
+      "url": "kwz/kwz10.png",
       "delay": 80,
       "me": {
         "x": 102,
@@ -112,7 +112,7 @@
       }
     },
     {
-      "url": "kwz/kwz13.png",
+      "url": "kwz/kwz9.png",
       "delay": 80,
       "me": {
         "x": 95,
@@ -121,7 +121,7 @@
       }
     },
     {
-      "url": "kwz/kwz14.png",
+      "url": "kwz/kwz8.png",
       "delay": 80,
       "me": {
         "x": 90,
@@ -130,7 +130,7 @@
       }
     },
     {
-      "url": "kwz/kwz15.png",
+      "url": "kwz/kwz7.png",
       "delay": 80,
       "me": {
         "x": 89,
@@ -139,7 +139,7 @@
       }
     },
     {
-      "url": "kwz/kwz16.png",
+      "url": "kwz/kwz6.png",
       "delay": 80,
       "me": {
         "x": 88,
@@ -148,7 +148,7 @@
       }
     },
     {
-      "url": "kwz/kwz17.png",
+      "url": "kwz/kwz5.png",
       "delay": 80,
       "me": {
         "x": 87,
@@ -157,7 +157,7 @@
       }
     },
     {
-      "url": "kwz/kwz18.png",
+      "url": "kwz/kwz4.png",
       "delay": 80,
       "me": {
         "x": 85,
@@ -166,7 +166,7 @@
       }
     },
     {
-      "url": "kwz/kwz19.png",
+      "url": "kwz/kwz3.png",
       "delay": 80,
       "me": {
         "x": 83,
@@ -175,7 +175,7 @@
       }
     },
     {
-      "url": "kwz/kwz20.png",
+      "url": "kwz/kwz2.png",
       "delay": 80,
       "me": {
         "x": 80,
@@ -184,7 +184,7 @@
       }
     },
     {
-      "url": "kwz/kwz21.png",
+      "url": "kwz/kwz1.png",
       "delay": 80,
       "me": {
         "x": 78,
