@@ -259,7 +259,8 @@ const help_text = `🔐 <b>SSH管理插件</b>
 • <code>${mainPrefix}ssh passwd &lt;新密码&gt;</code> - 修改root密码
 • <code>${mainPrefix}ssh port &lt;端口号&gt;</code> - 修改SSH端口
 • <code>${mainPrefix}ssh pwauth on/off</code> - 开启/关闭密码登录
-• <code>${mainPrefix}ssh keyauth on/off</code> - 开启/关闭密钥登录
+• <code>${mainPrefix}ssh keyauth on/off</code> - 开启/关闭密钥登录  
+• <code>${mainPrefix}ssh rootlogin on/off/keyonly</code> - 控制root登录方式
 • <code>${mainPrefix}ssh open &lt;端口&gt;</code> - 开放防火墙端口
 • <code>${mainPrefix}ssh close &lt;端口&gt;</code> - 关闭防火墙端口
 • <code>${mainPrefix}ssh restart</code> - 重启SSH服务
@@ -374,6 +375,10 @@ class SSHPlugin extends Plugin {
           await this.toggleKeyAuth(msg, args[1]);
           break;
 
+        case "rootlogin":
+          await this.toggleRootLogin(msg, args[1]);
+          break;
+
         case "open":
           await this.openPort(msg, args[1]);
           break;
@@ -466,12 +471,14 @@ class SSHPlugin extends Plugin {
       await execAsync(`mkdir -p /root/.ssh && chmod 700 /root/.ssh`);
       
       if (mode === "replace") {
-        // 替换模式：清空现有密钥，只保留新密钥
-        await execAsync(`echo "${publicKey}" > /root/.ssh/authorized_keys`);
+        // 替换模式：先清空文件，再写入新密钥
+        await execAsync(`> /root/.ssh/authorized_keys`); // 先清空文件
         await msg.edit({ text: "🔄 已清空旧密钥，正在设置新密钥...", parseMode: "html" });
+        // 使用printf避免echo的转义问题，并确保以换行符结尾
+        await execAsync(`printf '%s\n' ${shellEscape(publicKey.trim())} > /root/.ssh/authorized_keys`);
       } else {
         // 追加模式：添加到现有密钥
-        await execAsync(`echo "${publicKey}" >> /root/.ssh/authorized_keys`);
+        await execAsync(`printf '%s\n' ${shellEscape(publicKey.trim())} >> /root/.ssh/authorized_keys`);
       }
       
       await execAsync(`chmod 600 /root/.ssh/authorized_keys`);
@@ -824,6 +831,93 @@ class SSHPlugin extends Plugin {
       });
     } catch (error: any) {
       throw new Error(`${action}密钥登录失败: ${error.message}`);
+    }
+  }
+
+  // 开关Root登录
+  private async toggleRootLogin(msg: Api.Message, mode: string): Promise<void> {
+    const enable = mode === "on" || mode === "enable" || mode === "yes";
+    const disable = mode === "off" || mode === "disable" || mode === "no";
+    const keyOnly = mode === "keyonly" || mode === "key-only" || mode === "keys";
+    
+    if (!enable && !disable && !keyOnly) {
+      await msg.edit({
+        text: `❌ <b>无效的参数</b>\n\n用法:\n• <code>${mainPrefix}ssh rootlogin on</code> - 允许所有root登录方式\n• <code>${mainPrefix}ssh rootlogin off</code> - 完全禁止root登录\n• <code>${mainPrefix}ssh rootlogin keyonly</code> - 仅允许密钥登录root`,
+        parseMode: "html"
+      });
+      return;
+    }
+
+    let action: string;
+    let authValue: string;
+    
+    if (enable) {
+      action = "开启所有Root登录方式";
+      authValue = "yes";
+    } else if (keyOnly) {
+      action = "设置Root仅密钥登录";
+      authValue = "prohibit-password";
+    } else {
+      action = "完全禁止Root登录";
+      authValue = "no";
+    }
+
+    await msg.edit({ text: `🔄 正在${action}...`, parseMode: "html" });
+
+    try {
+      // 检查当前是否有其他登录方式
+      if (disable) {
+        // 完全禁用root登录前检查是否有其他用户
+        try {
+          const { stdout: users } = await execAsync(`getent passwd | awk -F: '$3 >= 1000 && $3 != 65534 { print $1 }' | head -5`);
+          const userList = users.trim().split('\n').filter(u => u.trim());
+          
+          if (userList.length === 0) {
+            await msg.edit({
+              text: `⚠️ <b>安全警告</b>\n\n检测到系统中没有普通用户账户！\n完全禁用root登录可能导致无法访问服务器。\n\n💡 <b>建议选择:</b>\n• 使用 <code>${mainPrefix}ssh rootlogin keyonly</code> (推荐)\n• 先创建普通用户再禁用root\n\n<b>继续禁用请再次确认:</b>\n<code>${mainPrefix}ssh rootlogin off</code>`,
+              parseMode: "html"
+            });
+            return;
+          }
+        } catch {
+          // 检查失败时给出警告
+          await msg.edit({
+            text: `⚠️ <b>无法检测用户账户</b>\n\n建议使用 <code>${mainPrefix}ssh rootlogin keyonly</code> 而不是完全禁用\n\n如需继续禁用root登录:\n<code>${mainPrefix}ssh rootlogin off</code>`,
+            parseMode: "html"
+          });
+          return;
+        }
+      }
+      
+      // 使用通用函数修改SSH配置
+      const timestamp = await modifySSHConfig("PermitRootLogin", authValue);
+      
+      // 重启SSH服务使配置生效
+      const restartResult = await restartSSHService();
+      if (!restartResult.success) {
+        throw new Error("无法重启SSH服务");
+      }
+      
+      let statusText: string;
+      let securityTip: string;
+      
+      if (enable) {
+        statusText = "✅ 允许所有登录方式";
+        securityTip = "⚠️ <b>安全提示:</b> 已开启所有root登录方式，建议使用强密码";
+      } else if (keyOnly) {
+        statusText = "🔐 仅允许密钥登录";
+        securityTip = "🛡️ <b>安全提示:</b> Root密码登录已禁用，仅允许SSH密钥登录";
+      } else {
+        statusText = "❌ 完全禁止登录";
+        securityTip = "🛡️ <b>安全提示:</b> Root登录已完全禁用，请确保有其他用户账户可用";
+      }
+      
+      await msg.edit({
+        text: `✅ <b>Root登录配置已更新</b>\n\n状态: ${statusText}\n配置值: <code>PermitRootLogin ${authValue}</code>\n备份文件: /etc/ssh/sshd_config.backup.${timestamp}\n\n${securityTip}`,
+        parseMode: "html"
+      });
+    } catch (error: any) {
+      throw new Error(`配置Root登录失败: ${error.message}`);
     }
   }
 
