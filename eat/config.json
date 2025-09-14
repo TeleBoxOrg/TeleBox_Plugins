@@ -100,7 +100,8 @@
       "you": {
         "x": 86,
         "y": 206,
-        "mask": "eat/maskgyx.png"
+        "mask": "eat/maskgyx.png",
+        "rotate": -45
       }
     },
     "hy": {
