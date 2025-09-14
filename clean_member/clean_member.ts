@@ -211,10 +211,10 @@ async function removeChatMember(
       })
     );
 
-    // 等待一小段时间确保踢出生效
-    await sleep(500);
+    // 等待较长时间确保踢出生效，避免解封失败
+    await sleep(2000 + Math.random() * 1000);  // 等待2-3秒
 
-    // 第二步：立即解封（允许用户重新加入）
+    // 第二步：解封（允许用户重新加入）
     await client.invoke(
       new Api.channels.EditBanned({
         channel: channelEntity,
@@ -298,7 +298,7 @@ interface StreamProcessOptions {
   adminIds: Set<number>;
   onlySearch: boolean;
   maxRemove?: number;  // 移除人数上限
-  statusCallback?: (message: string) => Promise<void>;
+  statusCallback?: (message: string, forceUpdate?: boolean) => Promise<void>;
   modeNames: { [key: string]: string };
 }
 
@@ -332,8 +332,10 @@ async function streamProcessMembers(
       
       // 获取一批用户
       if (statusCallback) {
+        // 每批次强制更新
         await statusCallback(
-          `🔍 扫描第 ${batchNumber} 批 (${modeNames[mode]}) | 已扫描: ${result.totalScanned} | 已找到: ${result.totalFound}${!onlySearch ? ` | 已移出: ${result.totalRemoved}` : ''}`
+          `🔍 扫描第 ${batchNumber} 批 (${modeNames[mode]}) | 已扫描: ${result.totalScanned} | 已找到: ${result.totalFound}${!onlySearch ? ` | 已移出: ${result.totalRemoved}` : ''}`,
+          true
         );
       }
 
@@ -459,11 +461,12 @@ async function streamProcessMembers(
                 await removeChatMember(client, chatEntity, uid);
                 result.totalRemoved++;
                 
-                // 实时更新进度
-                if (result.totalFound % 5 === 0 && statusCallback) {
+                // 实时更新进度（每5个用户更新一次）
+                if (result.totalRemoved % 5 === 0 && statusCallback) {
                   const limitInfo = maxRemove ? ` / 上限: ${maxRemove}` : '';
                   await statusCallback(
-                    `⚡ 流式处理中 (${modeNames[mode]}) | 扫描: ${result.totalScanned} | 找到: ${result.totalFound} | 已移出: ${result.totalRemoved}${limitInfo}`
+                    `⚡ 流式处理中 (${modeNames[mode]}) | 扫描: ${result.totalScanned} | 找到: ${result.totalFound} | 已移出: ${result.totalRemoved}${limitInfo}`,
+                    false // 不强制更新，受频率限制
                   );
                 }
                 
@@ -507,11 +510,13 @@ async function streamProcessMembers(
     if (statusCallback) {
       if (onlySearch) {
         await statusCallback(
-          `✅ 搜索完成 (${modeNames[mode]}) | 扫描: ${result.totalScanned} 人 | 找到: ${result.totalFound} 人`
+          `✅ 搜索完成 (${modeNames[mode]}) | 扫描: ${result.totalScanned} 人 | 找到: ${result.totalFound} 人`,
+          true // 强制更新最终结果
         );
       } else {
         await statusCallback(
-          `✅ 清理完成 (${modeNames[mode]}) | 扫描: ${result.totalScanned} 人 | 移出: ${result.totalRemoved}/${result.totalFound} 人`
+          `✅ 清理完成 (${modeNames[mode]}) | 扫描: ${result.totalScanned} 人 | 移出: ${result.totalRemoved}/${result.totalFound} 人`,
+          true // 强制更新最终结果
         );
       }
     }
@@ -520,7 +525,7 @@ async function streamProcessMembers(
   } catch (error) {
     console.error("Stream process error:", error);
     if (statusCallback) {
-      await statusCallback(`❌ 处理失败: ${error}`);
+      await statusCallback(`❌ 处理失败: ${error}`, true);
     }
     throw error;
   }
@@ -560,11 +565,11 @@ async function checkCache(
   chatId: number,
   mode: string,
   day: number,
-  statusCallback?: (message: string) => Promise<void>
+  statusCallback?: (message: string, forceUpdate?: boolean) => Promise<void>
 ): Promise<CacheData | null> {
   const cached = getFromCache(chatId, mode, day);
   if (cached && statusCallback) {
-    await statusCallback(`📋 使用缓存: ${cached.total_found} 名用户`);
+    await statusCallback(`📋 使用缓存: ${cached.total_found} 名用户`, true);
   }
   return cached;
 }
@@ -740,32 +745,90 @@ const clean_member = async (msg: Api.Message) => {
     return;
   }
 
-  // 初始化提示 - 发送到收藏夹和当前会话
+  // 初始化提示 - 在原消息编辑
   const startMessage = onlySearch ? 
     `🔍 开始搜索: ${modeNames[mode]}` : 
     `🧹 开始清理: ${modeNames[mode]}`;
   
   await msg.edit({
-    text: `✅ 任务已启动，进度将发送到收藏夹\n\n📋 ${startMessage}`,
+    text: `📋 <b>群组清理任务启动</b>\n\n🏷️ 群组: <b>${htmlEscape(chatTitle)}</b>\n🎯 ${startMessage}\n\n⏳ 正在初始化...`,
     parseMode: "html",
   });
   
-  // 同时发送到收藏夹
-  await client.sendMessage("me", {
-    message: `📋 <b>群组清理任务启动</b>\n\n🏷️ 群组: <b>${htmlEscape(chatTitle)}</b>\n🎯 ${startMessage}`,
-    parseMode: "html",
-  });
+  // 保存收藏夹消息ID，用于备用
+  let savedMessageId: number | null = null;
+  let useOriginalMessage = true; // 标记是否使用原消息
 
-  // 状态回调函数 - 发送进度到收藏夹
-  const statusCallback = async (message: string) => {
+  // 状态回调函数 - 优先编辑原消息，失败则发送到收藏夹
+  let lastUpdateTime = Date.now();
+  const MIN_UPDATE_INTERVAL = 2000; // 最小更新间隔2秒，避免过于频繁
+  
+  const statusCallback = async (message: string, forceUpdate: boolean = false) => {
     try {
-      await client.sendMessage("me", {
-        message: `📋 <b>群组清理进度</b>\n\n🏷️ 群组: <b>${htmlEscape(chatTitle)}</b>\n📊 ${message}`,
-        parseMode: "html",
-      });
-      await sleep(50); // 减少延迟
+      // 控制更新频率
+      const now = Date.now();
+      if (!forceUpdate && now - lastUpdateTime < MIN_UPDATE_INTERVAL) {
+        return;
+      }
+      lastUpdateTime = now;
+      
+      const progressMessage = `📋 <b>群组清理进度</b>\n\n🏷️ 群组: <b>${htmlEscape(chatTitle)}</b>\n📊 ${message}\n\n⏰ 更新时间: ${new Date().toLocaleTimeString('zh-CN')}`;
+      
+      if (useOriginalMessage) {
+        try {
+          // 尝试编辑原消息
+          await msg.edit({
+            text: progressMessage,
+            parseMode: "html",
+          });
+        } catch (editError: any) {
+          // 如果编辑失败（消息被删除等），切换到收藏夹
+          console.log("原消息编辑失败，切换到收藏夹:", editError);
+          useOriginalMessage = false;
+          
+          // 发送到收藏夹
+          const savedMsg = await client.sendMessage("me", {
+            message: `⚠️ <b>原消息已被删除，进度转移到收藏夹</b>\n\n${progressMessage}`,
+            parseMode: "html",
+          });
+          
+          if (savedMsg && typeof savedMsg.id === 'number') {
+            savedMessageId = savedMsg.id;
+          }
+        }
+      } else {
+        // 使用收藏夹消息
+        if (savedMessageId) {
+          try {
+            // 尝试编辑收藏夹中的消息
+            await client.editMessage("me", {
+              message: savedMessageId,
+              text: progressMessage,
+              parseMode: "html",
+            });
+          } catch (error) {
+            // 如果编辑失败，发送新消息
+            const newMsg = await client.sendMessage("me", {
+              message: progressMessage,
+              parseMode: "html",
+            });
+            if (newMsg && typeof newMsg.id === 'number') {
+              savedMessageId = newMsg.id;
+            }
+          }
+        } else {
+          // 如果没有保存的消息ID，发送新消息
+          const newMsg = await client.sendMessage("me", {
+            message: progressMessage,
+            parseMode: "html",
+          });
+          if (newMsg && typeof newMsg.id === 'number') {
+            savedMessageId = newMsg.id;
+          }
+        }
+      }
     } catch (error) {
-      console.log("Status update to saved messages failed:", error);
+      console.log("Status update failed:", error);
     }
   };
 
@@ -806,11 +869,12 @@ const clean_member = async (msg: Api.Message) => {
   }
 
   // 获取管理员列表
-  await statusCallback(`👤 获取管理员权限...`);
+  await statusCallback(`👤 获取管理员权限...`, true);
   const adminIds = await getAdminIds(client, channelEntity);
   
   await statusCallback(
-    `🎯 准备${onlySearch ? "搜索" : "清理"}: ${modeNames[mode]} | 管理员: ${adminIds.size}`
+    `🎯 准备${onlySearch ? "搜索" : "清理"}: ${modeNames[mode]} | 管理员: ${adminIds.size}`,
+    true
   );
 
   // 最终结果
@@ -866,26 +930,55 @@ const clean_member = async (msg: Api.Message) => {
       `📁 报告位置: <code>${CACHE_DIR}/</code>`;
   }
   
-  await msg.edit({
-    text: finalMessage,
-    parseMode: "html",
-  });
-  
-  // 发送报告到收藏夹
+  // 尝试编辑原消息显示最终结果
   try {
-    const reportMessage = `📋 <b>群组清理报告</b>\n\n` +
-      `🏷️ 群组: <b>${htmlEscape(chatTitle)}</b>\n` +
-      `🔧 模式: ${modeNames[mode]}\n` +
-      `📅 时间: ${new Date().toLocaleString('zh-CN')}\n\n` +
-      finalMessage;
-    
+    if (useOriginalMessage) {
+      await msg.edit({
+        text: finalMessage,
+        parseMode: "html",
+      });
+    } else {
+      // 如果原消息已被删除，在收藏夹中显示最终结果
+      if (savedMessageId) {
+        await client.editMessage("me", {
+          message: savedMessageId,
+          text: finalMessage,
+          parseMode: "html",
+        });
+      } else {
+        await client.sendMessage("me", {
+          message: finalMessage,
+          parseMode: "html",
+        });
+      }
+    }
+  } catch (error) {
+    console.error("显示最终结果失败:", error);
+    // 如果都失败了，至少发送到收藏夹
     await client.sendMessage("me", {
-      message: reportMessage,
+      message: finalMessage,
       parseMode: "html",
     });
-    console.log("清理报告已发送到收藏夹");
-  } catch (error) {
-    console.error("发送报告到收藏夹失败:", error);
+  }
+  
+  // 如果使用了收藏夹，额外发送一份完整报告
+  if (!useOriginalMessage) {
+    try {
+      const reportMessage = `📋 <b>群组清理最终报告</b>\n\n` +
+        `🏷️ 群组: <b>${htmlEscape(chatTitle)}</b>\n` +
+        `🔧 模式: ${modeNames[mode]}\n` +
+        `📅 时间: ${new Date().toLocaleString('zh-CN')}\n\n` +
+        `⚠️ 注意：原消息已被删除，报告已转移到收藏夹\n\n` +
+        finalMessage;
+      
+      await client.sendMessage("me", {
+        message: reportMessage,
+        parseMode: "html",
+      });
+      console.log("完整报告已发送到收藏夹");
+    } catch (error) {
+      console.error("发送完整报告失败:", error);
+    }
   }
 };
 
