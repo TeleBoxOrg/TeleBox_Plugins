@@ -427,12 +427,27 @@ const speedtest = async (msg: Api.Message): Promise<void> => {
           return;
         }
         const [username, hostWithPort] = connection.split("@");
-        const [host, portStr] = hostWithPort.split(":");
-        const port = parseInt(portStr);
-        if (!username || !host || !port) {
+        
+        // --- START: MODIFIED CODE FOR IPV6 PARSING ---
+        if (!hostWithPort) {
           await msg.edit({ text: `❌ <b>连接格式错误</b>`, parseMode: "html" });
           return;
         }
+        const lastColonIndex = hostWithPort.lastIndexOf(":");
+        if (lastColonIndex === -1) {
+            await msg.edit({ text: `❌ <b>连接格式错误: 缺少端口号</b>`, parseMode: "html" });
+            return;
+        }
+        const host = hostWithPort.substring(0, lastColonIndex);
+        const portStr = hostWithPort.substring(lastColonIndex + 1);
+        const port = parseInt(portStr, 10);
+
+        if (!username || !host || isNaN(port)) {
+          await msg.edit({ text: `❌ <b>连接格式错误或端口号无效</b>`, parseMode: "html" });
+          return;
+        }
+        // --- END: MODIFIED CODE FOR IPV6 PARSING ---
+
         const storedCredential =
           authMethod === "password" ? encrypt(credential) : credential;
         try {
