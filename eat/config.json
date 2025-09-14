@@ -94,6 +94,20 @@
         "mask": "eat/maskgb.png"
       }
     },
+    "hy": {
+      "name": "你很勇喔",
+      "url": "eat/eathy.png",
+      "me": {
+        "x": 430,
+        "y": -10,
+        "mask": "eat/maskhy1.png"
+      },
+      "you": {
+        "x": 770,
+        "y": 100,
+        "mask": "eat/maskhy2.png"
+      }
+    },
     "ko": {
       "name": "升龙拳",
       "url": "https://github.com/FoKit/PagerMaid_Plugins/raw/modify/eat/eatko.png",
