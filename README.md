@@ -61,6 +61,7 @@ npm i <插件名>
 - `shift` - 智能消息转发系统  
 - `speedlink` - 对其他服务器测速  
 - `speedtest` - 网络速度测试工具  
+- `ssh` - ssh管理  
 - `sticker` - 偷表情  
 - `sticker_to_pic` - 表情转图片  
 - `sunremove` - 定向批量解除封禁用户  
