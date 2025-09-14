@@ -1,23 +1,23 @@
 {
   "eat": {
     "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/eat/eat.ts?raw=true",
-    "desc": "生成\"吃掉\"表情包，支持自定义头像合成"
+    "desc": "生成带头像表情包"
   },
   "q": {
     "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/q/q.ts?raw=true",
-    "desc": "消息引用生成器，通过 QuotLyBot 制作引用图片"
+    "desc": "消息引用生成贴纸"
   },
   "yt-dlp": {
     "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/yt-dlp/yt-dlp.ts?raw=true",
-    "desc": "YouTube 视频下载工具，支持多种格式"
+    "desc": "YouTube 视频下载工具"
   },
   "gt": {
     "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/gt/gt.ts?raw=true",
-    "desc": "谷歌翻译插件，支持中英文互译"
+    "desc": "谷歌中英文互译"
   },
   "ip": {
     "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/ip/ip.ts?raw=true",
-    "desc": "IP 地址查询工具，获取地理位置和网络信息"
+    "desc": "IP 地址查询"
   },
   "acron": {
     "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/acron/acron.ts?raw=true",
@@ -29,27 +29,27 @@
   },
   "netease": {
     "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/netease/netease.ts?raw=true",
-    "desc": "网易云音乐搜索和播放功能"
+    "desc": "网易云音乐"
   },
   "bulk_delete": {
     "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/bulk_delete/bulk_delete.ts?raw=true",
-    "desc": "批量删除消息工具，支持回复删除和数量删除"
+    "desc": "批量删除消息工具"
   },
   "aban": {
     "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/aban/aban.ts?raw=true",
-    "desc": "管理用户权限工具，支持多群组操作和永久缓存"
+    "desc": "高级封禁管理工具"
   },
   "search": {
     "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/search/search.ts?raw=true",
-    "desc": "频道消息搜索工具，支持多频道配置"
+    "desc": "频道消息搜索工具"
   },
   "music": {
     "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/music/music.ts?raw=true",
-    "desc": "YouTube 音乐搜索和下载工具"
+    "desc": "YouTube音乐"
   },
   "clean_member": {
     "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/clean_member/clean_member.ts?raw=true",
-    "desc": "群组成员清理工具，可按活跃度和时间筛选清理成员"
+    "desc": "群组成员清理工具"
   },
   "speedtest": {
     "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/speedtest/speedtest.ts?raw=true",
@@ -57,35 +57,35 @@
   },
   "shift": {
     "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/shift/shift.ts?raw=true",
-    "desc": "智能消息转发系统，支持规则过滤和统计"
+    "desc": "智能消息转发系统"
   },
   "da": {
     "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/da/da.ts?raw=true",
-    "desc": "删除群内所有消息（非管理员仅删除自己的消息）"
+    "desc": "删除群内所有消息"
   },
   "dc": {
     "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/dc/dc.ts?raw=true",
-    "desc": "获取用户或群组的数据中心信息"
+    "desc": "获取实体DC"
   },
   "gpt": {
     "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/gpt/gpt.ts?raw=true",
-    "desc": "OpenAI GPT 聊天助手，支持文本对话和图像识别"
+    "desc": "OpenAI助手"
   },
   "komari": {
     "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/komari/komari.ts?raw=true",
-    "desc": "Komari 服务器监控插件，获取节点状态和资源信息"
+    "desc": "Komari 服务器监控插件"
   },
   "dig": {
     "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/dig/dig.ts?raw=true",
-    "desc": "DNS 查询工具，支持域名解析和网络诊断"
+    "desc": "DNS 查询工具"
   },
   "keyword": {
     "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/keyword/keyword.ts?raw=true",
-    "desc": "关键词自动回复系统，支持正则表达式匹配"
+    "desc": "关键词自动回复"
   },
   "lottery": {
     "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/lottery/lottery.ts?raw=true",
-    "desc": "抽奖系统，支持群组抽奖活动管理"
+    "desc": "抽奖工具"
   },
   "dme": {
     "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/dme/dme.ts?raw=true",
@@ -93,7 +93,7 @@
   },
   "autochangename": {
     "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/autochangename/autochangename.ts?raw=true",
-    "desc": "自动定时修改用户名插件，支持时区配置和计划任务管理"
+    "desc": "自动定时修改用户名插"
   },
   "yvlu": {
     "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/yvlu/yvlu.ts?raw=true",
@@ -113,7 +113,7 @@
   },
   "his": {
     "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/his/his.ts?raw=true",
-    "desc": "查看被回复者最近三十条消息"
+    "desc": "查看被回复者最近消息"
   },
   "moyu": {
     "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/moyu/moyu.ts?raw=true",
