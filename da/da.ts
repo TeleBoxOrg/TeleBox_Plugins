@@ -12,12 +12,21 @@ import { JSONFile } from "lowdb/node";
 const prefixes = getPrefixes();
 const mainPrefix = prefixes[0];
 
-// HTML转义工具
+// HTML转义工具（每个插件必须实现）
 const htmlEscape = (text: string): string => 
   text.replace(/[&<>"']/g, m => ({ 
     '&': '&amp;', '<': '&lt;', '>': '&gt;', 
     '"': '&quot;', "'": '&#x27;' 
   }[m] || m));
+
+// 帮助文档常量（必须定义）
+const help_text = `🚀 <b>DA - 群组消息批量删除插件</b>
+
+<b>🔧 使用方法:</b>
+• <code>${mainPrefix}da true</code> - 开始删除任务
+• <code>${mainPrefix}da stop</code> - 停止当前任务
+• <code>${mainPrefix}da status</code> - 查看任务状态
+• <code>${mainPrefix}da help</code> - 显示此帮助 `;
 
 // 删除任务状态管理
 interface DeleteTask {
@@ -31,6 +40,7 @@ interface DeleteTask {
   lastUpdate: number;
   lastLogTime: number;
   errors: string[];
+  savedMessageId?: number; // 收藏夹消息ID
 }
 
 interface DatabaseSchema {
@@ -89,12 +99,12 @@ const removeTask = async (chatId: string) => {
 // 初始化数据库
 initDatabase().catch(console.error);
 
-// 发送进度到收藏夹
+// 发送或更新进度到收藏夹
 const sendProgressToSaved = async (
   client: TelegramClient,
   task: DeleteTask,
   status: string
-) => {
+): Promise<number | undefined> => {
   try {
     const elapsed = Date.now() - task.startTime;
     const hours = Math.floor(elapsed / 3600000);
@@ -129,12 +139,30 @@ const sendProgressToSaved = async (
 
 ${task.errors.length > 0 ? `<b>⚠️ 最近错误:</b>\n${task.errors.slice(-3).join("\n")}` : ""}`;
 
-    await client.sendMessage("me", {
+    // 如果已有收藏夹消息，则编辑；否则创建新消息
+    if (task.savedMessageId) {
+      try {
+        await client.editMessage("me", {
+          message: task.savedMessageId,
+          text: message,
+          parseMode: "html",
+        });
+        return task.savedMessageId;
+      } catch (editError) {
+        // 如果编辑失败，创建新消息
+        console.log("编辑收藏夹消息失败，创建新消息:", editError);
+      }
+    }
+    
+    // 创建新消息
+    const savedMsg = await client.sendMessage("me", {
       message,
       parseMode: "html",
     });
+    return savedMsg.id;
   } catch (error) {
     console.error("发送进度到收藏夹失败:", error);
+    return undefined;
   }
 };
 
@@ -160,7 +188,6 @@ const deleteBatch = async (
   chatId: bigInt.BigInteger,
   messages: Api.Message[],
   task: DeleteTask,
-  statusMsg: Api.Message,
   currentFloodWait: number
 ): Promise<{ floodWaitTime: number; consecutiveErrors: number }> => {
   let floodWaitTime = currentFloodWait;
@@ -173,17 +200,8 @@ const deleteBatch = async (
       task.sleepUntil = Date.now() + floodWaitTime;
       await saveTask(task);
       
-      // 显示休眠倒计时
-      for (let i = waitSeconds; i > 0; i--) {
-        await statusMsg.edit({
-          text: `😴 <b>API限制，休眠倒计时: ${i} 秒</b>
-          
-已删除: <code>${task.deletedMessages.toLocaleString()}</code> 条
-状态: 休眠中`,
-          parseMode: "html",
-        });
-        await new Promise(resolve => setTimeout(resolve, 1000));
-      }
+      // 休眠等待（不在群聊显示倒计时）
+      await new Promise(resolve => setTimeout(resolve, floodWaitTime));
       
       task.sleepUntil = null;
       floodWaitTime = Math.max(0, floodWaitTime - 1000);
@@ -200,30 +218,16 @@ const deleteBatch = async (
     task.lastUpdate = Date.now();
     consecutiveErrors = 0;
     
-    // 更新进度显示（减少频率）
+    // 更新进度到收藏夹（减少频率）
     const shouldUpdate = 
       task.deletedMessages % 1000 === 0 || 
       Date.now() - task.lastUpdate > 30000;
       
     if (shouldUpdate) {
-      const speed = task.deletedMessages / ((Date.now() - task.startTime) / 1000);
-      
-      try {
-        await statusMsg.edit({
-          text: `🔄 <b>正在删除消息...</b>
-
-已删除: <code>${task.deletedMessages.toLocaleString()}</code> 条
-速度: ${speed.toFixed(1)} 条/秒
-状态: 🟢 运行中`,
-          parseMode: "html",
-        });
-      } catch (e) {
-        // 忽略编辑失败
-      }
-      
-      // 每5000条发送一次进度到收藏夹
-      if (task.deletedMessages % 5000 === 0) {
-        await sendProgressToSaved(client, task, "进行中");
+      // 更新收藏夹进度
+      const msgId = await sendProgressToSaved(client, task, "进行中");
+      if (msgId && !task.savedMessageId) {
+        task.savedMessageId = msgId;
       }
       
       task.lastUpdate = Date.now();
@@ -257,22 +261,13 @@ const deleteBatch = async (
       task.sleepUntil = Date.now() + floodWaitTime;
       await saveTask(task);
       
-      // 显示休眠倒计时
-      for (let i = waitSeconds; i > 0; i--) {
-        await statusMsg.edit({
-          text: `😴 <b>遇到API限制，休眠倒计时: ${i} 秒</b>
-          
-已删除: <code>${task.deletedMessages.toLocaleString()}</code> 条
-状态: 休眠中`,
-          parseMode: "html",
-        });
-        await new Promise(resolve => setTimeout(resolve, 1000));
-      }
+      // 休眠等待（不在群聊显示倒计时）
+      await new Promise(resolve => setTimeout(resolve, floodWaitTime));
       
       task.sleepUntil = null;
       
       // 重试批量删除
-      return deleteBatch(client, chatId, messages, task, statusMsg, floodWaitTime - 1000);
+      return deleteBatch(client, chatId, messages, task, floodWaitTime - 1000);
       
     } else if (error.message && error.message.includes("MESSAGE_DELETE_FORBIDDEN")) {
       // 无权限删除，尝试逐个删除
@@ -326,16 +321,23 @@ const deleteBatch = async (
 
 // 主删除命令
 const da = async (msg: Api.Message) => {
-  // 参数解析（严格按acron.ts模式）
+  // 标准参数解析模式（参考 music.ts）
   const lines = msg.text?.trim()?.split(/\r?\n/g) || [];
   const parts = lines?.[0]?.split(/\s+/) || [];
   const [, ...args] = parts; // 跳过命令本身
-  const param = (args[0] || "").toLowerCase();
+  const sub = (args[0] || "").toLowerCase();
+
+  // 获取客户端
+  const client = await getGlobalClient();
+  if (!client) {
+    await msg.edit({ text: "❌ 客户端未初始化", parseMode: "html" });
+    return;
+  }
 
   // 检查是否在群组中
   if (!msg.chatId || msg.isPrivate) {
     await msg.edit({
-      text: "❌ 此命令只能在群组中使用",
+      text: "❌ <b>此命令只能在群组中使用</b>",
       parseMode: "html",
     });
     return;
@@ -343,172 +345,113 @@ const da = async (msg: Api.Message) => {
 
   const taskId = msg.chatId.toString();
 
-  // 处理停止命令
-  if (param === "stop") {
-    const task = await getTask(taskId);
-    
-    if (!task) {
-      await msg.edit({
-        text: "❌ 当前群组没有正在运行的删除任务",
-        parseMode: "html",
-      });
+  try {
+    // 无参数时显示帮助
+    if (!sub) {
+      await msg.edit({ text: help_text, parseMode: "html" });
       return;
     }
-    
-    task.isRunning = false;
-    task.isPaused = true;
-    await saveTask(task);
-    
-    const client = await getGlobalClient();
-    if (client) {
-      await sendProgressToSaved(client, task, "已手动停止");
-    }
-    
-    await msg.edit({
-      text: `⏹️ 删除任务已停止\n已删除: ${task.deletedMessages.toLocaleString()} 条\n📊 详细状态已发送到收藏夹`,
-      parseMode: "html",
-    });
-    return;
-  }
 
-  // 处理状态查询
-  if (param === "status") {
-    const task = await getTask(taskId);
-    
-    if (!task) {
-      await msg.edit({
-        text: "❌ 当前群组没有删除任务记录",
-        parseMode: "html",
-      });
+    // 处理 help 命令
+    if (sub === "help" || sub === "h") {
+      await msg.edit({ text: help_text, parseMode: "html" });
       return;
     }
-    
-    const client = await getGlobalClient();
-    if (client) {
-      await sendProgressToSaved(client, task, "状态查询");
-    }
-    
-    await msg.edit({
-      text: `📊 <b>删除任务状态</b>
+
+    // 处理停止命令
+    if (sub === "stop") {
+      const task = await getTask(taskId);
       
-状态: ${task.isRunning ? "🟢 运行中" : "⏸️ 已暂停"}
-已删除: ${task.deletedMessages.toLocaleString()} 条
-运行时长: ${calculateElapsedTime(task)}
-
-📊 详细状态已发送到收藏夹`,
-      parseMode: "html",
-    });
-    return;
-  }
-
-  // 帮助文档显示
-  if (param === "help" || param === "h") {
-    const help_text = `🚀 <b>DA - 群组消息批量删除插件</b>
-
-<b>📝 功能描述:</b>
-• 🗑️ <b>批量删除</b>：删除群内所有消息（管理员模式）
-• 👤 <b>个人删除</b>：仅删除自己的消息（普通用户模式）
-• ⏸️ <b>任务控制</b>：支持停止、暂停、恢复操作
-• 📊 <b>进度跟踪</b>：实时显示删除进度和状态
-• 😴 <b>智能休眠</b>：自动处理API限制，显示倒计时
-• 💾 <b>断点续传</b>：任务状态持久化，支持重启恢复
-
-<b>🔧 使用方法:</b>
-• <code>${mainPrefix}da true</code> - 开始删除任务
-• <code>${mainPrefix}da stop</code> - 停止当前任务
-• <code>${mainPrefix}da status</code> - 查看任务状态
-• <code>${mainPrefix}da help</code> - 显示此帮助
-
-<b>💡 示例:</b>
-• <code>${mainPrefix}da true</code> - 确认开始删除群内消息
-• <code>${mainPrefix}da stop</code> - 立即停止正在运行的删除任务
-• <code>${mainPrefix}da status</code> - 查看当前删除进度和状态
-
-<b>⚠️ 安全提示:</b>
-• 此操作不可逆，请谨慎使用
-• 管理员可删除所有消息，普通用户仅删除自己的消息
-• 任务状态会自动发送到收藏夹，便于监控
-• 支持API限制自动处理，无需手动干预`;
-    
-    await msg.edit({
-      text: help_text,
-      parseMode: "html",
-    });
-    return;
-  }
-
-  // 安全确认机制
-  if (param !== "true") {
-    await msg.edit({
-      text: `❌ <b>参数不足</b>
-
-💡 使用 <code>${mainPrefix}da help</code> 查看帮助
-
-⚠️ <b>快速开始:</b>
-• <code>${mainPrefix}da true</code> - 确认开始删除
-• <code>${mainPrefix}da stop</code> - 停止删除
-• <code>${mainPrefix}da status</code> - 查看状态`,
-      parseMode: "html",
-    });
-    return;
-  }
-
-  // 检查是否已有运行中的任务
-  const existingTask = await getTask(taskId);
-  
-  if (existingTask && existingTask.isRunning) {
-    await msg.edit({
-      text: "⚠️ 当前群组已有正在运行的删除任务\n使用 <code>da status</code> 查看状态",
-      parseMode: "html",
-    });
-    return;
-  }
-
-  const client = await getGlobalClient();
-  if (!client) {
-    await msg.edit({
-      text: "❌ Telegram客户端未初始化",
-      parseMode: "html",
-    });
-    return;
-  }
-
-  // 获取群聊信息
-  let chatName = "未知群组";
-  try {
-    const chat = await client.getEntity(msg.chatId);
-    if ("title" in chat) {
-      chatName = chat.title || "未知群组";
+      if (!task) {
+        await msg.delete();
+        return;
+      }
+      
+      task.isRunning = false;
+      task.isPaused = true;
+      await saveTask(task);
+      
+      const msgId = await sendProgressToSaved(client, task, "已手动停止");
+      if (msgId && !task.savedMessageId) {
+        task.savedMessageId = msgId;
+        await saveTask(task);
+      }
+      
+      await msg.delete();
+      return;
     }
-  } catch (error) {
-    console.error("获取群聊信息失败:", error);
-  }
 
-  // 创建或恢复任务
-  const task: DeleteTask = existingTask || {
-    chatId: taskId,
-    chatName,
-    startTime: Date.now(),
-    deletedMessages: 0,
-    isRunning: true,
-    isPaused: false,
-    sleepUntil: null,
-    lastUpdate: Date.now(),
-    lastLogTime: Date.now(),
-    errors: [],
-  };
+    // 处理状态查询
+    if (sub === "status") {
+      const task = await getTask(taskId);
+      
+      if (!task) {
+        await msg.delete();
+        return;
+      }
+      
+      const msgId = await sendProgressToSaved(client, task, "状态查询");
+      if (msgId && !task.savedMessageId) {
+        task.savedMessageId = msgId;
+        await saveTask(task);
+      }
+      
+      await msg.delete();
+      return;
+    }
 
-  task.isRunning = true;
-  task.isPaused = false;
-  task.lastUpdate = Date.now();
-  await saveTask(task);
+    // 安全确认机制 - 处理 true 命令
+    if (sub !== "true") {
+      // 未知命令
+      await msg.edit({
+        text: `❌ <b>未知命令:</b> <code>${htmlEscape(sub)}</code>\n\n💡 使用 <code>${mainPrefix}da help</code> 查看帮助`,
+        parseMode: "html"
+      });
+      return;
+    }
 
-  await msg.edit({
-    text: "🔄 <b>正在初始化删除任务...</b>\n直接开始删除，无需统计...",
-    parseMode: "html",
-  });
+    // 检查是否已有运行中的任务
+    const existingTask = await getTask(taskId);
+    
+    if (existingTask && existingTask.isRunning) {
+      await msg.delete();
+      return;
+    }
 
-  try {
+    // 获取群聊信息
+    let chatName = "未知群组";
+    try {
+      const chat = await client.getEntity(msg.chatId);
+      if ("title" in chat) {
+        chatName = chat.title || "未知群组";
+      }
+    } catch (error) {
+      console.error("获取群聊信息失败:", error);
+    }
+
+    // 创建或恢复任务
+    const task: DeleteTask = existingTask || {
+      chatId: taskId,
+      chatName,
+      startTime: Date.now(),
+      deletedMessages: 0,
+      isRunning: true,
+      isPaused: false,
+      sleepUntil: null,
+      lastUpdate: Date.now(),
+      lastLogTime: Date.now(),
+      errors: [],
+    };
+
+    task.isRunning = true;
+    task.isPaused = false;
+    task.lastUpdate = Date.now();
+    await saveTask(task);
+
+    // 删除命令消息
+    await msg.delete();
+
+    // 开始执行删除任务
     const chatId = msg.chatId;
     const me = await client.getMe();
     const myId = me.id;
@@ -557,21 +500,15 @@ const da = async (msg: Api.Message) => {
       isAdmin = false;
     }
 
-    await msg.edit({
-      text: `📊 <b>开始删除任务</b>
-
-群聊: ${chatName}
-模式: ${isAdmin ? "管理员（删除所有）" : "普通用户（仅删除自己）"}
-
-⏳ 正在开始删除...`,
-      parseMode: "html",
-    });
-
     // 启动日志
     console.log(`[DA] 任务启动 - 群组: ${chatName} | 模式: ${isAdmin ? "管理员" : "普通用户"}`);
 
     // 自动发送任务开始状态到收藏夹
-    await sendProgressToSaved(client, task, "任务已启动");
+    const msgId = await sendProgressToSaved(client, task, "任务已启动");
+    if (msgId) {
+      task.savedMessageId = msgId;
+      await saveTask(task);
+    }
 
     // 批处理配置
     const BATCH_SIZE = 100;
@@ -586,12 +523,10 @@ const da = async (msg: Api.Message) => {
       // 检查是否需要停止
       const currentTask = await getTask(taskId);
       if (!currentTask || !currentTask.isRunning) {
-        await msg.edit({
-          text: `⏹️ <b>删除任务已停止</b>
-          
-已删除: ${task.deletedMessages.toLocaleString()} 条`,
-          parseMode: "html",
-        });
+        // 最后更新一次收藏夹状态
+        if (client) {
+          await sendProgressToSaved(client, task, "已停止");
+        }
         return;
       }
 
@@ -609,7 +544,6 @@ const da = async (msg: Api.Message) => {
           chatId,
           messages,
           task,
-          msg,
           floodWaitTime
         );
         
@@ -625,14 +559,6 @@ const da = async (msg: Api.Message) => {
           await saveTask(task);
           
           await sendProgressToSaved(client, task, "自动暂停");
-          await msg.edit({
-            text: `⚠️ <b>任务因连续错误暂停</b>
-            
-已删除: ${task.deletedMessages.toLocaleString()} 条
-请稍后使用 <code>da true</code> 继续
-📊 详细状态已发送到收藏夹`,
-            parseMode: "html",
-          });
           return;
         }
       }
@@ -640,7 +566,7 @@ const da = async (msg: Api.Message) => {
 
     // 删除剩余消息
     if (messages.length > 0) {
-      await deleteBatch(client, chatId, messages, task, msg, floodWaitTime);
+      await deleteBatch(client, chatId, messages, task, floodWaitTime);
     }
 
     // 任务完成
@@ -655,91 +581,38 @@ const da = async (msg: Api.Message) => {
     
     await sendProgressToSaved(client, task, "任务完成");
 
-    const resultText = isAdmin
-      ? `✅ <b>批量删除完成</b>
-
-群聊: ${chatName}
-删除消息: <code>${task.deletedMessages.toLocaleString()}</code> 条
-耗时: ${calculateElapsedTime(task)}
-📊 详细报告已发送到收藏夹`
-      : `✅ <b>删除完成</b>
-
-群聊: ${chatName}  
-删除消息: <code>${task.deletedMessages.toLocaleString()}</code> 条（仅自己的）
-耗时: ${calculateElapsedTime(task)}
-📊 详细报告已发送到收藏夹`;
-
-    try {
-      const resultMsg = await client.sendMessage(chatId, {
-        message: resultText,
-        parseMode: "html",
-      });
-
-      // 10秒后删除结果消息
-      setTimeout(async () => {
-        try {
-          await client.deleteMessages(chatId, [resultMsg.id], { revoke: true });
-        } catch (e) {
-          // 忽略删除失败
-        }
-      }, 10000);
-    } catch (error) {
-      console.error("发送结果消息失败:", error);
-    }
-
     // 清理任务
     await removeTask(taskId);
 
-  } catch (error) {
-    console.log(`[DA] 插件执行失败 - 群组: ${chatName} | 错误: ${String(error)}`);
-    task.isRunning = false;
-    task.errors.push(String(error));
-    await saveTask(task);
+  } catch (error: any) {
+    console.error("[DA] 插件执行失败:", error);
     
-    await sendProgressToSaved(client, task, "执行失败");
-    
-    try {
-      await msg.edit({
-        text: `❌ <b>删除任务失败:</b> ${String(error)}
-📊 错误详情已发送到收藏夹`,
-        parseMode: "html",
-      });
-    } catch (e) {
-      // 忽略编辑失败
+    // 如果任务已创建，更新状态
+    const existingTask = await getTask(taskId);
+    if (existingTask) {
+      existingTask.isRunning = false;
+      existingTask.errors.push(String(error));
+      await saveTask(existingTask);
+      await sendProgressToSaved(client, existingTask, "执行失败");
     }
+    
+    // 处理特定错误类型
+    if (error.message?.includes("FLOOD_WAIT")) {
+      const waitTime = parseInt(error.message.match(/\d+/)?.[0] || "60");
+      // 静默处理，不在群聊显示错误
+      console.log(`[DA] FLOOD_WAIT: 需等待 ${waitTime} 秒`);
+      return;
+    }
+    
+    // 其他错误也静默处理
+    console.log(`[DA] 错误: ${error.message || "未知错误"}`);
   }
 };
 
-// 帮助文档
-const help_text = `🚀 <b>DA - 群组消息批量删除插件</b>
-
-<b>📝 功能描述:</b>
-• 🗑️ <b>批量删除</b>：删除群内所有消息（管理员模式）
-• 👤 <b>个人删除</b>：仅删除自己的消息（普通用户模式）
-• ⏸️ <b>任务控制</b>：支持停止、暂停、恢复操作
-• 📊 <b>进度跟踪</b>：实时显示删除进度和状态
-• 😴 <b>智能休眠</b>：自动处理API限制，显示倒计时
-• 💾 <b>断点续传</b>：任务状态持久化，支持重启恢复
-
-<b>🔧 使用方法:</b>
-• <code>${mainPrefix}da true</code> - 开始删除任务
-• <code>${mainPrefix}da stop</code> - 停止当前任务
-• <code>${mainPrefix}da status</code> - 查看任务状态
-• <code>${mainPrefix}da help</code> - 显示此帮助
-
-<b>💡 示例:</b>
-• <code>${mainPrefix}da true</code> - 确认开始删除群内消息
-• <code>${mainPrefix}da stop</code> - 立即停止正在运行的删除任务
-• <code>${mainPrefix}da status</code> - 查看当前删除进度和状态
-
-<b>⚠️ 安全提示:</b>
-• 此操作不可逆，请谨慎使用
-• 管理员可删除所有消息，普通用户仅删除自己的消息
-• 任务状态会自动发送到收藏夹，便于监控
-• 支持API限制自动处理，无需手动干预`;
-
 class DaPlugin extends Plugin {
-  description: string = `DA - 群组消息批量删除插件\n\n${help_text}`;
+  // 必须在 description 中引用 help_text
+  description: string = `群组消息批量删除插件\n\n${help_text}`;
+  
   cmdHandlers: Record<string, (msg: Api.Message) => Promise<void>> = {
     da,
   };
