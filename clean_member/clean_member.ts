@@ -299,6 +299,7 @@ interface StreamProcessOptions {
   onlySearch: boolean;
   maxRemove?: number;  // 移除人数上限
   statusCallback?: (message: string) => Promise<void>;
+  modeNames: { [key: string]: string };
 }
 
 interface StreamProcessResult {
@@ -312,7 +313,7 @@ interface StreamProcessResult {
 async function streamProcessMembers(
   options: StreamProcessOptions
 ): Promise<StreamProcessResult> {
-  const { client, chatEntity, mode, day, adminIds, onlySearch, maxRemove, statusCallback } = options;
+  const { client, chatEntity, mode, day, adminIds, onlySearch, maxRemove, statusCallback, modeNames } = options;
   const result: StreamProcessResult = {
     totalScanned: 0,
     totalFound: 0,
@@ -332,7 +333,7 @@ async function streamProcessMembers(
       // 获取一批用户
       if (statusCallback) {
         await statusCallback(
-          `🔍 扫描第 ${batchNumber} 批 | 已扫描: ${result.totalScanned} | 已找到: ${result.totalFound}${!onlySearch ? ` | 已移出: ${result.totalRemoved}` : ''}`
+          `🔍 扫描第 ${batchNumber} 批 (${modeNames[mode]}) | 已扫描: ${result.totalScanned} | 已找到: ${result.totalFound}${!onlySearch ? ` | 已移出: ${result.totalRemoved}` : ''}`
         );
       }
 
@@ -462,7 +463,7 @@ async function streamProcessMembers(
                 if (result.totalFound % 5 === 0 && statusCallback) {
                   const limitInfo = maxRemove ? ` / 上限: ${maxRemove}` : '';
                   await statusCallback(
-                    `⚡ 流式处理中 | 扫描: ${result.totalScanned} | 找到: ${result.totalFound} | 已移出: ${result.totalRemoved}${limitInfo}`
+                    `⚡ 流式处理中 (${modeNames[mode]}) | 扫描: ${result.totalScanned} | 找到: ${result.totalFound} | 已移出: ${result.totalRemoved}${limitInfo}`
                   );
                 }
                 
@@ -506,11 +507,11 @@ async function streamProcessMembers(
     if (statusCallback) {
       if (onlySearch) {
         await statusCallback(
-          `✅ 搜索完成 | 扫描: ${result.totalScanned} 人 | 找到: ${result.totalFound} 人`
+          `✅ 搜索完成 (${modeNames[mode]}) | 扫描: ${result.totalScanned} 人 | 找到: ${result.totalFound} 人`
         );
       } else {
         await statusCallback(
-          `✅ 清理完成 | 扫描: ${result.totalScanned} 人 | 移出: ${result.totalRemoved}/${result.totalFound} 人`
+          `✅ 清理完成 (${modeNames[mode]}) | 扫描: ${result.totalScanned} 人 | 移出: ${result.totalRemoved}/${result.totalFound} 人`
         );
       }
     }
@@ -571,11 +572,6 @@ async function checkCache(
 function getHelpText(): string {
   return `<b>🧹 群成员清理工具 Pro</b>
 
-<b>📝 核心功能:</b>
-• 🚀 流式处理 - 边扫描边移出，支持超大群组
-• 🔒 安全保护 - 踢出后立即解封，用户可重新加入
-• 📊 智能筛选 - 5种清理模式，精准定位目标
-• 📈 详细报告 - CSV导出，完整记录清理过程
 
 <b>🔧 使用格式:</b>
 <code>${mainPrefix}clean_member &lt;模式&gt; &lt;参数&gt; [limit:数量] [search]</code>
@@ -603,17 +599,7 @@ function getHelpText(): string {
 • <code>${mainPrefix}clean_member 1 7 limit:10</code>
   └ 移出7天未上线，最多10人
 
-<b>⚡ 高级特性:</b>
-• ⏱️ 智能缓存 - 24小时有效，避免重复扫描
-• 🔄 断点续传 - 支持大批量任务中断恢复
-• 📤 自动报告 - 完成后发送到收藏夹
-• 🛡️ API保护 - 自动处理频率限制
-• 👥 权限识别 - 自动跳过管理员和机器人
-
-<b>📌 注意事项:</b>
-• 需要管理员权限才能执行
-• 建议先用 search 预览再执行
-• 大群组建议设置 limit 分批处理`;
+`;
 }
 
 const clean_member = async (msg: Api.Message) => {
@@ -754,29 +740,32 @@ const clean_member = async (msg: Api.Message) => {
     return;
   }
 
-  // 初始化提示
-  if (onlySearch) {
-    await msg.edit({
-      text: "🔍 开始搜索: " + modeNames[mode],
-      parseMode: "html",
-    });
-  } else {
-    await msg.edit({
-      text: `🧹 开始清理: ${modeNames[mode]}`,
-      parseMode: "html",
-    });
-  }
+  // 初始化提示 - 发送到收藏夹和当前会话
+  const startMessage = onlySearch ? 
+    `🔍 开始搜索: ${modeNames[mode]}` : 
+    `🧹 开始清理: ${modeNames[mode]}`;
+  
+  await msg.edit({
+    text: `✅ 任务已启动，进度将发送到收藏夹\n\n📋 ${startMessage}`,
+    parseMode: "html",
+  });
+  
+  // 同时发送到收藏夹
+  await client.sendMessage("me", {
+    message: `📋 <b>群组清理任务启动</b>\n\n🏷️ 群组: <b>${htmlEscape(chatTitle)}</b>\n🎯 ${startMessage}`,
+    parseMode: "html",
+  });
 
-  // 状态回调函数
+  // 状态回调函数 - 发送进度到收藏夹
   const statusCallback = async (message: string) => {
     try {
-      await msg.edit({
-        text: message,
+      await client.sendMessage("me", {
+        message: `📋 <b>群组清理进度</b>\n\n🏷️ 群组: <b>${htmlEscape(chatTitle)}</b>\n📊 ${message}`,
         parseMode: "html",
       });
       await sleep(50); // 减少延迟
     } catch (error) {
-      console.log("Status update failed:", error);
+      console.log("Status update to saved messages failed:", error);
     }
   };
 
@@ -824,7 +813,7 @@ const clean_member = async (msg: Api.Message) => {
     `🎯 准备${onlySearch ? "搜索" : "清理"}: ${modeNames[mode]} | 管理员: ${adminIds.size}`
   );
 
-  // 使用流式处理
+  // 最终结果
   const result = await streamProcessMembers({
     client,
     chatEntity: channelEntity,
@@ -834,35 +823,27 @@ const clean_member = async (msg: Api.Message) => {
     onlySearch,
     maxRemove,
     statusCallback,
+    modeNames
   });
-
-  // 生成缓存数据
-  const cacheData: CacheData = {
-    chat_id: numericChatId,
-    chat_title: chatTitle,
-    mode,
-    day,
-    search_time: new Date().toISOString(),
-    total_found: result.totalFound,
-    users: result.users,
-  };
-
-  // 生成报告
-  try {
-    await generateReport(cacheData);
-  } catch (error) {
-    console.error("Failed to generate CSV report:", error);
-  }
 
   // 设置缓存
   if (numericChatId) {
+    const cacheData: CacheData = {
+      chat_id: numericChatId,
+      chat_title: chatTitle,
+      mode,
+      day,
+      search_time: new Date().toISOString(),
+      total_found: result.totalFound,
+      users: result.users
+    };
     setCache(numericChatId, mode, day, cacheData);
   }
 
   // 显示最终结果
   let finalMessage = "";
   if (onlySearch) {
-    finalMessage = `✅ <b>搜索完成</b>\n\n` +
+    finalMessage = `✅ <b>搜索完成</b> - ${modeNames[mode]}\n\n` +
       `📊 扫描人数: <code>${result.totalScanned}</code> 人\n` +
       `🎯 符合条件: <code>${result.totalFound}</code> 人\n` +
       `📁 报告位置: <code>${CACHE_DIR}/</code>\n\n` +
@@ -875,7 +856,7 @@ const clean_member = async (msg: Api.Message) => {
     const failedCount = result.totalFound - result.totalRemoved;
     const limitReached = maxRemove && result.totalRemoved >= maxRemove;
     
-    finalMessage = `🎉 <b>清理完成</b>${limitReached ? " (已达上限)" : ""}\n\n` +
+    finalMessage = `🎉 <b>清理完成</b> - ${modeNames[mode]}${limitReached ? " (已达上限)" : ""}\n\n` +
       `📊 扫描人数: <code>${result.totalScanned}</code> 人\n` +
       `🎯 符合条件: <code>${result.totalFound}</code> 人\n` +
       `✅ 成功移出: <code>${result.totalRemoved}</code> 人` +
