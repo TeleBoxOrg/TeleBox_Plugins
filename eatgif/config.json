@@ -10,5 +10,9 @@
   "rf": {
     "url": "rf/rf.json",
     "desc": "日翻你"
+  },
+  "kwz": {
+    "url": "kwz/kwz.json",
+    "desc": "柯文哲拍桌"
   }
 }
