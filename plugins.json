@@ -242,5 +242,9 @@
   "ntp": {
     "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/ntp/ntp.ts?raw=true",
     "desc": "NTP 时间同步插件"
+  },
+  "sticker": {
+    "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/sticker/sticker.ts?raw=true",
+    "desc": "偷表情"
   }
 }
