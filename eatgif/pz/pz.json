@@ -1,195 +1,194 @@
 {
-  "desc": "柯文哲拍桌",
   "width": 300,
   "height": 300,
   "res": [
     {
-      "url": "kwz/kwz21.png",
+      "url": "pz/pz21.png",
       "delay": 80,
       "me": {
         "x": 101,
         "y": 1,
-        "mask": "kwz/me.png"
+        "mask": "pz/me.png"
       }
     },
     {
-      "url": "kwz/kwz20.png",
+      "url": "pz/pz20.png",
       "delay": 80,
       "me": {
         "x": 101,
         "y": 1,
-        "mask": "kwz/me.png"
+        "mask": "pz/me.png"
       }
     },
     {
-      "url": "kwz/kwz19.png",
+      "url": "pz/pz19.png",
       "delay": 80,
       "me": {
         "x": 100,
         "y": 0,
-        "mask": "kwz/me.png"
+        "mask": "pz/me.png"
       }
     },
     {
-      "url": "kwz/kwz18.png",
+      "url": "pz/pz18.png",
       "delay": 80,
       "me": {
         "x": 100,
         "y": 1,
-        "mask": "kwz/me.png"
+        "mask": "pz/me.png"
       }
     },
     {
-      "url": "kwz/kwz17.png",
+      "url": "pz/pz17.png",
       "delay": 80,
       "me": {
         "x": 104,
         "y": 6,
-        "mask": "kwz/me.png"
+        "mask": "pz/me.png"
       }
     },
     {
-      "url": "kwz/kwz16.png",
+      "url": "pz/pz16.png",
       "delay": 80,
       "me": {
         "x": 108,
         "y": 15,
-        "mask": "kwz/me.png"
+        "mask": "pz/me.png"
       }
     },
     {
-      "url": "kwz/kwz15.png",
+      "url": "pz/pz15.png",
       "delay": 80,
       "me": {
         "x": 114,
         "y": 23,
-        "mask": "kwz/me.png"
+        "mask": "pz/me.png"
       }
     },
     {
-      "url": "kwz/kwz14.png",
+      "url": "pz/pz14.png",
       "delay": 80,
       "me": {
         "x": 119,
         "y": 30,
-        "mask": "kwz/me.png"
+        "mask": "pz/me.png"
       }
     },
     {
-      "url": "kwz/kwz13.png",
+      "url": "pz/pz13.png",
       "delay": 80,
       "me": {
         "x": 121,
         "y": 34,
-        "mask": "kwz/me.png"
+        "mask": "pz/me.png"
       }
     },
     {
-      "url": "kwz/kwz12.png",
+      "url": "pz/pz12.png",
       "delay": 80,
       "me": {
         "x": 119,
         "y": 23,
-        "mask": "kwz/me.png"
+        "mask": "pz/me.png"
        }
     },
     {
-      "url": "kwz/kwz11.png",
+      "url": "pz/pz11.png",
       "delay": 80,
       "me": {
         "x": 111,
         "y": 0,
-        "mask": "kwz/me.png"
+        "mask": "pz/me.png"
        }
     },
     {
-      "url": "kwz/kwz10.png",
+      "url": "pz/pz10.png",
       "delay": 80,
       "me": {
         "x": 102,
         "y": 0,
-        "mask": "kwz/me.png"
+        "mask": "pz/me.png"
       }
     },
     {
-      "url": "kwz/kwz9.png",
+      "url": "pz/pz9.png",
       "delay": 80,
       "me": {
         "x": 95,
         "y": 0,
-        "mask": "kwz/me.png"
+        "mask": "pz/me.png"
       }
     },
     {
-      "url": "kwz/kwz8.png",
+      "url": "pz/pz8.png",
       "delay": 80,
       "me": {
         "x": 90,
         "y": 0,
-        "mask": "kwz/me.png"
+        "mask": "pz/me.png"
       }
     },
     {
-      "url": "kwz/kwz7.png",
+      "url": "pz/pz7.png",
       "delay": 80,
       "me": {
         "x": 89,
         "y": 0,
-        "mask": "kwz/me.png"
+        "mask": "pz/me.png"
       }
     },
     {
-      "url": "kwz/kwz6.png",
+      "url": "pz/pz6.png",
       "delay": 80,
       "me": {
         "x": 88,
         "y": 0,
-        "mask": "kwz/me.png"
+        "mask": "pz/me.png"
       }
     },
     {
-      "url": "kwz/kwz5.png",
+      "url": "pz/pz5.png",
       "delay": 80,
       "me": {
         "x": 87,
         "y": 0,
-        "mask": "kwz/me.png"
+        "mask": "pz/me.png"
       }
     },
     {
-      "url": "kwz/kwz4.png",
+      "url": "pz/pz4.png",
       "delay": 80,
       "me": {
         "x": 85,
         "y": 0,
-        "mask": "kwz/me.png"
+        "mask": "pz/me.png"
       }
     },
     {
-      "url": "kwz/kwz3.png",
+      "url": "pz/pz3.png",
       "delay": 80,
       "me": {
         "x": 83,
         "y": 0,
-        "mask": "kwz/me.png"
+        "mask": "pz/me.png"
       }
     },
     {
-      "url": "kwz/kwz2.png",
+      "url": "pz/pz2.png",
       "delay": 80,
       "me": {
         "x": 80,
         "y": 0,
-        "mask": "kwz/me.png"
+        "mask": "pz/me.png"
       }
     },
     {
-      "url": "kwz/kwz1.png",
+      "url": "pz/pz1.png",
       "delay": 80,
       "me": {
         "x": 78,
         "y": 0,
-        "mask": "kwz/me.png"
+        "mask": "pz/me.png"
       }
     }   
   ]
