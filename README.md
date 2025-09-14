@@ -9,56 +9,56 @@ npm i <插件名>
 ```
 
 ## 可用插件列表
-- `aban` - 管理用户权限工具，支持多群组操作和永久缓存  
+- `aban` - 高级封禁管理工具  
 - `acron` - 定时发送/转发/复制/置顶/取消置顶/删除消息/执行命令  
 - `atadmins` - 一键艾特全部管理员  
 - `audio_to_voice` - 音乐转音频  
-- `autochangename` - 自动定时修改用户名插件，支持时区配置和计划任务管理  
+- `autochangename` - 自动定时修改用户名插  
 - `autodel` - 定时删除消息  
 - `bizhi` - 发送一张壁纸  
-- `bulk_delete` - 批量删除消息工具，支持回复删除和数量删除  
-- `clean_member` - 群组成员清理工具，可按活跃度和时间筛选清理成员  
+- `bulk_delete` - 批量删除消息工具  
+- `clean_member` - 群组成员清理工具  
 - `clear_sticker` - 批量删除群组内贴纸  
 - `clearblocked` - 批量清理已拉黑用户  
 - `convert` - 视频转音频插件  
 - `copy_sticker_set` - 复制贴纸包  
 - `cosplay` - 获取随机cos写真  
 - `crazy4` - 疯狂星期四文案  
-- `da` - 删除群内所有消息（非管理员仅删除自己的消息）  
+- `da` - 删除群内所有消息  
 - `dbdj` - 点兵点将 - 从最近的消息中随机抽取指定人数的用户  
-- `dc` - 获取用户或群组的数据中心信息  
-- `dig` - DNS 查询工具，支持域名解析和网络诊断  
+- `dc` - 获取实体DC  
+- `dig` - DNS 查询工具  
 - `dme` - 删除指定数量的自己发送的消息  
-- `eat` - 生成"吃掉"表情包，支持自定义头像合成  
+- `eat` - 生成带头像表情包  
 - `eatgif` - 生成"吃掉"动图表情包  
 - `encode` - 简单的编码解码插件  
 - `gemini` - 谷歌AI助手Gemini  
 - `getstickers` - 下载整个贴纸包  
 - `gif` - GIF与视频转贴纸插件  
-- `gpt` - OpenAI GPT 聊天助手，支持文本对话和图像识别  
-- `gt` - 谷歌翻译插件，支持中英文互译  
-- `his` - 查看被回复者最近三十条消息  
+- `gpt` - OpenAI助手  
+- `gt` - 谷歌中英文互译  
+- `his` - 查看被回复者最近消息  
 - `httpcat` - 发送一张http状态码主题的猫猫图片  
 - `ids` - 用户信息显示以及跳转链接  
-- `ip` - IP 地址查询工具，获取地理位置和网络信息  
-- `keyword` - 关键词自动回复系统，支持正则表达式匹配  
+- `ip` - IP 地址查询  
+- `keyword` - 关键词自动回复  
 - `kitt` - 高级触发器: 匹配 -> 执行, 高度自定义, 逻辑自由  
-- `komari` - Komari 服务器监控插件，获取节点状态和资源信息  
-- `lottery` - 抽奖系统，支持群组抽奖活动管理  
+- `komari` - Komari 服务器监控插件  
+- `lottery` - 抽奖工具  
 - `manage_admin` - 管理管理员  
 - `moyu` - 摸鱼日报  
-- `music` - YouTube 音乐搜索和下载工具  
+- `music` - YouTube音乐  
 - `music_bot` - 多音源音乐搜索  
-- `netease` - 网易云音乐搜索和播放功能  
+- `netease` - 网易云音乐  
 - `news` - 每日新闻插件  
 - `ntp` - NTP 时间同步插件  
 - `oxost` - 回复聊天中的文件与媒体 得到一个临时的下载链接  
 - `pic_to_sticker` - 图片转表情  
-- `q` - 消息引用生成器，通过 QuotLyBot 制作引用图片  
+- `q` - 消息引用生成贴纸  
 - `qr` - QR 二维码插件  
 - `rate` - 货币实时汇率查询与计算  
-- `search` - 频道消息搜索工具，支持多频道配置  
-- `shift` - 智能消息转发系统，支持规则过滤和统计  
+- `search` - 频道消息搜索工具  
+- `shift` - 智能消息转发系统  
 - `speedlink` - 对其他服务器测速  
 - `speedtest` - 网络速度测试工具  
 - `sticker` - 偷表情  
@@ -69,7 +69,7 @@ npm i <插件名>
 - `weather` - 天气查询  
 - `whois` - 域名查询插件  
 - `yinglish` - 淫语翻译  
-- `yt-dlp` - YouTube 视频下载工具，支持多种格式  
+- `yt-dlp` - YouTube 视频下载工具  
 - `yvlu` - 为被回复用户生成语录  
 
 ## 技术栈
