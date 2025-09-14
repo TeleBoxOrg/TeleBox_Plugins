@@ -1,5 +1,14 @@
 {
-  "dd": "dd/dd.json",
-  "dr": "dr/dr.json",
-  "rf": "rf/rf.json"
+  "dd": {
+    "url": "dd/dd.json",
+    "desc": "逗逗你呀～～"
+  },
+  "dr": {
+    "url": "dr/dr.json",
+    "desc": "想要了吧"
+  },
+  "rf": {
+    "url": "rf/rf.json",
+    "desc": "日翻你"
+  }
 }

@@ -21,14 +21,13 @@ interface RoleConfig {
 
 interface GifResConfig {
   url: string;
-  delay?: number
+  delay?: number;
   me?: RoleConfig;
   you?: RoleConfig;
 }
 
 // 表情包详细配置
 interface EatGifConfig {
-  desc: string;
   width: number;
   height: number;
   res: GifResConfig[];
@@ -36,20 +35,22 @@ interface EatGifConfig {
 
 // 各种表情包配置列表
 interface EatGifListConfig {
-  [key: string] : string
+  [key: string]: { url: string; desc: string };
 }
-// 不再有 eatgif set，每次使用 eatgif 就会重新获取
-let config: EatGifListConfig;
 
 // 测试时可以更换主体url
-const baseRepoURL = "https://github.com/TeleBoxOrg/TeleBox_Plugins/raw/main/eatgif/";
+const baseRepoURL =
+  "https://github.com/TeleBoxOrg/TeleBox_Plugins/raw/main/eatgif/";
 const baseConfigURL = baseRepoURL + "config.json";
-// 理论上可以下载别的仓库的文件保存在本地，但是直接拿取实时数据得了
-async function loadGifListConfig(url: string): Promise<EatGifListConfig> {
+
+let config: EatGifListConfig;
+
+// 还是每次生命周期仅加载一次资源，或者 clear 来重载
+async function loadGifListConfig(url: string): Promise<void> {
   const res = await axios.get(url);
-  config = res.data as EatGifListConfig;
-  return config;
+  config = res.data;
 }
+loadGifListConfig(baseConfigURL);
 
 async function loadGifDetailConfig(url: string): Promise<EatGifConfig> {
   const res = await axios.get(baseRepoURL + url);
@@ -65,7 +66,7 @@ async function assetBufferFor(filePath: string): Promise<Buffer> {
     return buffer;
   }
   const res = await axios.get(url, { responseType: "arraybuffer" });
-  fs.mkdirSync(path.dirname(localPath), {recursive: true})
+  fs.mkdirSync(path.dirname(localPath), { recursive: true });
   fs.writeFileSync(localPath, res.data);
   return res.data;
 }
@@ -83,23 +84,56 @@ class EatGifPlugin extends Plugin {
   };
 
   private async handleEatGif(msg: Api.Message, trigger?: Api.Message) {
-    await loadGifListConfig(baseConfigURL);
+    const [, ...args] = msg.message.split(" ");
+    const detailCMD = args[0];
     if (!msg.isReply && !trigger?.isReply) {
+      if (detailCMD == "ls") {
+        await msg.edit({ text: this.listAllStickers() });
+        await msg.deleteWithDelay(10000);
+        return;
+      } else if (detailCMD == "clear") {
+        await this.clearRes(msg);
+        return;
+      }
       await msg.edit({ text: "请回复一个人" });
       return;
     }
-    const [, ...arg] = msg.message.split(" ");
-    const eatGif = arg[0];
-    if (!eatGif) {
-      await this.generateGif(this.getRandomEatGif(), {msg, trigger});
+    if (!detailCMD) {
+      const randomEatgif = this.getRandomEatGif();
+      await msg.edit({ text: `正在生成 ${config[randomEatgif].desc} 表情包` });
+      await this.generateGif(randomEatgif, {
+        msg,
+        trigger,
+      });
       return;
     }
-    if (!Object.keys(config).includes(eatGif)) {
-      await msg.edit({ text: `没找到 ${eatGif} 这个表情包` });
-      await msg.deleteWithDelay(2000);
+    if (!Object.keys(config).includes(detailCMD)) {
+      const text =
+        `没找到 ${detailCMD} 这个表情包` + "\n\n" + this.listAllStickers();
+      await msg.edit({ text });
+      await msg.deleteWithDelay(10000);
       return;
     }
-    await this.generateGif(eatGif, {msg, trigger});
+    await msg.edit({ text: `正在生成 ${config[detailCMD].desc} 表情包` });
+    await this.generateGif(detailCMD, { msg, trigger });
+  }
+
+  private listAllStickers(): string {
+    let text = "";
+    const keys = Object.keys(config);
+    for (const key of keys) {
+      const name = key;
+      const desc = config[key].desc;
+      text += `${name}: ${desc}\n`;
+    }
+    return text;
+  }
+
+  private async clearRes(msg: Api.Message): Promise<void> {
+    fs.rmSync(ASSET_PATH, { recursive: true, force: true });
+    await loadGifListConfig(baseConfigURL);
+    await msg.edit({ text: "清理所有缓存资源成功" });
+    await msg.deleteWithDelay(10000);
   }
 
   private getRandomEatGif(): string {
@@ -113,14 +147,13 @@ class EatGifPlugin extends Plugin {
     params: { msg: Api.Message; trigger?: Api.Message }
   ) {
     const { msg, trigger } = params;
-    const gifConfig = await loadGifDetailConfig(config[gifName]);
-    await msg.edit({text: `正在生成 ${gifConfig.desc} 表情包`});
+    const gifConfig = await loadGifDetailConfig(config[gifName].url);
 
     // 由于要生成很多张图片，最好就是保存 self.avatar 以及 you.avatar 不断调用
     const meAvatarBuffer = await this.getSelfAvatarBuffer(msg, trigger);
     if (!meAvatarBuffer) {
       await msg.edit({ text: "无法获取自己的头像" });
-            await msg.deleteWithDelay(2000);
+      await msg.deleteWithDelay(2000);
       return;
     }
     const youAvatarBuffer = await this.getYouAvatarBuffer(msg, trigger);
@@ -148,14 +181,14 @@ class EatGifPlugin extends Plugin {
 
     let frames: UnencodedFrame[] = [];
     for (let i = 0; i < gifConfig.res.length; i++) {
-      const buffer = result[i]
+      const buffer = result[i];
       if (!buffer) continue;
-      const data = Buffer.from(buffer)
+      const data = Buffer.from(buffer);
       const delay = gifConfig.res[i].delay;
       frames.push({
         data,
-        delay: delay ? delay : 100
-      })
+        delay: delay ? delay : 100,
+      });
     }
 
     const output = await encode({
@@ -275,8 +308,11 @@ class EatGifPlugin extends Plugin {
     return youAvatarBuffer as Buffer | undefined;
   }
 
-  private async getMediaAvatarBuffer(msg: Api.Message, trigger?: Api.Message): Promise<Buffer | undefined> {
-    return
+  private async getMediaAvatarBuffer(
+    msg: Api.Message,
+    trigger?: Api.Message
+  ): Promise<Buffer | undefined> {
+    return;
   }
 }
 
