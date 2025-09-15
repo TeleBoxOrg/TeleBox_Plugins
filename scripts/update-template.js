@@ -137,10 +137,10 @@ function generatePrompt(date = new Date().toISOString().split('T')[0], version =
 # 输出格式规范
 
 ## 标题部分
-📢 TeleBox 更新 | YYYY-MM-DD
+📢 TeleBox 更新 | ${date}
 
 ## 版本信息
-🗓 [版本号] --YYYY-MM-DD
+🗓 [${version}] --${date}
 
 ## 内容结构
 
@@ -192,12 +192,20 @@ function generatePrompt(date = new Date().toISOString().split('T')[0], version =
    - 避免技术术语
    - 保持专业语气
    - 条目以动词开头
+   - 不要使用反引号包裹函数名或代码
+   - 直接使用纯文本描述
 
 4. **质量标准**
    - 每个条目信息完整
    - 避免重复内容
    - 保持格式一致
    - 控制总长度适中
+
+5. **重要要求**
+   - 不要在输出中包含任何示例文本或占位符说明
+   - 不要使用“示例日期”、“请替换为实际”等提示词
+   - 直接使用提供的实际日期和版本号
+   - 函数名、变量名等代码元素直接作为普通文本写出，不用反引号
 
 # 待分析的提交记录
 

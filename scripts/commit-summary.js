@@ -1,7 +1,7 @@
 const { execSync } = require('child_process');
 const https = require('https');
 const querystring = require('querystring');
-const { UPDATE_TEMPLATE, ENHANCED_PROMPT, callGeminiAPI } = require('./update-template');
+const { UPDATE_TEMPLATE, ENHANCED_PROMPT, callGeminiAPI, generatePrompt } = require('./update-template');
 
 // 配置
 const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
@@ -33,10 +33,19 @@ async function summarizeWithGemini(commits) {
   }
   
   try {
-    const commitMessages = commits.map(c => c.message).join('\n');
-    const fullPrompt = ENHANCED_PROMPT + commitMessages;
+    // 准备提交记录文本
+    const commitsText = commits.map(c => 
+      `- [${c.author}] ${c.message}`
+    ).join('\n');
     
-    console.log('📝 提交记录数量:', commits.length);
+    // 获取实际日期和版本号
+    const currentDate = TARGET_DATE || new Date().toISOString().split('T')[0];
+    const version = `0.${new Date().getMonth() + 1}.${new Date().getDate()}`; // 动态生成版本号
+    
+    // 使用更新的提示词生成函数
+    const { generatePrompt } = require('./update-template');
+    const promptTemplate = generatePrompt(currentDate, version);
+    const fullPrompt = promptTemplate + commitsText;
     console.log('📏 Prompt 长度:', fullPrompt.length, '字符');
     
     // 使用增强的 API 调用
@@ -362,7 +371,12 @@ async function main() {
   if (geminiSummary) {
     console.log('\n✅ 使用 Gemini AI 生成的智能摘要');
     console.log('📊 摘要长度:', geminiSummary.length, '字符');
-    message += `🤖 AI 智能摘要\n${geminiSummary}\n\n`;
+    // 清理输出，移除多余的提示
+    const cleanedSummary = geminiSummary
+      .replace(/好的，根据您提供的提交记录，我将生成以下更新日志：\n+/g, '')
+      .replace(/^#\s+/gm, '') // 移除markdown标题符号
+      .trim();
+    message += `🤖 AI 智能摘要\n${cleanedSummary}\n\n`;
   } else {
     console.log('\n📝 使用基础分组摘要（Fallback 模式）');
     console.log('   原因: Gemini AI 不可用或返回空结果');
