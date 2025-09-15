@@ -11,11 +11,41 @@ import { exec } from "child_process";
 import { promisify } from "util";
 import archiver from "archiver";
 import dayjs from "dayjs";
-import { utils as ssh2Utils } from "ssh2";
+import crypto from "crypto";
 
 const execAsync = promisify(exec);
 const prefixes = getPrefixes();
 const mainPrefix = prefixes[0];
+
+// SSH2模块检测和安装
+let ssh2Available = false;
+let SSH2Client: any = null;
+
+// 检测并安装SSH2模块
+async function checkAndInstallSSH2(): Promise<void> {
+  try {
+    // 尝试加载ssh2模块
+    SSH2Client = (await import('ssh2')).Client;
+    ssh2Available = true;
+    console.log("[ssh] SSH2模块已加载");
+  } catch (error) {
+    console.log("[ssh] SSH2模块未安装，正在自动安装...");
+    try {
+      // 尝试安装ssh2模块
+      await execAsync('npm install ssh2');
+      // 重新尝试加载
+      SSH2Client = (await import('ssh2')).Client;
+      ssh2Available = true;
+      console.log("[ssh] SSH2模块安装成功");
+    } catch (installError) {
+      console.error("[ssh] SSH2模块安装失败:", installError);
+      console.log("[ssh] 部分功能可能受限，请手动安装: npm install ssh2");
+    }
+  }
+}
+
+// 插件启动时检测SSH2
+checkAndInstallSSH2().catch(console.error);
 
 // HTML转义函数
 const htmlEscape = (text: string): string => 
@@ -263,6 +293,7 @@ const help_text = `🔐 <b>SSH管理插件</b>
 • <code>${mainPrefix}ssh keyauth on/off</code> - 开启/关闭密钥登录  
 • <code>${mainPrefix}ssh rootlogin on/off/keyonly</code> - 控制root登录方式
 • <code>${mainPrefix}ssh enableroot &lt;密码&gt;</code> - 启用root账户直接登录
+• <code>${mainPrefix}ssh createuser</code> - 自动创建新用户并返回凭据
 • <code>${mainPrefix}ssh open &lt;端口&gt;</code> - 开放防火墙端口
 • <code>${mainPrefix}ssh close &lt;端口&gt;</code> - 关闭防火墙端口
 • <code>${mainPrefix}ssh restart</code> - 重启SSH服务
@@ -405,6 +436,11 @@ class SSHPlugin extends Plugin {
           await this.restartSSH(msg);
           break;
 
+        case "createuser":
+        case "newuser":
+          await this.createNewUser(msg);
+          break;
+
         default:
           await msg.edit({
             text: `❌ <b>未知命令:</b> <code>${htmlEscape(sub)}</code>\n\n💡 使用 <code>${mainPrefix}ssh help</code> 查看帮助`,
@@ -420,49 +456,6 @@ class SSHPlugin extends Plugin {
     }
   }
 
-  // 验证SSH公钥格式
-  private validateSSHPublicKey(publicKey: string): { valid: boolean; type?: string; comment?: string } {
-    try {
-      // 使用ssh2库验证公钥格式
-      const parsed = ssh2Utils.parseKey(publicKey);
-      if (!parsed) {
-        return { valid: false };
-      }
-      
-      // 获取密钥类型和注释
-      const parts = publicKey.trim().split(' ');
-      const type = parts[0] || '未知类型';
-      const comment = parts[2] || '无备注';
-      
-      return {
-        valid: true,
-        type,
-        comment
-      };
-    } catch {
-      return { valid: false };
-    }
-  }
-
-  // 使用Node.js原生crypto生成SSH密钥
-  private async generateSSHKeyPair(comment: string): Promise<{ publicKey: string; privateKey: string }> {
-    try {
-      // 使用ssh2的密钥生成功能
-      const keys = ssh2Utils.generateKeyPairSync('rsa', {
-        bits: 4096,
-        comment: comment
-      });
-      
-      return {
-        publicKey: keys.public,
-        privateKey: keys.private
-      };
-    } catch (error) {
-      // 如果ssh2生成失败，回退到shell命令
-      throw new Error(`密钥生成失败: ${error}`);
-    }
-  }
-
   // 生成SSH密钥
   private async generateSSHKeys(msg: Api.Message, client: any, mode: "add" | "replace" = "add"): Promise<void> {
     await msg.edit({ text: "🔄 正在生成SSH密钥对...", parseMode: "html" });
@@ -470,53 +463,34 @@ class SSHPlugin extends Plugin {
     const timestamp = dayjs().format("YYYYMMDD_HHmmss");
     const workDir = path.join(createDirectoryInTemp("sshkey"), `keys_${timestamp}`);
     const keyName = `ssh_key_${timestamp}`;
-    const comment = `generated_${timestamp}`;
 
     try {
       // 创建工作目录
       fs.mkdirSync(workDir, { recursive: true });
 
-      let privateKey: string;
-      let publicKey: string;
-      
-      // 尝试使用ssh2库生成密钥
-      try {
-        await msg.edit({ text: "🔄 使用Node.js原生方法生成密钥...", parseMode: "html" });
-        const keyPair = await this.generateSSHKeyPair(comment);
-        privateKey = keyPair.privateKey;
-        publicKey = keyPair.publicKey;
-      } catch {
-        // 回退到传统ssh-keygen方法
-        await msg.edit({ text: "🔄 回退到ssh-keygen方法生成密钥...", parseMode: "html" });
-        
-        if (!validatePath(keyName)) {
-          throw new Error("密钥名称包含非法字符");
-        }
-        const keyPath = path.join(workDir, keyName);
-        const escapedPath = shellEscape(keyPath);
-        const escapedComment = shellEscape(comment);
-        
-        await execAsync(`ssh-keygen -t rsa -b 4096 -f ${escapedPath} -N "" -C ${escapedComment}`);
-        
-        privateKey = fs.readFileSync(keyPath, "utf-8");
-        publicKey = fs.readFileSync(`${keyPath}.pub`, "utf-8");
+      // 生成RSA密钥对 - 使用验证过的路径
+      if (!validatePath(keyName)) {
+        throw new Error("密钥名称包含非法字符");
       }
+      const keyPath = path.join(workDir, keyName);
+      const escapedPath = shellEscape(keyPath);
+      const escapedComment = shellEscape(`generated_${timestamp}`);
       
-      // 验证生成的公钥
-      const validation = this.validateSSHPublicKey(publicKey);
-      if (!validation.valid) {
-        throw new Error("生成的SSH密钥格式无效");
+      await execAsync(`ssh-keygen -t rsa -b 4096 -f ${escapedPath} -N "" -C ${escapedComment}`);
+
+      // 读取密钥文件
+      const privateKey = fs.readFileSync(keyPath, "utf-8");
+      const publicKey = fs.readFileSync(`${keyPath}.pub`, "utf-8").trim();
+
+      // 验证公钥格式
+      const keyParts = publicKey.split(/\s+/);
+      if (keyParts.length < 2 || !keyParts[0].startsWith('ssh-')) {
+        throw new Error("生成的公钥格式无效");
       }
 
-      // 保存密钥文件用于压缩包
-      const keyPath = path.join(workDir, keyName);
-      fs.writeFileSync(keyPath, privateKey);
-      fs.writeFileSync(`${keyPath}.pub`, publicKey);
-      
       // 尝试转换为PPK格式
       let ppkKey = "";
       try {
-        const escapedPath = shellEscape(keyPath);
         await execAsync(`puttygen ${escapedPath} -o ${escapedPath}.ppk`);
         ppkKey = fs.readFileSync(`${keyPath}.ppk`, "utf-8");
       } catch {
@@ -526,9 +500,10 @@ class SSHPlugin extends Plugin {
       // 获取服务器信息
       const hostname = (await execAsync("hostname")).stdout.trim();
       const ipAddress = (await execAsync("curl -s ifconfig.me || echo '未知'")).stdout.trim();
+      const sshPort = await ConfigManager.get(CONFIG_KEYS.SSH_PORT, "22");
 
       // 创建信息文件
-      const infoText = `SSH密钥信息\n生成时间: ${dayjs().format("YYYY-MM-DD HH:mm:ss")}\n服务器: ${hostname}\nIP地址: ${ipAddress}\n\n文件说明:\n- ${keyName}: RSA私钥 (OpenSSH格式)\n- ${keyName}.pub: RSA公钥\n${ppkKey ? `- ${keyName}.ppk: RSA私钥 (PuTTY格式)\n` : ""}\n使用方法:\n1. 将公钥内容添加到目标服务器的 ~/.ssh/authorized_keys 文件中\n2. 使用OpenSSH客户端时使用 ${keyName} 私钥文件\n${ppkKey ? `3. 使用PuTTY/WinSCP等工具时使用 ${keyName}.ppk 文件\n` : ""}\n公钥内容:\n${publicKey}`;
+      const infoText = `SSH密钥信息\n==================\n生成时间: ${dayjs().format("YYYY-MM-DD HH:mm:ss")}\n服务器: ${hostname}\nIP地址: ${ipAddress}\nSSH端口: ${sshPort}\n\n文件说明\n==================\n- ${keyName}: RSA私钥 (OpenSSH格式)\n- ${keyName}.pub: RSA公钥\n${ppkKey ? `- ${keyName}.ppk: RSA私钥 (PuTTY格式)\n` : ""}\n使用方法\n==================\n1. 保存私钥文件到本地\n2. 设置私钥文件权限: chmod 600 ${keyName}\n3. 使用SSH连接:\n   ssh -i ${keyName} root@${ipAddress} -p ${sshPort}\n${ppkKey ? `\n使用PuTTY/WinSCP:\n   使用 ${keyName}.ppk 文件作为私钥\n` : ""}\n公钥内容\n==================\n${publicKey}`;
 
       fs.writeFileSync(path.join(workDir, "key_info.txt"), infoText);
 
@@ -541,21 +516,70 @@ class SSHPlugin extends Plugin {
         "key_info.txt"
       ].filter(Boolean) as string[]);
 
-      // 更新authorized_keys
-      await execAsync(`mkdir -p /root/.ssh && chmod 700 /root/.ssh`);
+      // 检查是否为首次生成密钥
+      const isFirstTime = !fs.existsSync("/root/.ssh/authorized_keys") || 
+                          fs.readFileSync("/root/.ssh/authorized_keys", "utf-8").trim() === "";
       
-      if (mode === "replace") {
-        // 替换模式：先清空文件，再写入新密钥
-        await execAsync(`> /root/.ssh/authorized_keys`); // 先清空文件
-        await msg.edit({ text: "🔄 已清空旧密钥，正在设置新密钥...", parseMode: "html" });
-        // 使用printf避免echo的转义问题，并确保以换行符结尾
-        await execAsync(`printf '%s\n' ${shellEscape(publicKey.trim())} > /root/.ssh/authorized_keys`);
+      // 更新authorized_keys - 改进的方式并设置正确权限
+      await execAsync(`mkdir -p /root/.ssh`);
+      
+      if (isFirstTime) {
+        await msg.edit({ text: "🔄 首次生成密钥，正在设置SSH环境...", parseMode: "html" });
+        
+        // 首次设置，确保所有权限正确
+        await execAsync(`chmod 700 /root/.ssh`);
+        
+        // 创建authorized_keys文件并设置权限
+        fs.writeFileSync("/root/.ssh/authorized_keys", publicKey + "\n");
+        await execAsync(`chmod 600 /root/.ssh/authorized_keys`);
+        
+        // 设置SSH配置目录的所有者
+        await execAsync(`chown -R root:root /root/.ssh`);
+        
+      } else if (mode === "replace") {
+        // 替换模式：备份旧密钥后替换
+        const backupTimestamp = dayjs().format("YYYYMMDD_HHmmss");
+        try {
+          await execAsync(`cp /root/.ssh/authorized_keys /root/.ssh/authorized_keys.backup.${backupTimestamp} 2>/dev/null || true`);
+        } catch {}
+        
+        await msg.edit({ text: "🔄 正在替换密钥...", parseMode: "html" });
+        // 直接写入公钥，确保格式正确
+        fs.writeFileSync("/root/.ssh/authorized_keys", publicKey + "\n");
+        
       } else {
-        // 追加模式：添加到现有密钥
-        await execAsync(`printf '%s\n' ${shellEscape(publicKey.trim())} >> /root/.ssh/authorized_keys`);
+        // 追加模式：检查密钥是否已存在
+        let existingKeys = "";
+        try {
+          existingKeys = fs.readFileSync("/root/.ssh/authorized_keys", "utf-8");
+        } catch {}
+        
+        // 检查密钥是否已存在（通过比较公钥数据部分）
+        const newKeyData = keyParts[1];
+        if (existingKeys.includes(newKeyData)) {
+          await msg.edit({ text: "⚠️ 密钥已存在，跳过添加...", parseMode: "html" });
+        } else {
+          // 追加新密钥
+          fs.appendFileSync("/root/.ssh/authorized_keys", publicKey + "\n");
+        }
       }
       
+      // 确保权限始终正确
+      await execAsync(`chmod 700 /root/.ssh`);
       await execAsync(`chmod 600 /root/.ssh/authorized_keys`);
+      
+      // 如果是首次生成，还需要确保SSH服务配置
+      if (isFirstTime) {
+        await msg.edit({ text: "🔄 首次设置，正在优化SSH配置...", parseMode: "html" });
+        
+        // 确保SSH服务允许密钥认证
+        try {
+          await modifySSHConfig("PubkeyAuthentication", "yes", false);
+          await modifySSHConfig("AuthorizedKeysFile", "/root/.ssh/authorized_keys", false);
+        } catch (configError) {
+          console.log("[ssh] SSH配置优化失败，但密钥已正确设置:", configError);
+        }
+      }
 
       // 获取目标会话
       const targetChat = await ConfigManager.get(CONFIG_KEYS.TARGET_CHAT);
@@ -589,8 +613,21 @@ class SSHPlugin extends Plugin {
 
       const modeText = mode === "replace" ? "已替换所有旧密钥" : "已追加到现有密钥";
       
+      // 验证密钥是否正确添加
+      let keyCount = 0;
+      try {
+        const keysContent = fs.readFileSync("/root/.ssh/authorized_keys", "utf-8");
+        keyCount = keysContent.trim().split('\n').filter(line => line.trim() && !line.startsWith('#')).length;
+      } catch {}
+
+      // 生成状态消息
+      let setupMessage = "";
+      if (isFirstTime) {
+        setupMessage = "\n\n🎉 <b>首次SSH设置完成:</b>\n• SSH目录权限: 700 (drwx------)\n• 密钥文件权限: 600 (-rw-------)\n• SSH配置已优化";
+      }
+      
       await msg.edit({
-        text: `✅ <b>SSH密钥生成成功</b>\n\n📁 已发送到: ${targetChat === "me" ? "收藏夹" : htmlEscape(targetChat)}\n🔑 公钥${modeText}: /root/.ssh/authorized_keys\n\n<b>公钥内容：</b>\n<code>${htmlEscape(publicKey)}</code>`,
+        text: `✅ <b>SSH密钥生成成功</b>\n\n📁 密钥包已发送到: ${targetChat === "me" ? "收藏夹" : htmlEscape(targetChat)}\n🔑 公钥${modeText}\n📊 当前共有 ${keyCount} 个授权密钥\n\n<b>服务器信息：</b>\n🖥️ 主机: ${hostname}\n🌐 IP: ${ipAddress}\n🔌 端口: ${sshPort}\n\n<b>连接命令：</b>\n<code>ssh -i ${keyName} root@${ipAddress} -p ${sshPort}</code>${setupMessage}\n\n💡 <b>提示：</b>\n• 请下载并保存私钥文件\n• 本地设置权限: <code>chmod 600 ${keyName}</code>\n• 使用 <code>${mainPrefix}ssh keys</code> 查看所有密钥`,
         parseMode: "html"
       });
 
@@ -626,9 +663,9 @@ class SSHPlugin extends Plugin {
 
       // 读取并解析密钥
       const { stdout } = await execAsync(`cat ${authorizedKeysPath}`);
-      const keys = stdout.trim().split('\n').filter(line => line.trim() && !line.startsWith('#'));
+      const lines = stdout.trim().split('\n').filter(line => line.trim() && !line.startsWith('#'));
       
-      if (keys.length === 0) {
+      if (lines.length === 0) {
         await msg.edit({
           text: "📋 <b>授权密钥列表</b>\n\n当前没有任何授权密钥",
           parseMode: "html"
@@ -637,38 +674,70 @@ class SSHPlugin extends Plugin {
       }
 
       let keyList = "📋 <b>授权密钥列表</b>\n\n";
-      keyList += `📊 <b>总计:</b> ${keys.length} 个密钥\n\n`;
+      keyList += `📊 <b>总计:</b> ${lines.length} 个密钥\n\n`;
       
-      keys.forEach((key, index) => {
-        // 使用新的验证逻辑验证密钥
-        const validation = this.validateSSHPublicKey(key);
+      lines.forEach((line, index) => {
+        const trimmedLine = line.trim();
+        let keyType = '未知类型';
+        let keyData = '';
+        let comment = '无备注';
         
-        let keyType: string;
-        let comment: string;
-        let keyPreview: string;
+        // SSH密钥格式: <type> <base64-key> [comment]
+        // 支持的类型: ssh-rsa, ssh-dss, ecdsa-sha2-nistp256, ssh-ed25519等
+        const sshKeyTypes = ['ssh-rsa', 'ssh-dss', 'ecdsa-sha2-nistp256', 'ecdsa-sha2-nistp384', 'ecdsa-sha2-nistp521', 'ssh-ed25519'];
         
-        if (validation.valid) {
-          keyType = validation.type || '未知类型';
-          comment = validation.comment || '无备注';
-          // 获取密钥指纹用于预览
-          const parts = key.trim().split(' ');
-          keyPreview = parts[1] ? `${parts[1].substring(0, 20)}...` : '有效密钥';
-        } else {
-          // 对于无效密钥，尝试解析基本信息
-          const parts = key.trim().split(' ');
-          keyType = parts[0] || '未知类型';
-          comment = parts[2] || '无备注';
-          keyPreview = '无效密钥';
+        // 尝试解析标准格式
+        const parts = trimmedLine.split(/\s+/);
+        
+        if (parts.length >= 2) {
+          // 检查第一部分是否是有效的密钥类型
+          if (sshKeyTypes.includes(parts[0])) {
+            keyType = parts[0];
+            keyData = parts[1];
+            comment = parts.slice(2).join(' ') || '无备注';
+          } else {
+            // 可能是格式错误的密钥，尝试识别
+            // 如果第一部分看起来像base64编码
+            if (/^[A-Za-z0-9+/=]+$/.test(parts[0]) && parts[0].length > 50) {
+              keyType = '⚠️ 格式错误';
+              keyData = parts[0];
+              comment = parts.slice(1).join(' ') || '无备注';
+            } else {
+              // 完全无法识别的格式
+              keyType = '❌ 无效格式';
+              keyData = trimmedLine.substring(0, 50);
+              comment = '解析失败';
+            }
+          }
+        } else if (parts.length === 1) {
+          // 只有一个部分，可能是裸密钥
+          keyType = '⚠️ 缺少类型';
+          keyData = parts[0];
+          comment = '无备注';
+        }
+        
+        // 生成密钥预览
+        let keyPreview = '无效密钥';
+        if (keyData && keyData.length > 20) {
+          keyPreview = `${keyData.substring(0, 20)}...${keyData.substring(keyData.length - 10)}`;
         }
         
         keyList += `🔑 <b>密钥 ${index + 1}:</b>\n`;
-        keyList += `   类型: <code>${htmlEscape(keyType)}</code>\n`;
+        keyList += `   类型: <code>${keyType}</code>\n`;
         keyList += `   备注: <code>${htmlEscape(comment)}</code>\n`;
         keyList += `   预览: <code>${keyPreview}</code>\n`;
-        keyList += `   状态: ${validation.valid ? '✅ 有效' : '❌ 无效'}\n\n`;
+        
+        // 如果密钥格式有问题，添加警告
+        if (keyType.includes('⚠️') || keyType.includes('❌')) {
+          keyList += `   <i>⚠️ 此密钥可能无法正常使用</i>\n`;
+        }
+        
+        keyList += `\n`;
       });
       
-      keyList += `💡 <b>提示:</b> 使用 <code>${mainPrefix}ssh keys clear</code> 清空所有密钥`;
+      keyList += `💡 <b>提示:</b>\n`;
+      keyList += `• 使用 <code>${mainPrefix}ssh keys clear</code> 清空所有密钥\n`;
+      keyList += `• 使用 <code>${mainPrefix}ssh gen replace</code> 重新生成并替换所有密钥`;
 
       await msg.edit({
         text: keyList,
@@ -1078,65 +1147,217 @@ class SSHPlugin extends Plugin {
     }
   }
 
-  // 自动生成用户账户
-  private async generateUserAccount(): Promise<{ username: string; password: string }> {
-    // 生成更安全的随机用户名和密码
-    const timestamp = dayjs().format("YYYYMMDD_HHmmss");
-    const randomSuffix = Math.random().toString(36).substring(2, 8);
-    const username = `user_${timestamp}_${randomSuffix}`;
-    
-    // 生成复杂密码：包含大小写字母、数字、特殊字符
-    const chars = {
-      lower: "abcdefghijklmnopqrstuvwxyz",
-      upper: "ABCDEFGHIJKLMNOPQRSTUVWXYZ", 
-      numbers: "0123456789",
-      symbols: "!@#$%^&*"
-    };
-    
-    let password = "";
-    // 确保每种类型的字符至少包含2个
-    Object.values(chars).forEach(charset => {
-      for (let i = 0; i < 2; i++) {
-        password += charset.charAt(Math.floor(Math.random() * charset.length));
-      }
-    });
-    
-    // 填充到16位
-    const allChars = Object.values(chars).join("");
-    while (password.length < 16) {
-      password += allChars.charAt(Math.floor(Math.random() * allChars.length));
-    }
-    
-    // 随机打乱密码字符顺序
-    password = password.split("").sort(() => Math.random() - 0.5).join("");
-    
-    return { username, password };
-  }
-
   // 创建备用用户账户
   private async createBackupUser(msg: Api.Message): Promise<{ username: string; password: string } | null> {
     try {
-      // 使用新的用户生成逻辑
-      const userAccount = await this.generateUserAccount();
-      const { username, password } = userAccount;
+      // 生成随机用户名和密码
+      const timestamp = Date.now().toString().slice(-6);
+      const username = `admin${timestamp}`;
+      const password = Math.random().toString(36).slice(-12) + "A1!";
       
       await msg.edit({ text: "🔄 正在创建备用管理员账户...", parseMode: "html" });
       
       // 创建用户
-      await execAsync(`sudo useradd -m -s /bin/bash ${shellEscape(username)}`);
+      await execAsync(`sudo useradd -m -s /bin/bash ${username}`);
       
       // 设置密码
       const escapedPassword = shellEscape(password);
-      await execAsync(`echo '${shellEscape(username)}:${escapedPassword}' | sudo chpasswd`);
+      await execAsync(`echo '${username}:${escapedPassword}' | sudo chpasswd`);
       
       // 添加到sudo组
-      await execAsync(`sudo usermod -aG sudo ${shellEscape(username)}`);
+      await execAsync(`sudo usermod -aG sudo ${username}`);
       
       return { username, password };
     } catch (error) {
       console.error("[ssh] 创建备用用户失败:", error);
       return null;
     }
+  }
+
+  // 创建新用户（主动命令）
+  private async createNewUser(msg: Api.Message): Promise<void> {
+    await msg.edit({ text: "🔄 正在自动生成新用户...", parseMode: "html" });
+
+    try {
+      // 生成安全的随机用户名
+      const randomBytes = crypto.randomBytes(4).toString('hex');
+      const username = `user_${randomBytes}`;
+      
+      // 生成强密码
+      const password = this.generateSecurePassword();
+      
+      // 检查用户是否已存在
+      try {
+        await execAsync(`id ${username}`);
+        // 如果没有抛出错误，说明用户已存在，重新生成
+        const newRandomBytes = crypto.randomBytes(4).toString('hex');
+        const newUsername = `user_${newRandomBytes}`;
+        await this.createSystemUser(newUsername, password);
+        
+        await this.sendUserCredentials(msg, newUsername, password);
+      } catch {
+        // 用户不存在，可以创建
+        await this.createSystemUser(username, password);
+        await this.sendUserCredentials(msg, username, password);
+      }
+      
+    } catch (error: any) {
+      console.error("[ssh] 创建新用户失败:", error);
+      await msg.edit({
+        text: `❌ <b>创建用户失败:</b> ${htmlEscape(error.message || "未知错误")}`,
+        parseMode: "html"
+      });
+    }
+  }
+
+  // 生成安全密码
+  private generateSecurePassword(): string {
+    const length = 16;
+    const charset = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%^&*()_+-=";
+    let password = "";
+    
+    // 确保包含各种字符类型
+    password += charset.slice(0, 26)[Math.floor(Math.random() * 26)]; // 小写
+    password += charset.slice(26, 52)[Math.floor(Math.random() * 26)]; // 大写
+    password += charset.slice(52, 62)[Math.floor(Math.random() * 10)]; // 数字
+    password += charset.slice(62)[Math.floor(Math.random() * (charset.length - 62))]; // 特殊字符
+    
+    // 填充剩余长度
+    for (let i = password.length; i < length; i++) {
+      password += charset[Math.floor(Math.random() * charset.length)];
+    }
+    
+    // 打乱密码顺序
+    return password.split('').sort(() => Math.random() - 0.5).join('');
+  }
+
+  // 创建系统用户
+  private async createSystemUser(username: string, password: string): Promise<void> {
+    // 创建用户
+    await execAsync(`useradd -m -s /bin/bash ${username}`);
+    
+    // 设置密码
+    const escapedPassword = shellEscape(password);
+    await execAsync(`echo '${username}:${escapedPassword}' | chpasswd`);
+    
+    // 添加到sudo组（给予管理员权限）
+    try {
+      await execAsync(`usermod -aG sudo ${username}`);
+    } catch {
+      // 某些系统可能使用wheel组
+      try {
+        await execAsync(`usermod -aG wheel ${username}`);
+      } catch {
+        console.log("[ssh] 无法添加用户到sudo/wheel组");
+      }
+    }
+    
+    // 为用户创建SSH目录
+    await execAsync(`mkdir -p /home/${username}/.ssh`);
+    await execAsync(`chmod 700 /home/${username}/.ssh`);
+    await execAsync(`chown -R ${username}:${username} /home/${username}/.ssh`);
+    
+    // 复制root的authorized_keys（如果存在）给新用户
+    try {
+      await execAsync(`cp /root/.ssh/authorized_keys /home/${username}/.ssh/authorized_keys`);
+      await execAsync(`chmod 600 /home/${username}/.ssh/authorized_keys`);
+      await execAsync(`chown ${username}:${username} /home/${username}/.ssh/authorized_keys`);
+    } catch {
+      console.log("[ssh] 未复制authorized_keys文件");
+    }
+  }
+
+  // 发送用户凭据
+  private async sendUserCredentials(msg: Api.Message, username: string, password: string): Promise<void> {
+    const client = await getGlobalClient();
+    if (!client) {
+      await msg.edit({ 
+        text: `✅ <b>用户创建成功</b>\n\n👤 用户名: <code>${username}</code>\n🔑 密码: <code>${htmlEscape(password)}</code>\n\n⚠️ 请妥善保管凭据信息`,
+        parseMode: "html" 
+      });
+      return;
+    }
+
+    // 获取服务器信息
+    const hostname = (await execAsync("hostname")).stdout.trim();
+    const ipAddress = (await execAsync("curl -s ifconfig.me || echo '未知'")).stdout.trim();
+    const sshPort = await ConfigManager.get(CONFIG_KEYS.SSH_PORT, "22");
+    
+    // 生成凭据文件
+    const timestamp = dayjs().format("YYYYMMDD_HHmmss");
+    const workDir = path.join(createDirectoryInTemp("sshuser"), `user_${timestamp}`);
+    fs.mkdirSync(workDir, { recursive: true });
+    
+    const credentialsText = `SSH用户凭据信息
+==================
+生成时间: ${dayjs().format("YYYY-MM-DD HH:mm:ss")}
+服务器: ${hostname}
+IP地址: ${ipAddress}
+SSH端口: ${sshPort}
+
+用户凭据
+==================
+用户名: ${username}
+密码: ${password}
+权限: sudo用户组
+
+SSH连接命令
+==================
+标准连接:
+ssh ${username}@${ipAddress} -p ${sshPort}
+
+带密码连接(不推荐):
+sshpass -p '${password}' ssh ${username}@${ipAddress} -p ${sshPort}
+
+安全建议
+==================
+1. 请立即修改初始密码
+2. 建议配置SSH密钥登录
+3. 考虑禁用密码登录，仅使用密钥
+4. 定期更新密码和密钥
+
+修改密码命令:
+passwd
+
+生成SSH密钥对:
+ssh-keygen -t rsa -b 4096`;
+    
+    const credentialsFile = path.join(workDir, "user_credentials.txt");
+    fs.writeFileSync(credentialsFile, credentialsText);
+    
+    // 获取目标会话
+    const targetChat = await ConfigManager.get(CONFIG_KEYS.TARGET_CHAT);
+    let peer: any;
+
+    if (targetChat === "me") {
+      peer = "me";
+    } else {
+      try {
+        peer = await client.getEntity(targetChat);
+      } catch {
+        peer = "me";
+      }
+    }
+    
+    // 发送凭据文件
+    await client.sendFile(peer, {
+      file: new CustomFile(
+        "user_credentials.txt",
+        fs.statSync(credentialsFile).size,
+        "",
+        fs.readFileSync(credentialsFile)
+      ),
+      caption: `🎉 <b>新用户创建成功</b>\n\n👤 用户名: <code>${username}</code>\n🔑 密码: <spoiler>${htmlEscape(password)}</spoiler>\n🖥️ 服务器: ${hostname}\n🌐 IP: ${ipAddress}\n🔌 端口: ${sshPort}\n\n📝 详细信息请查看文件\n⚠️ <b>请立即修改初始密码</b>`,
+      parseMode: "html"
+    });
+    
+    await msg.edit({
+      text: `✅ <b>用户创建成功</b>\n\n👤 用户名: <code>${username}</code>\n🔑 密码: <spoiler>${htmlEscape(password)}</spoiler>\n\n📁 凭据文件已发送到: ${targetChat === "me" ? "收藏夹" : htmlEscape(targetChat)}\n\n💡 <b>提示:</b>\n• 用户已添加到sudo组\n• 已复制SSH密钥(如果存在)\n• 建议立即修改初始密码`,
+      parseMode: "html"
+    });
+    
+    // 清理临时文件
+    fs.rmSync(workDir, { recursive: true, force: true });
   }
 
   // 重启SSH服务
