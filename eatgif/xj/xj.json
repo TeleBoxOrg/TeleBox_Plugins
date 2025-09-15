@@ -8,7 +8,7 @@
       "you": {
         "x": 6,
         "y": 46,
-        "rotate": 90,
+        "rotate": -90,
         "mask": "xj/me.png"
       },
       "me": {
@@ -23,7 +23,7 @@
       "you": {
         "x": 6,
         "y": 46,
-        "rotate": 90,
+        "rotate": -90,
         "mask": "xj/me.png"
       },
       "me": {
@@ -38,7 +38,7 @@
       "you": {
         "x": 6,
         "y": 46,
-        "rotate": 90,
+        "rotate": -90,
         "mask": "xj/me.png"
       },
       "me": {
@@ -53,7 +53,7 @@
       "you": {
         "x": 6,
         "y": 46,
-        "rotate": 90,
+        "rotate": -90,
         "mask": "xj/me.png"
       },
       "me": {
@@ -68,7 +68,7 @@
       "you": {
         "x": 6,
         "y": 46,
-        "rotate": 90,
+        "rotate": -90,
         "mask": "xj/me.png"
       },
       "me": {
@@ -83,7 +83,7 @@
       "you": {
         "x": 6,
         "y": 46,
-        "rotate": 90,
+        "rotate": -90,
         "mask": "xj/me.png"
       },
       "me": {
@@ -98,7 +98,7 @@
       "you": {
         "x": 6,
         "y": 46,
-        "rotate": 90,
+        "rotate": -90,
         "mask": "xj/me.png"
       },
       "me": {
