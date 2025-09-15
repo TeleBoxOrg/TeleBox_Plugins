@@ -1,6 +1,7 @@
 const { execSync } = require('child_process');
 const https = require('https');
 const querystring = require('querystring');
+const { UPDATE_TEMPLATE, ENHANCED_PROMPT, callGeminiAPI } = require('./update-template');
 
 // 配置
 const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
@@ -16,88 +17,52 @@ if (!BOT_TOKEN || !CHAT_ID) {
 }
 
 console.log(`📅 生成 ${TARGET_DATE} 的提交摘要`);
+console.log('🔍 环境变量状态:');
+console.log(`  - TELEGRAM_BOT_TOKEN: ${BOT_TOKEN ? '✅ 已配置' : '❌ 未配置'}`);
+console.log(`  - TELEGRAM_CHAT_ID: ${CHAT_ID ? '✅ 已配置' : '❌ 未配置'}`);
+console.log(`  - GEMINI_API_KEY: ${GEMINI_API_KEY ? `✅ 已配置 (长度: ${GEMINI_API_KEY.length})` : '❌ 未配置'}`);
 
-// Gemini AI 总结功能
+// 增强版 Gemini AI 总结功能
 async function summarizeWithGemini(commits) {
+  console.log('\n🤖 === Gemini AI 处理开始 ===');
+  
   if (!GEMINI_API_KEY) {
     console.warn('⚠️ 未配置 GEMINI_API_KEY，使用基础总结模式');
+    console.warn('   请在 GitHub Settings → Secrets → Actions 中添加 GEMINI_API_KEY');
     return null;
   }
   
   try {
     const commitMessages = commits.map(c => c.message).join('\n');
+    const fullPrompt = ENHANCED_PROMPT + commitMessages;
     
-    const prompt = `请分析以下 TeleBox 项目的提交记录，按功能模块进行智能分组和总结。
-
-提交记录：
-${commitMessages}
-
-请按以下分类格式输出：
-🎵 音乐娱乐、🤖 AI 助手、👮 群组管理、🎨 媒体处理、🎮 娱乐功能、🔧 系统工具、📊 信息查询、📱 实用工具、⏰ 定时任务、🔍 监控服务、⚡ 性能优化、🐛 问题修复、📚 文档更新、🔄 CI/CD、✨ 新增功能
-
-格式示例：
-🎵 音乐娱乐
-• [具体改进描述]
-• [具体改进描述]
-
-要求：
-1. 严格按照上述分类整理提交记录
-2. 用简洁的中文描述具体改进内容
-3. 去掉技术细节，专注于用户可感知的功能变化
-4. 如果是新增插件，说明插件的主要功能
-5. 如果是修复，说明修复了什么问题
-6. 每个分类最多显示5个改进点
-7. 如果某个分类没有相关提交则跳过`;
-
-    const postData = JSON.stringify({
-      contents: [{
-        parts: [{
-          text: prompt
-        }]
-      }]
-    });
+    console.log('📝 提交记录数量:', commits.length);
+    console.log('📏 Prompt 长度:', fullPrompt.length, '字符');
     
-    return new Promise((resolve, reject) => {
-      const options = {
-        hostname: 'generativelanguage.googleapis.com',
-        port: 443,
-        path: '/v1beta/models/gemini-pro:generateContent?key=' + GEMINI_API_KEY,
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Content-Length': Buffer.byteLength(postData)
-        }
-      };
+    // 使用增强的 API 调用
+    const result = await callGeminiAPI(GEMINI_API_KEY, fullPrompt);
+    
+    if (result.success) {
+      console.log('✅ === Gemini AI 处理成功 ===\n');
+      return result.content;
+    } else {
+      console.error('❌ === Gemini AI 处理失败 ===');
+      console.error('   错误信息:', result.error);
       
-      const req = https.request(options, (res) => {
-        let data = '';
-        res.on('data', (chunk) => { data += chunk; });
-        res.on('end', () => {
-          try {
-            const response = JSON.parse(data);
-            if (response.candidates && response.candidates[0] && response.candidates[0].content) {
-              resolve(response.candidates[0].content.parts[0].text);
-            } else {
-              console.warn('⚠️ Gemini 返回空响应');
-              resolve(null);
-            }
-          } catch (error) {
-            console.warn('⚠️ Gemini 响应解析失败:', error.message);
-            resolve(null);
-          }
-        });
-      });
+      // 尝试诊断常见问题
+      if (result.error.includes('API key not valid')) {
+        console.error('   💡 解决方案: 请检查 GEMINI_API_KEY 是否正确');
+      } else if (result.error.includes('quota')) {
+        console.error('   💡 解决方案: API 配额已用完，请检查 Google Cloud Console');
+      } else if (result.error.includes('timeout')) {
+        console.error('   💡 解决方案: 网络超时，可能需要配置代理或稍后重试');
+      }
       
-      req.on('error', (error) => {
-        console.warn('⚠️ Gemini API 调用失败:', error.message);
-        resolve(null);
-      });
-      
-      req.write(postData);
-      req.end();
-    });
+      return null;
+    }
   } catch (error) {
-    console.warn('⚠️ Gemini API 调用失败:', error.message);
+    console.error('❌ 意外错误:', error.message);
+    console.error('   错误堆栈:', error.stack);
     return null;
   }
 }
@@ -380,7 +345,10 @@ async function main() {
   };
   
   // 尝试使用 Gemini AI 生成智能摘要
-  console.log('🤖 尝试使用 Gemini AI 生成智能摘要...');
+  console.log('\n' + '='.repeat(50));
+  console.log('🚀 开始生成更新日志');
+  console.log('='.repeat(50));
+  
   const geminiSummary = await summarizeWithGemini(allCommits);
   
   // 生成摘要消息
@@ -392,10 +360,12 @@ async function main() {
   
   // 如果有 Gemini 摘要，使用 AI 生成的内容
   if (geminiSummary) {
-    console.log('✅ 使用 Gemini AI 生成的智能摘要');
+    console.log('\n✅ 使用 Gemini AI 生成的智能摘要');
+    console.log('📊 摘要长度:', geminiSummary.length, '字符');
     message += `🤖 AI 智能摘要\n${geminiSummary}\n\n`;
   } else {
-    console.log('📝 使用基础分组摘要');
+    console.log('\n📝 使用基础分组摘要（Fallback 模式）');
+    console.log('   原因: Gemini AI 不可用或返回空结果');
     // 按功能分组提交信息（作为 fallback）
     message += generateBasicSummary(commitsByRepo);
   }
@@ -420,10 +390,17 @@ async function main() {
     message = message.substring(0, 3900) + '\n\n_... 消息过长已截断_';
   }
   
-  console.log('📝 生成的消息:');
-  console.log(message);
+  console.log('\n' + '='.repeat(50));
+  console.log('📝 最终消息预览:');
+  console.log('='.repeat(50));
+  console.log(message.substring(0, 500) + (message.length > 500 ? '\n... [省略剩余内容]' : ''));
+  console.log('\n📊 消息统计:');
+  console.log(`  - 总长度: ${message.length} 字符`);
+  console.log(`  - AI 摘要: ${geminiSummary ? '是' : '否'}`);
+  console.log(`  - 提交数: ${allCommits.length}`);
   
   // 发送到 Telegram
+  console.log('\n📤 发送到 Telegram...');
   sendToTelegram(message);
 }
 
