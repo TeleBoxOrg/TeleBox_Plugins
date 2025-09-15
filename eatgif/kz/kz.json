@@ -1,0 +1,146 @@
+{
+  "width": 300,
+  "height": 169,
+  "res": [
+    {
+      "url": "kz/kz0.png",
+      "delay": 150,
+      "you": {
+        "x": 189,
+        "y": 73,
+        "mask": "kz/you.png"
+      },
+      "me": {
+        "x": 120,
+        "y": 35,
+        "mask": "kz/me.png"
+      }
+    },
+    {
+      "url": "kz/kz6.png",
+      "delay": 150,
+      "you": {
+        "x": 188,
+        "y": 71,
+        "mask": "kz/you.png"
+      },
+      "me": {
+        "x": 119,
+        "y": 33,
+        "mask": "kz/me.png"
+      }
+    },
+    {
+      "url": "kz/kz12.png",
+      "delay": 150,
+      "you": {
+        "x": 185,
+        "y": 69,
+        "mask": "kz/you.png"
+      },
+      "me": {
+        "x": 117,
+        "y": 31,
+        "mask": "kz/me.png"
+      }
+    },
+    {
+      "url": "kz/kz18.png",
+      "delay": 150,
+      "you": {
+        "x": 183,
+        "y": 68,
+        "mask": "kz/you.png"
+      },
+      "me": {
+        "x": 114,
+        "y": 30,
+        "mask": "kz/me.png"
+      }
+    },
+    {
+      "url": "kz/kz24.png",
+      "delay": 150,
+      "you": {
+        "x": 180,
+        "y": 67,
+        "mask": "kz/you.png"
+      },
+      "me": {
+        "x": 112,
+        "y": 29,
+        "mask": "kz/me.png"
+      }
+    },
+    {
+      "url": "kz/kz30.png",
+      "delay": 150,
+      "you": {
+        "x": 179,
+        "y": 68,
+        "mask": "kz/you.png"
+      },
+      "me": {
+        "x": 111,
+        "y": 30,
+        "mask": "kz/me.png"
+      }
+    },
+    {
+      "url": "kz/kz36.png",
+      "delay": 150,
+      "you": {
+        "x": 178,
+        "y": 65,
+        "mask": "kz/you.png"
+      },
+      "me": {
+        "x": 108,
+        "y": 26,
+        "mask": "kz/me.png"
+      }
+    },
+    {
+      "url": "kz/kz42.png",
+      "delay": 150,
+      "you": {
+        "x": 177,
+        "y": 65,
+        "mask": "kz/you.png"
+      },
+      "me": {
+        "x": 107,
+        "y": 27,
+        "mask": "kz/me.png"
+      }
+    },
+    {
+      "url": "kz/kz48.png",
+      "delay": 150,
+      "you": {
+        "x": 175,
+        "y": 64,
+        "mask": "kz/you.png"
+      },
+      "me": {
+        "x": 105,
+        "y": 26,
+        "mask": "kz/me.png"
+      }
+    },
+    {
+      "url": "kz/kz54.png",
+      "delay": 150,
+      "you": {
+        "x": 173,
+        "y": 63,
+        "mask": "kz/you.png"
+      },
+      "me": {
+        "x": 103,
+        "y": 24,
+        "mask": "kz/me.png"
+      }
+    }
+  ]
+}
