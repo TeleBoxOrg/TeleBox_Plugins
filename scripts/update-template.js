@@ -633,13 +633,17 @@ class CommitParser {
       /\bframework\b/i
     ];
     
-    // 插件模式
+    // 插件模式（改进的识别算法）
     const pluginPatterns = [
       /^feat\(([^)]+)\):/i,
       /^fix\(([^)]+)\):/i,
       /^perf\(([^)]+)\):/i,
+      /^refactor\(([^)]+)\):/i,
       /插件[：:]/,
-      /\[([^\]]+)\]/
+      /\[([^\]]+)\]/,
+      // 常见插件名称模式
+      /\b(sure|eatgif?|eat|gpt|gemini|acron|aban|dbdj|music|help|debug|sudo|re|ping|shift|bf|npm|tpm)\b[：:]/i,
+      /\b(sure|eatgif?|eat|gpt|gemini|acron|aban|dbdj|music|help|debug|sudo|re|ping|shift|bf|npm|tpm)\s+[使使用修复优化新增]/i
     ];
     
     // 检查是否为核心更新
@@ -651,20 +655,40 @@ class CommitParser {
     
     // 检查是否为插件更新
     for (const pattern of pluginPatterns) {
-      const match = msg.match(pattern);
+      const match = originalMsg.match(pattern);
       if (match) {
-        const pluginName = match[1];
+        let pluginName = match[1] || match[0]; // 获取匹配的插件名
+        
+        // 清理插件名称
+        pluginName = pluginName
+          .replace(/^(feat|fix|perf|refactor)\(|\):|[：:].*$/gi, '')
+          .replace(/\s+(使用|修复|优化|新增).*$/i, '')
+          .trim()
+          .toLowerCase();
         
         // 检查是否为通用插件更新
-        if (pluginName === 'plugins' || pluginName === '插件系统') {
+        if (pluginName === 'plugins' || pluginName === '插件系统' || pluginName === 'plugin') {
           structure.plugins.general.push(this.formatCommitMessage(originalMsg));
-        } else {
+        } else if (pluginName) {
           // 特定插件更新
           if (!structure.plugins.specific[pluginName]) {
             structure.plugins.specific[pluginName] = [];
           }
           structure.plugins.specific[pluginName].push(this.formatCommitMessage(originalMsg));
         }
+        structure.stats.pluginCommits++;
+        return;
+      }
+    }
+    
+    // 额外检查：直接提到插件名的提交
+    const pluginNames = ['sure', 'eatgif', 'eat', 'gpt', 'gemini', 'acron', 'aban', 'dbdj', 'music', 'help', 'debug', 'sudo', 're', 'ping', 'shift', 'bf', 'npm', 'tpm'];
+    for (const plugin of pluginNames) {
+      if (msg.includes(plugin)) {
+        if (!structure.plugins.specific[plugin]) {
+          structure.plugins.specific[plugin] = [];
+        }
+        structure.plugins.specific[plugin].push(this.formatCommitMessage(originalMsg));
         structure.stats.pluginCommits++;
         return;
       }
