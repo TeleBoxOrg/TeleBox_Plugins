@@ -371,10 +371,12 @@ async function main() {
   if (geminiSummary) {
     console.log('\n✅ 使用 Gemini AI 生成的智能摘要');
     console.log('📊 摘要长度:', geminiSummary.length, '字符');
-    // 清理输出，移除多余的提示
+    // 清理输出，移除多余的提示和重复标题
     const cleanedSummary = geminiSummary
       .replace(/好的，根据您提供的提交记录，我将生成以下更新日志：\n+/g, '')
       .replace(/^#\s+/gm, '') // 移除markdown标题符号
+      .replace(/📢\s*TeleBox\s*更新\s*\|[^\n]*\n+/g, '') // 移除重复的标题行
+      .replace(/🗓\s*\[[^\]]*\]\s*--[^\n]*\n+/g, '') // 移除重复的版本行
       .trim();
     message += `🤖 AI 智能摘要\n${cleanedSummary}\n\n`;
   } else {
@@ -395,8 +397,18 @@ async function main() {
     message += '\n';
   }
   
-  // 添加时间戳
-  message += `⏰ 报告生成时间: ${new Date().toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' })}`;
+  // 添加时间戳（使用目标日期而不是当前时间）
+  const targetDate = new Date(TARGET_DATE + 'T23:59:59');
+  const timestamp = targetDate.toLocaleString('zh-CN', {
+    year: 'numeric',
+    month: 'numeric', 
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    timeZone: 'Asia/Shanghai'
+  });
+  message += `\n⏰ 报告生成时间: ${timestamp}`;
   
   // 检查消息长度，Telegram 限制为 4096 字符
   if (message.length > 4000) {
