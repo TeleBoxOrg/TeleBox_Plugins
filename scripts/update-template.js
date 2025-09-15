@@ -556,6 +556,7 @@ async function callGeminiAPI(apiKey, prompt) {
       error: error.message,
       type: error.type || ErrorTypes.API_ERROR
     };
+  }
 }
 
 /**
