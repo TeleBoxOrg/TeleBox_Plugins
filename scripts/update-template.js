@@ -132,41 +132,38 @@ const UPDATE_TEMPLATE = {
  * @returns {string} 格式化的提示词
  */
 function generatePrompt(date = new Date().toISOString().split('T')[0], version = '0.0.0') {
-  return `你是 TeleBox 项目的专业更新日志生成助手。请严格按照以下模板格式分析提交记录，生成结构化的更新日志。
+  return `你是 TeleBox 项目的专业更新日志生成助手。请严格按照以下模板格式分析提交记录，生成结构化的更新日志，AI根据GitHub提交日期填写最新日期。
 
 # 输出格式规范
 
 ## 标题部分
-📢 TeleBox 更新 | ${date}
-
-## 版本信息
-🗓 [${version}] --${date}
+📢 TeleBox 更新 | AI根据GitHub提交日期填写最新日期
 
 ## 内容结构
 
-### 🔧 本体
+🔧 本体
 - 核心框架功能更新
 - API 接口变更
 - 性能优化
 - Bug 修复
 
-### 🧩 插件
+🧩 插件
 - 插件系统架构更新
 - 插件通用功能改进
 - 插件兼容性调整
 
-### 📦 [具体插件名]
+📦 [具体插件名]
 - 新增功能
 - 优化改进  
 - Bug 修复
 - 破坏性变更（如有）
 
-### ⚙️ 更新方式
+⚙️ 更新方式
 - 更新主程序：update -f
 - 安装新插件：tpm i <插件名>
 - 一键安装全部插件：tpm i all
 
-### 📢 声明
+📢 声明
 ⚠️ 更新前建议先备份 导出
 
 若出现 bug，会在后续快速修复，敬请耐心等待
