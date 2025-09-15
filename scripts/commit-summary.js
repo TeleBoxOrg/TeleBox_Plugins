@@ -32,18 +32,22 @@ async function summarizeWithGemini(commits) {
 提交记录：
 ${commitMessages}
 
-请按以下格式输出：
-📦 [功能模块名] 插件/功能
-- [具体改进描述]
-- [具体改进描述]
+请按以下分类格式输出：
+🎵 音乐娱乐、🤖 AI 助手、👮 群组管理、🎨 媒体处理、🎮 娱乐功能、🔧 系统工具、📊 信息查询、📱 实用工具、⏰ 定时任务、🔍 监控服务、⚡ 性能优化、🐛 问题修复、📚 文档更新、🔄 CI/CD、✨ 新增功能
+
+格式示例：
+🎵 音乐娱乐
+• [具体改进描述]
+• [具体改进描述]
 
 要求：
-1. 将相关提交合并到同一功能模块下
+1. 严格按照上述分类整理提交记录
 2. 用简洁的中文描述具体改进内容
 3. 去掉技术细节，专注于用户可感知的功能变化
 4. 如果是新增插件，说明插件的主要功能
 5. 如果是修复，说明修复了什么问题
-6. 最多输出10个功能模块`;
+6. 每个分类最多显示5个改进点
+7. 如果某个分类没有相关提交则跳过`;
 
     const postData = JSON.stringify({
       contents: [{
@@ -153,37 +157,70 @@ function deduplicateCommits(commits) {
   return filtered;
 }
 
+// 插件分类配置
+const PLUGIN_CATEGORIES = {
+  '🎵 音乐娱乐': ['music', 'music_bot', 'netease', 'audio_to_voice', 't'],
+  '🤖 AI 助手': ['gpt', 'gemini'],
+  '👮 群组管理': ['aban', 'clean_member', 'bulk_delete', 'manage_admin', 'atadmins', 'sunremove', 'clearblocked', 'clear_sticker', 'da', 'dme'],
+  '🎨 媒体处理': ['convert', 'gif', 'sticker', 'sticker_to_pic', 'pic_to_sticker', 'getstickers', 'copy_sticker_set', 'q', 'eat', 'eatgif'],
+  '🎮 娱乐功能': ['cosplay', 'crazy4', 'bizhi', 'httpcat', 'moyu', 'lottery', 'dbdj', 'yvlu'],
+  '🔧 系统工具': ['speedtest', 'speedlink', 'ssh', 'ntp', 'dig', 'whois', 'encode', 'dc', 'trace'],
+  '📊 信息查询': ['weather', 'rate', 'news', 'ip', 'ids', 'his'],
+  '📱 实用工具': ['qr', 'gt', 'yt-dlp', 'search', 'shift', 'keyword', 'oxost', 'yinglish'],
+  '⏰ 定时任务': ['acron', 'autodel', 'autochangename'],
+  '🔍 监控服务': ['komari', 'kitt']
+};
+
+// 根据插件名获取分类
+function getPluginCategory(pluginName) {
+  for (const [category, plugins] of Object.entries(PLUGIN_CATEGORIES)) {
+    if (plugins.includes(pluginName.toLowerCase())) {
+      return category;
+    }
+  }
+  return '🔧 其他功能';
+}
+
 // 按功能分组提交信息
 function groupCommitsByFeature(commits) {
   const groups = {};
   
   commits.forEach(commit => {
-    let feature = '';
+    let category = '';
     let description = commit.message;
     
     // 识别插件名称
     const pluginMatch = description.match(/^(新增|更新|修复|优化|删除)?\s*([a-zA-Z_]+)\s*(插件|功能)?/);
     if (pluginMatch) {
-      feature = pluginMatch[2];
+      const pluginName = pluginMatch[2];
+      category = getPluginCategory(pluginName);
       description = description.replace(/^(新增|更新|修复|优化|删除)?\s*[a-zA-Z_]+\s*(插件|功能)?\s*/, '');
     } else {
       // 通用功能识别
       if (description.includes('插件')) {
         const match = description.match(/([a-zA-Z_]+)\s*插件/);
-        if (match) feature = match[1];
+        if (match) {
+          category = getPluginCategory(match[1]);
+        } else {
+          category = '🔧 其他功能';
+        }
       } else if (description.includes('修复')) {
-        feature = '修复';
+        category = '🐛 问题修复';
       } else if (description.includes('优化')) {
-        feature = '优化';
-      } else if (description.includes('新增')) {
-        feature = '新功能';
+        category = '⚡ 性能优化';
+      } else if (description.includes('新增') || description.includes('添加')) {
+        category = '✨ 新增功能';
+      } else if (description.includes('文档') || description.includes('README')) {
+        category = '📚 文档更新';
+      } else if (description.includes('工作流') || description.includes('CI') || description.includes('workflow')) {
+        category = '🔄 CI/CD';
       } else {
-        feature = '其他';
+        category = '🔧 其他功能';
       }
     }
     
-    if (!groups[feature]) {
-      groups[feature] = [];
+    if (!groups[category]) {
+      groups[category] = [];
     }
     
     // 清理描述文本
@@ -195,7 +232,7 @@ function groupCommitsByFeature(commits) {
       .trim();
     
     if (description) {
-      groups[feature].push(description);
+      groups[category].push(description);
     }
   });
   
@@ -205,28 +242,57 @@ function groupCommitsByFeature(commits) {
 // 生成基础摘要
 function generateBasicSummary(commitsByRepo) {
   let basicSummary = '';
+  const allFeatureGroups = {};
   
+  // 合并所有仓库的提交到统一的分类中
   for (const [repoName, commits] of Object.entries(commitsByRepo)) {
     if (commits.length === 0) continue;
     
     const featureGroups = groupCommitsByFeature(commits);
     
-    Object.entries(featureGroups).forEach(([feature, descriptions]) => {
-      if (descriptions.length === 0) return;
-      
-      basicSummary += `📦 ${feature} 插件/功能\n`;
+    Object.entries(featureGroups).forEach(([category, descriptions]) => {
+      if (!allFeatureGroups[category]) {
+        allFeatureGroups[category] = [];
+      }
+      allFeatureGroups[category].push(...descriptions);
+    });
+  }
+  
+  // 按分类输出，使用预定义的顺序
+  const categoryOrder = [
+    '✨ 新增功能',
+    '🎵 音乐娱乐', 
+    '🤖 AI 助手',
+    '👮 群组管理',
+    '🎨 媒体处理',
+    '🎮 娱乐功能',
+    '🔧 系统工具',
+    '📊 信息查询',
+    '📱 实用工具',
+    '⏰ 定时任务',
+    '🔍 监控服务',
+    '⚡ 性能优化',
+    '🐛 问题修复',
+    '📚 文档更新',
+    '🔄 CI/CD',
+    '🔧 其他功能'
+  ];
+  
+  categoryOrder.forEach(category => {
+    if (allFeatureGroups[category] && allFeatureGroups[category].length > 0) {
+      basicSummary += `${category}\n`;
       
       // 去重描述并格式化
-      const uniqueDescriptions = [...new Set(descriptions)];
+      const uniqueDescriptions = [...new Set(allFeatureGroups[category])];
       uniqueDescriptions.forEach(desc => {
         if (desc.length > 0) {
-          basicSummary += `- ${desc}\n`;
+          basicSummary += `• ${desc}\n`;
         }
       });
       
       basicSummary += '\n';
-    });
-  }
+    }
+  });
   
   return basicSummary;
 }
