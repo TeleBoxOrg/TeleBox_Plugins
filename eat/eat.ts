@@ -134,7 +134,7 @@ async function iconMaskedFor(params: {
   let iconRotate = await sharp(avatar).resize(maskWidth, maskHeight).toBuffer();
 
   if (role.rotate) {
-    iconRotate = await sharp(iconRotate).rotate(-45).toBuffer();
+    iconRotate = await sharp(iconRotate).rotate(role.rotate).toBuffer();
   }
   if (role.brightness) {
     iconRotate = await sharp(iconRotate)

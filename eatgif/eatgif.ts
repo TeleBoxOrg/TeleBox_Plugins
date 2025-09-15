@@ -248,25 +248,47 @@ class EatGifPlugin extends Plugin {
     role: RoleConfig,
     avatar: Buffer
   ): Promise<sharp.OverlayOptions> {
-    const maskSharp = sharp(await assetBufferFor(role.mask)).ensureAlpha();
-    const { width, height } = await maskSharp.metadata();
+    const maskBuffer = await assetBufferFor(role.mask);
+    const { width: maskWidth, height: maskHeight } = await sharp(
+      maskBuffer
+    ).metadata();
 
-    let iconSharp = sharp(avatar).resize(width, height);
+    let iconRotate = await sharp(avatar)
+      .resize(maskWidth, maskHeight)
+      .toBuffer();
+
     if (role.rotate) {
-      iconSharp = iconSharp.rotate(role.rotate);
+      iconRotate = await sharp(iconRotate).rotate(role.rotate).toBuffer();
     }
-
-    const [iconBuffer, alphaMask] = await Promise.all([
-      iconSharp.toBuffer(),
-      maskSharp.clone().extractChannel("alpha").toBuffer(),
-    ]);
-
-    const pipeline = sharp(iconBuffer).joinChannel(alphaMask);
     if (role.brightness) {
-      pipeline.modulate({ brightness: role.brightness });
+      iconRotate = await sharp(iconRotate)
+        .modulate({ brightness: role.brightness })
+        .toBuffer();
     }
 
-    const iconMasked = await pipeline.png().toBuffer();
+    let iconSharp = sharp(iconRotate);
+
+    const { width: iconWidth, height: iconHeight } = await iconSharp.metadata();
+
+    const left = Math.max(0, Math.floor((iconWidth - maskWidth) / 2));
+    const top = Math.max(0, Math.floor((iconHeight - maskHeight) / 2));
+
+    let cropped = iconSharp.extract({
+      left,
+      top,
+      width: maskWidth,
+      height: maskHeight,
+    });
+
+    let iconMasked = await cropped
+      .composite([
+        {
+          input: maskBuffer,
+          blend: "dest-in", // 保留 mask 区域
+        },
+      ])
+      .png()
+      .toBuffer();
 
     return {
       input: iconMasked,
