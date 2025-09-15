@@ -7,12 +7,16 @@
     "url": "dr/dr.json",
     "desc": "想要了吧"
   },
-  "rf": {
-    "url": "rf/rf.json",
-    "desc": "日翻你"
+  "kz": {
+    "url": "kz/kz.json",
+    "desc": "看来真得铐走你了"
   },
   "pz": {
     "url": "pz/pz.json",
     "desc": "柯文哲大怒拍桌"
+  },
+  "rf": {
+    "url": "rf/rf.json",
+    "desc": "日翻你"
   }
 }
