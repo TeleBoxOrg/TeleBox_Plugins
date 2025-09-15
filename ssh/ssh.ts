@@ -11,6 +11,7 @@ import { exec } from "child_process";
 import { promisify } from "util";
 import archiver from "archiver";
 import dayjs from "dayjs";
+import { utils as ssh2Utils } from "ssh2";
 
 const execAsync = promisify(exec);
 const prefixes = getPrefixes();
@@ -419,6 +420,49 @@ class SSHPlugin extends Plugin {
     }
   }
 
+  // 验证SSH公钥格式
+  private validateSSHPublicKey(publicKey: string): { valid: boolean; type?: string; comment?: string } {
+    try {
+      // 使用ssh2库验证公钥格式
+      const parsed = ssh2Utils.parseKey(publicKey);
+      if (!parsed) {
+        return { valid: false };
+      }
+      
+      // 获取密钥类型和注释
+      const parts = publicKey.trim().split(' ');
+      const type = parts[0] || '未知类型';
+      const comment = parts[2] || '无备注';
+      
+      return {
+        valid: true,
+        type,
+        comment
+      };
+    } catch {
+      return { valid: false };
+    }
+  }
+
+  // 使用Node.js原生crypto生成SSH密钥
+  private async generateSSHKeyPair(comment: string): Promise<{ publicKey: string; privateKey: string }> {
+    try {
+      // 使用ssh2的密钥生成功能
+      const keys = ssh2Utils.generateKeyPairSync('rsa', {
+        bits: 4096,
+        comment: comment
+      });
+      
+      return {
+        publicKey: keys.public,
+        privateKey: keys.private
+      };
+    } catch (error) {
+      // 如果ssh2生成失败，回退到shell命令
+      throw new Error(`密钥生成失败: ${error}`);
+    }
+  }
+
   // 生成SSH密钥
   private async generateSSHKeys(msg: Api.Message, client: any, mode: "add" | "replace" = "add"): Promise<void> {
     await msg.edit({ text: "🔄 正在生成SSH密钥对...", parseMode: "html" });
@@ -426,28 +470,53 @@ class SSHPlugin extends Plugin {
     const timestamp = dayjs().format("YYYYMMDD_HHmmss");
     const workDir = path.join(createDirectoryInTemp("sshkey"), `keys_${timestamp}`);
     const keyName = `ssh_key_${timestamp}`;
+    const comment = `generated_${timestamp}`;
 
     try {
       // 创建工作目录
       fs.mkdirSync(workDir, { recursive: true });
 
-      // 生成RSA密钥对 - 使用验证过的路径
-      if (!validatePath(keyName)) {
-        throw new Error("密钥名称包含非法字符");
-      }
-      const keyPath = path.join(workDir, keyName);
-      const escapedPath = shellEscape(keyPath);
-      const escapedComment = shellEscape(`generated_${timestamp}`);
+      let privateKey: string;
+      let publicKey: string;
       
-      await execAsync(`ssh-keygen -t rsa -b 4096 -f ${escapedPath} -N "" -C ${escapedComment}`);
+      // 尝试使用ssh2库生成密钥
+      try {
+        await msg.edit({ text: "🔄 使用Node.js原生方法生成密钥...", parseMode: "html" });
+        const keyPair = await this.generateSSHKeyPair(comment);
+        privateKey = keyPair.privateKey;
+        publicKey = keyPair.publicKey;
+      } catch {
+        // 回退到传统ssh-keygen方法
+        await msg.edit({ text: "🔄 回退到ssh-keygen方法生成密钥...", parseMode: "html" });
+        
+        if (!validatePath(keyName)) {
+          throw new Error("密钥名称包含非法字符");
+        }
+        const keyPath = path.join(workDir, keyName);
+        const escapedPath = shellEscape(keyPath);
+        const escapedComment = shellEscape(comment);
+        
+        await execAsync(`ssh-keygen -t rsa -b 4096 -f ${escapedPath} -N "" -C ${escapedComment}`);
+        
+        privateKey = fs.readFileSync(keyPath, "utf-8");
+        publicKey = fs.readFileSync(`${keyPath}.pub`, "utf-8");
+      }
+      
+      // 验证生成的公钥
+      const validation = this.validateSSHPublicKey(publicKey);
+      if (!validation.valid) {
+        throw new Error("生成的SSH密钥格式无效");
+      }
 
-      // 读取密钥文件
-      const privateKey = fs.readFileSync(keyPath, "utf-8");
-      const publicKey = fs.readFileSync(`${keyPath}.pub`, "utf-8");
-
+      // 保存密钥文件用于压缩包
+      const keyPath = path.join(workDir, keyName);
+      fs.writeFileSync(keyPath, privateKey);
+      fs.writeFileSync(`${keyPath}.pub`, publicKey);
+      
       // 尝试转换为PPK格式
       let ppkKey = "";
       try {
+        const escapedPath = shellEscape(keyPath);
         await execAsync(`puttygen ${escapedPath} -o ${escapedPath}.ppk`);
         ppkKey = fs.readFileSync(`${keyPath}.ppk`, "utf-8");
       } catch {
@@ -571,15 +640,32 @@ class SSHPlugin extends Plugin {
       keyList += `📊 <b>总计:</b> ${keys.length} 个密钥\n\n`;
       
       keys.forEach((key, index) => {
-        const parts = key.trim().split(' ');
-        const keyType = parts[0] || '未知类型';
-        const comment = parts[2] || '无备注';
-        const keyPreview = parts[1] ? `${parts[1].substring(0, 20)}...` : '无效密钥';
+        // 使用新的验证逻辑验证密钥
+        const validation = this.validateSSHPublicKey(key);
+        
+        let keyType: string;
+        let comment: string;
+        let keyPreview: string;
+        
+        if (validation.valid) {
+          keyType = validation.type || '未知类型';
+          comment = validation.comment || '无备注';
+          // 获取密钥指纹用于预览
+          const parts = key.trim().split(' ');
+          keyPreview = parts[1] ? `${parts[1].substring(0, 20)}...` : '有效密钥';
+        } else {
+          // 对于无效密钥，尝试解析基本信息
+          const parts = key.trim().split(' ');
+          keyType = parts[0] || '未知类型';
+          comment = parts[2] || '无备注';
+          keyPreview = '无效密钥';
+        }
         
         keyList += `🔑 <b>密钥 ${index + 1}:</b>\n`;
-        keyList += `   类型: <code>${keyType}</code>\n`;
+        keyList += `   类型: <code>${htmlEscape(keyType)}</code>\n`;
         keyList += `   备注: <code>${htmlEscape(comment)}</code>\n`;
-        keyList += `   预览: <code>${keyPreview}</code>\n\n`;
+        keyList += `   预览: <code>${keyPreview}</code>\n`;
+        keyList += `   状态: ${validation.valid ? '✅ 有效' : '❌ 无效'}\n\n`;
       });
       
       keyList += `💡 <b>提示:</b> 使用 <code>${mainPrefix}ssh keys clear</code> 清空所有密钥`;
@@ -992,25 +1078,59 @@ class SSHPlugin extends Plugin {
     }
   }
 
+  // 自动生成用户账户
+  private async generateUserAccount(): Promise<{ username: string; password: string }> {
+    // 生成更安全的随机用户名和密码
+    const timestamp = dayjs().format("YYYYMMDD_HHmmss");
+    const randomSuffix = Math.random().toString(36).substring(2, 8);
+    const username = `user_${timestamp}_${randomSuffix}`;
+    
+    // 生成复杂密码：包含大小写字母、数字、特殊字符
+    const chars = {
+      lower: "abcdefghijklmnopqrstuvwxyz",
+      upper: "ABCDEFGHIJKLMNOPQRSTUVWXYZ", 
+      numbers: "0123456789",
+      symbols: "!@#$%^&*"
+    };
+    
+    let password = "";
+    // 确保每种类型的字符至少包含2个
+    Object.values(chars).forEach(charset => {
+      for (let i = 0; i < 2; i++) {
+        password += charset.charAt(Math.floor(Math.random() * charset.length));
+      }
+    });
+    
+    // 填充到16位
+    const allChars = Object.values(chars).join("");
+    while (password.length < 16) {
+      password += allChars.charAt(Math.floor(Math.random() * allChars.length));
+    }
+    
+    // 随机打乱密码字符顺序
+    password = password.split("").sort(() => Math.random() - 0.5).join("");
+    
+    return { username, password };
+  }
+
   // 创建备用用户账户
   private async createBackupUser(msg: Api.Message): Promise<{ username: string; password: string } | null> {
     try {
-      // 生成随机用户名和密码
-      const timestamp = Date.now().toString().slice(-6);
-      const username = `admin${timestamp}`;
-      const password = Math.random().toString(36).slice(-12) + "A1!";
+      // 使用新的用户生成逻辑
+      const userAccount = await this.generateUserAccount();
+      const { username, password } = userAccount;
       
       await msg.edit({ text: "🔄 正在创建备用管理员账户...", parseMode: "html" });
       
       // 创建用户
-      await execAsync(`sudo useradd -m -s /bin/bash ${username}`);
+      await execAsync(`sudo useradd -m -s /bin/bash ${shellEscape(username)}`);
       
       // 设置密码
       const escapedPassword = shellEscape(password);
-      await execAsync(`echo '${username}:${escapedPassword}' | sudo chpasswd`);
+      await execAsync(`echo '${shellEscape(username)}:${escapedPassword}' | sudo chpasswd`);
       
       // 添加到sudo组
-      await execAsync(`sudo usermod -aG sudo ${username}`);
+      await execAsync(`sudo usermod -aG sudo ${shellEscape(username)}`);
       
       return { username, password };
     } catch (error) {
