@@ -1,0 +1,111 @@
+{
+  "width": 80,
+  "height": 75,
+  "res": [
+    {
+      "url": "xj/xj0.png",
+      "delay": 50,
+      "you": {
+        "x": 6,
+        "y": 46,
+        "rotate": 90,
+        "mask": "xj/me.png"
+      },
+      "me": {
+        "x": 40,
+        "y": 4,
+        "mask": "xj/me.png"
+      }
+    },
+    {
+      "url": "xj/xj1.png",
+      "delay": 50,
+      "you": {
+        "x": 6,
+        "y": 46,
+        "rotate": 90,
+        "mask": "xj/me.png"
+      },
+      "me": {
+        "x": 40,
+        "y": 4,
+        "mask": "xj/me.png"
+      }
+    },
+    {
+      "url": "xj/xj2.png",
+      "delay": 50,
+      "you": {
+        "x": 6,
+        "y": 46,
+        "rotate": 90,
+        "mask": "xj/me.png"
+      },
+      "me": {
+        "x": 40,
+        "y": 4,
+        "mask": "xj/me.png"
+      }
+    },
+    {
+      "url": "xj/xj3.png",
+      "delay": 50,
+      "you": {
+        "x": 6,
+        "y": 46,
+        "rotate": 90,
+        "mask": "xj/me.png"
+      },
+      "me": {
+        "x": 40,
+        "y": 4,
+        "mask": "xj/me.png"
+      }
+    },
+    {
+      "url": "xj/xj4.png",
+      "delay": 50,
+      "you": {
+        "x": 6,
+        "y": 46,
+        "rotate": 90,
+        "mask": "xj/me.png"
+      },
+      "me": {
+        "x": 40,
+        "y": 4,
+        "mask": "xj/me.png"
+      }
+    },
+    {
+      "url": "xj/xj5.png",
+      "delay": 50,
+      "you": {
+        "x": 6,
+        "y": 46,
+        "rotate": 90,
+        "mask": "xj/me.png"
+      },
+      "me": {
+        "x": 40,
+        "y": 4,
+        "mask": "xj/me.png"
+      }
+    },
+    {
+      "url": "xj/xj6.png",
+      "delay": 50,
+      "you": {
+        "x": 6,
+        "y": 46,
+        "rotate": 90,
+        "mask": "xj/me.png"
+      },
+      "me": {
+        "x": 40,
+        "y": 4,
+        "mask": "xj/me.png"
+      }
+    }
+  ]
+}

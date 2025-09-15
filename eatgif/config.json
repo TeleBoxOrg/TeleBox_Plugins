@@ -7,6 +7,10 @@
     "url": "dr/dr.json",
     "desc": "想要了吧"
   },
+  "j": {
+    "url": "j/j.json",
+    "desc": "撅"
+  },
   "kz": {
     "url": "kz/kz.json",
     "desc": "看来真得铐走你了"
@@ -18,5 +22,9 @@
   "rf": {
     "url": "rf/rf.json",
     "desc": "日翻你"
+  },
+  "xj": {
+    "url": "xj/xj.json",
+    "desc": "小撅"
   }
 }
