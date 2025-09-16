@@ -1885,7 +1885,7 @@ ${apiKey ? "✅" : "⚪"} <b>AI搜索:</b> ${apiKey ? "已启用" : "未配置"}
         });
 
         // 使用 yt-dlp 搜索，加入"動態歌詞"关键词
-        const searchQuery = `${recognitionText} 動態歌詞`;
+        const searchQuery = `${recognitionText} lyrics`;
         url = await this.downloader.search(searchQuery, metadata.duration);
       }
 
