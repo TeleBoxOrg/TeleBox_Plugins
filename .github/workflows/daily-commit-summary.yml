@@ -39,6 +39,28 @@ jobs:
       with:
         node-version: '18'
         
+    - name: Debug - Check environment variables
+      run: |
+        echo "🔍 调试信息："
+        echo "Secrets 配置状态："
+        echo "TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN != '' && '已配置' || '未配置' }}"
+        echo "TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID != '' && '已配置' || '未配置' }}"
+        echo "GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY != '' && '已配置' || '未配置' }}"
+        
+        # 显示 API Key 长度（不显示内容）
+        if [ -n "${{ secrets.GEMINI_API_KEY }}" ]; then
+          echo "GEMINI_API_KEY 长度: $(echo -n '${{ secrets.GEMINI_API_KEY }}' | wc -c) 字符"
+          echo "GEMINI_API_KEY 前缀: $(echo -n '${{ secrets.GEMINI_API_KEY }}' | cut -c1-6)..."
+        fi
+        
+    - name: Test Gemini API connection
+      env:
+        GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+      run: |
+        echo "🧪 测试 Gemini API 连接..."
+        node TeleBox_Plugins/scripts/test-gemini.js
+      continue-on-error: true
+        
     - name: Generate commit summary and send to Telegram
       env:
         TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
@@ -47,4 +69,8 @@ jobs:
         TARGET_DATE: ${{ github.event.inputs.date }}
         CHECKOUT_SUCCESS: ${{ steps.checkout-telebox.outcome == 'success' }}
       run: |
+        echo "📊 开始生成提交摘要..."
+        echo "环境变量传递状态："
+        echo "  - GEMINI_API_KEY 是否存在: $([ -n "$GEMINI_API_KEY" ] && echo '是' || echo '否')"
+        echo "  - GEMINI_API_KEY 长度: $(echo -n "$GEMINI_API_KEY" | wc -c)"
         node TeleBox_Plugins/scripts/commit-summary.js
