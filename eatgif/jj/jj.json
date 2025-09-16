@@ -1,0 +1,272 @@
+{
+  "width": 111,
+  "height": 54,
+  "res": [
+    {
+      "url": "jj/jj0.png",
+      "delay": 50,
+      "you": {
+        "x": 57,
+        "y": 4,
+        "mask": "jj/me.png"
+      },
+      "me": {
+        "x": 10,
+        "y": 6,
+        "mask": "jj/me.png"
+      }
+    },
+    {
+      "url": "jj/jj1.png",
+      "delay": 50,
+      "you": {
+        "x": 55,
+        "y": 5,
+        "mask": "jj/me.png"
+      },
+      "me": {
+        "x": 3,
+        "y": 6,
+        "mask": "jj/me.png"
+      }
+    },
+    {
+      "url": "jj/jj2.png",
+      "delay": 50,
+      "you": {
+        "x": 58,
+        "y": 7,
+        "mask": "jj/me.png"
+      },
+      "me": {
+        "x": 32,
+        "y": 7,
+        "mask": "jj/me.png"
+      }
+    },
+    {
+      "url": "jj/jj3.png",
+      "delay": 50,
+      "you": {
+        "x": 57,
+        "y": 5,
+        "mask": "jj/me.png"
+      },
+      "me": {
+        "x": 22,
+        "y": 7,
+        "mask": "jj/me.png"
+      }
+    },
+    {
+      "url": "jj/jj4.png",
+      "delay": 50,
+      "you": {
+        "x": 53,
+        "y": 8,
+        "mask": "jj/me.png"
+      },
+      "me": {
+        "x": 13,
+        "y": 4,
+        "mask": "jj/me.png"
+      }
+    },
+    {
+      "url": "jj/jj5.png",
+      "delay": 50,
+      "you": {
+        "x": 54,
+        "y": 9,
+        "mask": "jj/me.png"
+      },
+      "me": {
+        "x": 21,
+        "y": 6,
+        "mask": "jj/me.png"
+      }
+    },
+    {
+      "url": "jj/jj6.png",
+      "delay": 50,
+      "you": {
+        "x": 64,
+        "y": 5,
+        "mask": "jj/me.png"
+      },
+      "me": {
+        "x": 30,
+        "y": 6,
+        "mask": "jj/me.png"
+      }
+    },
+    {
+      "url": "jj/jj7.png",
+      "delay": 50,
+      "you": {
+        "x": 66,
+        "y": 8,
+        "mask": "jj/me.png"
+      },
+      "me": {
+        "x": 22,
+        "y": 2,
+        "mask": "jj/me.png"
+      }
+    },
+    {
+      "url": "jj/jj8.png",
+      "delay": 50,
+      "you": {
+        "x": 70,
+        "y": 9,
+        "mask": "jj/me.png"
+      },
+      "me": {
+        "x": 22,
+        "y": 3,
+        "mask": "jj/me.png"
+      }
+    },
+    {
+      "url": "jj/jj9.png",
+      "delay": 50,
+      "you": {
+        "x": 73,
+        "y": 8,
+        "mask": "jj/me.png"
+      },
+      "me": {
+        "x": 26,
+        "y": 8,
+        "mask": "jj/me.png"
+      }
+    },
+    {
+      "url": "jj/jj10.png",
+      "delay": 50,
+      "you": {
+        "x": 81,
+        "y": 10,
+        "mask": "jj/me.png"
+      },
+      "me": {
+        "x": 23,
+        "y": 8,
+        "mask": "jj/me.png"
+      }
+    },
+    {
+      "url": "jj/jj11.png",
+      "delay": 50,
+      "you": {
+        "x": 77,
+        "y": 10,
+        "mask": "jj/me.png"
+      },
+      "me": {
+        "x": 27,
+        "y": 10,
+        "mask": "jj/me.png"
+      }
+    },
+    {
+      "url": "jj/jj12.png",
+      "delay": 50,
+      "you": {
+        "x": 72,
+        "y": 4,
+        "mask": "jj/me.png"
+      },
+      "me": {
+        "x": 30,
+        "y": 9,
+        "mask": "jj/me.png"
+      }
+    },
+    {
+      "url": "jj/jj13.png",
+      "delay": 50,
+      "you": {
+        "x": 79,
+        "y": 8,
+        "mask": "jj/me.png"
+      },
+      "me": {
+        "x": 17,
+        "y": 6,
+        "mask": "jj/me.png"
+      }
+    },
+    {
+      "url": "jj/jj14.png",
+      "delay": 50,
+      "you": {
+        "x": 50,
+        "y": 8,
+        "mask": "jj/me.png"
+      },
+      "me": {
+        "x": 12,
+        "y": 8,
+        "mask": "jj/me.png"
+      }
+    },
+    {
+      "url": "jj/jj15.png",
+      "delay": 50,
+      "you": {
+        "x": 60,
+        "y": 7,
+        "mask": "jj/me.png"
+      },
+      "me": {
+        "x": 11,
+        "y": 7,
+        "mask": "jj/me.png"
+      }
+    },
+    {
+      "url": "jj/jj16.png",
+      "delay": 50,
+      "you": {
+        "x": 67,
+        "y": 6,
+        "mask": "jj/me.png"
+      },
+      "me": {
+        "x": 8,
+        "y": 6,
+        "mask": "jj/me.png"
+      }
+    },
+    {
+      "url": "jj/jj17.png",
+      "delay": 50,
+      "you": {
+        "x": 60,
+        "y": 6,
+        "mask": "jj/me.png"
+      },
+      "me": {
+        "x": -2,
+        "y": 10,
+        "mask": "jj/me.png"
+      }
+    },
+    {
+      "url": "jj/jj18.png",
+      "delay": 50,
+      "you": {
+        "x": 50,
+        "y": 9,
+        "mask": "jj/me.png"
+      },
+      "me": {
+        "x": 4,
+        "y": 9,
+        "mask": "jj/me.png"
+      }
+    }
+  ]
+}
