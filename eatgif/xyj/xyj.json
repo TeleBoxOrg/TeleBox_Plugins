@@ -1,0 +1,126 @@
+{
+  "width": 512,
+  "height": 498,
+  "res": [
+    {
+      "url": "xyj/xyj.png",
+      "delay": 30,
+      "me": {
+        "x": 82,
+        "y": 73,
+        "rotate": 30,
+        "mask": "xyj/me.png"
+      }
+    },
+    {
+      "url": "xyj/xyj.png",
+      "delay": 30,
+      "me": {
+        "x": 82,
+        "y": 73,
+        "rotate": 30,
+        "mask": "xyj/me.png"
+      }
+    },
+    {
+      "url": "xyj/xyj.png",
+      "delay": 30,
+      "me": {
+        "x": 82,
+        "y": 73,
+        "rotate": 30,
+        "mask": "xyj/me.png"
+      }
+    },
+    {
+      "url": "xyj/xyj.png",
+      "delay": 30,
+      "me": {
+        "x": 82,
+        "y": 73,
+        "rotate": 30,
+        "mask": "xyj/me.png"
+      }
+    },
+    {
+      "url": "xyj/xyj.png",
+      "delay": 30,
+      "me": {
+        "x": 82,
+        "y": 73,
+        "rotate": 30,
+        "mask": "xyj/me.png"
+      }
+    },
+    {
+      "url": "xyj/xyj.png",
+      "delay": 30,
+      "me": {
+        "x": 82,
+        "y": 73,
+        "rotate": 30,
+        "mask": "xyj/me.png"
+      }
+    },
+    {
+      "url": "xyj/xyj.png",
+      "delay": 30,
+      "me": {
+        "x": 82,
+        "y": 73,
+        "rotate": 30,
+        "mask": "xyj/me.png"
+      }
+    },
+    {
+      "url": "xyj/xyj.png",
+      "delay": 30,
+      "me": {
+        "x": 82,
+        "y": 73,
+        "rotate": 30,
+        "mask": "xyj/me.png"
+      }
+    },
+    {
+      "url": "xyj/xyj.png",
+      "delay": 30,
+      "me": {
+        "x": 82,
+        "y": 73,
+        "rotate": 30,
+        "mask": "xyj/me.png"
+      }
+    },
+    {
+      "url": "xyj/xyj.png",
+      "delay": 30,
+      "me": {
+        "x": 82,
+        "y": 73,
+        "rotate": 30,
+        "mask": "xyj/me.png"
+      }
+    },
+    {
+      "url": "xyj/xyj.png",
+      "delay": 30,
+      "me": {
+        "x": 82,
+        "y": 73,
+        "rotate": 30,
+        "mask": "xyj/me.png"
+      }
+    },
+    {
+      "url": "xyj/xyj.png",
+      "delay": 30,
+      "me": {
+        "x": 82,
+        "y": 73,
+        "rotate": 30,
+        "mask": "xyj/me.png"
+      }
+    }
+  ]
+}

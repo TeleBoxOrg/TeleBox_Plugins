@@ -30,5 +30,9 @@
   "xj": {
     "url": "xj/xj.json",
     "desc": "小撅"
+  },
+  "xyj": {
+    "url": "xyj/xyj.json",
+    "desc": "doro洗衣机"
   }
 }
