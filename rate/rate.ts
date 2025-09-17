@@ -54,15 +54,30 @@ class RatePlugin extends Plugin {
 
   // 货币缓存 - 提高性能，避免重复API调用
   private currencyCache: Record<string, {id: string, symbol: string, name: string, type: 'crypto' | 'fiat'}> = {};
+  // 支持的法币集（从 CoinGecko 动态获取并缓存）
+  private vsFiats: Set<string> | null = null;
   
-  // 常用法币列表 - 用于判断货币类型
-  private commonFiats = ['usd', 'cny', 'eur', 'jpy', 'krw', 'gbp', 'try', 'rub', 'inr', 'aud', 'cad', 'hkd', 'sgd', 'thb', 'brl', 'mxn', 'sar', 'aed', 'twd', 'chf'];
-
+  // 常用法币列表 - 用于判断货币类型（作为网络失败时的后备）
+  private commonFiats = ['usd', 'cny', 'ngn', 'eur', 'jpy', 'krw', 'gbp', 'try', 'rub', 'inr', 'aud', 'cad', 'hkd', 'sgd', 'thb', 'brl', 'mxn', 'sar', 'aed', 'twd', 'chf'];
+  
   cmdHandlers: Record<string, (msg: Api.Message) => Promise<void>> = {
     rate: async (msg: Api.Message) => {
       await this.handleRate(msg);
     }
   };
+
+  // 动态判断是否为法币（优先使用网络列表，失败则回退本地列表）
+  private async isFiat(query: string): Promise<boolean> {
+    if (!this.vsFiats) {
+      try {
+        const { data } = await axios.get('https://api.coingecko.com/api/v3/simple/supported_vs_currencies', { timeout: 8000 });
+        this.vsFiats = new Set((data || []).map((x: string) => x.toLowerCase()));
+      } catch {
+        this.vsFiats = new Set(this.commonFiats);
+      }
+    }
+    return this.vsFiats.has(query.toLowerCase());
+  }
 
   // 搜索货币的API函数 - 支持加密货币和法币
   private async searchCurrency(query: string): Promise<{id: string, symbol: string, name: string, type: 'crypto' | 'fiat'} | null> {
@@ -72,8 +87,8 @@ class RatePlugin extends Plugin {
       return cached;
     }
     
-    // 优先检查是否为常用法币 - 避免与加密货币符号冲突
-    if (this.commonFiats.includes(query.toLowerCase())) {
+    // 优先动态检查是否为法币 - 避免与加密货币符号冲突
+    if (await this.isFiat(query)) {
       const result = {
         id: query.toLowerCase(),
         symbol: query.toUpperCase(),
