@@ -67,6 +67,7 @@ npm i <插件名>
 - `sunremove` - 定向批量解除封禁用户  
 - `t` - 文字转语音  
 - `trace` - 全局追踪点赞插件  
+- `warp` - warp管理  
 - `weather` - 天气查询  
 - `whois` - 域名查询插件  
 - `yinglish` - 淫语翻译  
