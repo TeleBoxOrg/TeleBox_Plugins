@@ -118,13 +118,18 @@ async function editMediaMessageToAntiRecall(
         attr instanceof Api.DocumentAttributeSticker
       );
       if (isSticker) {
-        console.log(`[DME] 跳过贴纸消息编辑: ${message.id}`);
         return false;
       }
     }
   }
 
   if (!trollImagePath || !fs.existsSync(trollImagePath)) {
+    return false;
+  }
+
+  // 超过可编辑时间窗口(48h)则静默跳过，避免 MESSAGE_EDIT_TIME_EXPIRED
+  const nowSec = Math.floor(Date.now() / 1000);
+  if (typeof (message as any).date === "number" && nowSec - (message as any).date > 172800) {
     return false;
   }
 
@@ -147,8 +152,8 @@ async function editMediaMessageToAntiRecall(
       })
     );
     return true;
-  } catch (error) {
-    console.error("[DME] 编辑媒体消息失败:", error);
+  } catch {
+    // 任意编辑失败(含 MESSAGE_EDIT_TIME_EXPIRED)静默跳过
     return false;
   }
 }
@@ -297,7 +302,6 @@ async function searchEditAndDeleteMyMessages(
           attr instanceof Api.DocumentAttributeSticker
         );
         if (isSticker) {
-          console.log(`[DME] 跳过贴纸消息分类: ${m.id}`);
           return false;
         }
       }
