@@ -1,7 +1,7 @@
 /**
  * Music Plugin for TeleBox
  * Professional YouTube audio downloader with AI-enhanced search
- * @version 3.0.1
+ * @version 3.0.0
  * @author TeleBox Team
  */
 
@@ -2060,7 +2060,7 @@ ${apiKey ? "✅" : "⚪"} <b>AI搜索:</b> ${apiKey ? "已启用" : "未配置"}
       const fileName = path.basename(downloadResult.audioPath);
       const sendParams: any = {
         file: downloadResult.audioPath,
-        replyTo: msg.id,
+        // replyTo 移除：发送为新消息而非回复
         forceDocument: false, // 作为音频发送而不是文档
         // 不添加 caption，只发送音频文件
         attributes: [
