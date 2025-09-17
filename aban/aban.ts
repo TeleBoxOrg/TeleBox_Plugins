@@ -508,13 +508,90 @@ async function canDeleteMessages(
 }
 
 /**
+ * Invoke helper with FLOOD_WAIT backoff
+ */
+async function invokeWithFlood<T>(
+  client: TelegramClient,
+  req: any
+): Promise<T> {
+  try {
+    return await client.invoke(req);
+  } catch (e: any) {
+    const m = /FLOOD_WAIT_(\d+)/.exec(e?.message || "");
+    if (m) {
+      const wait = (parseInt(m[1]) + 1) * 1000;
+      await new Promise((r) => setTimeout(r, wait));
+      return client.invoke(req);
+    }
+    throw e;
+  }
+}
+
+/**
+ * Get common chats (channels/supergroups) with target user
+ */
+async function getCommonChats(
+  client: TelegramClient,
+  uid: number
+): Promise<number[]> {
+  try {
+    const entity: any = await safeGetEntity(client, uid);
+    const inputUser = entity?.accessHash
+      ? new Api.InputUser({ userId: entity.id as any, accessHash: entity.accessHash })
+      : (uid as any);
+    const res: any = await invokeWithFlood(
+      client,
+      new (Api as any).contacts.GetCommonChats({
+        userId: inputUser,
+        maxId: 0,
+        limit: 200,
+      })
+    );
+    const ids = (res.chats || [])
+      .filter((c: any) => c.megagroup || c.broadcast)
+      .map((c: any) => Number(c.id));
+    return ids;
+  } catch (e) {
+    console.log(`[BanManager] GetCommonChats error: ${(e as any).message || e}`);
+    return [];
+  }
+}
+
+/**
+ * Delete all messages of user in common chats only
+ */
+async function deleteHistoryInCommonChats(
+  client: TelegramClient,
+  uid: number
+): Promise<number> {
+  const chats = await getCommonChats(client, uid);
+  const entity: any = await safeGetEntity(client, uid);
+  let count = 0;
+  for (const gid of chats) {
+    try {
+      await invokeWithFlood(
+        client,
+        new Api.channels.DeleteParticipantHistory({ channel: gid, participant: entity })
+      );
+      count++;
+    } catch (e: any) {
+      if (!/CHANNEL_INVALID|CHAT_ADMIN_REQUIRED/.test(e?.message || "")) {
+        console.log(`[BanManager] Delete history in ${gid} failed: ${e?.message}`);
+      }
+    }
+  }
+  return count;
+}
+
+/**
  * Safe ban action with multiple fallback methods
  */
 async function safeBanAction(
   client: TelegramClient,
   chatId: any,
   userId: number,
-  rights: any
+  rights: any,
+  options: { deleteHistory?: boolean } = { deleteHistory: true }
 ): Promise<boolean> {
   try {
     let banSuccess = false;
@@ -598,8 +675,8 @@ async function safeBanAction(
       }
     }
 
-    // If permanent ban, try to delete user messages (with proper checks)
-    if (banSuccess && rights.viewMessages) {
+    // Delete history only when explicitly requested (sb 场景关闭)
+    if (banSuccess && rights.viewMessages && options?.deleteHistory) {
       try {
         // Check if this chat supports message deletion
         const canDelete = await canDeleteMessages(client, chatId);
@@ -656,7 +733,8 @@ async function batchBanOperation(
   groups: Array<{ id: number; title: string }>,
   userId: number,
   rights: any,
-  operationName: string = "封禁"
+  operationName: string = "封禁",
+  options: { deleteHistory?: boolean } = {}
 ): Promise<{ success: number; failed: number; failedGroups: string[] }> {
   let success = 0;
   let failed = 0;
@@ -664,7 +742,13 @@ async function batchBanOperation(
 
   const processGroup = async (group: { id: number; title: string }) => {
     try {
-      const result = await safeBanAction(client, group.id, userId, rights);
+      const result = await safeBanAction(
+        client,
+        group.id,
+        userId,
+        rights,
+        options
+      );
       if (result) {
         return { success: true, groupName: null };
       } else {
@@ -1323,8 +1407,12 @@ async function handleSuperBanCommand(
       groups,
       uid,
       rights,
-      "封禁"
+      "封禁",
+      { deleteHistory: false }
     );
+
+    // Then delete messages only in common chats
+    const deletedIn = await deleteHistoryInCommonChats(client, uid);
 
     let resultText = `✅ **批量封禁完成**
 
@@ -1333,6 +1421,7 @@ async function handleSuperBanCommand(
 📝 原因：${htmlEscape(reason)}
 🌐 成功：${success} 群组
 ❌ 失败：${failed} 群组
+🗑️ 清理共同群消息：${deletedIn} 个群
 ⏰ ${new Date().toISOString().replace("T", " ").slice(0, 19)} UTC`;
 
     if (failedGroups.length > 0 && failedGroups.length <= 3) {
