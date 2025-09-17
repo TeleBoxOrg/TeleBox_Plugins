@@ -397,19 +397,6 @@ async function main() {
     message += '\n';
   }
   
-  // 添加时间戳（使用目标日期而不是当前时间）
-  const targetDate = new Date(TARGET_DATE + 'T23:59:59');
-  const timestamp = targetDate.toLocaleString('zh-CN', {
-    year: 'numeric',
-    month: 'numeric', 
-    day: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit',
-    second: '2-digit',
-    timeZone: 'Asia/Shanghai'
-  });
-  message += `\n⏰ 报告生成时间: ${timestamp}`;
-  
   // 检查消息长度，Telegram 限制为 4096 字符
   if (message.length > 4000) {
     console.warn('⚠️ 消息过长，进行截断处理');

@@ -250,5 +250,9 @@
   "ssh": {
     "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/ssh/ssh.ts?raw=true",
     "desc": "ssh管理"
+  },
+  "warp": {
+    "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/warp/warp.ts?raw=true",
+    "desc": "warp管理"
   }
 }

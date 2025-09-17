@@ -1021,6 +1021,128 @@ class Downloader {
     return lines.join("\n");
   }
 
+  // 使用 gdstudio 音乐 API 获取专辑封面，保存到 destPath
+  // 元数据优先使用 AI 解析结果（artist/title/album）
+  private async fetchAlbumCoverUsingAPI(
+    metadata: SongInfo | undefined,
+    destPath: string
+  ): Promise<boolean> {
+    try {
+      if (!metadata || !metadata.title) return false;
+      const COVER_SOURCES = [
+        "tencent",
+        "kuwo",
+        "kugou",
+        "migu",
+        "netease",
+        "ytmusic",
+      ];
+      const BASE = "https://music-api.gdstudio.xyz/api.php";
+
+      const hasArtist = !!metadata.artist && metadata.artist !== "Unknown Artist";
+      const query = hasArtist
+        ? `${metadata.artist} ${metadata.title}`
+        : `${metadata.title}`;
+
+      for (const source of COVER_SOURCES) {
+        try {
+          const searchUrl = `${BASE}?types=search&source=${source}&name=${encodeURIComponent(
+            query
+          )}&count=10&pages=1`;
+          const res = await HttpClient.makeRequest(searchUrl, { method: "GET" });
+          if (res.status !== 200 || !res.data) continue;
+
+          let list: any[] = [];
+          if (Array.isArray(res.data)) list = res.data;
+          else if (Array.isArray(res.data.result)) list = res.data.result;
+          else if (Array.isArray(res.data.data)) list = res.data.data;
+          if (!list.length) continue;
+
+          const lowerTitle = String(metadata.title).toLowerCase();
+          const lowerArtist = String(metadata.artist || "").toLowerCase();
+          let best: any = null;
+          if (hasArtist) {
+            best = list.find(
+              (it: any) =>
+                String(it?.name || "").toLowerCase().includes(lowerTitle) &&
+                String(it?.artist || "").toLowerCase().includes(lowerArtist)
+            );
+          } else {
+            best = list.find((it: any) =>
+              String(it?.name || "").toLowerCase().includes(lowerTitle)
+            );
+          }
+          best = best || list[0];
+          const picId = String(best?.pic_id || "");
+          if (!picId) continue;
+
+          // 获取封面URL
+          const picUrlApi = `${BASE}?types=pic&source=${encodeURIComponent(
+            source
+          )}&id=${encodeURIComponent(picId)}&size=500`;
+          const picRes = await HttpClient.makeRequest(picUrlApi, { method: "GET" });
+          if (picRes.status !== 200 || !picRes.data) continue;
+          let picUrl = "";
+          if (typeof picRes.data === "string") {
+            picUrl = picRes.data;
+          } else if (
+            picRes.data &&
+            (picRes.data.url || picRes.data.pic || picRes.data.image)
+          ) {
+            picUrl = picRes.data.url || picRes.data.pic || picRes.data.image;
+          }
+          if (!picUrl) continue;
+
+          const ok = await this.downloadImageToFile(picUrl, destPath);
+          if (ok) {
+            console.log(`[Music] 已从API获取专辑封面: ${source}`);
+            return true;
+          }
+        } catch (e) {
+          // 尝试下一个源
+          continue;
+        }
+      }
+      return false;
+    } catch {
+      return false;
+    }
+  }
+
+  private async downloadImageToFile(url: string, destPath: string): Promise<boolean> {
+    return new Promise((resolve) => {
+      try {
+        const isHttps = url.startsWith("https:");
+        const client = isHttps ? https : http;
+        const req = client.get(url, (res: any) => {
+          if ((res.statusCode || 0) >= 300 && res.headers.location) {
+            // 处理重定向
+            this.downloadImageToFile(res.headers.location as string, destPath)
+              .then(resolve)
+              .catch(() => resolve(false));
+            return;
+          }
+          const chunks: Buffer[] = [];
+          res.on("data", (c: Buffer) => chunks.push(c));
+          res.on("end", async () => {
+            try {
+              const buf = Buffer.concat(chunks);
+              if (!buf || buf.length === 0) return resolve(false);
+              await fs.promises.writeFile(destPath, buf);
+              resolve(true);
+            } catch {
+              resolve(false);
+            }
+          });
+        });
+        req.on("error", () => resolve(false));
+        req.end();
+      } catch {
+        resolve(false);
+      }
+    });
+  }
+
   async download(
     url: string,
     metadata?: SongInfo
@@ -1054,9 +1176,14 @@ class Downloader {
       }
       if (proxy) authParams += ` --proxy "${proxy}"`;
 
-      // 先获取视频信息和缩略图
+      // 先尝试通过 API 获取专辑封面；失败再回退到视频缩略图
       let hasThumbnail = false;
       let videoInfo: any = null;
+
+      try {
+        const ok = await this.fetchAlbumCoverUsingAPI(metadata, thumbnailPath);
+        if (ok) hasThumbnail = true;
+      } catch {}
 
       // 获取视频元数据
       try {
@@ -1099,39 +1226,41 @@ class Downloader {
         console.log("[music] 无法获取视频信息，使用已有元数据");
       }
 
-      // 下载缩略图
-      try {
-        const thumbCmd = `yt-dlp --write-thumbnail --skip-download -o "${thumbnailPath.replace(
-          ".jpg",
-          ""
-        )}"${authParams} "${url}"`;
-        await execAsync(thumbCmd);
+      // 若 API 未获取到封面，则回退到视频缩略图
+      if (!hasThumbnail) {
+        try {
+          const thumbCmd = `yt-dlp --write-thumbnail --skip-download -o "${thumbnailPath.replace(
+            ".jpg",
+            ""
+          )}"${authParams} "${url}"`;
+          await execAsync(thumbCmd);
 
-        // 检查各种可能的缩略图格式
-        const possibleExts = [".jpg", ".jpeg", ".png", ".webp"];
-        for (const ext of possibleExts) {
-          const possiblePath = thumbnailPath.replace(".jpg", ext);
-          if (fs.existsSync(possiblePath)) {
-            // 如果不是jpg，转换为jpg
-            if (ext !== ".jpg") {
-              await execAsync(
-                `ffmpeg -i "${possiblePath}" -vf "scale=320:320:force_original_aspect_ratio=increase,crop=320:320" "${thumbnailPath}" -y`
-              );
-              fs.unlinkSync(possiblePath);
-            } else {
-              // 调整大小为正方形
-              await execAsync(
-                `ffmpeg -i "${possiblePath}" -vf "scale=320:320:force_original_aspect_ratio=increase,crop=320:320" "${thumbnailPath}_temp.jpg" -y`
-              );
-              fs.renameSync(`${thumbnailPath}_temp.jpg`, thumbnailPath);
+          // 检查各种可能的缩略图格式
+          const possibleExts = [".jpg", ".jpeg", ".png", ".webp"];
+          for (const ext of possibleExts) {
+            const possiblePath = thumbnailPath.replace(".jpg", ext);
+            if (fs.existsSync(possiblePath)) {
+              // 如果不是jpg，转换为jpg
+              if (ext !== ".jpg") {
+                await execAsync(
+                  `ffmpeg -i "${possiblePath}" -vf "scale=320:320:force_original_aspect_ratio=increase,crop=320:320" "${thumbnailPath}" -y`
+                );
+                fs.unlinkSync(possiblePath);
+              } else {
+                // 调整大小为正方形
+                await execAsync(
+                  `ffmpeg -i "${possiblePath}" -vf "scale=320:320:force_original_aspect_ratio=increase,crop=320:320" "${thumbnailPath}_temp.jpg" -y`
+                );
+                fs.renameSync(`${thumbnailPath}_temp.jpg`, thumbnailPath);
+              }
+              hasThumbnail = true;
+              console.log(`[music] 缩略图已下载: ${thumbnailPath}`);
+              break;
             }
-            hasThumbnail = true;
-            console.log(`[music] 缩略图已下载: ${thumbnailPath}`);
-            break;
           }
+        } catch (error) {
+          console.log("[music] 缩略图下载失败，继续下载音频");
         }
-      } catch (error) {
-        console.log("[music] 缩略图下载失败，继续下载音频");
       }
 
       // 读取用户配置的音频质量（可为空）
@@ -1885,7 +2014,7 @@ ${apiKey ? "✅" : "⚪"} <b>AI搜索:</b> ${apiKey ? "已启用" : "未配置"}
         });
 
         // 使用 yt-dlp 搜索，加入"動態歌詞"关键词
-        const searchQuery = `${recognitionText} 動態歌詞`;
+        const searchQuery = `${recognitionText} lyrics`;
         url = await this.downloader.search(searchQuery, metadata.duration);
       }
 
@@ -1931,7 +2060,7 @@ ${apiKey ? "✅" : "⚪"} <b>AI搜索:</b> ${apiKey ? "已启用" : "未配置"}
       const fileName = path.basename(downloadResult.audioPath);
       const sendParams: any = {
         file: downloadResult.audioPath,
-        replyTo: msg.id,
+        // replyTo 移除：发送为新消息而非回复
         forceDocument: false, // 作为音频发送而不是文档
         // 不添加 caption，只发送音频文件
         attributes: [
