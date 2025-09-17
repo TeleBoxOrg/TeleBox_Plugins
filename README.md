@@ -81,6 +81,11 @@ npm i <插件名>
 - **Telegram API**: telegram (GramJS)
 - **图像处理**: Sharp
 - **其他依赖**: axios, lodash 等
+  
+## 声明
+
+本仓库的表情素材等均来自网络，如有侵权请联系作者删除
+
 
 ## 贡献指南
 
