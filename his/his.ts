@@ -14,6 +14,83 @@ import { Api } from "telegram";
 const prefixes = getPrefixes();
 const mainPrefix = prefixes[0];
 
+// 工具函数
+const sleep = (ms: number): Promise<void> =>
+  new Promise((resolve) => setTimeout(resolve, ms));
+
+/**
+ * 使用messages.search高效搜索指定用户的消息
+ * 从dme.ts/da.ts移植的优化搜索函数
+ */
+async function searchUserMessagesOptimized(
+  client: any,
+  chatEntity: any,
+  targetUserId: string | number,
+  limit: number = 30
+): Promise<Api.Message[]> {
+  const userMessages: Api.Message[] = [];
+  let offsetId = 0;
+
+  console.log(`[HIS] 使用优化搜索模式，查询用户 ${targetUserId} 的消息`);
+
+  try {
+    while (userMessages.length < limit) {
+      const batchSize = Math.min(100, limit - userMessages.length);
+      
+      // 使用messages.search直接搜索指定用户的消息
+      const searchResult = await client.invoke(
+        new Api.messages.Search({
+          peer: chatEntity,
+          q: "", // 空查询搜索所有消息
+          fromId: await client.getInputEntity(targetUserId.toString()), // 关键：指定from_id
+          filter: new Api.InputMessagesFilterEmpty(), // 不过滤消息类型
+          minDate: 0,
+          maxDate: 0,
+          offsetId: offsetId,
+          addOffset: 0,
+          limit: batchSize,
+          maxId: 0,
+          minId: 0,
+          hash: 0 as any
+        })
+      );
+
+      // 正确处理搜索结果类型
+      const resultMessages = (searchResult as any).messages;
+      if (!resultMessages || resultMessages.length === 0) {
+        console.log(`[HIS] 搜索完成，共找到 ${userMessages.length} 条用户消息`);
+        break;
+      }
+
+      const messages = resultMessages.filter((m: any) => 
+        (m.className === "Message" || m.className === "MessageService") && 
+        m.senderId?.toString() === targetUserId.toString()
+      );
+
+      if (messages.length > 0) {
+        userMessages.push(...messages);
+        offsetId = messages[messages.length - 1].id;
+        console.log(`[HIS] 批次搜索到 ${messages.length} 条消息，总计 ${userMessages.length} 条`);
+      } else {
+        break;
+      }
+
+      // 避免API限制
+      await sleep(200);
+      
+      // 如果已达到目标数量，退出
+      if (userMessages.length >= limit) {
+        break;
+      }
+    }
+  } catch (error: any) {
+    console.error("[HIS] 优化搜索失败:", error);
+    return [];
+  }
+
+  return userMessages.slice(0, limit);
+}
+
 // HTML转义函数（必需）
 const htmlEscape = (text: string): string => 
   text.replace(/[&<>"']/g, m => ({ 
@@ -22,7 +99,7 @@ const htmlEscape = (text: string): string =>
   }[m] || m));
 
 // 帮助文本定义（必需）
-const help_text = `📜 <b>消息历史查询</b>
+const help_text = `📜 <b>消息历史查询 - 高效版本</b>
 
 <b>使用方法：</b>
 • <code>${mainPrefix}his</code> - 回复消息时查询该用户历史
@@ -35,6 +112,11 @@ const help_text = `📜 <b>消息历史查询</b>
 • <code>${mainPrefix}his @username</code>
 • <code>${mainPrefix}his 123456789 10</code>
 • 回复消息后：<code>${mainPrefix}his 5</code>
+
+<b>🚀 技术改进：</b>
+• 基于Telegram MTProto API的messages.search方法
+• 使用from_id参数直接定位用户消息
+• 避免遍历，显著提升查询效率
 
 <b>注意事项：</b>
 • 仅限群组使用
@@ -232,13 +314,20 @@ class HisPlugin extends Plugin {
     const messages: string[] = [];
 
     try {
-      // 迭代消息
-      const messageIterator = client.iterMessages(chatId, {
-        limit: num,
-        fromUser: targetEntity
-      });
+      // 使用优化搜索获取消息
+      const chatEntity = await client.getEntity(chatId);
+      const foundMessages = await searchUserMessagesOptimized(client, chatEntity, targetEntity, num);
 
-      for await (const message of messageIterator) {
+      if (foundMessages.length === 0) {
+        await msg.edit({
+          text: `❌ 未找到 <b>${htmlEscape(targetDisplay)}</b> 的消息记录`,
+          parseMode: "html"
+        });
+        return;
+      }
+
+      // 处理找到的消息
+      for (const message of foundMessages) {
         count++;
         let messageText = message.text || "";
 
@@ -247,8 +336,8 @@ class HisPlugin extends Plugin {
           messageText = await this.processMediaMessage(message, messageText);
         }
 
-        // 处理服务消息
-        if (message.className === "MessageService") {
+        // 处理服务消息 (类型检查)
+        if ((message as any).className === "MessageService") {
           const action = message.action;
           if (action.className === "MessageActionPinMessage") {
             const pinnedMessage = (action as any).message;
