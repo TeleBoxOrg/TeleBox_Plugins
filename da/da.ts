@@ -20,13 +20,25 @@ const htmlEscape = (text: string): string =>
   }[m] || m));
 
 // 帮助文档常量（必须定义）
-const help_text = `🚀 <b>DA - 群组消息批量删除插件</b>
+const help_text = `🚀 <b>DA - 群组消息批量删除插件 - 高效版本</b>
 
 <b>🔧 使用方法:</b>
 • <code>${mainPrefix}da true</code> - 开始删除任务
 • <code>${mainPrefix}da stop</code> - 停止当前任务
 • <code>${mainPrefix}da status</code> - 查看任务状态
-• <code>${mainPrefix}da help</code> - 显示此帮助 `;
+• <code>${mainPrefix}da help</code> - 显示此帮助
+
+<b>🚀 核心特性:</b>
+• <b>管理员模式:</b> 删除群组内所有消息（使用传统遍历）
+• <b>普通用户模式:</b> 使用messages.search高效删除自己的消息
+• <b>任务管理:</b> 支持暂停、恢复、状态查询
+• <b>进度追踪:</b> 实时更新到收藏夹
+• <b>错误处理:</b> 智能处理API限制和错误重试
+
+<b>⚡ 技术改进:</b>
+• 基于Telegram MTProto API的messages.search方法
+• 普通用户模式避免遍历，直接定位自己的消息
+• 显著提升删除自己消息的效率 `;
 
 // 删除任务状态管理
 interface DeleteTask {
@@ -98,6 +110,75 @@ const removeTask = async (chatId: string) => {
 
 // 初始化数据库
 initDatabase().catch(console.error);
+
+// 工具函数
+const sleep = (ms: number): Promise<void> =>
+  new Promise((resolve) => setTimeout(resolve, ms));
+
+/**
+ * 使用messages.search直接搜索自己的消息 - 高效版本
+ * 从dme.ts移植的优化搜索函数
+ */
+async function searchMyMessagesOptimized(
+  client: TelegramClient,
+  chatEntity: any,
+  myId: bigInt.BigInteger,
+  batchSize: number = 100
+): Promise<Api.Message[]> {
+  const allMyMessages: Api.Message[] = [];
+  let offsetId = 0;
+
+  console.log(`[DA] 使用优化搜索模式，直接定位自己的消息`);
+
+  try {
+    while (true) {
+      // 使用messages.search直接搜索自己的消息
+      const searchResult = await client.invoke(
+        new Api.messages.Search({
+          peer: chatEntity,
+          q: "", // 空查询搜索所有消息
+          fromId: await client.getInputEntity(myId.toString()), // 关键：指定from_id为自己
+          filter: new Api.InputMessagesFilterEmpty(), // 不过滤消息类型
+          minDate: 0,
+          maxDate: 0,
+          offsetId: offsetId,
+          addOffset: 0,
+          limit: batchSize,
+          maxId: 0,
+          minId: 0,
+          hash: 0 as any
+        })
+      );
+
+      // 正确处理搜索结果类型
+      const resultMessages = (searchResult as any).messages;
+      if (!resultMessages || resultMessages.length === 0) {
+        console.log(`[DA] 搜索完成，共找到 ${allMyMessages.length} 条自己的消息`);
+        break;
+      }
+
+      const messages = resultMessages.filter((m: any) => 
+        m.className === "Message" && m.senderId?.toString() === myId.toString()
+      );
+
+      if (messages.length > 0) {
+        allMyMessages.push(...messages);
+        offsetId = messages[messages.length - 1].id;
+        console.log(`[DA] 批次搜索到 ${messages.length} 条消息，总计 ${allMyMessages.length} 条`);
+      } else {
+        break;
+      }
+
+      // 避免API限制
+      await sleep(200);
+    }
+  } catch (error: any) {
+    console.error("[DA] 优化搜索失败:", error);
+    return [];
+  }
+
+  return allMyMessages;
+}
 
 // 发送或更新进度到收藏夹
 const sendProgressToSaved = async (
@@ -514,59 +595,129 @@ const da = async (msg: Api.Message) => {
     const BATCH_SIZE = 100;
     let floodWaitTime = 0;
     let consecutiveErrors = 0;
-    let messages: Api.Message[] = [];
 
-    // 开始删除消息
-    const deleteIterator = client.iterMessages(chatId, { minId: 1 });
-    
-    for await (const message of deleteIterator) {
-      // 检查是否需要停止
-      const currentTask = await getTask(taskId);
-      if (!currentTask || !currentTask.isRunning) {
-        // 最后更新一次收藏夹状态
-        if (client) {
-          await sendProgressToSaved(client, task, "已停止");
-        }
-        return;
-      }
-
-      // 权限过滤
-      if (!isAdmin && message.senderId?.toString() !== myId.toString()) {
-        continue;
-      }
-
-      messages.push(message);
-
-      // 达到批处理大小时执行删除
-      if (messages.length >= BATCH_SIZE) {
-        const batchResult = await deleteBatch(
-          client,
-          chatId,
-          messages,
-          task,
-          floodWaitTime
-        );
-        
-        floodWaitTime = batchResult.floodWaitTime;
-        consecutiveErrors = batchResult.consecutiveErrors;
-        messages = [];
-
-        // 如果连续错误太多，暂停任务
-        if (consecutiveErrors >= 5) {
-          task.isRunning = false;
-          task.isPaused = true;
-          task.errors.push(`连续错误${consecutiveErrors}次，任务自动暂停`);
-          await saveTask(task);
-          
-          await sendProgressToSaved(client, task, "自动暂停");
+    if (isAdmin) {
+      // 管理员模式：使用传统遍历删除所有消息
+      console.log(`[DA] 管理员模式：遍历删除所有消息`);
+      let messages: Api.Message[] = [];
+      
+      const deleteIterator = client.iterMessages(chatId, { minId: 1 });
+      
+      for await (const message of deleteIterator) {
+        // 检查是否需要停止
+        const currentTask = await getTask(taskId);
+        if (!currentTask || !currentTask.isRunning) {
+          // 最后更新一次收藏夹状态
+          if (client) {
+            await sendProgressToSaved(client, task, "已停止");
+          }
           return;
         }
-      }
-    }
 
-    // 删除剩余消息
-    if (messages.length > 0) {
-      await deleteBatch(client, chatId, messages, task, floodWaitTime);
+        messages.push(message);
+
+        // 达到批处理大小时执行删除
+        if (messages.length >= BATCH_SIZE) {
+          const batchResult = await deleteBatch(
+            client,
+            chatId,
+            messages,
+            task,
+            floodWaitTime
+          );
+          
+          floodWaitTime = batchResult.floodWaitTime;
+          consecutiveErrors = batchResult.consecutiveErrors;
+          messages = [];
+
+          // 如果连续错误太多，暂停任务
+          if (consecutiveErrors >= 5) {
+            task.isRunning = false;
+            task.isPaused = true;
+            task.errors.push(`连续错误${consecutiveErrors}次，任务自动暂停`);
+            await saveTask(task);
+            
+            await sendProgressToSaved(client, task, "自动暂停");
+            return;
+          }
+        }
+      }
+
+      // 删除剩余消息
+      if (messages.length > 0) {
+        await deleteBatch(client, chatId, messages, task, floodWaitTime);
+      }
+    } else {
+      // 普通用户模式：使用优化搜索只删除自己的消息
+      console.log(`[DA] 普通用户模式：使用优化搜索删除自己的消息`);
+      
+      try {
+        const chatEntity = await client.getEntity(chatId);
+        const myMessages = await searchMyMessagesOptimized(client, chatEntity, myId, BATCH_SIZE);
+        
+        if (myMessages.length === 0) {
+          console.log(`[DA] 未找到任何自己的消息`);
+          task.isRunning = false;
+          await saveTask(task);
+          await sendProgressToSaved(client, task, "未找到消息");
+          return;
+        }
+
+        console.log(`[DA] 找到 ${myMessages.length} 条自己的消息，开始批量删除`);
+
+        // 分批删除消息，优化进度报告
+        const totalBatches = Math.ceil(myMessages.length / BATCH_SIZE);
+        let currentBatch = 0;
+        
+        for (let i = 0; i < myMessages.length; i += BATCH_SIZE) {
+          currentBatch++;
+          
+          // 检查是否需要停止
+          const currentTask = await getTask(taskId);
+          if (!currentTask || !currentTask.isRunning) {
+            await sendProgressToSaved(client, task, "已停止");
+            return;
+          }
+
+          const batch = myMessages.slice(i, i + BATCH_SIZE);
+          console.log(`[DA] 优化模式：处理批次 ${currentBatch}/${totalBatches}，消息数: ${batch.length}`);
+          
+          const batchResult = await deleteBatch(
+            client,
+            chatId,
+            batch,
+            task,
+            floodWaitTime
+          );
+          
+          floodWaitTime = batchResult.floodWaitTime;
+          consecutiveErrors = batchResult.consecutiveErrors;
+
+          // 更新进度到收藏夹（每隔几个批次更新一次，避免频繁更新）
+          if (currentBatch % 3 === 0 || currentBatch === totalBatches) {
+            const progress = Math.round((currentBatch / totalBatches) * 100);
+            await sendProgressToSaved(client, task, `优化删除进行中 ${progress}%`);
+          }
+
+          // 如果连续错误太多，暂停任务
+          if (consecutiveErrors >= 5) {
+            task.isRunning = false;
+            task.isPaused = true;
+            task.errors.push(`连续错误${consecutiveErrors}次，任务自动暂停`);
+            await saveTask(task);
+            
+            await sendProgressToSaved(client, task, "自动暂停");
+            return;
+          }
+        }
+      } catch (error) {
+        console.error("[DA] 优化删除失败:", error);
+        task.errors.push(`优化删除失败: ${error}`);
+        task.isRunning = false;
+        await saveTask(task);
+        await sendProgressToSaved(client, task, "执行失败");
+        return;
+      }
     }
 
     // 任务完成
