@@ -370,40 +370,61 @@ async function streamProcessMembers(
               shouldProcess = true;
             }
           } else if (mode === "2") {
-            // 按未发言时间
+            // 按未发言时间（使用 messages.search + from_id 快速过滤）
             try {
               const userEntity = await client.getInputEntity(uid);
-              const messages = await client.getMessages(chatEntity, {
-                limit: 1,
-                fromUser: userEntity,
-              });
-
-              if (messages && messages.length > 0) {
-                const lastMessageDate = messages[0].date;
-                const daysDiff = Math.floor(
-                  (Date.now() - lastMessageDate * 1000) / (1000 * 60 * 60 * 24)
-                );
-                if (daysDiff > day) {
-                  shouldProcess = true;
-                }
-              } else {
-                // 从未发言
+              const minDate = Math.floor(Date.now() / 1000) - day * 24 * 60 * 60;
+              const res = await client.invoke(
+                new Api.messages.Search({
+                  peer: chatEntity,
+                  q: "",
+                  filter: new Api.InputMessagesFilterEmpty(),
+                  minDate,
+                  maxDate: undefined as any,
+                  offsetId: 0,
+                  addOffset: 0,
+                  limit: 1,
+                  maxId: 0,
+                  minId: 0,
+                  hash: 0 as any,
+                  fromId: userEntity,
+                })
+              );
+              const cnt = ("count" in (res as any))
+                ? (res as any).count
+                : ((res as any).messages?.length || 0);
+              if (cnt === 0) {
+                // 在最近 N 天内无发言
                 shouldProcess = true;
               }
             } catch (error) {
-              // 获取消息失败时跳过
+              // 获取失败时跳过该用户
               continue;
             }
           } else if (mode === "3") {
-            // 按发言数
+            // 按发言数（使用 messages.search + from_id 获取计数）
             try {
               const userEntity = await client.getInputEntity(uid);
-              const messages = await client.getMessages(chatEntity, {
-                limit: day + 1,
-                fromUser: userEntity,
-              });
-
-              if (messages.length < day) {
+              const res = await client.invoke(
+                new Api.messages.Search({
+                  peer: chatEntity,
+                  q: "",
+                  filter: new Api.InputMessagesFilterEmpty(),
+                  minDate: undefined as any,
+                  maxDate: undefined as any,
+                  offsetId: 0,
+                  addOffset: 0,
+                  limit: 1,
+                  maxId: 0,
+                  minId: 0,
+                  hash: 0 as any,
+                  fromId: userEntity,
+                })
+              );
+              const cnt = ("count" in (res as any))
+                ? (res as any).count
+                : ((res as any).messages?.length || 0);
+              if (cnt < day) {
                 shouldProcess = true;
               }
             } catch (error) {
