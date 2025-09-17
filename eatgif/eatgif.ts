@@ -2,6 +2,7 @@ import { Plugin } from "@utils/pluginBase";
 import sharp from "sharp";
 import axios from "axios";
 import { createDirectoryInAssets } from "@utils/pathHelpers";
+import { getPrefixes } from "@utils/pluginManager";
 import path from "path";
 import fs from "fs";
 import { Api } from "telegram";
@@ -40,7 +41,7 @@ interface EatGifListConfig {
 
 // 测试时可以更换主体url
 const baseRepoURL =
-  "https://github.com/TeleBoxOrg/TeleBox_Plugins/raw/main/eatgif/";
+  "https://github.com/TeleBoxOrg/TeleBox_Plugins/raw/refs/heads/main/eatgif/";
 const baseConfigURL = baseRepoURL + "config.json";
 
 let config: EatGifListConfig;
@@ -51,6 +52,28 @@ async function loadGifListConfig(url: string): Promise<void> {
   config = res.data;
 }
 loadGifListConfig(baseConfigURL);
+
+// 命令前缀与帮助
+const prefixes = getPrefixes();
+const mainPrefix = prefixes[0];
+const pluginName = "eatgif";
+const commandName = `${mainPrefix}${pluginName}`;
+
+const help_text = `🧩 <b>头像动图表情</b>
+
+<b>用法：</b>
+<code>${commandName} [list|ls|clear|名称]</code>
+• <b>空/ list</b>：查看表情列表
+• <b>生成</b>：回复目标并输入名称`;
+
+const htmlEscape = (text: string): string =>
+  String(text || "").replace(/[&<>"']/g, (m) =>
+    (({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#x27;" } as any)[m]) || m
+  );
+
+async function ensureConfig(): Promise<void> {
+  if (!config) await loadGifListConfig(baseConfigURL);
+}
 
 async function loadGifDetailConfig(url: string): Promise<EatGifConfig> {
   const res = await axios.get(baseRepoURL + url);
@@ -72,7 +95,7 @@ async function assetBufferFor(filePath: string): Promise<Buffer> {
 }
 
 class EatGifPlugin extends Plugin {
-  description: string = "生成 eat GIF 版的有趣表情包";
+  description: string = `生成头像融合动图\n\n${help_text}`;
   cmdHandlers: Record<
     string,
     (msg: Api.Message, trigger?: Api.Message) => Promise<void>
@@ -84,56 +107,67 @@ class EatGifPlugin extends Plugin {
   };
 
   private async handleEatGif(msg: Api.Message, trigger?: Api.Message) {
-    const [, ...args] = msg.message.split(" ");
-    const detailCMD = args[0];
-    if (!msg.isReply && !trigger?.isReply) {
-      if (detailCMD == "ls") {
-        await msg.edit({ text: this.listAllStickers() });
-        await msg.deleteWithDelay(10000);
+    const firstLine = (msg.message || msg.text || "").split(/\r?\n/g)[0] || "";
+    const parts = firstLine.trim().split(/\s+/) || [];
+    const [, ...args] = parts;
+    const sub = (args[0] || "").toLowerCase();
+
+    try {
+      await ensureConfig();
+
+      if (!sub || sub === "list" || sub === "ls") {
+        await msg.edit({ text: this.listAllStickers(), parseMode: "html" });
         return;
-      } else if (detailCMD == "clear") {
+      }
+
+      if (sub === "help" || sub === "h") {
+        await msg.edit({ text: help_text, parseMode: "html" });
+        return;
+      }
+
+      if (sub === "clear") {
         await this.clearRes(msg);
         return;
       }
-      await msg.edit({ text: "请回复一个人" });
-      return;
-    }
-    if (!detailCMD) {
-      const randomEatgif = this.getRandomEatGif();
-      await msg.edit({ text: `正在生成 ${config[randomEatgif].desc} 表情包` });
-      await this.generateGif(randomEatgif, {
-        msg,
-        trigger,
+
+      if (!Object.keys(config).includes(sub)) {
+        const text = `❌ 未找到 <code>${htmlEscape(sub)}</code>\n\n${this.listAllStickers()}`;
+        await msg.edit({ text, parseMode: "html" });
+        return;
+      }
+
+      if (!msg.isReply && !trigger?.isReply) {
+        await msg.edit({
+          text: `💡 请先回复一个用户的消息再执行\n\n使用：<code>${commandName} list</code> 查看表情列表`,
+          parseMode: "html",
+        });
+        return;
+      }
+
+      await msg.edit({
+        text: `⏳ 正在生成 <b>${htmlEscape(config[sub].desc)}</b>...`,
+        parseMode: "html",
       });
-      return;
+      await this.generateGif(sub, { msg, trigger });
+    } catch (e: any) {
+      await msg.edit({
+        text: `❌ 失败：${htmlEscape(e?.message || String(e))}`,
+        parseMode: "html",
+      });
     }
-    if (!Object.keys(config).includes(detailCMD)) {
-      const text =
-        `没找到 ${detailCMD} 这个表情包` + "\n\n" + this.listAllStickers();
-      await msg.edit({ text });
-      await msg.deleteWithDelay(10000);
-      return;
-    }
-    await msg.edit({ text: `正在生成 ${config[detailCMD].desc} 表情包` });
-    await this.generateGif(detailCMD, { msg, trigger });
   }
 
   private listAllStickers(): string {
-    let text = "";
-    const keys = Object.keys(config);
-    for (const key of keys) {
-      const name = key;
-      const desc = config[key].desc;
-      text += `${name}: ${desc}\n`;
-    }
-    return text;
+    const keys = Object.keys(config || {});
+    const items = keys.map((k) => `• <code>${htmlEscape(k)}</code> - ${htmlEscape(config[k].desc)}`);
+    const header = `🧩 <b>可用表情列表</b>\n使用：<code>${commandName} &lt;名称&gt;</code>（需回复Ta）\n\n`;
+    return header + items.join("\n");
   }
 
   private async clearRes(msg: Api.Message): Promise<void> {
     fs.rmSync(ASSET_PATH, { recursive: true, force: true });
     await loadGifListConfig(baseConfigURL);
-    await msg.edit({ text: "清理所有缓存资源成功" });
-    await msg.deleteWithDelay(10000);
+    await msg.edit({ text: "🧹 已清理缓存并刷新配置", parseMode: "html" });
   }
 
   private getRandomEatGif(): string {
@@ -248,47 +282,25 @@ class EatGifPlugin extends Plugin {
     role: RoleConfig,
     avatar: Buffer
   ): Promise<sharp.OverlayOptions> {
-    const maskBuffer = await assetBufferFor(role.mask);
-    const { width: maskWidth, height: maskHeight } = await sharp(
-      maskBuffer
-    ).metadata();
+    const maskSharp = sharp(await assetBufferFor(role.mask)).ensureAlpha();
+    const { width, height } = await maskSharp.metadata();
 
-    let iconRotate = await sharp(avatar)
-      .resize(maskWidth, maskHeight)
-      .toBuffer();
-
+    let iconSharp = sharp(avatar).resize(width, height);
     if (role.rotate) {
-      iconRotate = await sharp(iconRotate).rotate(role.rotate).toBuffer();
+      iconSharp = iconSharp.rotate(role.rotate);
     }
+
+    const [iconBuffer, alphaMask] = await Promise.all([
+      iconSharp.toBuffer(),
+      maskSharp.clone().extractChannel("alpha").toBuffer(),
+    ]);
+
+    const pipeline = sharp(iconBuffer).joinChannel(alphaMask);
     if (role.brightness) {
-      iconRotate = await sharp(iconRotate)
-        .modulate({ brightness: role.brightness })
-        .toBuffer();
+      pipeline.modulate({ brightness: role.brightness });
     }
 
-    let iconSharp = sharp(iconRotate);
-
-    const { width: iconWidth, height: iconHeight } = await iconSharp.metadata();
-
-    const left = Math.max(0, Math.floor((iconWidth - maskWidth) / 2));
-    const top = Math.max(0, Math.floor((iconHeight - maskHeight) / 2));
-
-    let cropped = iconSharp.extract({
-      left,
-      top,
-      width: maskWidth,
-      height: maskHeight,
-    });
-
-    let iconMasked = await cropped
-      .composite([
-        {
-          input: maskBuffer,
-          blend: "dest-in", // 保留 mask 区域
-        },
-      ])
-      .png()
-      .toBuffer();
+    const iconMasked = await pipeline.png().toBuffer();
 
     return {
       input: iconMasked,
