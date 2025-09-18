@@ -279,36 +279,57 @@ class EatGifPlugin extends Plugin {
 
   // 拿到每一帧头像位置及裁剪形状
   private async iconMaskedFor(
-    role: RoleConfig,
-    avatar: Buffer
-  ): Promise<sharp.OverlayOptions> {
-    const maskSharp = sharp(await assetBufferFor(role.mask)).ensureAlpha();
-    const { width, height } = await maskSharp.metadata();
+  role: RoleConfig,
+  avatar: Buffer
+): Promise<sharp.OverlayOptions> {
+  const maskBuffer = await assetBufferFor(role.mask);
+  const { width: maskWidth, height: maskHeight } = await sharp(
+    maskBuffer
+  ).metadata();
 
-    let iconSharp = sharp(avatar).resize(width, height);
-    if (role.rotate) {
-      iconSharp = iconSharp.rotate(role.rotate);
-    }
+  let iconRotate = await sharp(avatar)
+    .resize(maskWidth, maskHeight)
+    .toBuffer();
 
-    const [iconBuffer, alphaMask] = await Promise.all([
-      iconSharp.toBuffer(),
-      maskSharp.clone().extractChannel("alpha").toBuffer(),
-    ]);
-
-    const pipeline = sharp(iconBuffer).joinChannel(alphaMask);
-    if (role.brightness) {
-      pipeline.modulate({ brightness: role.brightness });
-    }
-
-    const iconMasked = await pipeline.png().toBuffer();
-
-    return {
-      input: iconMasked,
-      top: role.y,
-      left: role.x,
-    };
+  if (role.rotate) {
+    iconRotate = await sharp(iconRotate).rotate(role.rotate).toBuffer();
+  }
+  if (role.brightness) {
+    iconRotate = await sharp(iconRotate)
+      .modulate({ brightness: role.brightness })
+      .toBuffer();
   }
 
+  let iconSharp = sharp(iconRotate);
+
+  const { width: iconWidth, height: iconHeight } = await iconSharp.metadata();
+
+  const left = Math.max(0, Math.floor((iconWidth - maskWidth) / 2));
+  const top = Math.max(0, Math.floor((iconHeight - maskHeight) / 2));
+
+  let cropped = iconSharp.extract({
+    left,
+    top,
+    width: maskWidth,
+    height: maskHeight,
+  });
+
+  let iconMasked = await cropped
+    .composite([
+      {
+        input: maskBuffer,
+        blend: "dest-in", // 保留 mask 区域
+      },
+    ])
+    .png()
+    .toBuffer();
+
+  return {
+    input: iconMasked,
+    top: role.y,
+    left: role.x,
+  };
+}
   // 获取头像等数据
   private async getSelfAvatarBuffer(
     msg: Api.Message,
