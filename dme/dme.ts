@@ -40,6 +40,10 @@ const htmlEscape = (text: string): string =>
       ] || m)
   );
 
+// 获取命令前缀
+const prefixes = ["."];
+const mainPrefix = prefixes[0];
+
 const sleep = (ms: number): Promise<void> =>
   new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -506,56 +510,66 @@ async function searchEditAndDeleteMyMessages(
 // 已移除频道直接删除功能，避免误删别人消息
 // 所有情况下都使用普通模式，只删除自己的消息
 
+// 定义帮助文本常量
+const help_text = `🗑️ <b>智能防撤回删除插件</b>
+
+<b>命令格式：</b>
+<code>${mainPrefix}dme [数量]</code>
+
+<b>可用命令：</b>
+• <code>${mainPrefix}dme [数量]</code> - 删除指定数量的消息
+• <code>${mainPrefix}dme help</code> - 显示帮助信息
+
+<b>示例：</b>
+• <code>${mainPrefix}dme 10</code> - 删除最近10条消息
+• <code>${mainPrefix}dme 100</code> - 删除最近100条消息
+• <code>${mainPrefix}dme 999999</code> - 删除所有自己的消息`;
+
 const dme = async (msg: Api.Message) => {
-  const text = msg.message || "";
-  const chatId = msg.chatId?.toString() || msg.peerId?.toString() || "";
-  const args = text.trim().split(/\s+/);
-
-  // 解析参数：数量和帮助命令
-  let countArg: string | undefined;
-  let showHelp = false;
-
-  // 检查参数中是否有帮助命令
-  const filteredArgs = args.slice(1).filter((arg) => {
-    if (arg === "help" || arg === "h") {
-      showHelp = true;
-      return false;
-    }
-    return true;
-  });
-
-  countArg = filteredArgs[0];
-
   const client = await getGlobalClient();
   if (!client) {
-    console.error("[DME] 客户端未初始化");
+    await msg.edit({ text: "❌ 客户端未初始化", parseMode: "html" });
     return;
   }
 
-  // 显示帮助文档（仅在明确请求时）
-  if (showHelp) {
-    console.log("[DME] 用户请求帮助文档");
-    console.log(new DmePlugin().description);
-    return;
-  }
-
-  // 参数验证
-  if (!countArg) {
-    console.error("[DME] 参数错误: 请提供要删除的消息数量");
-    console.log("[DME] 提示: 使用 .dme help 查看帮助");
-    return;
-  }
-
-  const userRequestedCount = parseInt(countArg);
-  if (isNaN(userRequestedCount) || userRequestedCount <= 0) {
-    console.error("[DME] 参数错误: 数量必须是正整数");
-    return;
-  }
+  // 标准参数解析
+  const lines = msg.text?.trim()?.split(/\r?\n/g) || [];
+  const parts = lines?.[0]?.split(/\s+/) || [];
+  const [, ...args] = parts;
+  const sub = (args[0] || "").toLowerCase();
 
   try {
+    // 无参数时显示帮助
+    if (!sub) {
+      await msg.edit({
+        text: help_text,
+        parseMode: "html"
+      });
+      return;
+    }
+
+    // 处理 help 命令
+    if (sub === "help" || sub === "h") {
+      await msg.edit({
+        text: help_text,
+        parseMode: "html"
+      });
+      return;
+    }
+
+    // 解析数量参数
+    const userRequestedCount = parseInt(sub);
+    if (isNaN(userRequestedCount) || userRequestedCount <= 0) {
+      await msg.edit({
+        text: `❌ <b>参数错误:</b> 数量必须是正整数\n\n💡 使用 <code>${mainPrefix}dme help</code> 查看帮助`,
+        parseMode: "html"
+      });
+      return;
+    }
+
     const me = await client.getMe();
     const myId = BigInt(me.id.toString());
-
+    const chatId = msg.chatId?.toString() || msg.peerId?.toString() || "";
     const chatEntity = await getEntityWithHash(client, chatId);
 
     // 删除命令消息
@@ -589,38 +603,15 @@ const dme = async (msg: Api.Message) => {
     // 完全静默模式 - 不发送任何前台消息
   } catch (error: any) {
     console.error("[DME] 操作失败:", error);
-    // 静默模式：不显示错误消息
+    await msg.edit({
+      text: `❌ <b>操作失败:</b> ${htmlEscape(error.message || "未知错误")}`,
+      parseMode: "html"
+    });
   }
 };
 
 class DmePlugin extends Plugin {
-  description: string = `智能防撤回删除插件 - 高效版本
-
-参数说明:
-• [数量] - 要删除的消息数量
-
-核心特性:
-• 🚀 高效搜索：基于messages.search API直接定位自己的消息，无需遍历
-• 🧠 智能策略：媒体消息防撤回，文字消息快速删除，贴纸直接删除
-• 🖼️ 媒体消息：替换为防撤回图片（真正防撤回）
-• 📝 文字消息：直接删除（提升速度）
-• 🎯 贴纸处理：跳过编辑直接删除，避免MESSAGE_ID_INVALID错误
-• ⚡ 性能优化：批量处理，减少API调用
-• 🌍 支持所有聊天类型
-
-示例:
-• .dme 10 - 删除最近10条消息
-• .dme 100 - 删除最近100条消息
-• .dme 999999 - 删除所有自己的消息
-
-工作流程:
-1️⃣ 使用messages.search搜索自己的消息 → 2️⃣ 智能分类处理 → 3️⃣ 媒体防撤回 → 4️⃣ 批量删除
-
-技术改进:
-• 基于Telegram MTProto API的messages.search方法
-• 使用from_id参数直接过滤用户消息，避免低效遍历
-• 参考CherryGram等第三方客户端的优化实现
-• 移除传统批次遍历，显著提升性能`;
+  description: string = `智能防撤回删除插件\n\n${help_text}`;
   cmdHandlers: Record<string, (msg: Api.Message) => Promise<void>> = {
     dme,
   };
