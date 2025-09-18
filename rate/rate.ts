@@ -21,33 +21,12 @@ const htmlEscape = (text: string): string =>
 
 const help_text = `🚀 <b>智能汇率查询助手</b>
 
-💡 <b>支持功能</b>
-• 加密货币实时价格
-• 法币汇率转换
-• 多币种智能换算
-
 📊 <b>使用示例</b>
 • <code>rate BTC</code> - 比特币美元价
 • <code>rate ETH CNY</code> - 以太坊人民币价
 • <code>rate CNY TRY</code> - 人民币兑土耳其里拉
 • <code>rate BTC CNY 0.5</code> - 0.5个BTC换算
-• <code>rate CNY USDT 7000</code> - 7000元换USDT
-
-💰 <b>常用加密货币</b>
-BTC ETH BNB SOL XRP ADA DOGE
-MATIC AVAX DOT SHIB LTC UNI LINK
-USDT USDC BUSD DAI
-
-💵 <b>常用法币</b>
-USD CNY EUR JPY GBP KRW TRY
-RUB INR AUD CAD HKD SGD THB
-BRL MXN SAR AED TWD CHF
-
-💡 <b>小贴士</b>
-• 支持所有CoinGecko上的加密货币和法币
-• 货币代码不区分大小写
-• 可添加数量进行换算
-• 法币优先：TRY=土耳其里拉，USD=美元等`;
+• <code>rate CNY USDT 7000</code> - 7000元换USDT`;
 
 class RatePlugin extends Plugin {
   description: string = `加密货币汇率查询 & 数量换算\n\n${help_text}`;
@@ -56,9 +35,10 @@ class RatePlugin extends Plugin {
   private currencyCache: Record<string, {id: string, symbol: string, name: string, type: 'crypto' | 'fiat'}> = {};
   // 支持的法币集（从 CoinGecko 动态获取并缓存）
   private vsFiats: Set<string> | null = null;
+  private vsFiatsTs: number = 0;
+  // 法币汇率缓存（按基准币种缓存一篮子）
+  private fiatRatesCache: Record<string, { rates: Record<string, number>, ts: number }> = {};
   
-  // 常用法币列表 - 用于判断货币类型（作为网络失败时的后备）
-  private commonFiats = ['usd', 'cny', 'ngn', 'eur', 'jpy', 'krw', 'gbp', 'try', 'rub', 'inr', 'aud', 'cad', 'hkd', 'sgd', 'thb', 'brl', 'mxn', 'sar', 'aed', 'twd', 'chf'];
   
   cmdHandlers: Record<string, (msg: Api.Message) => Promise<void>> = {
     rate: async (msg: Api.Message) => {
@@ -66,14 +46,122 @@ class RatePlugin extends Plugin {
     }
   };
 
+  // 规范化货币代码（别名归一）
+  private normalizeCode(s: string | undefined): string {
+    const map: Record<string, string> = { rmb: 'cny', yuan: 'cny', cnh: 'cny' };
+    const k = (s || '').toLowerCase();
+    return map[k] || k;
+  }
+
+  // 获取法币汇率（带多源回退与5分钟缓存）
+  private async fetchFiatRates(base: string): Promise<Record<string, number>> {
+    const key = base.toLowerCase();
+    const now = Date.now();
+    const cached = this.fiatRatesCache[key];
+    if (cached && now - cached.ts < 5 * 60 * 1000) return cached.rates;
+    const endpoints = [
+      `https://api.exchangerate.host/latest?base=${encodeURIComponent(key)}`,
+      `https://open.er-api.com/v6/latest/${encodeURIComponent(key)}`,
+      `https://api.frankfurter.app/latest?from=${encodeURIComponent(key)}`,
+      // Coinbase 公共汇率（含法币与加密货币）
+      `https://api.coinbase.com/v2/exchange-rates?currency=${encodeURIComponent(key.toUpperCase())}`,
+      // jsDelivr 镜像的每日更新静态汇率（无钥，稳定）
+      `https://cdn.jsdelivr.net/gh/fawazahmed0/currency-api@1/latest/currencies/${encodeURIComponent(key.toLowerCase())}.json`
+    ];
+    for (const url of endpoints) {
+      try {
+        const { data } = await axios.get(url, { timeout: 8000 });
+        let rates: Record<string, number> | null = null;
+        // 标准结构与 open.er-api、frankfurter
+        if (data?.rates) rates = data.rates;
+        if (data?.result === 'success' && data?.rates) rates = data.rates;
+        // Coinbase 结构: { data: { rates: { USD: "1", ... } } }
+        if (!rates && data?.data?.rates) rates = data.data.rates;
+        // Fawaz Ahmed currency API: { date: '...', usd: { eur: 0.93, ... } }
+        if (!rates && typeof data === 'object' && data && data[key]) rates = data[key];
+        if (rates) {
+          const normalized = Object.fromEntries(
+            Object.entries(rates).map(([k, v]) => [k.toLowerCase(), Number(v)])
+          );
+          this.fiatRatesCache[key] = { rates: normalized, ts: now };
+          return normalized;
+        }
+      } catch {}
+    }
+    throw new Error('法币汇率服务不可用');
+  }
+
+  // 智能解析参数：抓取两种货币与数量（数量可在任意位置）
+  private parseArgs(args: string[]): { base: string, quote: string, amount: number } {
+    const tokens = (args || []).map(a => this.normalizeCode(a));
+    let amount = 1;
+    const curr: string[] = [];
+    for (const t of tokens) {
+      const n = parseFloat(t);
+      if (!isNaN(n) && isFinite(n)) amount = n; else curr.push(t);
+    }
+    const base = curr[0] || 'btc';
+    const quote = curr[1] || 'usd';
+    return { base, quote, amount };
+  }
+
+  // 获取加密货币对法币价格，失败则经USD桥接回退
+  private async getCryptoPrice(cryptoId: string, fiat: string): Promise<{ price: number, lastUpdated: Date }> {
+    try {
+      const resp = await this.fetchCryptoPrice([cryptoId], [fiat]);
+      const data = resp[cryptoId];
+      const p = data?.[fiat];
+      if (typeof p === 'number') {
+        const ts = data.last_updated_at ? new Date(data.last_updated_at * 1000) : new Date();
+        return { price: p, lastUpdated: ts };
+      }
+    } catch {}
+    // 回退：USD桥接
+    const usdResp = await this.fetchCryptoPrice([cryptoId], ['usd']);
+    const usdData = usdResp[cryptoId];
+    const usdPrice = usdData?.usd;
+    const ts = usdData?.last_updated_at ? new Date(usdData.last_updated_at * 1000) : new Date();
+    if (typeof usdPrice !== 'number') throw new Error('无法获取USD价格');
+    if (fiat.toLowerCase() === 'usd') {
+      return { price: usdPrice, lastUpdated: ts };
+    }
+    const rates = await this.fetchFiatRates('usd');
+    const rate = rates[fiat.toLowerCase()];
+    if (!rate) throw new Error('无法获取法币汇率');
+    return { price: usdPrice * rate, lastUpdated: ts };
+  }
+
   // 动态判断是否为法币（优先使用网络列表，失败则回退本地列表）
   private async isFiat(query: string): Promise<boolean> {
-    if (!this.vsFiats) {
+    const now = Date.now();
+    if (!this.vsFiats || now - this.vsFiatsTs > 6 * 60 * 60 * 1000) {
+      // 1) CoinGecko vs_currencies
       try {
         const { data } = await axios.get('https://api.coingecko.com/api/v3/simple/supported_vs_currencies', { timeout: 8000 });
         this.vsFiats = new Set((data || []).map((x: string) => x.toLowerCase()));
-      } catch {
-        this.vsFiats = new Set(this.commonFiats);
+        this.vsFiatsTs = now;
+      } catch {}
+      // 2) exchangerate.host /symbols
+      if (!this.vsFiats || this.vsFiats.size === 0) {
+        try {
+          const { data } = await axios.get('https://api.exchangerate.host/symbols', { timeout: 8000 });
+          const symbols = data?.symbols || {};
+          this.vsFiats = new Set(Object.keys(symbols).map(k => k.toLowerCase()));
+          this.vsFiatsTs = now;
+        } catch {}
+      }
+      // 3) frankfurter.app /currencies
+      if (!this.vsFiats || this.vsFiats.size === 0) {
+        try {
+          const { data } = await axios.get('https://api.frankfurter.app/currencies', { timeout: 8000 });
+          this.vsFiats = new Set(Object.keys(data || {}).map(k => k.toLowerCase()));
+          this.vsFiatsTs = now;
+        } catch {}
+      }
+      // 最后兜底：空集合（不使用本地映射）
+      if (!this.vsFiats) {
+        this.vsFiats = new Set();
+        this.vsFiatsTs = now;
       }
     }
     return this.vsFiats.has(query.toLowerCase());
@@ -371,15 +459,10 @@ class RatePlugin extends Plugin {
       await msg.edit({ text: "⚡ 正在获取最新汇率数据...", parseMode: "html" });
       
       // 解析参数 - 智能识别货币类型
-      const input1 = args[0]?.toLowerCase();
-      const input2 = args[1]?.toLowerCase() || 'usd';
-      const amountStr = args[2];
-      let amount = 1;
-
-      // 检查是否为数量转换
-      if (amountStr && !isNaN(parseFloat(amountStr))) {
-        amount = parseFloat(amountStr);
-      }
+      const parsed = this.parseArgs(args as string[]);
+      const input1 = parsed.base;
+      const input2 = parsed.quote;
+      const amount = parsed.amount;
 
       // 使用API搜索所有货币
       await msg.edit({
@@ -497,29 +580,23 @@ class RatePlugin extends Plugin {
       
       console.log(`[RatePlugin] 查询: ${cryptoId} -> ${fiatCurrency}, 数量: ${amount}`);
 
-      // 调用CoinGecko API
-      let priceData: any;
-      try {
-        const response = await this.fetchCryptoPrice([cryptoId], [fiatCurrency]);
-        priceData = response[cryptoId];
-      } catch (error: any) {
-        await msg.edit({
-          text: `❌ <b>获取价格失败:</b> ${error.message}`,
-          parseMode: "html"
-        });
-        return;
+      // 获取价格（支持USD桥接回退），法币↔法币无需获取
+      let price: number = 0;
+      let lastUpdated: Date = new Date();
+      if (!isFiatFiat) {
+        let market: { price: number, lastUpdated: Date };
+        try {
+          market = await this.getCryptoPrice(cryptoId, fiatCurrency);
+        } catch (error: any) {
+          await msg.edit({
+            text: `❌ <b>获取价格失败:</b> ${error.message}`,
+            parseMode: "html"
+          });
+          return;
+        }
+        price = market.price;
+        lastUpdated = market.lastUpdated;
       }
-
-      if (!priceData || !priceData[fiatCurrency]) {
-        await msg.edit({
-          text: "❌ <b>API错误:</b> 无法获取价格数据，请稍后重试",
-          parseMode: "html"
-        });
-        return;
-      }
-
-      const price = priceData[fiatCurrency];
-      const lastUpdated = priceData.last_updated_at ? new Date(priceData.last_updated_at * 1000) : new Date();
 
       // 格式化价格显示 - 显示完整数字
       const formatPrice = (value: number): string => {
@@ -547,39 +624,24 @@ class RatePlugin extends Plugin {
       let responseText: string;
       
       if (isFiatFiat) {
-        // 法币间汇率转换
+        // 法币间汇率转换（直连外汇API）
         const sourceFiatSymbol = input1!.toUpperCase();
         const targetFiatSymbol = input2!.toUpperCase();
-        
-        // 获取两种法币对USDT的汇率
         try {
-          const response = await this.fetchCryptoPrice(['tether'], [fiatInput, targetFiat!]);
-          const usdtData = response['tether'];
-          
-          if (!usdtData || !usdtData[fiatInput] || !usdtData[targetFiat!]) {
-            await msg.edit({
-              text: "❌ <b>无法获取汇率数据</b>",
-              parseMode: "html"
-            });
+          const rates = await this.fetchFiatRates(input1!);
+          const rate = rates[input2!];
+          if (!rate) {
+            await msg.edit({ text: '❌ <b>无法获取目标汇率</b>', parseMode: 'html' });
             return;
           }
-          
-          const sourceRate = usdtData[fiatInput];  // 1 USDT = X CNY
-          const targetRate = usdtData[targetFiat!]; // 1 USDT = Y TRY
-          // 汇率计算：1 CNY = (Y/X) TRY
-          const exchangeRate = targetRate / sourceRate;
-          const convertedAmount = amount * exchangeRate;
-          
-          responseText = `💱 <b>法币汇率</b>\n\n` +
+          const convertedAmount = amount * rate;
+          responseText = `💱 <b>汇率</b>\n\n` +
             `<code>${formatAmount(amount)} ${sourceFiatSymbol} ≈</code>\n` +
             `<code>${formatAmount(convertedAmount)} ${targetFiatSymbol}</code>\n\n` +
-            `📊 <b>汇率:</b> <code>1 ${sourceFiatSymbol} = ${formatAmount(exchangeRate)} ${targetFiatSymbol}</code>\n` +
+            `📊 <b>汇率:</b> <code>1 ${sourceFiatSymbol} = ${formatAmount(rate)} ${targetFiatSymbol}</code>\n` +
             `⏰ <b>更新时间:</b> ${new Date().toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' })}`;
         } catch (error: any) {
-          await msg.edit({
-            text: `❌ <b>获取汇率失败:</b> ${error.message}`,
-            parseMode: "html"
-          });
+          await msg.edit({ text: `❌ <b>获取汇率失败:</b> ${error.message}`, parseMode: 'html' });
           return;
         }
       } else if (isCryptoCrypto) {
@@ -629,7 +691,7 @@ class RatePlugin extends Plugin {
         const sourceCryptoSymbol = currency1?.symbol?.toUpperCase() || cryptoInput?.toUpperCase() || 'UNKNOWN';
         const targetCryptoSymbol = currency2?.symbol?.toUpperCase() || targetCrypto?.toUpperCase() || 'UNKNOWN';
         
-        responseText = `🔄 <b>加密货币间兑换</b>\n\n` +
+        responseText = `💱 <b>汇率</b>\n\n` +
           `<code>${formatAmount(amount)} ${sourceCryptoSymbol} ≈</code>\n` +
           `<code>${formatAmount(convertedAmount)} ${targetCryptoSymbol}</code>\n\n` +
           `💎 <b>兑换比率:</b> <code>1 ${sourceCryptoSymbol} = ${formatAmount(conversionRate)} ${targetCryptoSymbol}</code>\n` +
@@ -641,7 +703,7 @@ class RatePlugin extends Plugin {
         const cryptoSymbol = (isReverse ? currency2?.symbol : currency1?.symbol)?.toUpperCase() || cryptoInput?.toUpperCase() || 'UNKNOWN';
         const fiatSymbol = (isReverse ? currency1?.symbol : currency2?.symbol)?.toUpperCase() || fiatInput?.toUpperCase() || 'UNKNOWN';
         
-        responseText = `💱 <b>法币兑换加密货币</b>\n\n` +
+        responseText = `💱 <b>汇率</b>\n\n` +
           `<code>${formatAmount(amount)} ${fiatSymbol} ≈</code>\n` +
           `<code>${formatAmount(cryptoAmount)} ${cryptoSymbol}</code>\n\n` +
           `💎 <b>当前汇率:</b> <code>1 ${cryptoSymbol} = ${formatPrice(price)} ${fiatSymbol}</code>\n` +
@@ -652,7 +714,7 @@ class RatePlugin extends Plugin {
         const cryptoSymbol = currency1?.symbol?.toUpperCase() || cryptoInput?.toUpperCase() || 'UNKNOWN';
         const fiatSymbol = currency2?.symbol?.toUpperCase() || fiatInput?.toUpperCase() || 'UNKNOWN';
         
-        responseText = `🪙 <b>加密货币兑换法币</b>\n\n` +
+        responseText = `💱 <b>汇率</b>\n\n` +
           `<code>${formatAmount(amount)} ${cryptoSymbol} ≈</code>\n` +
           `<code>${formatAmount(totalValue)} ${fiatSymbol}</code>\n\n` +
           `💎 <b>当前汇率:</b> <code>1 ${cryptoSymbol} = ${formatPrice(price)} ${fiatSymbol}</code>\n` +
@@ -662,7 +724,7 @@ class RatePlugin extends Plugin {
         const cryptoSymbol = currency1?.symbol?.toUpperCase() || cryptoInput?.toUpperCase() || 'UNKNOWN';
         const fiatSymbol = currency2?.symbol?.toUpperCase() || fiatInput?.toUpperCase() || 'UNKNOWN';
         
-        responseText = `📈 <b>实时市场价格</b>\n\n` +
+        responseText = `💱 <b>汇率</b>\n\n` +
           `<code>1 ${cryptoSymbol} = ${formatPrice(price)} ${fiatSymbol}</code>\n\n` +
           `⏰ <b>数据更新:</b> ${lastUpdated.toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' })}`;
       }
