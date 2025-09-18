@@ -224,6 +224,107 @@ async function searchMyMessagesOptimized(
 }
 
 /**
+ * 判断是否为“收藏夹/保存的消息”会话
+ */
+function isSavedMessagesPeer(chatEntity: any, myId: bigint): boolean {
+  return (
+    (chatEntity?.className === "User" && chatEntity?.id?.toString?.() === myId.toString()) ||
+    chatEntity?.className === "PeerSelf" ||
+    chatEntity?.className === "InputPeerSelf" ||
+    ((chatEntity?.className === "PeerUser" || chatEntity?.className === "InputPeerUser") &&
+      chatEntity?.userId?.toString?.() === myId.toString())
+  );
+}
+
+/**
+ * 收藏夹直接按数量删除（不做媒体编辑）
+ */
+async function deleteInSavedMessages(
+  client: TelegramClient,
+  chatEntity: any,
+  userRequestedCount: number
+): Promise<{ processedCount: number; actualCount: number; editedCount: number }> {
+  const target = userRequestedCount;
+  const ids: number[] = [];
+  let offsetId = 0;
+
+  while (ids.length < target) {
+    const history = await client.invoke(
+      new Api.messages.GetHistory({
+        peer: chatEntity,
+        offsetId,
+        offsetDate: 0,
+        addOffset: 0,
+        limit: Math.min(100, target - ids.length),
+        maxId: 0,
+        minId: 0,
+        hash: 0 as any,
+      })
+    );
+    const msgs: any[] = (history as any).messages || [];
+    const justMsgs = msgs.filter((m: any) => m.className === "Message");
+    if (justMsgs.length === 0) break;
+    ids.push(...justMsgs.map((m: any) => m.id));
+    offsetId = justMsgs[justMsgs.length - 1].id;
+    await sleep(200);
+  }
+
+  if (ids.length === 0)
+    return { processedCount: 0, actualCount: 0, editedCount: 0 };
+
+  let deleted = 0;
+  for (let i = 0; i < ids.length; i += CONFIG.BATCH_SIZE) {
+    const batch = ids.slice(i, i + CONFIG.BATCH_SIZE);
+    try {
+      deleted += await deleteMessagesUniversal(client, chatEntity, batch);
+      await sleep(CONFIG.DELAYS.BATCH);
+    } catch (e) {
+      console.error("[DME] 收藏夹删除批次失败:", e);
+      await sleep(1000);
+    }
+  }
+
+  return { processedCount: deleted, actualCount: ids.length, editedCount: 0 };
+}
+
+/**
+ * 兼容“频道身份发言”的搜索：扫描历史并筛选 out=true
+ */
+async function searchMyOutgoingMessages(
+  client: TelegramClient,
+  chatEntity: any,
+  userRequestedCount: number
+): Promise<Api.Message[]> {
+  const targetCount = userRequestedCount === 999999 ? Infinity : userRequestedCount;
+  const results: Api.Message[] = [];
+  let offsetId = 0;
+
+  while (true) {
+    if (targetCount !== Infinity && results.length >= targetCount) break;
+    const history = await client.invoke(
+      new Api.messages.GetHistory({
+        peer: chatEntity,
+        offsetId,
+        offsetDate: 0,
+        addOffset: 0,
+        limit: Math.min(100, targetCount === Infinity ? 100 : targetCount - results.length),
+        maxId: 0,
+        minId: 0,
+        hash: 0 as any,
+      })
+    );
+    const msgs: any[] = (history as any).messages || [];
+    const justMsgs = msgs.filter((m: any) => m.className === "Message");
+    if (justMsgs.length === 0) break;
+    const outMsgs = justMsgs.filter((m: any) => m.out === true);
+    results.push(...outMsgs);
+    offsetId = justMsgs[justMsgs.length - 1].id;
+    await sleep(150);
+  }
+
+  return targetCount === Infinity ? results : results.slice(0, targetCount);
+}
+/**
  * 搜索并处理用户消息的主函数 - 优化版本
  */
 async function searchEditAndDeleteMyMessages(
@@ -236,6 +337,12 @@ async function searchEditAndDeleteMyMessages(
   actualCount: number;
   editedCount: number;
 }> {
+  // 收藏夹（保存的消息）专用快速删除
+  if (isSavedMessagesPeer(chatEntity, myId)) {
+    console.log("[DME] 检测到收藏夹会话，直接按数量删除");
+    return await deleteInSavedMessages(client, chatEntity, userRequestedCount);
+  }
+
   // 检查是否为频道且有管理权限
   const isChannel = chatEntity.className === "Channel";
   if (isChannel) {
@@ -248,6 +355,15 @@ async function searchEditAndDeleteMyMessages(
           participant: me.id,
         })
       );
+
+      // 若为私人频道且自己是频道主，直接按数量删除（与收藏夹相同方案）
+      const isCreator =
+        participant.participant.className === "ChannelParticipantCreator";
+      const isBroadcast = (chatEntity as any).broadcast === true;
+      if (isCreator && isBroadcast) {
+        console.log(`[DME] 检测到私人频道且为频道主，直接按数量删除`);
+        return await deleteInSavedMessages(client, chatEntity, userRequestedCount);
+      }
 
       const isAdmin =
         participant.participant.className === "ChannelParticipantAdmin" ||
@@ -266,12 +382,19 @@ async function searchEditAndDeleteMyMessages(
   console.log(`[DME] 开始优化搜索消息，目标数量: ${userRequestedCount === 999999 ? "全部" : userRequestedCount}`);
 
   // 使用优化搜索模式直接获取自己的消息
-  const allMyMessages = await searchMyMessagesOptimized(
+  let allMyMessages = await searchMyMessagesOptimized(
     client, 
     chatEntity, 
     myId, 
     userRequestedCount
   );
+
+  // 回退：兼容频道身份发言（fromId 不匹配），改用 out=true 获取
+  const targetCount = userRequestedCount === 999999 ? Infinity : userRequestedCount;
+  if (allMyMessages.length === 0 || (targetCount !== Infinity && allMyMessages.length < targetCount)) {
+    console.log('[DME] fromId 搜索不足，回退到 out=true 以兼容频道身份发言');
+    allMyMessages = await searchMyOutgoingMessages(client, chatEntity, userRequestedCount);
+  }
 
   if (allMyMessages.length === 0) {
     console.log(`[DME] 未找到任何自己的消息`);
@@ -279,7 +402,6 @@ async function searchEditAndDeleteMyMessages(
   }
 
   // 处理找到的消息  
-  const targetCount = userRequestedCount === 999999 ? Infinity : userRequestedCount;
   const messagesToProcess = targetCount === Infinity ? allMyMessages : allMyMessages.slice(0, targetCount);
   if (messagesToProcess.length === 0) {
     console.log(`[DME] 未找到任何需要处理的消息`);
