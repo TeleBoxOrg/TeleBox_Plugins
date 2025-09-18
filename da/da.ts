@@ -20,25 +20,21 @@ const htmlEscape = (text: string): string =>
   }[m] || m));
 
 // 帮助文档常量（必须定义）
-const help_text = `🚀 <b>DA - 群组消息批量删除插件 - 高效版本</b>
+const help_text = `🗑️ <b>群组消息批量删除插件</b>
 
-<b>🔧 使用方法:</b>
+<b>命令格式：</b>
+<code>${mainPrefix}da [子命令]</code>
+
+<b>可用命令：</b>
 • <code>${mainPrefix}da true</code> - 开始删除任务
 • <code>${mainPrefix}da stop</code> - 停止当前任务
 • <code>${mainPrefix}da status</code> - 查看任务状态
-• <code>${mainPrefix}da help</code> - 显示此帮助
+• <code>${mainPrefix}da help</code> - 显示帮助信息
 
-<b>🚀 核心特性:</b>
-• <b>管理员模式:</b> 删除群组内所有消息（使用传统遍历）
-• <b>普通用户模式:</b> 使用messages.search高效删除自己的消息
-• <b>任务管理:</b> 支持暂停、恢复、状态查询
-• <b>进度追踪:</b> 实时更新到收藏夹
-• <b>错误处理:</b> 智能处理API限制和错误重试
-
-<b>⚡ 技术改进:</b>
-• 基于Telegram MTProto API的messages.search方法
-• 普通用户模式避免遍历，直接定位自己的消息
-• 显著提升删除自己消息的效率 `;
+<b>示例：</b>
+• <code>${mainPrefix}da true</code> - 开始删除群组消息
+• <code>${mainPrefix}da stop</code> - 停止正在运行的任务
+• <code>${mainPrefix}da status</code> - 查看当前任务状态`;
 
 // 删除任务状态管理
 interface DeleteTask {
