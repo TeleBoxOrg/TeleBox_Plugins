@@ -32,6 +32,7 @@ npm i <插件名>
 - `eat` - 生成带头像表情包  
 - `eatgif` - 生成"吃掉"动图表情包  
 - `encode` - 简单的编码解码插件  
+- `fadian` - fadian语录  
 - `gemini` - 谷歌AI助手Gemini  
 - `getstickers` - 下载整个贴纸包  
 - `gif` - GIF与视频转贴纸插件  
