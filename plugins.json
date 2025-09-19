@@ -254,5 +254,9 @@
   "warp": {
     "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/warp/warp.ts?raw=true",
     "desc": "warp管理"
+  },
+  "sub": {
+    "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/sub/sub.ts?raw=true",
+    "desc": "substore简单管理"
   }
 }
