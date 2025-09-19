@@ -84,8 +84,8 @@ async function getPopSentence(filename: string, originals: string[] = [], replac
   const list = await ensureConfigFile(filename);
   if (!list.length) return null;
   let item = list[Math.floor(Math.random() * list.length)] as string;
-  if (replacers.length === 1) item = item.replace("<name>", replacers[0]);
-  if (replacers.length === 2) item = item.replace("<name1>", replacers[0]).replace("<name2>", replacers[1]);
+  if (replacers.length === 1) item = item.replace(/<name>/g, replacers[0]);
+  if (replacers.length === 2) item = item.replace(/<name1>/g, replacers[0]).replace(/<name2>/g, replacers[1]);
   return item;
 }
 
