@@ -358,8 +358,8 @@ class SSHPlugin extends Plugin {
 
     try {
       if (!sub) {
-        // 无参数时默认生成SSH密钥
-        await this.generateSSHKeys(msg, client);
+        // 无参数时显示帮助
+        await msg.edit({ text: help_text, parseMode: "html" });
         return;
       }
 
@@ -491,10 +491,25 @@ class SSHPlugin extends Plugin {
       // 尝试转换为PPK格式
       let ppkKey = "";
       try {
+        // 首先检查 puttygen 是否可用
+        try {
+          await execAsync('puttygen --version');
+        } catch {
+          // puttygen 不可用，尝试安装 putty-tools
+          console.log("[ssh] puttygen 未找到，正在安装 putty-tools...");
+          try {
+            await execAsync('apt-get update && apt-get install -y putty-tools');
+          } catch {
+            throw new Error("无法安装 putty-tools");
+          }
+        }
+        
+        // 转换为PPK格式
         await execAsync(`puttygen ${escapedPath} -o ${escapedPath}.ppk`);
         ppkKey = fs.readFileSync(`${keyPath}.ppk`, "utf-8");
-      } catch {
-        console.log("[ssh] PPK转换失败，跳过");
+        console.log("[ssh] PPK格式密钥生成成功");
+      } catch (error: any) {
+        console.log(`[ssh] PPK转换失败: ${error.message}，跳过PPK格式`);
       }
 
       // 获取服务器信息
