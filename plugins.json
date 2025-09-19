@@ -258,5 +258,9 @@
   "sub": {
     "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/sub/sub.ts?raw=true",
     "desc": "substore简单管理"
+  },
+  "fadian": {
+    "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/fadian/fadian.ts?raw=true",
+    "desc": "fadian语录"
   }
 }
