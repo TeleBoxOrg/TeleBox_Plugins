@@ -91,17 +91,24 @@ async function getPopSentence(filename: string, originals: string[] = [], replac
 
 const help_text = `🗒️ <b>发电语录插件</b>
 
-<b>用法：</b>
+<b>命令格式：</b>
+<code>${mainPrefix}fadian [子命令] [参数]</code>
+
+<b>子命令：</b>
 • <code>${mainPrefix}fadian fd &lt;名字&gt;</code> - 心理语录
 • <code>${mainPrefix}fadian tg</code> - TG 语录
 • <code>${mainPrefix}fadian kfc</code> - KFC 语录
 • <code>${mainPrefix}fadian wyy</code> - 网抑云语录
 • <code>${mainPrefix}fadian cp</code> + 第二行/第三行为两个名字
 • <code>${mainPrefix}fadian clear</code> - 清理缓存并重新下载
-• <code>${mainPrefix}fadian help</code> - 查看帮助`;
+• <code>${mainPrefix}fadian help</code> - 查看帮助
+
+<b>使用示例：</b>
+<code>${mainPrefix}fadian fd 张三</code> - 生成张三的心理语录
+<code>${mainPrefix}fadian cp</code>\n第一个人\n第二个人 - 生成CP语录`;
 
 class FadianPlugin extends Plugin {
-  description: string = `从本地 JSON 语料随机生成语录\n\n${help_text}`;
+  description: string = `从远程配置随机生成发电语录\n\n${help_text}`;
 
   cmdHandlers = {
     fadian: async (msg: Api.Message) => {
@@ -111,45 +118,75 @@ class FadianPlugin extends Plugin {
         return;
       }
 
+      // 标准参数解析模式
       const lines = msg.text?.trim()?.split(/\r?\n/g) || [];
-      const parts = lines[0]?.split(/\s+/g) || [];
-      const [, ...args] = parts;
+      const parts = lines?.[0]?.split(/\s+/) || [];
+      const [, ...args] = parts; // 跳过命令本身
       const sub = (args[0] || "").toLowerCase();
 
-      if (!sub || sub === "help" || sub === "h") {
-        await msg.edit({ text: help_text, parseMode: "html" });
-        return;
-      }
-
-      if (sub === "clear") {
-        await this.clearCache(msg);
-        return;
-      }
-
       try {
+        // 无参数时显示帮助
+        if (!sub) {
+          await msg.edit({ text: help_text, parseMode: "html" });
+          return;
+        }
+
+        // 处理 help 在前的情况：.fadian help [subcommand]
+        if (sub === "help" || sub === "h") {
+          if (args[1]) {
+            // 显示特定子命令的帮助
+            const subCmd = args[1].toLowerCase();
+            await this.showSubCommandHelp(subCmd, msg);
+          } else {
+            // 显示总帮助
+            await msg.edit({ text: help_text, parseMode: "html" });
+          }
+          return;
+        }
+
+        // 处理 help 在后的情况：.fadian [subcommand] help
+        if (args[1] && (args[1].toLowerCase() === "help" || args[1].toLowerCase() === "h")) {
+          await this.showSubCommandHelp(sub, msg);
+          return;
+        }
+
+        // 处理 clear 命令
+        if (sub === "clear") {
+          await this.clearCache(msg);
+          return;
+        }
+
+        // 处理具体的子命令
         switch (sub) {
           case "fd": {
             const raw = (args.slice(1).join(" ") || lines[1] || "").trim();
             if (!raw) {
-              await msg.edit({ text: `❌ <b>参数不足</b>\n\n示例：<code>${mainPrefix}fadian fd 张三</code>`, parseMode: "html" });
+              await msg.edit({ 
+                text: `❌ <b>参数不足</b>\n\n💡 使用方法：<code>${mainPrefix}fadian fd &lt;名字&gt;</code>\n示例：<code>${mainPrefix}fadian fd 张三</code>`, 
+                parseMode: "html" 
+              });
               return;
             }
             const name = filterInput(raw);
+            await msg.edit({ text: "🔄 生成心理语录中...", parseMode: "html" });
             const res = await getPopSentence(configFiles.psycho, ["<name>"], [htmlEscape(name)]);
             await msg.edit({ text: res ? htmlEscape(res) : "❌ 数据为空", parseMode: "html" });
             break;
           }
           case "tg": {
+            await msg.edit({ text: "🔄 生成TG语录中...", parseMode: "html" });
             const res = await getPopSentence(configFiles.tg);
             await msg.edit({ text: res ? htmlEscape(res) : "❌ 数据为空", parseMode: "html" });
             break;
           }
           case "kfc": {
+            await msg.edit({ text: "🔄 生成KFC语录中...", parseMode: "html" });
             const res = await getPopSentence(configFiles.kfc);
             await msg.edit({ text: res ? htmlEscape(res) : "❌ 数据为空", parseMode: "html" });
             break;
           }
           case "wyy": {
+            await msg.edit({ text: "🔄 生成网抑云语录中...", parseMode: "html" });
             const res = await getPopSentence(configFiles.wyy);
             await msg.edit({ text: res ? htmlEscape(res) : "❌ 数据为空", parseMode: "html" });
             break;
@@ -158,24 +195,72 @@ class FadianPlugin extends Plugin {
             const a = filterInput((lines[1] || args[1] || "").trim());
             const b = filterInput((lines[2] || args[2] || "").trim());
             if (!a || !b) {
-              await msg.edit({ text: `❌ <b>参数不足</b>\n\n在第2/3行输入两个名字，或：<code>${mainPrefix}fadian cp A B</code>`, parseMode: "html" });
+              await msg.edit({ 
+                text: `❌ <b>参数不足</b>\n\n💡 使用方法：\n1. <code>${mainPrefix}fadian cp 名字1 名字2</code>\n2. 或者：<code>${mainPrefix}fadian cp</code>\n第二行写第一个名字\n第三行写第二个名字`, 
+                parseMode: "html" 
+              });
               return;
             }
+            await msg.edit({ text: "🔄 生成CP语录中...", parseMode: "html" });
             const res = await getPopSentence(configFiles.cp, ["<name1>", "<name2>"], [htmlEscape(a), htmlEscape(b)]);
             await msg.edit({ text: res ? htmlEscape(res) : "❌ 数据为空", parseMode: "html" });
             break;
           }
           default:
-            await msg.edit({ text: `❌ <b>未知子命令:</b> <code>${htmlEscape(sub)}</code>\n\n${help_text}`, parseMode: "html" });
+            await msg.edit({
+              text: `❌ <b>未知子命令:</b> <code>${htmlEscape(sub)}</code>\n\n💡 使用 <code>${mainPrefix}fadian help</code> 查看帮助`,
+              parseMode: "html"
+            });
         }
-      } catch (e: any) {
-        await msg.edit({ text: `❌ <b>执行失败:</b> ${htmlEscape(e?.message || "未知错误")}` , parseMode: "html"});
+        
+      } catch (error: any) {
+        console.error("[fadian] 插件执行失败:", error);
+        
+        // 处理特定错误类型
+        if (error.message?.includes("FLOOD_WAIT")) {
+          const waitTime = parseInt(error.message.match(/\d+/)?.[0] || "60");
+          await msg.edit({
+            text: `⏳ <b>请求过于频繁</b>\n\n需要等待 ${waitTime} 秒后重试`,
+            parseMode: "html"
+          });
+          return;
+        }
+        
+        if (error.message?.includes("MESSAGE_TOO_LONG")) {
+          await msg.edit({
+            text: "❌ <b>消息过长</b>\n\n请减少内容长度或使用文件发送",
+            parseMode: "html"
+          });
+          return;
+        }
+        
+        // 通用错误处理
+        await msg.edit({
+          text: `❌ <b>插件执行失败:</b> ${htmlEscape(error.message || "未知错误")}`,
+          parseMode: "html"
+        });
       }
     }
   };
 
+  private async showSubCommandHelp(subCmd: string, msg: Api.Message): Promise<void> {
+    const helpTexts: { [key: string]: string } = {
+      fd: `📖 <b>心理语录命令帮助</b>\n\n<code>${mainPrefix}fadian fd &lt;名字&gt;</code> - 生成指定人名的心理语录\n\n示例：<code>${mainPrefix}fadian fd 张三</code>`,
+      tg: `📖 <b>TG语录命令帮助</b>\n\n<code>${mainPrefix}fadian tg</code> - 生成TG舔狗语录`,
+      kfc: `📖 <b>KFC语录命令帮助</b>\n\n<code>${mainPrefix}fadian kfc</code> - 生成KFC疯狂星期四语录`,
+      wyy: `📖 <b>网抑云语录命令帮助</b>\n\n<code>${mainPrefix}fadian wyy</code> - 生成网易云音乐热评语录`,
+      cp: `📖 <b>CP语录命令帮助</b>\n\n<code>${mainPrefix}fadian cp 名字1 名字2</code> - 生成两人CP语录\n或者：\n<code>${mainPrefix}fadian cp</code>\n第二行写第一个名字\n第三行写第二个名字`,
+      clear: `📖 <b>清理缓存命令帮助</b>\n\n<code>${mainPrefix}fadian clear</code> - 清理本地缓存并重新下载配置文件`
+    };
+
+    const helpText = helpTexts[subCmd] || help_text;
+    await msg.edit({ text: helpText, parseMode: "html" });
+  }
+
   private async clearCache(msg: Api.Message): Promise<void> {
     try {
+      await msg.edit({ text: "🔄 清理缓存中...", parseMode: "html" });
+      
       // 清理本地缓存目录
       if (fs.existsSync(ASSET_PATH)) {
         fs.rmSync(ASSET_PATH, { recursive: true, force: true });
@@ -185,10 +270,14 @@ class FadianPlugin extends Plugin {
       lastUpdateCheck = 0;
       
       await msg.edit({ text: "🧹 已清理缓存，下次使用时将重新下载配置", parseMode: "html" });
-    } catch (e: any) {
-      await msg.edit({ text: `❌ 清理缓存失败: ${htmlEscape(e?.message || "未知错误")}`, parseMode: "html" });
+    } catch (error: any) {
+      console.error("[fadian] 清理缓存失败:", error);
+      await msg.edit({ 
+        text: `❌ <b>清理缓存失败:</b> ${htmlEscape(error?.message || "未知错误")}`, 
+        parseMode: "html" 
+      });
     }
   }
 }
 
-export default FadianPlugin;
+export default new FadianPlugin();
