@@ -95,7 +95,7 @@ const help_text = `🗒️ <b>发电语录插件</b>
 <code>${mainPrefix}fadian [子命令] [参数]</code>
 
 <b>子命令：</b>
-• <code>${mainPrefix}fadian fd &lt;名字&gt;</code> - 心理语录
+• <code>${mainPrefix}fadian fd [名字]</code> - 心理语录（回复消息时自动获取对方昵称）
 • <code>${mainPrefix}fadian tg</code> - TG 语录
 • <code>${mainPrefix}fadian kfc</code> - KFC 语录
 • <code>${mainPrefix}fadian wyy</code> - 网抑云语录
@@ -105,6 +105,7 @@ const help_text = `🗒️ <b>发电语录插件</b>
 
 <b>使用示例：</b>
 <code>${mainPrefix}fadian fd 张三</code> - 生成张三的心理语录
+<code>${mainPrefix}fadian fd</code> (回复消息) - 自动生成被回复人的心理语录
 <code>${mainPrefix}fadian cp</code>\n第一个人\n第二个人 - 生成CP语录`;
 
 class FadianPlugin extends Plugin {
@@ -159,15 +160,35 @@ class FadianPlugin extends Plugin {
         // 处理具体的子命令
         switch (sub) {
           case "fd": {
-            const raw = (args.slice(1).join(" ") || lines[1] || "").trim();
-            if (!raw) {
+            let targetName = (args.slice(1).join(" ") || lines[1] || "").trim();
+            
+            // 如果没有提供名字，尝试从回复消息获取
+            if (!targetName) {
+              const replyMsg = await msg.getReplyMessage();
+              if (replyMsg) {
+                const sender = await replyMsg.getSender();
+                if (sender && 'firstName' in sender) {
+                  const firstName = sender.firstName || "";
+                  const lastName = sender.lastName || "";
+                  const username = sender.username || "";
+                  
+                  // 优先使用 firstName + lastName，其次使用 username
+                  targetName = (firstName + (lastName ? " " + lastName : "")).trim() || username || "Ta";
+                } else {
+                  targetName = "Ta";
+                }
+              }
+            }
+            
+            if (!targetName) {
               await msg.edit({ 
-                text: `❌ <b>参数不足</b>\n\n💡 使用方法：<code>${mainPrefix}fadian fd &lt;名字&gt;</code>\n示例：<code>${mainPrefix}fadian fd 张三</code>`, 
+                text: `❌ <b>参数不足</b>\n\n💡 使用方法：\n1. <code>${mainPrefix}fadian fd &lt;名字&gt;</code>\n2. 回复某人消息后使用 <code>${mainPrefix}fadian fd</code>\n\n示例：<code>${mainPrefix}fadian fd 张三</code>`, 
                 parseMode: "html" 
               });
               return;
             }
-            const name = filterInput(raw);
+            
+            const name = filterInput(targetName);
             await msg.edit({ text: "🔄 生成心理语录中...", parseMode: "html" });
             const res = await getPopSentence(configFiles.psycho, ["<name>"], [htmlEscape(name)]);
             await msg.edit({ text: res ? htmlEscape(res) : "❌ 数据为空", parseMode: "html" });
@@ -245,7 +266,7 @@ class FadianPlugin extends Plugin {
 
   private async showSubCommandHelp(subCmd: string, msg: Api.Message): Promise<void> {
     const helpTexts: { [key: string]: string } = {
-      fd: `📖 <b>心理语录命令帮助</b>\n\n<code>${mainPrefix}fadian fd &lt;名字&gt;</code> - 生成指定人名的心理语录\n\n示例：<code>${mainPrefix}fadian fd 张三</code>`,
+      fd: `📖 <b>心理语录命令帮助</b>\n\n<code>${mainPrefix}fadian fd [名字]</code> - 生成心理语录\n\n<b>使用方式：</b>\n1. 直接指定名字：<code>${mainPrefix}fadian fd 张三</code>\n2. 回复消息后自动获取对方昵称：<code>${mainPrefix}fadian fd</code>`,
       tg: `📖 <b>TG语录命令帮助</b>\n\n<code>${mainPrefix}fadian tg</code> - 生成TG舔狗语录`,
       kfc: `📖 <b>KFC语录命令帮助</b>\n\n<code>${mainPrefix}fadian kfc</code> - 生成KFC疯狂星期四语录`,
       wyy: `📖 <b>网抑云语录命令帮助</b>\n\n<code>${mainPrefix}fadian wyy</code> - 生成网易云音乐热评语录`,
