@@ -64,6 +64,7 @@ npm i <插件名>
 - `ssh` - ssh管理  
 - `sticker` - 偷表情  
 - `sticker_to_pic` - 表情转图片  
+- `sub` - substore简单管理  
 - `sunremove` - 定向批量解除封禁用户  
 - `t` - 文字转语音  
 - `trace` - 全局追踪点赞插件  

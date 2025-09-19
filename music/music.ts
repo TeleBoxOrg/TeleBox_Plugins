@@ -82,9 +82,9 @@ const DEFAULT_CONFIG: Record<string, string> = {
   [CONFIG.KEYS.API]: "",
   [CONFIG.KEYS.PROXY]: "",
   [CONFIG.KEYS.AUDIO_QUALITY]: "", // 空则不指定，保持最佳可用
-  [CONFIG.KEYS.TEMPERATURE]: "0.1", // 低温度提高准确性
-  [CONFIG.KEYS.TOP_P]: "0.8", // 适中的核采样
-  [CONFIG.KEYS.TOP_K]: "10", // 限制候选词提高准确性
+  [CONFIG.KEYS.TEMPERATURE]: "0.0", // 低温度提高准确性
+  [CONFIG.KEYS.TOP_P]: "0.6", // 适中的核采样
+  [CONFIG.KEYS.TOP_K]: "20", // 限制候选词提高准确性
 };
 
 // ==================== Types ====================
@@ -1693,7 +1693,7 @@ class MusicPlugin extends Plugin {
     // 检查 yt-dlp
     const ytdlpAvailable = await DependencyManager.checkYtDlp();
     if (!ytdlpAvailable) {
-      console.warn("[music] yt-dlp 未安装，请手动安装: pip install yt-dlp");
+      console.warn("[music] yt-dlp 未安装，请手动安装: sudo pip install --upgrade --force-reinstall yt-dlp --break-system-packages");
     }
 
     const ffmpegInstalled = await DependencyManager.checkFfmpeg();
@@ -1964,7 +1964,16 @@ ${apiKey ? "✅" : "⚪"} <b>AI搜索:</b> ${apiKey ? "已启用" : "未配置"}
     const ytdlpAvailable = await DependencyManager.checkYtDlp();
     if (!ytdlpAvailable) {
       await msg.edit({
-        text: "❌ <b>缺少必要组件</b>\n\n请安装 yt-dlp：\n<code>pip install yt-dlp</code>",
+        text: `❌ <b>缺少必要组件</b>
+
+🛠️ <b>解决方案：</b>
+<code>sudo pip install --upgrade --force-reinstall yt-dlp --break-system-packages</code>
+
+🚀 <b>网络问题？试试 WARP：</b>
+<code>wget -N https://gitlab.com/fscarmen/warp/-/raw/main/menu.sh && bash menu.sh e</code>
+
+💡 <b>提示：</b>配置 Gemini API 可提升搜索准确率
+<code>${commandName} set api_key [你的Gemini密钥]</code>`,
         parseMode: "html",
       });
       return;
@@ -1974,7 +1983,16 @@ ${apiKey ? "✅" : "⚪"} <b>AI搜索:</b> ${apiKey ? "已启用" : "未配置"}
     const deps = await this.downloader.checkDependencies();
     if (!deps.ytdlp) {
       await msg.edit({
-        text: "❌ <b>缺少下载器</b>\n\n请先安装 yt-dlp",
+        text: `❌ <b>缺少下载器</b>
+
+🛠️ <b>安装 yt-dlp：</b>
+<code>sudo pip install --upgrade --force-reinstall yt-dlp --break-system-packages</code>
+
+🌐 <b>网络受限？配置代理：</b>
+<code>${commandName} set proxy socks5://127.0.0.1:1080</code>
+
+🍪 <b>或设置 Cookie 绕过限制：</b>
+<code>${commandName} set cookie [YouTube Cookie]</code>`,
         parseMode: "html",
       });
       return;
@@ -2020,7 +2038,16 @@ ${apiKey ? "✅" : "⚪"} <b>AI搜索:</b> ${apiKey ? "已启用" : "未配置"}
 
       if (!url) {
         await statusMsg.edit({
-          text: "😔 <b>未找到相关音乐</b>\n\n请尝试更换关键词",
+          text: `😔 <b>未找到相关音乐</b>
+
+🔍 <b>建议尝试：</b>
+• 更换搜索关键词
+• 配置 Cookie 绕过地区限制
+• 使用 WARP 改善网络连接
+
+⚙️ <b>快速配置：</b>
+<code>${commandName} set cookie [Cookie]</code>
+<code>${commandName} set api_key [Gemini密钥]</code>`,
           parseMode: "html",
         });
         return;
@@ -2042,7 +2069,19 @@ ${apiKey ? "✅" : "⚪"} <b>AI搜索:</b> ${apiKey ? "已启用" : "未配置"}
 
       if (!downloadResult.audioPath) {
         await statusMsg.edit({
-          text: `❌ <b>下载失败</b>\n\n请检查链接或稍后重试`,
+          text: `❌ <b>下载失败</b>
+
+🛠️ <b>解决方案：</b>
+• 配置 YouTube Cookie 绕过限制
+• 设置网络代理或使用 WARP
+• 检查网络连接状态
+
+⚙️ <b>快速配置：</b>
+<code>${commandName} set cookie [Cookie]</code>
+<code>${commandName} set proxy [代理地址]</code>
+
+🚀 <b>WARP 安装：</b>
+<code>wget -N https://gitlab.com/fscarmen/warp/-/raw/main/menu.sh && bash menu.sh e</code>`,
           parseMode: "html",
         });
         return;

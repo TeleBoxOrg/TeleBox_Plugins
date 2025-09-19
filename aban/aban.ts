@@ -534,27 +534,57 @@ async function getCommonChats(
   client: TelegramClient,
   uid: number
 ): Promise<number[]> {
+  const result: number[] = [];
   try {
     const entity: any = await safeGetEntity(client, uid);
     const inputUser = entity?.accessHash
       ? new Api.InputUser({ userId: entity.id as any, accessHash: entity.accessHash })
       : (uid as any);
-    const res: any = await invokeWithFlood(
-      client,
-      new (Api as any).contacts.GetCommonChats({
-        userId: inputUser,
-        maxId: 0,
-        limit: 200,
-      })
+
+    const Ctor = (Api as any).contacts?.GetCommonChats;
+    if (typeof Ctor === "function") {
+      const res: any = await invokeWithFlood(
+        client,
+        new Ctor({ userId: inputUser, maxId: 0, limit: 200 })
+      );
+      const ids = (res.chats || [])
+        .filter((c: any) => c.megagroup || c.broadcast)
+        .map((c: any) => Number(c.id));
+      return ids;
+    } else {
+      console.log(
+        `[BanManager] contacts.GetCommonChats not available, fallback to managed-groups scan`
+      );
+    }
+  } catch (e: any) {
+    console.log(
+      `[BanManager] GetCommonChats error: ${e.message || e}, fallback to scan`
     );
-    const ids = (res.chats || [])
-      .filter((c: any) => c.megagroup || c.broadcast)
-      .map((c: any) => Number(c.id));
-    return ids;
-  } catch (e) {
-    console.log(`[BanManager] GetCommonChats error: ${(e as any).message || e}`);
-    return [];
   }
+
+  // Fallback: scan managed groups and check membership via channels.GetParticipant
+  try {
+    const groups = await getManagedGroups(client);
+    const entity: any = await safeGetEntity(client, uid);
+    const participantRef = entity || (uid as any);
+    for (const g of groups) {
+      try {
+        await invokeWithFlood(
+          client,
+          new Api.channels.GetParticipant({
+            channel: Number(g.id),
+            participant: participantRef,
+          })
+        );
+        result.push(Number(g.id));
+      } catch {
+        // Not a member or no access; skip
+      }
+    }
+  } catch (e) {
+    console.log(`[BanManager] Fallback scan error: ${(e as any).message || e}`);
+  }
+  return result;
 }
 
 /**
@@ -566,12 +596,13 @@ async function deleteHistoryInCommonChats(
 ): Promise<number> {
   const chats = await getCommonChats(client, uid);
   const entity: any = await safeGetEntity(client, uid);
+  const participantRef = entity || (uid as any);
   let count = 0;
   for (const gid of chats) {
     try {
       await invokeWithFlood(
         client,
-        new Api.channels.DeleteParticipantHistory({ channel: gid, participant: entity })
+        new Api.channels.DeleteParticipantHistory({ channel: gid, participant: participantRef })
       );
       count++;
     } catch (e: any) {
@@ -1149,7 +1180,9 @@ async function handleBanCommand(
     sendMessages: true,
   });
 
-  const success = await safeBanAction(client, message.peerId, uid, rights);
+  const success = await safeBanAction(client, message.peerId, uid, rights, {
+    deleteHistory: true,
+  });
 
   if (success) {
     const resultText = `✅ **封禁完成**
