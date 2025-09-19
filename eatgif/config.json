@@ -1,4 +1,8 @@
 {
+  "bl": {
+    "url": "bl/bl.json",
+    "desc": "开摆！"
+  },
   "dd": {
     "url": "dd/dd.json",
     "desc": "逗逗你呀～～"
