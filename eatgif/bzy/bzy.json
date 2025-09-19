@@ -1,0 +1,594 @@
+{
+  "width": 400,
+  "height": 300,
+  "res": [
+    {
+      "url": "bzy/bzy0.png",
+      "delay": 120,
+      "you": {
+        "x": 0,
+        "y": 104,
+        "mask": "bzy/you.png"
+      },
+      "me": {
+        "x": 162,
+        "y": 59,
+        "mask": "bzy/me.png"
+      }
+    },
+    {
+      "url": "bzy/bzy1.png",
+      "delay": 120,
+      "you": {
+        "x": 0,
+        "y": 104,
+        "mask": "bzy/you.png"
+      },
+      "me": {
+        "x": 166,
+        "y": 59,
+        "mask": "bzy/me.png"
+      }
+    },
+    {
+      "url": "bzy/bzy2.png",
+      "delay": 120,
+      "you": {
+        "x": 0,
+        "y": 104,
+        "mask": "bzy/you.png"
+      },
+      "me": {
+        "x": 167,
+        "y": 57,
+        "mask": "bzy/me.png"
+      }
+    },
+    {
+      "url": "bzy/bzy3.png",
+      "delay": 120,
+      "you": {
+        "x": 0,
+        "y": 104,
+        "mask": "bzy/you.png"
+      },
+      "me": {
+        "x": 160,
+        "y": 57,
+        "mask": "bzy/me.png"
+      }
+    },
+    {
+      "url": "bzy/bzy4.png",
+      "delay": 120,
+      "you": {
+        "x": 1,
+        "y": 104,
+        "mask": "bzy/you.png"
+      },
+      "me": {
+        "x": 153,
+        "y": 58,
+        "mask": "bzy/me.png"
+      }
+    },
+    {
+      "url": "bzy/bzy5.png",
+      "delay": 120,
+      "you": {
+        "x": -2,
+        "y": 105,
+        "mask": "bzy/you.png"
+      },
+      "me": {
+        "x": 147,
+        "y": 60,
+        "mask": "bzy/me.png"
+      }
+    },
+    {
+      "url": "bzy/bzy6.png",
+      "delay": 120,
+      "you": {
+        "x": 4,
+        "y": 100,
+        "mask": "bzy/you.png"
+      },
+      "me": {
+        "x": 144,
+        "y": 61,
+        "mask": "bzy/me.png"
+      }
+    },
+    {
+      "url": "bzy/bzy7.png",
+      "delay": 120,
+      "you": {
+        "x": 17,
+        "y": 111,
+        "mask": "bzy/you.png"
+      },
+      "me": {
+        "x": 140,
+        "y": 61,
+        "mask": "bzy/me.png"
+      }
+    },
+    {
+      "url": "bzy/bzy8.png",
+      "delay": 120,
+      "you": {
+        "x": 18,
+        "y": 111,
+        "mask": "bzy/you.png"
+      },
+      "me": {
+        "x": 137,
+        "y": 64,
+        "mask": "bzy/me.png"
+      }
+    },
+    {
+      "url": "bzy/bzy9.png",
+      "delay": 120,
+      "you": {
+        "x": 16,
+        "y": 109,
+        "mask": "bzy/you.png"
+      },
+      "me": {
+        "x": 141,
+        "y": 65,
+        "mask": "bzy/me.png"
+      }
+    },
+    {
+      "url": "bzy/bzy10.png",
+      "delay": 120,
+      "you": {
+        "x": 4,
+        "y": 107,
+        "mask": "bzy/you.png"
+      },
+      "me": {
+        "x": 145,
+        "y": 63,
+        "mask": "bzy/me.png"
+      }
+    },
+    {
+      "url": "bzy/bzy11.png",
+      "delay": 120,
+      "you": {
+        "x": -8,
+        "y": 108,
+        "mask": "bzy/you.png"
+      },
+      "me": {
+        "x": 147,
+        "y": 63,
+        "mask": "bzy/me.png"
+      }
+    },
+    {
+      "url": "bzy/bzy12.png",
+      "delay": 120,
+      "you": {
+        "x": -8,
+        "y": 112,
+        "mask": "bzy/you.png"
+      },
+      "me": {
+        "x": 152,
+        "y": 63,
+        "mask": "bzy/me.png"
+      }
+    },
+    {
+      "url": "bzy/bzy13.png",
+      "delay": 120,
+      "you": {
+        "x": 4,
+        "y": 113,
+        "mask": "bzy/you.png"
+      },
+      "me": {
+        "x": 155,
+        "y": 64,
+        "mask": "bzy/me.png"
+      }
+    },
+    {
+      "url": "bzy/bzy14.png",
+      "delay": 120,
+      "you": {
+        "x": 10,
+        "y": 114,
+        "mask": "bzy/you.png"
+      },
+      "me": {
+        "x": 157,
+        "y": 65,
+        "mask": "bzy/me.png"
+      }
+    },
+    {
+      "url": "bzy/bzy15.png",
+      "delay": 120,
+      "you": {
+        "x": 11,
+        "y": 114,
+        "mask": "bzy/you.png"
+      },
+      "me": {
+        "x": 158,
+        "y": 67,
+        "mask": "bzy/me.png"
+      }
+    },
+    {
+      "url": "bzy/bzy16.png",
+      "delay": 120,
+      "you": {
+        "x": 12,
+        "y": 114,
+        "mask": "bzy/you.png"
+      },
+      "me": {
+        "x": 159,
+        "y": 68,
+        "mask": "bzy/me.png"
+      }
+    },
+    {
+      "url": "bzy/bzy17.png",
+      "delay": 120,
+      "you": {
+        "x": 14,
+        "y": 113,
+        "mask": "bzy/you.png"
+      },
+      "me": {
+        "x": 159,
+        "y": 68,
+        "mask": "bzy/me.png"
+      }
+    },
+    {
+      "url": "bzy/bzy18.png",
+      "delay": 120,
+      "you": {
+        "x": 17,
+        "y": 113,
+        "mask": "bzy/you.png"
+      },
+      "me": {
+        "x": 160,
+        "y": 68,
+        "mask": "bzy/me.png"
+      }
+    },
+    {
+      "url": "bzy/bzy19.png",
+      "delay": 120,
+      "you": {
+        "x": 20,
+        "y": 113,
+        "mask": "bzy/you.png"
+      },
+      "me": {
+        "x": 161,
+        "y": 69,
+        "mask": "bzy/me.png"
+      }
+    },
+    {
+      "url": "bzy/bzy20.png",
+      "delay": 120,
+      "you": {
+        "x": 24,
+        "y": 112,
+        "mask": "bzy/you.png"
+      },
+      "me": {
+        "x": 165,
+        "y": 69,
+        "mask": "bzy/me.png"
+      }
+    },
+    {
+      "url": "bzy/bzy21.png",
+      "delay": 120,
+      "you": {
+        "x": 25,
+        "y": 112,
+        "mask": "bzy/you.png"
+      },
+      "me": {
+        "x": 169,
+        "y": 69,
+        "mask": "bzy/me.png"
+      }
+    },
+    {
+      "url": "bzy/bzy22.png",
+      "delay": 120,
+      "you": {
+        "x": 26,
+        "y": 111,
+        "mask": "bzy/you.png"
+      },
+      "me": {
+        "x": 172,
+        "y": 69,
+        "mask": "bzy/me.png"
+      }
+    },
+    {
+      "url": "bzy/bzy23.png",
+      "delay": 120,
+      "you": {
+        "x": 27,
+        "y": 110,
+        "mask": "bzy/you.png"
+      },
+      "me": {
+        "x": 177,
+        "y": 70,
+        "mask": "bzy/me.png"
+      }
+    },
+    {
+      "url": "bzy/bzy24.png",
+      "delay": 120,
+      "you": {
+        "x": 28,
+        "y": 109,
+        "mask": "bzy/you.png"
+      },
+      "me": {
+        "x": 180,
+        "y": 70,
+        "mask": "bzy/me.png"
+      }
+    },
+    {
+      "url": "bzy/bzy25.png",
+      "delay": 120,
+      "you": {
+        "x": 28,
+        "y": 108,
+        "mask": "bzy/you.png"
+      },
+      "me": {
+        "x": 183,
+        "y": 71,
+        "mask": "bzy/me.png"
+      }
+    },
+    {
+      "url": "bzy/bzy26.png",
+      "delay": 120,
+      "you": {
+        "x": 29,
+        "y": 107,
+        "mask": "bzy/you.png"
+      },
+      "me": {
+        "x": 186,
+        "y": 70,
+        "mask": "bzy/me.png"
+      }
+    },
+    {
+      "url": "bzy/bzy27.png",
+      "delay": 120,
+      "you": {
+        "x": 30,
+        "y": 105,
+        "mask": "bzy/you.png"
+      },
+      "me": {
+        "x": 187,
+        "y": 69,
+        "mask": "bzy/me.png"
+      }
+    },
+    {
+      "url": "bzy/bzy28.png",
+      "delay": 120,
+      "you": {
+        "x": 30,
+        "y": 104,
+        "mask": "bzy/you.png"
+      },
+      "me": {
+        "x": 187,
+        "y": 69,
+        "mask": "bzy/me.png"
+      }
+    },
+    {
+      "url": "bzy/bzy29.png",
+      "delay": 120,
+      "you": {
+        "x": 31,
+        "y": 103,
+        "mask": "bzy/you.png"
+      },
+      "me": {
+        "x": 185,
+        "y": 68,
+        "mask": "bzy/me.png"
+      }
+    },
+    {
+      "url": "bzy/bzy30.png",
+      "delay": 120,
+      "you": {
+        "x": 32,
+        "y": 102,
+        "mask": "bzy/you.png"
+      },
+      "me": {
+        "x": 182,
+        "y": 67,
+        "mask": "bzy/me.png"
+      }
+    },
+    {
+      "url": "bzy/bzy31.png",
+      "delay": 120,
+      "you": {
+        "x": 34,
+        "y": 101,
+        "mask": "bzy/you.png"
+      },
+      "me": {
+        "x": 177,
+        "y": 64,
+        "mask": "bzy/me.png"
+      }
+    },
+    {
+      "url": "bzy/bzy32.png",
+      "delay": 120,
+      "you": {
+        "x": 35,
+        "y": 100,
+        "mask": "bzy/you.png"
+      },
+      "me": {
+        "x": 175,
+        "y": 62,
+        "mask": "bzy/me.png"
+      }
+    },
+    {
+      "url": "bzy/bzy33.png",
+      "delay": 120,
+      "you": {
+        "x": 34,
+        "y": 102,
+        "mask": "bzy/you.png"
+      },
+      "me": {
+        "x": 173,
+        "y": 62,
+        "mask": "bzy/me.png"
+      }
+    },
+    {
+      "url": "bzy/bzy34.png",
+      "delay": 120,
+      "you": {
+        "x": 30,
+        "y": 109,
+        "mask": "bzy/you.png"
+      },
+      "me": {
+        "x": 174,
+        "y": 64,
+        "mask": "bzy/me.png"
+      }
+    },
+    {
+      "url": "bzy/bzy35.png",
+      "delay": 120,
+      "you": {
+        "x": 31,
+        "y": 106,
+        "mask": "bzy/you.png"
+      },
+      "me": {
+        "x": 176,
+        "y": 63,
+        "mask": "bzy/me.png"
+      }
+    },
+    {
+      "url": "bzy/bzy36.png",
+      "delay": 120,
+      "you": {
+        "x": 33,
+        "y": 106,
+        "mask": "bzy/you.png"
+      },
+      "me": {
+        "x": 168,
+        "y": 53,
+        "mask": "bzy/me.png"
+      }
+    },
+    {
+      "url": "bzy/bzy37.png",
+      "delay": 120,
+      "you": {
+        "x": 42,
+        "y": 99,
+        "mask": "bzy/you.png"
+      },
+      "me": {
+        "x": 174,
+        "y": 45,
+        "mask": "bzy/me.png"
+      }
+    },
+    {
+      "url": "bzy/bzy38.png",
+      "delay": 120,
+      "you": {
+        "x": 44,
+        "y": 97,
+        "mask": "bzy/you.png"
+      },
+      "me": {
+        "x": 177,
+        "y": 54,
+        "mask": "bzy/me.png"
+      }
+    },
+    {
+      "url": "bzy/bzy39.png",
+      "delay": 120,
+      "you": {
+        "x": 36,
+        "y": 95,
+        "mask": "bzy/you.png"
+      },
+      "me": {
+        "x": 180,
+        "y": 59,
+        "mask": "bzy/me.png"
+      }
+    },
+    {
+      "url": "bzy/bzy40.png",
+      "delay": 120,
+      "you": {
+        "x": 34,
+        "y": 93,
+        "mask": "bzy/you.png"
+      },
+      "me": {
+        "x": 183,
+        "y": 62,
+        "mask": "bzy/me.png"
+      }
+    },
+    {
+      "url": "bzy/bzy41.png",
+      "delay": 120,
+      "you": {
+        "x": 36,
+        "y": 93,
+        "mask": "bzy/you.png"
+      },
+      "me": {
+        "x": 188,
+        "y": 66,
+        "mask": "bzy/me.png"
+      }
+    }
+  ]
+}
