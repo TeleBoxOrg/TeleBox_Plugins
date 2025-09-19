@@ -83,7 +83,7 @@ function getCommitsForDate(repoPath, repoName, date) {
     const until = `${date} 23:59:59`;
     
     const gitLog = execSync(
-      `cd ${repoPath} && git log --since="${since}" --until="${until}" --pretty=format:"%h|%s|%an|%ad" --date=format:"%H:%M"`,
+      `cd ${repoPath} && git log --since="${since}" --until="${until}" --pretty=format:"%h|%s|%an|%ad" --date=format:"%H:%M" --name-only`,
       { encoding: 'utf8' }
     ).trim();
     
@@ -91,20 +91,77 @@ function getCommitsForDate(repoPath, repoName, date) {
       return [];
     }
     
-    return gitLog.split('\n').map(line => {
-      const [hash, message, author, time] = line.split('|');
-      return {
+    const commits = [];
+    const commitBlocks = gitLog.split('\n\n');
+    
+    commitBlocks.forEach(block => {
+      const lines = block.trim().split('\n');
+      if (lines.length === 0) return;
+      
+      const [hash, message, author, time] = lines[0].split('|');
+      const changedFiles = lines.slice(1).filter(file => file.trim());
+      
+      // 从文件路径提取插件名
+      const detectedPlugins = extractPluginNames(changedFiles, repoName);
+      
+      commits.push({
         hash: hash.trim(),
         message: message.trim(),
         author: author.trim(),
         time: time.trim(),
-        repo: repoName
-      };
+        repo: repoName,
+        changedFiles: changedFiles,
+        detectedPlugins: detectedPlugins
+      });
     });
+    
+    return commits;
   } catch (error) {
     console.warn(`⚠️ 获取 ${repoName} 提交记录失败:`, error.message);
     return [];
   }
+}
+
+// 从文件路径提取插件名
+function extractPluginNames(changedFiles, repoName) {
+  const plugins = new Set();
+  
+  changedFiles.forEach(filePath => {
+    // 处理 TeleBox_Plugins 仓库的插件文件
+    if (repoName === 'TeleBox_Plugins') {
+      // 插件目录直接包含插件名
+      const pluginMatch = filePath.match(/^([a-zA-Z_]+)\//);
+      if (pluginMatch) {
+        plugins.add(pluginMatch[1]);
+      }
+      // 根目录下的 .ts 文件也是插件
+      const rootPluginMatch = filePath.match(/^([a-zA-Z_]+)\.ts$/);
+      if (rootPluginMatch) {
+        plugins.add(rootPluginMatch[1]);
+      }
+      // plugins 目录下的插件
+      const pluginsMatch = filePath.match(/^plugins\/([a-zA-Z_]+)\.ts$/);
+      if (pluginsMatch) {
+        plugins.add(pluginsMatch[1]);
+      }
+    }
+    
+    // 处理 TeleBox 仓库的插件文件
+    if (repoName === 'TeleBox') {
+      // src/plugin 目录下的插件
+      const srcPluginMatch = filePath.match(/^src\/plugin\/([a-zA-Z_]+)\.ts$/);
+      if (srcPluginMatch) {
+        plugins.add(srcPluginMatch[1]);
+      }
+      // plugins 目录下的插件
+      const pluginsMatch = filePath.match(/^plugins\/([a-zA-Z_]+)\.ts$/);
+      if (pluginsMatch) {
+        plugins.add(pluginsMatch[1]);
+      }
+    }
+  });
+  
+  return Array.from(plugins);
 }
 
 // 去重和过滤提交信息
@@ -163,33 +220,26 @@ function groupCommitsByFeature(commits) {
     let category = '';
     let description = commit.message;
     
-    // 识别插件名称
-    const pluginMatch = description.match(/^(新增|更新|修复|优化|删除)?\s*([a-zA-Z_]+)\s*(插件|功能)?/);
-    if (pluginMatch) {
-      const pluginName = pluginMatch[2];
-      category = getPluginCategory(pluginName);
-      description = description.replace(/^(新增|更新|修复|优化|删除)?\s*[a-zA-Z_]+\s*(插件|功能)?\s*/, '');
-    } else {
-      // 通用功能识别
-      if (description.includes('插件')) {
-        const match = description.match(/([a-zA-Z_]+)\s*插件/);
-        if (match) {
-          category = getPluginCategory(match[1]);
-        } else {
-          category = '🔧 其他功能';
-        }
-      } else if (description.includes('修复')) {
-        category = '🐛 问题修复';
-      } else if (description.includes('优化')) {
-        category = '⚡ 性能优化';
-      } else if (description.includes('新增') || description.includes('添加')) {
-        category = '✨ 新增功能';
-      } else if (description.includes('文档') || description.includes('README')) {
-        category = '📚 文档更新';
-      } else if (description.includes('工作流') || description.includes('CI') || description.includes('workflow')) {
-        category = '🔄 CI/CD';
+    // 优先使用从文件变更中检测到的插件名
+    if (commit.detectedPlugins && commit.detectedPlugins.length > 0) {
+      category = '🔌 插件更新';
+      
+      // 显示详细插件名称和改动
+      if (commit.detectedPlugins.length > 1) {
+        const pluginList = commit.detectedPlugins.join(', ');
+        description = `${pluginList}: ${description}`;
       } else {
-        category = '🔧 其他功能';
+        description = `${commit.detectedPlugins[0]}: ${description}`;
+      }
+    } else {
+      // 判断是否为插件相关
+      const pluginMatch = description.match(/([a-zA-Z_]+)\s*(插件|plugin)/);
+      if (pluginMatch) {
+        category = '🔌 插件更新';
+        description = `${pluginMatch[1]}: ${description}`;
+      } else {
+        // 所有其他改动归为本体更新
+        category = '🏗️ 本体更新';
       }
     }
     
@@ -234,22 +284,8 @@ function generateBasicSummary(commitsByRepo) {
   
   // 按分类输出，使用预定义的顺序
   const categoryOrder = [
-    '✨ 新增功能',
-    '🎵 音乐娱乐', 
-    '🤖 AI 助手',
-    '👮 群组管理',
-    '🎨 媒体处理',
-    '🎮 娱乐功能',
-    '🔧 系统工具',
-    '📊 信息查询',
-    '📱 实用工具',
-    '⏰ 定时任务',
-    '🔍 监控服务',
-    '⚡ 性能优化',
-    '🐛 问题修复',
-    '📚 文档更新',
-    '🔄 CI/CD',
-    '🔧 其他功能'
+    '🔌 插件更新',
+    '🏗️ 本体更新'
   ];
   
   categoryOrder.forEach(category => {
