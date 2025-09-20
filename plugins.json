@@ -266,5 +266,9 @@
   "bin": {
     "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/bin/bin.ts?raw=true",
     "desc": "卡头检测"
+  },
+  "bs": {
+    "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/bs/bs.ts?raw=true",
+    "desc": "保送"
   }
 }
