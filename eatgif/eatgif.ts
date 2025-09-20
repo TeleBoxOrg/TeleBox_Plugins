@@ -1,16 +1,24 @@
 import { Plugin } from "@utils/pluginBase";
 import sharp from "sharp";
 import axios from "axios";
-import { createDirectoryInAssets } from "@utils/pathHelpers";
+import {
+  createDirectoryInAssets,
+  createDirectoryInTemp,
+} from "@utils/pathHelpers";
 import { getPrefixes } from "@utils/pluginManager";
 import path from "path";
 import fs from "fs";
 import { Api } from "telegram";
-import { CustomFile } from "telegram/client/uploads";
 import { encode, UnencodedFrame } from "modern-gif";
+import { exec } from "child_process";
+import { promisify } from "util";
+
+const execAsync = promisify(exec);
 
 // 由于gif可能很多帧，最好缓存在本地，而不是每次都远程拿不同的帧数
 const ASSET_PATH = createDirectoryInAssets("eatgif");
+// 用来保存缓存的gif资源以及webm资源
+const TEMP_PATH = createDirectoryInTemp("eatgif");
 
 interface RoleConfig {
   x: number;
@@ -67,8 +75,18 @@ const help_text = `🧩 <b>头像动图表情</b>
 • <b>生成</b>：回复目标并输入名称`;
 
 const htmlEscape = (text: string): string =>
-  String(text || "").replace(/[&<>"']/g, (m) =>
-    (({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#x27;" } as any)[m]) || m
+  String(text || "").replace(
+    /[&<>"']/g,
+    (m) =>
+      ((
+        {
+          "&": "&amp;",
+          "<": "&lt;",
+          ">": "&gt;",
+          '"': "&quot;",
+          "'": "&#x27;",
+        } as any
+      )[m] || m)
   );
 
 async function ensureConfig(): Promise<void> {
@@ -131,7 +149,9 @@ class EatGifPlugin extends Plugin {
       }
 
       if (!Object.keys(config).includes(sub)) {
-        const text = `❌ 未找到 <code>${htmlEscape(sub)}</code>\n\n${this.listAllStickers()}`;
+        const text = `❌ 未找到 <code>${htmlEscape(
+          sub
+        )}</code>\n\n${this.listAllStickers()}`;
         await msg.edit({ text, parseMode: "html" });
         return;
       }
@@ -159,7 +179,9 @@ class EatGifPlugin extends Plugin {
 
   private listAllStickers(): string {
     const keys = Object.keys(config || {});
-    const items = keys.map((k) => `• <code>${htmlEscape(k)}</code> - ${htmlEscape(config[k].desc)}`);
+    const items = keys.map(
+      (k) => `• <code>${htmlEscape(k)}</code> - ${htmlEscape(config[k].desc)}`
+    );
     const header = `🧩 <b>可用表情列表</b>\n使用：<code>${commandName} &lt;名称&gt;</code>（需回复Ta）\n\n`;
     return header + items.join("\n");
   }
@@ -231,18 +253,38 @@ class EatGifPlugin extends Plugin {
       frames,
     });
 
-    const file = new CustomFile(
-      "output.gif",
-      output.byteLength,
-      "",
-      Buffer.from(output)
-    );
-    await msg.client?.sendFile(msg.peerId, {
-      file,
-      replyTo: await msg.getReplyMessage(),
-    });
+    const gifPath = path.join(TEMP_PATH, "output.gif");
+    const webmPath = path.join(TEMP_PATH, "output.webm");
+
+    fs.writeFileSync(gifPath, Buffer.from(output));
+
+    const cmd = `ffmpeg -y -i ${gifPath} -c:v libvpx-vp9 -b:v 0 -crf 41 -pix_fmt yuva420p -auto-alt-ref 0 ${webmPath}`;
+
+    try {
+      await msg.edit({ text: "⏳ 正在转换为 webm 格式..." });
+      await execAsync(cmd);
+      await msg.client?.sendFile(msg.peerId, {
+        file: webmPath,
+        attributes: [
+          new Api.DocumentAttributeSticker({
+            alt: "✨",
+            stickerset: new Api.InputStickerSetEmpty(),
+          }),
+        ],
+      });
+    } catch (e) {
+      console.log("exec ffmpeg error", e);
+      await msg.edit({ text: `生成 webm 失败 ${e}` });
+      await msg.client?.sendFile(msg.peerId, {
+        file: gifPath,
+        replyTo: await msg.getReplyMessage(),
+      });
+    }
 
     await msg.delete();
+
+    fs.rmSync(gifPath, { force: true, recursive: true });
+    fs.rmSync(webmPath, { force: true, recursive: true });
   }
 
   // 合成每一帧
@@ -279,57 +321,57 @@ class EatGifPlugin extends Plugin {
 
   // 拿到每一帧头像位置及裁剪形状
   private async iconMaskedFor(
-  role: RoleConfig,
-  avatar: Buffer
-): Promise<sharp.OverlayOptions> {
-  const maskBuffer = await assetBufferFor(role.mask);
-  const { width: maskWidth, height: maskHeight } = await sharp(
-    maskBuffer
-  ).metadata();
+    role: RoleConfig,
+    avatar: Buffer
+  ): Promise<sharp.OverlayOptions> {
+    const maskBuffer = await assetBufferFor(role.mask);
+    const { width: maskWidth, height: maskHeight } = await sharp(
+      maskBuffer
+    ).metadata();
 
-  let iconRotate = await sharp(avatar)
-    .resize(maskWidth, maskHeight)
-    .toBuffer();
-
-  if (role.rotate) {
-    iconRotate = await sharp(iconRotate).rotate(role.rotate).toBuffer();
-  }
-  if (role.brightness) {
-    iconRotate = await sharp(iconRotate)
-      .modulate({ brightness: role.brightness })
+    let iconRotate = await sharp(avatar)
+      .resize(maskWidth, maskHeight)
       .toBuffer();
+
+    if (role.rotate) {
+      iconRotate = await sharp(iconRotate).rotate(role.rotate).toBuffer();
+    }
+    if (role.brightness) {
+      iconRotate = await sharp(iconRotate)
+        .modulate({ brightness: role.brightness })
+        .toBuffer();
+    }
+
+    let iconSharp = sharp(iconRotate);
+
+    const { width: iconWidth, height: iconHeight } = await iconSharp.metadata();
+
+    const left = Math.max(0, Math.floor((iconWidth - maskWidth) / 2));
+    const top = Math.max(0, Math.floor((iconHeight - maskHeight) / 2));
+
+    let cropped = iconSharp.extract({
+      left,
+      top,
+      width: maskWidth,
+      height: maskHeight,
+    });
+
+    let iconMasked = await cropped
+      .composite([
+        {
+          input: maskBuffer,
+          blend: "dest-in", // 保留 mask 区域
+        },
+      ])
+      .png()
+      .toBuffer();
+
+    return {
+      input: iconMasked,
+      top: role.y,
+      left: role.x,
+    };
   }
-
-  let iconSharp = sharp(iconRotate);
-
-  const { width: iconWidth, height: iconHeight } = await iconSharp.metadata();
-
-  const left = Math.max(0, Math.floor((iconWidth - maskWidth) / 2));
-  const top = Math.max(0, Math.floor((iconHeight - maskHeight) / 2));
-
-  let cropped = iconSharp.extract({
-    left,
-    top,
-    width: maskWidth,
-    height: maskHeight,
-  });
-
-  let iconMasked = await cropped
-    .composite([
-      {
-        input: maskBuffer,
-        blend: "dest-in", // 保留 mask 区域
-      },
-    ])
-    .png()
-    .toBuffer();
-
-  return {
-    input: iconMasked,
-    top: role.y,
-    left: role.x,
-  };
-}
   // 获取头像等数据
   private async getSelfAvatarBuffer(
     msg: Api.Message,
