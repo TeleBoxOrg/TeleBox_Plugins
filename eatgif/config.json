@@ -3,6 +3,10 @@
     "url": "bl/bl.json",
     "desc": "开摆！"
   },
+  "bzy": {
+    "url": "bzy/bzy.json",
+    "desc": "给你机会你不中用啊！"
+  },
   "dd": {
     "url": "dd/dd.json",
     "desc": "逗逗你呀～～"
