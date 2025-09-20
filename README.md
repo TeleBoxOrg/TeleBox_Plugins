@@ -17,6 +17,7 @@ npm i <插件名>
 - `autodel` - 定时删除消息  
 - `bin` - 卡头检测  
 - `bizhi` - 发送一张壁纸  
+- `bs` - 保送  
 - `bulk_delete` - 批量删除消息工具  
 - `clean_member` - 群组成员清理工具  
 - `clear_sticker` - 批量删除群组内贴纸  
