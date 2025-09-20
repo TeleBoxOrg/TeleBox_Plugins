@@ -587,13 +587,15 @@ async function collectMessages(
 }
 
 async function sendSourceFeedback(options: {
+  msg: Api.Message;
   client: any;
   fromPeer: any;
   replyMessage: Api.Message;
   successes: ForwardSuccess[];
   messageCount: number;
 }) {
-  const { client, fromPeer, replyMessage, successes, messageCount } = options;
+  const { msg, client, fromPeer, replyMessage, successes, messageCount } =
+    options;
   if (!successes.length) return;
 
   const responses: string[] = [];
@@ -622,11 +624,16 @@ async function sendSourceFeedback(options: {
   if (!responses.length) return;
 
   try {
-    await client.sendMessage(fromPeer, {
-      message: `亲爱的被观察者 您的 ${responses.join("\n")}`,
+    // await client.sendMessage(fromPeer, {
+    //   message: `亲爱的被观察者 您的 ${responses.join("\n")}`,
+    //   parseMode: "html",
+    //   linkPreview: false,
+    //   replyTo: buildReplyToForMessage(replyMessage),
+    // });
+    await msg.edit({
+      text: `亲爱的被观察者 您的 ${responses.join("\n")}`,
       parseMode: "html",
       linkPreview: false,
-      replyTo: buildReplyToForMessage(replyMessage),
     });
   } catch (error) {
     console.warn("[bs] 回复原消息失败", error);
@@ -863,6 +870,7 @@ class BsPlugin extends Plugin {
         }
 
         await sendSourceFeedback({
+          msg,
           client,
           fromPeer,
           replyMessage,
