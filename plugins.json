@@ -278,5 +278,9 @@
   "pmcaptcha": {
     "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/pmcaptcha/pmcaptcha.ts?raw=true",
     "desc": "pmcaptcha私聊验证"
+  },
+  "zhijiao": {
+    "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/zhijiao/zhijiao.ts?raw=true",
+    "desc": "掷筊 强随机 使用 笅杯卦辞廿七句"
   }
 }
