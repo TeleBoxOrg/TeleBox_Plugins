@@ -57,6 +57,7 @@ npm i <插件名>
 - `ntp` - NTP 时间同步插件  
 - `oxost` - 回复聊天中的文件与媒体 得到一个临时的下载链接  
 - `pic_to_sticker` - 图片转表情  
+- `pmcaptcha` - pmcaptcha私聊验证  
 - `q` - 消息引用生成贴纸  
 - `qr` - QR 二维码插件  
 - `rate` - 货币实时汇率查询与计算  
