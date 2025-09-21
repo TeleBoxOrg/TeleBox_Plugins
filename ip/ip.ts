@@ -190,13 +190,13 @@ const ip = async (msg: Api.Message) => {
       });
     } catch (parseError: any) {
       console.error("Failed to parse IP data:", parseError, data);
-      await msg。edit({
+      await msg.edit({
         text: `❌ <b>数据解析失败</b>
 
 <b>查询目标:</b> <code>${htmlEscape(query)}</code>
 <b>错误原因:</b> API返回了非预期的数据格式
 
-💡 <b>建议:</b> 请稍后重试或联系管理员`，
+💡 <b>建议:</b> 请稍后重试或联系管理员`,
         parseMode: "html",
       });
     }
@@ -205,11 +205,11 @@ const ip = async (msg: Api.Message) => {
     const errorMessage = error.message || String(error);
     const displayError =
       errorMessage.length > 100
-        ? errorMessage。substring(0， 100) + "..."
+        ? errorMessage.substring(0, 100) + "..."
         : errorMessage;
 
     try {
-        await msg。edit({
+        await msg.edit({
             text: `❌ <b>IP查询失败</b>
     
     <b>错误信息:</b> ${htmlEscape(displayError)}
@@ -217,11 +217,11 @@ const ip = async (msg: Api.Message) => {
     💡 <b>建议:</b>
     • 检查网络连接
     • 稍后重试查询
-    • 确认IP地址或域名格式正确`，
+    • 确认IP地址或域名格式正确`,
             parseMode: "html",
         });
     } catch (editError) {
-        console。error("Failed to edit message with final error:"， editError);
+        console.error("Failed to edit message with final error:", editError);
     }
   }
 };
