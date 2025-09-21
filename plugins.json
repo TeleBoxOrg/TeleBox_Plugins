@@ -270,5 +270,9 @@
   "bs": {
     "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/bs/bs.ts?raw=true",
     "desc": "保送"
+  },
+  "zpr": {
+    "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/zpr/zpr.ts?raw=true",
+    "desc": "二次元图片"
   }
 }
