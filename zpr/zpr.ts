@@ -44,27 +44,109 @@ class ZprConfigManager {
     private static db: any = null;
     private static initialized = false;
     private static configPath: string;
+    private static backupPath: string;
+    private static isWriting = false;
 
     private static async init(): Promise<void> {
         if (this.initialized) return;
         try {
-            // 确保目录存在
             await fs.mkdir(dataPath, { recursive: true });
             this.configPath = path.join(dataPath, "zpr_config.json");
+            this.backupPath = path.join(dataPath, "zpr_config.backup.json");
+            
+            // 尝试从备份恢复损坏的配置
+            await this.validateAndRestore();
+            
             this.db = await JSONFilePreset<Record<string, any>>(
                 this.configPath,
                 { ...DEFAULT_CONFIG }
             );
             this.initialized = true;
+            console.log("[zpr] 配置初始化成功");
         } catch (error) {
             console.error("[zpr] 初始化配置失败:", error);
+            await this.handleInitError();
+        }
+    }
+
+    private static async validateAndRestore(): Promise<void> {
+        try {
+            const configExists = await fs.access(this.configPath).then(() => true).catch(() => false);
+            if (!configExists) return;
+
+            const configContent = await fs.readFile(this.configPath, 'utf8');
+            JSON.parse(configContent); // 验证JSON格式
+        } catch (error) {
+            console.warn("[zpr] 配置文件损坏，尝试从备份恢复");
+            await this.restoreFromBackup();
+        }
+    }
+
+    private static async restoreFromBackup(): Promise<void> {
+        try {
+            const backupExists = await fs.access(this.backupPath).then(() => true).catch(() => false);
+            if (backupExists) {
+                await fs.copyFile(this.backupPath, this.configPath);
+                console.log("[zpr] 从备份恢复配置成功");
+            }
+        } catch (error) {
+            console.error("[zpr] 备份恢复失败:", error);
+            await this.createDefaultConfig();
+        }
+    }
+
+    private static async createDefaultConfig(): Promise<void> {
+        await fs.writeFile(this.configPath, JSON.stringify(DEFAULT_CONFIG, null, 2));
+        console.log("[zpr] 创建默认配置");
+    }
+
+    private static async handleInitError(): Promise<void> {
+        this.initialized = false;
+        this.db = null;
+        await this.createDefaultConfig();
+    }
+
+    private static async createBackup(): Promise<void> {
+        try {
+            const configExists = await fs.access(this.configPath).then(() => true).catch(() => false);
+            if (configExists) {
+                await fs.copyFile(this.configPath, this.backupPath);
+                console.log("[zpr] 配置备份创建成功");
+            }
+        } catch (error) {
+            console.warn("[zpr] 创建备份失败:", error);
+        }
+    }
+
+    private static async writeConfigWithRetry(): Promise<boolean> {
+        for (let attempt = 1; attempt <= 5; attempt++) {
+            try {
+                await this.db.write();
+                console.log("[zpr] 配置保存成功");
+                return true;
+            } catch (writeError: any) {
+                console.error(`[zpr] 第${attempt}次写入失败:`, writeError);
+                if (attempt === 5) {
+                    // 最后一次失败，尝试恢复备份
+                    await this.restoreFromBackup();
+                    throw writeError;
+                }
+                await new Promise(resolve => setTimeout(resolve, attempt * 200));
+            }
+        }
+        return false;
+    }
+
+    private static async ensureInitialized(): Promise<void> {
+        // 插件重新加载时强制重新初始化以从磁盘加载最新配置
+        if (!this.initialized || !this.db) {
             this.initialized = false;
-            this.db = null;
+            await this.init();
         }
     }
 
     static async getProxyHost(): Promise<string> {
-        await this.init();
+        await this.ensureInitialized();
         if (!this.db) return DEFAULT_CONFIG[CONFIG_KEYS.PROXY_HOST];
         return this.db.data[CONFIG_KEYS.PROXY_HOST] || DEFAULT_CONFIG[CONFIG_KEYS.PROXY_HOST];
     }
@@ -75,30 +157,34 @@ class ZprConfigManager {
             console.error("[zpr] 数据库未初始化");
             return false;
         }
-        
+
+        // 防止并发写入
+        if (this.isWriting) {
+            console.log("[zpr] 配置正在写入中，请稍后");
+            return false;
+        }
+
+        this.isWriting = true;
         try {
-            // 确保配置目录存在
-            await fs.mkdir(path.dirname(this.configPath), { recursive: true });
+            // 验证输入参数
+            if (!host || typeof host !== 'string') {
+                console.error("[zpr] 无效的代理地址");
+                return false;
+            }
+
+            // 创建备份
+            await this.createBackup();
             
             // 更新配置数据
             this.db.data[CONFIG_KEYS.PROXY_HOST] = host;
             
-            // 尝试写入配置，增加重试机制
-            for (let attempt = 1; attempt <= 3; attempt++) {
-                try {
-                    await this.db.write();
-                    console.log("[zpr] 配置保存成功:", host);
-                    return true;
-                } catch (writeError) {
-                    console.error(`[zpr] 第${attempt}次写入失败:`, writeError);
-                    if (attempt === 3) throw writeError;
-                    await new Promise(resolve => setTimeout(resolve, 100));
-                }
-            }
-            return false;
+            // 写入配置，增强重试机制
+            return await this.writeConfigWithRetry();
         } catch (error) {
             console.error("[zpr] 设置代理失败:", error);
             return false;
+        } finally {
+            this.isWriting = false;
         }
     }
 }
