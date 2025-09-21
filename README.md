@@ -78,6 +78,7 @@ npm i <插件名>
 - `yinglish` - 淫语翻译  
 - `yt-dlp` - YouTube 视频下载工具  
 - `yvlu` - 为被回复用户生成语录  
+- `zhijiao` - 掷筊 强随机 使用 笅杯卦辞廿七句  
 - `zpr` - 二次元图片  
 
 ## 技术栈
