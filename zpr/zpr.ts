@@ -3,6 +3,7 @@ import { Api } from "telegram";
 import { getGlobalClient } from "@utils/globalClient";
 import { getPrefixes } from "@utils/pluginManager";
 import { createDirectoryInAssets } from "@utils/pathHelpers";
+import { JSONFilePreset } from "lowdb/node";
 import path from "path";
 import fs from "fs/promises";
 import axios from "axios";
@@ -18,12 +19,89 @@ const htmlEscape = (text: string): string =>
 const prefixes = getPrefixes();
 const mainPrefix = prefixes[0];
 
-// pixiv反代服务器
-const pixivImgHost = "i.pixiv.cat";
+// pixiv反代服务器配置
+const PROXY_HOSTS = {
+    "pixiv.re": "i.pixiv.re",
+    "pixiv.cat": "i.pixiv.cat",
+    "pixiv.nl": "i.pixiv.nl"
+};
+
+const CONFIG_KEYS = {
+    PROXY_HOST: "zpr_proxy_host"
+};
+
+const DEFAULT_CONFIG = {
+    [CONFIG_KEYS.PROXY_HOST]: "i.pixiv.re"
+};
+
 const headers = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.0.0 Safari/537.36 Edg/127.0.2651.74"
 };
 const dataPath = createDirectoryInAssets("zpr");
+
+// 配置管理器
+class ZprConfigManager {
+    private static db: any = null;
+    private static initialized = false;
+    private static configPath: string;
+
+    private static async init(): Promise<void> {
+        if (this.initialized) return;
+        try {
+            // 确保目录存在
+            await fs.mkdir(dataPath, { recursive: true });
+            this.configPath = path.join(dataPath, "zpr_config.json");
+            this.db = await JSONFilePreset<Record<string, any>>(
+                this.configPath,
+                { ...DEFAULT_CONFIG }
+            );
+            this.initialized = true;
+        } catch (error) {
+            console.error("[zpr] 初始化配置失败:", error);
+            this.initialized = false;
+            this.db = null;
+        }
+    }
+
+    static async getProxyHost(): Promise<string> {
+        await this.init();
+        if (!this.db) return DEFAULT_CONFIG[CONFIG_KEYS.PROXY_HOST];
+        return this.db.data[CONFIG_KEYS.PROXY_HOST] || DEFAULT_CONFIG[CONFIG_KEYS.PROXY_HOST];
+    }
+
+    static async setProxyHost(host: string): Promise<boolean> {
+        await this.init();
+        if (!this.db) {
+            console.error("[zpr] 数据库未初始化");
+            return false;
+        }
+        
+        try {
+            // 确保配置目录存在
+            await fs.mkdir(path.dirname(this.configPath), { recursive: true });
+            
+            // 更新配置数据
+            this.db.data[CONFIG_KEYS.PROXY_HOST] = host;
+            
+            // 尝试写入配置，增加重试机制
+            for (let attempt = 1; attempt <= 3; attempt++) {
+                try {
+                    await this.db.write();
+                    console.log("[zpr] 配置保存成功:", host);
+                    return true;
+                } catch (writeError) {
+                    console.error(`[zpr] 第${attempt}次写入失败:`, writeError);
+                    if (attempt === 3) throw writeError;
+                    await new Promise(resolve => setTimeout(resolve, 100));
+                }
+            }
+            return false;
+        } catch (error) {
+            console.error("[zpr] 设置代理失败:", error);
+            return false;
+        }
+    }
+}
 
 // 帮助文本定义
 const help_text = `🎨 <b>随机纸片人插件</b>
@@ -38,6 +116,8 @@ const help_text = `🎨 <b>随机纸片人插件</b>
 • <code>${mainPrefix}zpr [标签] [数量]</code> - 按标签获取指定数量
 • <code>${mainPrefix}zpr r18</code> - 获取R18内容
 • <code>${mainPrefix}zpr r18 [数量]</code> - 获取指定数量R18图片
+• <code>${mainPrefix}zpr proxy</code> - 查看当前反代设置
+• <code>${mainPrefix}zpr proxy [地址]</code> - 设置反代地址
 • <code>${mainPrefix}zpr help</code> - 显示此帮助
 
 <b>使用示例：</b>
@@ -46,10 +126,16 @@ const help_text = `🎨 <b>随机纸片人插件</b>
 <code>${mainPrefix}zpr 萝莉</code> - 萝莉标签
 <code>${mainPrefix}zpr 萝莉 2</code> - 萝莉标签2张
 
+<b>反代地址管理：</b>
+<code>${mainPrefix}zpr proxy</code> - 查看当前反代
+<code>${mainPrefix}zpr proxy i.pixiv.re</code> - 设置为pixiv.re
+<code>${mainPrefix}zpr proxy i.pixiv.cat</code> - 设置为pixiv.cat
+<code>${mainPrefix}zpr proxy i.pixiv.nl</code> - 设置为pixiv.nl
+
 <b>说明：</b>
 • 图片来源：Lolicon API
 • 数量限制：1-10张
-• 使用pixiv反代服务器`;
+• 默认反代：i.pixiv.re（优先推荐）`;
 
 interface SetuData {
     pid: number;
@@ -82,8 +168,9 @@ async function getResult(message: Api.Message, r18 = 0, tag = "", num = 1): Prom
     const des = "出错了，没有纸片人看了。";
     
     try {
+        const proxyHost = await ZprConfigManager.getProxyHost();
         const response = await axios.get(
-            `https://api.lolicon.app/setu/v2?num=${num}&r18=${r18}&tag=${tag}&size=regular&size=original&proxy=${pixivImgHost}&excludeAI=true`,
+            `https://api.lolicon.app/setu/v2?num=${num}&r18=${r18}&tag=${tag}&size=regular&size=original&proxy=${proxyHost}&excludeAI=true`,
             { headers, timeout: 10000 }
         );
         
@@ -180,8 +267,63 @@ class ZprPlugin extends Plugin {
                 await msg.edit({ text: help_text, parseMode: "html" });
                 return;
             }
-            // 参数解析逻辑
-        
+            // 处理 proxy 子命令
+            if (sub === "proxy") {
+                if (args.length === 1) {
+                    // 查看当前反代设置
+                    const currentProxy = await ZprConfigManager.getProxyHost();
+                    await msg.edit({
+                        text: `🔗 <b>当前反代设置</b>
+
+<b>当前地址:</b> <code>${htmlEscape(currentProxy)}</code>
+
+<b>可用地址:</b>
+${Object.entries(PROXY_HOSTS).map(([key, value]) => 
+`• <code>${value}</code> - ${key}`).join('\n')}
+
+<b>使用方法:</b>
+<code>${mainPrefix}zpr proxy [地址]</code> - 设置反代地址`,
+                        parseMode: "html"
+                    });
+                    return;
+                } else {
+                    // 设置反代地址
+                    const newProxy = args[1];
+                    const validHosts = Object.values(PROXY_HOSTS);
+                    
+                    if (!validHosts.includes(newProxy)) {
+                        await msg.edit({
+                            text: `❌ <b>无效的反代地址</b>
+
+<b>可用地址:</b>
+${Object.entries(PROXY_HOSTS).map(([key, value]) => 
+`• <code>${value}</code> - ${key}`).join('\n')}`,
+                            parseMode: "html"
+                        });
+                        return;
+                    }
+                    
+                    const success = await ZprConfigManager.setProxyHost(newProxy);
+                    if (success) {
+                        await msg.edit({
+                            text: `✅ <b>反代地址已更新</b>
+
+<b>新地址:</b> <code>${htmlEscape(newProxy)}</code>
+
+设置已保存，下次获取图片时将使用新的反代地址。`,
+                            parseMode: "html"
+                        });
+                    } else {
+                        await msg.edit({
+                            text: "❌ <b>设置失败</b>\n\n无法保存配置，请稍后重试。",
+                            parseMode: "html"
+                        });
+                    }
+                    return;
+                }
+            }
+            
+            // 参数解析逻辑        
             let num = 1;
             let r18 = 0;
             let tag = "";
@@ -195,7 +337,7 @@ class ZprPlugin extends Plugin {
                     if (args.length > 1 && !isNaN(Number(args[1]))) {
                         num = Math.min(Math.max(1, Number(args[1])), 10);
                     }
-                } else {
+                } else if (args[0] !== "proxy") {
                     tag = args[0];
                     if (args.length > 1) {
                         if (!isNaN(Number(args[1]))) {
@@ -207,6 +349,9 @@ class ZprPlugin extends Plugin {
                             }
                         }
                     }
+                } else {
+                    // proxy 命令已在上面处理
+                    return;
                 }
             }
         
