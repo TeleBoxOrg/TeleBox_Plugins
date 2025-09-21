@@ -271,6 +271,7 @@ class EatGifPlugin extends Plugin {
             stickerset: new Api.InputStickerSetEmpty(),
           }),
         ],
+        replyTo: await msg.getReplyMessage(),
       });
     } catch (e) {
       console.log("exec ffmpeg error", e);
