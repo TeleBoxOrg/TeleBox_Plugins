@@ -1,20 +1,18 @@
 import { Plugin } from "@utils/pluginBase";
-import { Api, TelegramClient } from "telegram";
+import { Api } from "telegram";
 import axios from "axios";
 
-// HTML escape function equivalent to Python's html.escape
 function htmlEscape(text: string): string {
+  if (typeof text !== 'string') return '';
   return text
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#x27;");
+    .replace(/'/g, "&#39;");
 }
 
-// API helper function
 async function getIpInfo(query: string): Promise<any> {
-  // 验证输入格式
   if (!query || query.trim() === "") {
     return {
       status: "fail",
@@ -25,7 +23,7 @@ async function getIpInfo(query: string): Promise<any> {
   const cleanQuery = query.trim();
   const apiUrl = `http://ip-api.com/json/${encodeURIComponent(
     cleanQuery
-  )}?lang=zh-CN&fields=status,message,country,regionName,city,isp,org,as,query,lat,lon,timezone`;
+  )}?lang=zh-CN&fields=status,message,country,regionName,city,isp,org,as,query,timezone,proxy,hosting`;
 
   try {
     const response = await axios.get(apiUrl, {
@@ -37,15 +35,12 @@ async function getIpInfo(query: string): Promise<any> {
 
     if (response.status === 200) {
       const data = response.data;
-
-      // 检查API返回的状态
       if (data.status === "fail") {
         return {
           status: "fail",
           message: data.message || "查询失败，请检查IP地址或域名是否正确",
         };
       }
-
       return data;
     }
 
@@ -79,19 +74,17 @@ async function getIpInfo(query: string): Promise<any> {
 
 const ip = async (msg: Api.Message) => {
   try {
-    const args = msg.message.slice(1).split(" ").slice(1); // Remove command part
+    const args = msg.message.slice(1).split(" ").slice(1);
     let query = args.join(" ");
 
-    // If no query provided, try to get from replied message
     if (!query) {
       try {
         const reply = await msg.getReplyMessage();
         if (reply && reply.text) {
-          // 尝试提取IP或域名
           const text = reply.text.trim();
           const ipRegex = /\b(?:[0-9]{1,3}\.){3}[0-9]{1,3}\b/;
           const domainRegex =
-            /\b[a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?\.[a-zA-Z]{2,}\b/;
+            /\b(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)+[a-zA-Z]{2,}\b/;
 
           const ipMatch = text.match(ipRegex);
           const domainMatch = text.match(domainRegex);
@@ -101,16 +94,14 @@ const ip = async (msg: Api.Message) => {
           } else if (domainMatch) {
             query = domainMatch[0];
           } else {
-            query = text.split(" ")[0]; // 退化为第一个单词
+            query = text.split(" ")[0];
           }
         }
       } catch (replyError: any) {
         console.error("Failed to get reply message:", replyError);
-        // 继续执行，不阻断流程
       }
     }
 
-    // If still no query, show help
     if (!query || query.trim() === "") {
       await msg.edit({
         text: `📍 <b>IP查询插件</b>
@@ -129,16 +120,13 @@ const ip = async (msg: Api.Message) => {
       return;
     }
 
-    // Show searching message
     await msg.edit({
       text: `🔍 <b>正在查询:</b> <code>${htmlEscape(query)}</code>`,
       parseMode: "html",
     });
 
-    // Get IP information
     const data = await getIpInfo(query);
 
-    // Check for API failure
     if (data.status === "fail") {
       const errorMessage = data.message || "未知错误";
       await msg.edit({
@@ -155,7 +143,6 @@ const ip = async (msg: Api.Message) => {
       return;
     }
 
-    // Parse and format the results
     try {
       const country = data.country || "N/A";
       const region = data.regionName || "N/A";
@@ -164,48 +151,52 @@ const ip = async (msg: Api.Message) => {
       const org = data.org || "N/A";
       const asInfo = data.as || "N/A";
       const ipAddress = data.query || "N/A";
-      const lat = data.lat;
-      const lon = data.lon;
 
-      let resultText = `🌍 <b>IP/域名查询结果</b>
+      let resultText = "";
+
+      if (data.proxy) {
+        resultText += "此 IP 可能为代理 IP\n";
+      }
+      if (data.hosting) {
+        resultText += "此 IP 可能为数据中心 IP\n";
+      }
+      if (resultText) {
+        resultText += "\n";
+      }
+
+      resultText += `🌍 <b>IP/域名查询结果</b>
 
 <b>🔍 查询目标:</b> <code>${htmlEscape(ipAddress)}</code>
-<b>📍 地理位置:</b> ${htmlEscape(country)} - ${htmlEscape(
-        region
-      )} - ${htmlEscape(city)}
+<b>📍 地理位置:</b> ${htmlEscape(country)} - ${htmlEscape(region)} - ${htmlEscape(city)}
 <b>🏢 ISP:</b> ${htmlEscape(isp)}
 <b>🏦 组织:</b> ${htmlEscape(org)}
 <b>🔢 AS号:</b> <code>${htmlEscape(asInfo)}</code>`;
 
-      // 添加时区信息
       if (data.timezone) {
         resultText += `
 <b>⏰ 时区:</b> ${htmlEscape(data.timezone)}`;
       }
 
-      // Add map link if coordinates are available
-      if (lat && lon) {
-        const mapsLink = `https://www.google.com/maps/place/${lat},${lon}`;
-        resultText += `
-<b>🗺️ 地图链接:</b> <a href='${mapsLink}'>点击查看地图</a>`;
-        resultText += `
-<b>📍 坐标:</b> <code>${lat}, ${lon}</code>`;
+      const asMatch = asInfo.match(/^AS(\d+)/);
+      if (asMatch) {
+        const asNum = asMatch[1];
+        resultText += `\n\nhttps://bgp.he.net/AS${asNum}`;
       }
 
       await msg.edit({
         text: resultText,
         parseMode: "html",
-        linkPreview: false,
+        linkPreview: true,
       });
     } catch (parseError: any) {
       console.error("Failed to parse IP data:", parseError, data);
-      await msg.edit({
+      await msg。edit({
         text: `❌ <b>数据解析失败</b>
 
 <b>查询目标:</b> <code>${htmlEscape(query)}</code>
 <b>错误原因:</b> API返回了非预期的数据格式
 
-💡 <b>建议:</b> 请稍后重试或联系管理员`,
+💡 <b>建议:</b> 请稍后重试或联系管理员`，
         parseMode: "html",
       });
     }
@@ -214,20 +205,24 @@ const ip = async (msg: Api.Message) => {
     const errorMessage = error.message || String(error);
     const displayError =
       errorMessage.length > 100
-        ? errorMessage.substring(0, 100) + "..."
+        ? errorMessage。substring(0， 100) + "..."
         : errorMessage;
 
-    await msg.edit({
-      text: `❌ <b>IP查询失败</b>
-
-<b>错误信息:</b> ${htmlEscape(displayError)}
-
-💡 <b>建议:</b>
-• 检查网络连接
-• 稍后重试查询
-• 确认IP地址或域名格式正确`,
-      parseMode: "html",
-    });
+    try {
+        await msg。edit({
+            text: `❌ <b>IP查询失败</b>
+    
+    <b>错误信息:</b> ${htmlEscape(displayError)}
+    
+    💡 <b>建议:</b>
+    • 检查网络连接
+    • 稍后重试查询
+    • 确认IP地址或域名格式正确`，
+            parseMode: "html",
+        });
+    } catch (editError) {
+        console。error("Failed to edit message with final error:"， editError);
+    }
   }
 };
 
