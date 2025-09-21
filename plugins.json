@@ -274,5 +274,9 @@
   "zpr": {
     "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/zpr/zpr.ts?raw=true",
     "desc": "二次元图片"
+  },
+  "pmcaptcha": {
+    "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/pmcaptcha/pmcaptcha.ts?raw=true",
+    "desc": "pmcaptcha私聊验证"
   }
 }
