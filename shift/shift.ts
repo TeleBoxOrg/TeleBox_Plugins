@@ -89,6 +89,7 @@ const mainPrefix = prefixes[0];
 
 // Available message types
 const AVAILABLE_OPTIONS = new Set([
+  "handle_edited",
   "silent",
   "text",
   "all",
@@ -658,8 +659,6 @@ async function isCircularForward(
 // Help text
 const HELP_TEXT = `🚀 <b>转发规则管理插件</b>
 
-💡 默认只监听新的消息, 如需监听编辑的消息: <code>.env</code> 文件中设置环境变量 <code>TB_LISTENER_HANDLE_EDITED=shift</code> 重启 TeleBox 即可
-
 <b>📝 基础命令</b>
 • <code>${mainPrefix}shift set &lt;源&gt; &lt;目标&gt; [选项]</code> - 设置转发规则
 • <code>${mainPrefix}shift list</code> - 查看所有规则  
@@ -689,13 +688,14 @@ const HELP_TEXT = `🚀 <b>转发规则管理插件</b>
 
 ⚙️ <b>其他选项：</b>
 <code>silent</code> - 静音转发
+<code>handle_edited</code> - 监听编辑的消息
 
 📋 <b>状态说明：</b>
 • 当没有规则时，系统显示"🚫 暂无转发规则"
 • 使用 <code>${mainPrefix}shift set</code> 命令创建首个规则
 
 💡 <b>示例：</b>
-• <code>${mainPrefix}shift set @channel1 @channel2 silent photo</code>
+• <code>${mainPrefix}shift set @channel1 @channel2 silent handle_edited photo</code>
 • <code>${mainPrefix}shift set @channel1 @channel2|TopicID</code>
 • <code>${mainPrefix}shift del 1</code>
 • <code>${mainPrefix}shift filter 1 add 广告</code>
@@ -925,8 +925,11 @@ async function importRules(jsonData: string, merge = false): Promise<void> {
   }
 }
 // Message listener handler for the plugin system
-async function shiftMessageListener(message: any): Promise<void> {
-  await handleIncomingMessage(message);
+async function shiftMessageListener(
+  message: any,
+  options?: { isEdited?: boolean }
+): Promise<void> {
+  await handleIncomingMessage(message, options?.isEdited);
 }
 class ShiftPlugin extends Plugin {
   description: string = `智能转发助手 - 自动转发消息到指定目标\n\n${help_text}`;
@@ -1216,7 +1219,7 @@ class ShiftPlugin extends Plugin {
           for (let i = 0; i < allRules.length; i++) {
             const { sourceId, rule } = allRules[i];
             const status = rule.paused ? "⏸️ 已暂停" : "▶️ 运行中";
-
+            let handle_edited;
             try {
               if (!msg.client) continue;
               let replyTo = undefined;
@@ -1229,6 +1232,8 @@ class ShiftPlugin extends Plugin {
                     if (!isNaN(replyToNum)) {
                       replyTo = replyToNum;
                     }
+                  } else if (option === "handle_edited") {
+                    handle_edited = true;
                   } else {
                     options.push(option);
                   }
@@ -1257,6 +1262,9 @@ class ShiftPlugin extends Plugin {
               output += `   📥 目标: ${targetDisplayHtml}\n`;
               if (replyTo) {
                 output += `   📬 回复: ${replyTo}\n`;
+              }
+              if (handle_edited) {
+                output += `   ✏️ 监听编辑的消息\n`;
               }
               output += `   🎯 类型: ${options.join(", ") || "all"}\n`;
               output += `   🛡️ 过滤: ${rule.filters.length} 个关键词\n\n`;
@@ -1644,8 +1652,10 @@ class ShiftPlugin extends Plugin {
       }
     },
   };
-  listenMessageHandler?: ((msg: Api.Message) => Promise<void>) | undefined =
-    shiftMessageListener;
+  listenMessageHandlerIgnoreEdited: boolean = false;
+  listenMessageHandler?:
+    | ((msg: Api.Message, options?: { isEdited?: boolean }) => Promise<void>)
+    | undefined = shiftMessageListener;
 }
 
 // Update stats function
@@ -1788,7 +1798,10 @@ async function shiftForwardMessage(
 }
 
 // Message handler for automatic forwarding
-async function handleIncomingMessage(message: any): Promise<void> {
+async function handleIncomingMessage(
+  message: any,
+  isEdited?: boolean
+): Promise<void> {
   try {
     if (!message || !message.chat) {
       return;
@@ -1822,18 +1835,24 @@ async function handleIncomingMessage(message: any): Promise<void> {
 
     // Check message filtering
     if (await isMessageFiltered(message, sourceId)) {
-      console.log(`[SHIFT] 消息被过滤: ${sourceId}`);
+      console.log(`[SHIFT] 消息被过滤: ${rule.source_display || sourceId}`);
       return;
     }
 
     // Check message type
     const options = rule.options;
+
+    if (isEdited && !(options && options.includes("handle_edited"))) {
+      console.log(`[SHIFT] 编辑消息被忽略: ${rule.source_display || sourceId}`);
+      return;
+    }
+
     const messageTypes = [];
     if (Array.isArray(options) && options.length > 0) {
       for (const option of options) {
         if (
           !option.startsWith("replyTo:") &&
-          !["all", "silent"].includes(option)
+          !["all", "silent", "handle_edited"].includes(option)
         ) {
           messageTypes.push(option);
         }
@@ -1841,7 +1860,11 @@ async function handleIncomingMessage(message: any): Promise<void> {
     }
     const messageType = getMediaType(message);
     if (messageTypes.length > 0 && !messageTypes.includes(messageType)) {
-      console.log(`[SHIFT] 消息类型不匹配: ${messageType} not in ${options}`);
+      console.log(
+        `[SHIFT] 消息类型不匹配: ${messageType} not in ${options}, ${
+          rule.source_display || sourceId
+        }`
+      );
       return;
     }
 
