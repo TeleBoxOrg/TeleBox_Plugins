@@ -39,15 +39,6 @@
       }
     },
     {
-      "url": "ddw/ddw30.png",
-      "delay": 50,
-      "me": {
-        "x": 113,
-        "y": 32,
-        "mask": "ddw/me.png"
-      }
-    },
-    {
       "url": "ddw/ddw31.png",
       "delay": 50,
       "me": {
@@ -183,15 +174,6 @@
       }
     },
     {
-      "url": "ddw/ddw46.png",
-      "delay": 50,
-      "me": {
-        "x": 74,
-        "y": 17,
-        "mask": "ddw/me.png"
-      }
-    },
-    {
       "url": "ddw/ddw47.png",
       "delay": 50,
       "me": {
@@ -305,15 +287,6 @@
       "me": {
         "x": 42,
         "y": 22,
-        "mask": "ddw/me.png"
-      }
-    },
-    {
-      "url": "ddw/ddw60.png",
-      "delay": 50,
-      "me": {
-        "x": 38,
-        "y": 20,
         "mask": "ddw/me.png"
       }
     },
@@ -453,15 +426,6 @@
       }
     },
     {
-      "url": "ddw/ddw76.png",
-      "delay": 50,
-      "me": {
-        "x": 36,
-        "y": 27,
-        "mask": "ddw/me.png"
-      }
-    },
-    {
       "url": "ddw/ddw77.png",
       "delay": 50,
       "me": {
@@ -575,15 +539,6 @@
       "me": {
         "x": 57,
         "y": 32,
-        "mask": "ddw/me.png"
-      }
-    },
-    {
-      "url": "ddw/ddw90.png",
-      "delay": 50,
-      "me": {
-        "x": 57,
-        "y": 29,
         "mask": "ddw/me.png"
       }
     },
@@ -719,15 +674,6 @@
       "me": {
         "x": 98,
         "y": 26,
-        "mask": "ddw/me.png"
-      }
-    },
-    {
-      "url": "ddw/ddw106.png",
-      "delay": 50,
-      "me": {
-        "x": 103,
-        "y": 24,
         "mask": "ddw/me.png"
       }
     },
