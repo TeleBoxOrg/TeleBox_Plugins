@@ -438,19 +438,46 @@ function getDisplayName(entity: any): string {
   return `ID: ${entity.id}`;
 }
 
+function extractIdString(id: any): string {
+  if (id === undefined || id === null) return "";
+  if (typeof id === "object") {
+    if ("value" in id && id.value !== undefined && id.value !== null) {
+      return String(id.value);
+    }
+    if (typeof id.toString === "function") {
+      return id.toString();
+    }
+  }
+  if (typeof id === "bigint") {
+    return id.toString();
+  }
+  return String(id);
+}
+
+function ensureChannelId(id: any): number {
+  const idStr = extractIdString(id).trim();
+  if (!idStr) return Number.NaN;
+  if (idStr.startsWith("-100")) return Number(idStr);
+  const normalized = idStr.startsWith("-") ? idStr.slice(1) : idStr;
+  return Number(`-100${normalized}`);
+}
+
 function normalizeChatId(entityOrId: any): number {
   if (typeof entityOrId === "object" && entityOrId.id) {
-    const chatId = Number(entityOrId.id);
     if (entityOrId.className === "Channel") {
-      return chatId > 0 ? -1000000000000 - chatId : chatId;
-    } else if (entityOrId.className === "Chat" && chatId > 0) {
+      return ensureChannelId(entityOrId.id);
+    }
+    const chatId = Number(extractIdString(entityOrId.id));
+    if (entityOrId.className === "Chat" && chatId > 0) {
       return -chatId;
     }
     return chatId;
   } else {
-    const chatId = Number(entityOrId);
+    const rawId = extractIdString(entityOrId);
+    if (rawId.startsWith("-100")) return Number(rawId);
+    const chatId = Number(rawId);
     if (chatId > 1000000000) {
-      return -1000000000000 - chatId;
+      return ensureChannelId(rawId);
     }
     return chatId;
   }
@@ -1736,20 +1763,17 @@ function getChatIdFromMessage(message: any, isEdited?: boolean): number | null {
     message.fwdFrom?.fromId?.channelId
   ) {
     message.id = message.fwdFrom?.channelPost;
-    return (
-      -1000000000000 -
-      Number(
-        message.fwdFrom.fromId.channelId.value ||
-          message.fwdFrom.fromId.channelId
-      )
-    );
+    const channelId =
+      message.fwdFrom.fromId.channelId.value ||
+      message.fwdFrom.fromId.channelId;
+    return ensureChannelId(channelId);
   }
   if (message.chatId) {
     return Number(message.chatId);
   }
   if (message.peerId) {
     if (message.peerId.channelId) {
-      return -1000000000000 - Number(message.peerId.channelId);
+      return ensureChannelId(message.peerId.channelId);
     } else if (message.peerId.chatId) {
       return -Number(message.peerId.chatId);
     } else if (message.peerId.userId) {
