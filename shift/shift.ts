@@ -658,6 +658,8 @@ async function isCircularForward(
 // Help text
 const HELP_TEXT = `🚀 <b>转发规则管理插件</b>
 
+💡 默认只监听新的消息, 如需监听编辑的消息: <code>.env</code> 文件中设置环境变量 <code>TB_LISTENER_HANDLE_EDITED=shift</code> 重启 TeleBox 即可
+
 <b>📝 基础命令</b>
 • <code>${mainPrefix}shift set &lt;源&gt; &lt;目标&gt; [选项]</code> - 设置转发规则
 • <code>${mainPrefix}shift list</code> - 查看所有规则  
