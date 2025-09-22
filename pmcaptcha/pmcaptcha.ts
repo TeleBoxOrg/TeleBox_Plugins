@@ -502,6 +502,22 @@ async function verifyStickerResponse(
   }
 }
 
+// Robust sticker detection (GramJS)
+function isStickerMessage(message: Api.Message): boolean {
+  try {
+    const media: any = (message as any).media;
+    const doc: any = media?.document;
+    const attrs: any[] = (doc && (doc as any).attributes) || [];
+    return attrs.some((a: any) =>
+      (a instanceof (Api as any).DocumentAttributeSticker) ||
+      a?.className === "DocumentAttributeSticker" ||
+      a?._ === "documentAttributeSticker"
+    );
+  } catch {
+    return false;
+  }
+}
+
 // Handle bot private messages (block if enabled)
 async function handleBotMessage(
   client: TelegramClient,
@@ -546,16 +562,17 @@ async function handleBotMessage(
 // Check if there's chat history between users
 async function hasChatHistory(
   client: TelegramClient,
-  userId: number
+  userId: number,
+  excludeMessageId?: number
 ): Promise<boolean> {
   try {
     const messages = await client.getMessages(userId, {
       limit: 10
     });
-    
-    // Treat any existing messages as chat history
-    const hasAny = messages.length > 0;
-    return hasAny;
+    const filtered = excludeMessageId
+      ? messages.filter((m: any) => Number(m.id) !== Number(excludeMessageId))
+      : messages;
+    return filtered.length > 0;
   } catch (error) {
     console.error(`[PMCaptcha] Failed to check chat history with ${userId}:`, error);
     return false;
@@ -684,7 +701,7 @@ async function pmcaptchaMessageListener(message: Api.Message) {
   if (dbHelpers.isWhitelisted(userId)) return;
 
   // Check if there's chat history with this user
-  const hasHistory = await hasChatHistory(client, userId);
+  const hasHistory = await hasChatHistory(client, userId, Number(message.id));
   if (hasHistory) {
     dbHelpers.addToWhitelist(userId);
     console.log(`[PMCaptcha] Auto-whitelisted user ${userId} (has chat history)`);
@@ -732,7 +749,7 @@ async function pmcaptchaMessageListener(message: Api.Message) {
   const activeChallenge = activeChallenges.get(userId);
   if (activeChallenge && activeChallenge.type === "sticker") {
     // Verify sticker response
-    const hasSticker = !!message.sticker;
+    const hasSticker = isStickerMessage(message);
     await verifyStickerResponse(client, userId, hasSticker);
     return;
   }
