@@ -1728,11 +1728,25 @@ async function isMessageFiltered(
 }
 
 // Get chat ID from message
-function getChatIdFromMessage(message: any): number | null {
+function getChatIdFromMessage(message: any, isEdited?: boolean): number | null {
+  if (
+    isEdited &&
+    message.peerId?.channelId &&
+    message.fwdFrom?.channelPost &&
+    message.fwdFrom?.fromId?.channelId
+  ) {
+    message.id = message.fwdFrom?.channelPost;
+    return (
+      -1000000000000 -
+      Number(
+        message.fwdFrom.fromId.channelId.value ||
+          message.fwdFrom.fromId.channelId
+      )
+    );
+  }
   if (message.chatId) {
     return Number(message.chatId);
   }
-
   if (message.peerId) {
     if (message.peerId.channelId) {
       return -1000000000000 - Number(message.peerId.channelId);
@@ -1807,7 +1821,7 @@ async function handleIncomingMessage(
       return;
     }
 
-    const sourceId = getChatIdFromMessage(message);
+    const sourceId = getChatIdFromMessage(message, isEdited);
     if (!sourceId) {
       return;
     }
