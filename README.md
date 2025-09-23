@@ -12,6 +12,7 @@ npm i <插件名>
 - `aban` - 高级封禁管理工具  
 - `acron` - 定时发送/转发/复制/置顶/取消置顶/删除消息/执行命令  
 - `ai` - ai聚合插件  
+- `aitc` - AI Prompt 转写  
 - `atadmins` - 一键艾特全部管理员  
 - `audio_to_voice` - 音乐转音频  
 - `autochangename` - 自动定时修改用户名插  
