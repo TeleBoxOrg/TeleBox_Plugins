@@ -222,7 +222,7 @@ class CalcPlugin extends Plugin {
 
       if (expression.length > MAX_EXPR_LENGTH) {
         await msg.edit({
-          text: `❌ <b>表达式过长</b>\\n\\n最大长度: ${MAX_EXPR_LENGTH} 字符\\n当前长度: ${expression.length}`,
+          text: `❌ <b>表达式过长</b><br/><br/>最大长度: ${MAX_EXPR_LENGTH} 字符<br/>当前长度: ${expression.length}`,
           parseMode: "html",
         });
         return;
@@ -233,7 +233,7 @@ class CalcPlugin extends Plugin {
         result = SafeMathParser.calculate(expression);
       } catch (error: any) {
         await msg.edit({
-          text: `🚫 <b>计算失败</b>\\n\\n表达式: <code>${this.htmlEscape(expression)}</code>\\n错误: ${this.htmlEscape(error?.message ?? "未知错误")}`,
+          text: `🚫 <b>计算失败</b><br/><br/>表达式: <code>${this.htmlEscape(expression)}</code><br/>错误: ${this.htmlEscape(error?.message ?? "未知错误")}`,
           parseMode: "html",
         });
         return;
@@ -241,7 +241,7 @@ class CalcPlugin extends Plugin {
 
       if (!Number.isFinite(result)) {
         await msg.edit({
-          text: `🚫 <b>计算结果无效</b>\\n\\n表达式: <code>${this.htmlEscape(expression)}</code>` ,
+          text: `🚫 <b>计算结果无效</b><br/><br/>表达式: <code>${this.htmlEscape(expression)}</code>`,
           parseMode: "html",
         });
         return;
@@ -250,13 +250,13 @@ class CalcPlugin extends Plugin {
       const formatted = this.formatResult(result);
 
       await msg.edit({
-        text: `🧮 <b>计算结果</b>\\n\\n<code>${this.htmlEscape(expression)}</code>\\n= <b>${formatted}</b>`,
+        text: `🧮 <b>计算结果</b><br/><br/><code>${this.htmlEscape(expression)}</code><br/>= <b>${formatted}</b>`,
         parseMode: "html",
         linkPreview: false,
       });
     } catch (error: any) {
       await msg.edit({
-        text: `❌ <b>插件错误</b>\\n\\n${this.htmlEscape(error?.message ?? "未知错误")}`,
+        text: `❌ <b>插件错误</b><br/><br/>${this.htmlEscape(error?.message ?? "未知错误")}`,
         parseMode: "html",
       });
     }
