@@ -278,5 +278,9 @@
   "ai": {
     "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/ai/ai.ts?raw=true",
     "desc": "ai聚合插件"
+  },
+  "aitc": {
+    "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/aitc/aitc.ts?raw=true",
+    "desc": "AI Prompt 转写"
   }
 }
