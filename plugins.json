@@ -282,5 +282,9 @@
   "zhijiao": {
     "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/zhijiao/zhijiao.ts?raw=true",
     "desc": "掷筊 强随机 使用 笅杯卦辞廿七句"
+  },
+  "ai": {
+    "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/ai/ai.ts?raw=true",
+    "desc": "ai聚合插件"
   }
 }
