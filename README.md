@@ -21,6 +21,7 @@ npm i <插件名>
 - `bizhi` - 发送一张壁纸  
 - `bs` - 保送  
 - `bulk_delete` - 批量删除消息工具  
+- `calc` - 计算器  
 - `clean_member` - 群组成员清理工具  
 - `clear_sticker` - 批量删除群组内贴纸  
 - `clearblocked` - 批量清理已拉黑用户  
