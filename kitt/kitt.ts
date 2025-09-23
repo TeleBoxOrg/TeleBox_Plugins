@@ -148,11 +148,16 @@ async function run(text: string, msg: Api.Message, trigger?: Api.Message) {
     await dealCommandPluginWithMessage({ cmd, msg: sudoMsg, trigger: msg });
 }
 
-async function exec(text: string, msg: Api.Message, trigger?: Api.Message) {
+async function exec(
+  text: string,
+  msg: Api.Message,
+  trigger?: Api.Message,
+  options?: { isEdited?: boolean }
+) {
   return await (
     await import(
       `data:text/javascript;charset=utf-8,${encodeURIComponent(
-        `export default async ({ msg, chat, sender, trigger, reply, client, _, axios, formatEntity, sleep, dayjs, run, Api }) => { ${text} }`
+        `export default async ({ msg, chat, sender, trigger, reply, client, _, axios, formatEntity, sleep, dayjs, run, Api, isEdited }) => { ${text} }`
       )}`
     )
   ).default({
@@ -169,6 +174,7 @@ async function exec(text: string, msg: Api.Message, trigger?: Api.Message) {
     dayjs,
     run,
     Api,
+    isEdited: options?.isEdited,
   });
 }
 
@@ -190,6 +196,7 @@ const help_text = `▎格式
 
 可使用
 
+<code>isEdited: boolean</code>: 是否为编辑消息事件(默认情况并不监听编辑消息事件, 可使用环境变量 <code>TB_LISTENER_HANDLE_EDITED</code> 设置, 多个插件用空格分隔)
 <code>msg: Api.Message</code>: 当前消息
 <code>chat: Entity</code>: 当前消息的对话(可从 <code>msg</code> 上取, 这里是为了精简)
 <code>sender: Entity</code>: 当前消息的发送者(可从 <code>msg</code> 上取, 这里是为了精简)
@@ -210,11 +217,12 @@ const help_text = `▎格式
 return !msg.fwdFrom && ['a', 'b'].includes(msg.sender?.username) && dayjs().day() === 4
 await msg.reply({ message: \`\${(await formatEntity(msg.sender)).display}, V 我 50!\`}, parseMode: 'html' })</pre>
 
-- <code>username</code> 为 <code>test</code> 的群里的没有 <code>username</code> 的用户不许参加淫趴
+- id 为 <code>-1000000000000</code> 的群里有人修改消息时自动警告
 
-<pre>${commandName} add 你不许参加淫趴
-return msg.chat?.username === 'test' && !msg.sender?.username
-await msg.reply({ message: \`\${(await formatEntity(msg.sender)).display}, 你不许参加淫趴!\`, parseMode: 'html' })</pre>
+<pre>${commandName} 你不许修改消息
+return msg.chatId.toString() === '-1000000000000' && isEdited
+await msg.reply({ message: \`\${(await formatEntity(msg.sender)).display}, 不许修改!\`, parseMode: 'html' })
+</pre>
 
 - <code>username</code> 为 <code>a</code> 或 <code>b</code> 的用户可使用 <code>${mainPrefix}${mainPrefix}</code> 依次执行命令 一键强制更新并退出重启
 
@@ -371,36 +379,42 @@ class KittPlugin extends Plugin {
       }
     },
   };
-  listenMessageHandler?: ((msg: Api.Message) => Promise<void>) | undefined =
-    async (msg: Api.Message) => {
-      const db = await getDB();
-      for (const { id, remark, match, action, status } of db.data.tasks) {
-        if ("0" !== status) {
-          let matched;
+  // 可使用环境变量 TB_LISTENER_HANDLE_EDITED 设置, 多个插件用空格分隔
+  // listenMessageHandlerIgnoreEdited: boolean = false;
+  listenMessageHandler?:
+    | ((msg: Api.Message, options?: { isEdited?: boolean }) => Promise<void>)
+    | undefined = async (
+    msg: Api.Message,
+    options?: { isEdited?: boolean }
+  ) => {
+    const db = await getDB();
+    for (const { id, remark, match, action, status } of db.data.tasks) {
+      if ("0" !== status) {
+        let matched;
+        try {
+          matched = await exec(match, msg, undefined, options);
+        } catch (e) {
+          console.error(
+            `[KITT] 任务 ${id}${remark ? ` ${remark}` : ""} 匹配时出错:`,
+            e
+          );
+        }
+        if (matched) {
           try {
-            matched = await exec(match, msg);
+            console.log(
+              `[KITT] 任务 ${id}${remark ? ` ${remark}` : ""} 匹配成功`
+            );
+            await exec(action, msg, undefined, options);
           } catch (e) {
             console.error(
-              `[KITT] 任务 ${id}${remark ? ` ${remark}` : ""} 匹配时出错:`,
+              `[KITT] 任务 ${id}${remark ? ` ${remark}` : ""} 执行时出错:`,
               e
             );
           }
-          if (matched) {
-            try {
-              console.log(
-                `[KITT] 任务 ${id}${remark ? ` ${remark}` : ""} 匹配成功`
-              );
-              await exec(action, msg);
-            } catch (e) {
-              console.error(
-                `[KITT] 任务 ${id}${remark ? ` ${remark}` : ""} 执行时出错:`,
-                e
-              );
-            }
-          }
         }
       }
-    };
+    }
+  };
 }
 
 export default new KittPlugin();

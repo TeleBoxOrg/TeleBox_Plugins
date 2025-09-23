@@ -11,6 +11,7 @@ npm i <插件名>
 ## 可用插件列表
 - `aban` - 高级封禁管理工具  
 - `acron` - 定时发送/转发/复制/置顶/取消置顶/删除消息/执行命令  
+- `ai` - ai聚合插件  
 - `atadmins` - 一键艾特全部管理员  
 - `audio_to_voice` - 音乐转音频  
 - `autochangename` - 自动定时修改用户名插  
@@ -35,10 +36,8 @@ npm i <插件名>
 - `eatgif` - 生成"吃掉"动图表情包  
 - `encode` - 简单的编码解码插件  
 - `fadian` - fadian语录  
-- `gemini` - 谷歌AI助手Gemini  
 - `getstickers` - 下载整个贴纸包  
 - `gif` - GIF与视频转贴纸插件  
-- `gpt` - OpenAI助手  
 - `gt` - 谷歌中英文互译  
 - `his` - 查看被回复者最近消息  
 - `httpcat` - 发送一张http状态码主题的猫猫图片  

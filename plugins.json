@@ -67,10 +67,6 @@
     "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/dc/dc.ts?raw=true",
     "desc": "获取实体DC"
   },
-  "gpt": {
-    "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/gpt/gpt.ts?raw=true",
-    "desc": "OpenAI助手"
-  },
   "komari": {
     "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/komari/komari.ts?raw=true",
     "desc": "Komari 服务器监控插件"
@@ -122,10 +118,6 @@
   "clearblocked": {
     "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/clearblocked/clearblocked.ts?raw=true",
     "desc": "批量清理已拉黑用户"
-  },
-  "gemini": {
-    "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/gemini/gemini.ts?raw=true",
-    "desc": "谷歌AI助手Gemini"
   },
   "news": {
     "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/news/news.ts?raw=true",
@@ -282,5 +274,9 @@
   "zhijiao": {
     "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/zhijiao/zhijiao.ts?raw=true",
     "desc": "掷筊 强随机 使用 笅杯卦辞廿七句"
+  },
+  "ai": {
+    "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/ai/ai.ts?raw=true",
+    "desc": "ai聚合插件"
   }
 }
