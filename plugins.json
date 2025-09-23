@@ -282,5 +282,9 @@
   "aitc": {
     "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/aitc/aitc.ts?raw=true",
     "desc": "AI Prompt 转写"
+  },
+  "calc": {
+    "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/calc/calc.ts?raw=true",
+    "desc": "计算器"
   }
 }
