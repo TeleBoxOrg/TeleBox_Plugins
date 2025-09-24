@@ -17,6 +17,7 @@ npm i <插件名>
 - `audio_to_voice` - 音乐转音频  
 - `autochangename` - 自动定时修改用户名插  
 - `autodel` - 定时删除消息  
+- `banana` - Nano-Banana 图像编辑  
 - `bin` - 卡头检测  
 - `bizhi` - 发送一张壁纸  
 - `bs` - 保送  
