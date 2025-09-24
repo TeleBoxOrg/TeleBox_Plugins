@@ -39,6 +39,10 @@
     "url": "rf/rf.json",
     "desc": "日翻你"
   },
+  "wd": {
+    "url": "wd/wd.json",
+    "desc": "寄了！"
+  },
   "xj": {
     "url": "xj/xj.json",
     "desc": "小撅"
