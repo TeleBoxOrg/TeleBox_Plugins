@@ -292,6 +292,7 @@ class AitcPlugin extends Plugin {
 - aitc [文本] - 根据 Prompt 处理输入
 - aitc apikey <OpenAI Key> - 设置 API Key
 - aitc model <模型名> - 指定模型
+- aitc api <地址> - 自定义 API 地址
 - aitc prompt <提示词> - 定义系统 Prompt
 - aitc info - 查看当前配置
   `;
