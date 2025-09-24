@@ -94,6 +94,13 @@ const htmlEscape = (text: string): string =>
 const prefixes = getPrefixes();
 const mainPrefix = prefixes[0] || ".";
 
+// 基础表情池与随机函数（当贴纸不携带基础 emoji 时兜底）
+const BASE_EMOJIS = ["😀","😁","😂","🤣","😊","😇","🙂","😉","😋","😎","😍","😘","😜","🤗","🤔","😴","😌","😅","😆","😄"];
+const getRandomBaseEmoji = (): string => {
+  const idx = Math.floor(Math.random() * BASE_EMOJIS.length);
+  return BASE_EMOJIS[idx];
+};
+
 // Custom Error for better handling
 class StickerError extends Error {
   constructor(message: string) {
@@ -112,7 +119,6 @@ const help_text = `⭐ <b>贴纸收藏插件</b>
 
 <b>🔧 使用方法:</b>
 • 回复一个贴纸，发送 <code>${mainPrefix}sticker</code> - 保存贴纸到默认或自动创建的包。
-• <code>${mainPrefix}sticker &lt;包名&gt;</code> - 设置一个永久的默认贴纸包。
 • <code>${mainPrefix}sticker to &lt;包名&gt;</code> - (回复贴纸时) 临时保存到指定包。
 • <code>${mainPrefix}sticker cancel</code> - 取消设置的默认贴纸包。
 • <code>${mainPrefix}sticker</code> - (不回复贴纸) 查看当前配置。
@@ -127,6 +133,7 @@ const help_text = `⭐ <b>贴纸收藏插件</b>
 <b>📌 注意事项:</b>
 • 首次使用前，请确保您已私聊过官方的 @Stickers 机器人。
 • 贴纸包名称只能包含字母、数字和下划线，且必须以字母开头。
+• 若被收藏贴纸未携带基础 emoji，将自动随机选择一个基础表情作为标签。
 `;
 
 class StickerPlugin extends Plugin {
@@ -181,9 +188,12 @@ class StickerPlugin extends Plugin {
         isAnimated,
         isVideo,
         isStatic,
-        emoji: sticker.attributes.find(
-          (a): a is Api.DocumentAttributeSticker => a instanceof Api.DocumentAttributeSticker
-        )?.alt ?? "😀",
+        emoji: (() => {
+          const alt = sticker.attributes.find(
+            (a): a is Api.DocumentAttributeSticker => a instanceof Api.DocumentAttributeSticker
+          )?.alt?.trim();
+          return alt && alt.length > 0 ? alt : getRandomBaseEmoji();
+        })(),
         document: new Api.InputDocument({
           id: sticker.id,
           accessHash: sticker.accessHash,
