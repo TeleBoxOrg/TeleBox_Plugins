@@ -19,22 +19,11 @@ const htmlEscape = (text: string): string =>
     '"': '&quot;', "'": '&#x27;' 
   }[m] || m));
 
-// 帮助文档常量（必须定义）
-const help_text = `🗑️ <b>群组消息批量删除插件</b>
+// 帮助文档常量
+const help_text = `<b>批量删除</b>
 
-<b>命令格式：</b>
-<code>${mainPrefix}da [子命令]</code>
-
-<b>可用命令：</b>
-• <code>${mainPrefix}da true</code> - 开始删除任务
-• <code>${mainPrefix}da stop</code> - 停止当前任务
-• <code>${mainPrefix}da status</code> - 查看任务状态
-• <code>${mainPrefix}da help</code> - 显示帮助信息
-
-<b>示例：</b>
-• <code>${mainPrefix}da true</code> - 开始删除群组消息
-• <code>${mainPrefix}da stop</code> - 停止正在运行的任务
-• <code>${mainPrefix}da status</code> - 查看当前任务状态`;
+<code>.da true</code> 开始删除
+<code>.da stop</code> 停止任务`;
 
 // 删除任务状态管理
 interface DeleteTask {
@@ -259,32 +248,15 @@ const calculateElapsedTime = (task: DeleteTask): string => {
   }
 };
 
-// 批量删除消息
-const deleteBatch = async (
+// 高速删除批处理（极简版）
+const fastDeleteBatch = async (
   client: TelegramClient,
   chatId: bigInt.BigInteger,
   messages: Api.Message[],
-  task: DeleteTask,
-  currentFloodWait: number
-): Promise<{ floodWaitTime: number; consecutiveErrors: number }> => {
-  let floodWaitTime = currentFloodWait;
-  let consecutiveErrors = 0;
-  
+  task: DeleteTask
+): Promise<boolean> => {
   try {
-    // 如果有flood wait时间，先等待
-    if (floodWaitTime > 0) {
-      const waitSeconds = Math.ceil(floodWaitTime / 1000);
-      task.sleepUntil = Date.now() + floodWaitTime;
-      await saveTask(task);
-      
-      // 休眠等待（不在群聊显示倒计时）
-      await new Promise(resolve => setTimeout(resolve, floodWaitTime));
-      
-      task.sleepUntil = null;
-      floodWaitTime = Math.max(0, floodWaitTime - 1000);
-    }
-    
-    // 尝试批量删除
+    // 直接批量删除，不等待
     await client.deleteMessages(
       chatId,
       messages.map((m) => m.id),
@@ -292,108 +264,29 @@ const deleteBatch = async (
     );
     
     task.deletedMessages += messages.length;
-    task.lastUpdate = Date.now();
-    consecutiveErrors = 0;
-    
-    // 更新进度到收藏夹（减少频率）
-    const shouldUpdate = 
-      task.deletedMessages % 1000 === 0 || 
-      Date.now() - task.lastUpdate > 30000;
-      
-    if (shouldUpdate) {
-      // 更新收藏夹进度
-      const msgId = await sendProgressToSaved(client, task, "进行中");
-      if (msgId && !task.savedMessageId) {
-        task.savedMessageId = msgId;
-      }
-      
-      task.lastUpdate = Date.now();
-      await saveTask(task);
-    }
-    
-    // 后台日志报告（一分钟一次）
-    const shouldLog = Date.now() - task.lastLogTime > 60000;
-    if (shouldLog) {
-      const speed = task.deletedMessages / ((Date.now() - task.startTime) / 1000);
-      const elapsed = Math.floor((Date.now() - task.startTime) / 1000);
-      console.log(`[DA] 群组: ${task.chatName} | 已删除: ${task.deletedMessages} 条 | 速度: ${speed.toFixed(1)} 条/秒 | 运行: ${elapsed}秒`);
-      task.lastLogTime = Date.now();
-      await saveTask(task);
-    }
+    await saveTask(task);
+    return true;
     
   } catch (error: any) {
-    consecutiveErrors++;
+    // FLOOD_WAIT处理
+    if (error.message?.includes("FLOOD_WAIT")) {
+      const waitTime = parseInt(error.message.match(/\d+/)?.[0] || "30") * 1000;
+      await sleep(waitTime);
+      return fastDeleteBatch(client, chatId, messages, task); // 重试
+    }
     
-    // 处理Flood Wait错误
-    if (error.message && error.message.includes("FLOOD_WAIT")) {
-      const waitMatch = error.message.match(/(\d+)/);
-      if (waitMatch) {
-        floodWaitTime = parseInt(waitMatch[1]) * 1000 + 5000;
-        task.errors.push(`API限制: 需等待 ${Math.ceil(floodWaitTime / 1000)} 秒`);
-      } else {
-        floodWaitTime = Math.min(floodWaitTime * 2, 60000);
-      }
-      
-      const waitSeconds = Math.ceil(floodWaitTime / 1000);
-      task.sleepUntil = Date.now() + floodWaitTime;
-      await saveTask(task);
-      
-      // 休眠等待（不在群聊显示倒计时）
-      await new Promise(resolve => setTimeout(resolve, floodWaitTime));
-      
-      task.sleepUntil = null;
-      
-      // 重试批量删除
-      return deleteBatch(client, chatId, messages, task, floodWaitTime - 1000);
-      
-    } else if (error.message && error.message.includes("MESSAGE_DELETE_FORBIDDEN")) {
-      // 无权限删除，尝试逐个删除
-      console.log("批量删除失败，尝试逐个删除");
-      
-      for (const message of messages) {
-        try {
-          await client.deleteMessages(chatId, [message.id], { revoke: true });
-          task.deletedMessages++;
-          
-          if (task.deletedMessages % 10 === 0) {
-            await new Promise(resolve => setTimeout(resolve, 100));
-          }
-        } catch (singleError: any) {
-          if (singleError.message && singleError.message.includes("FLOOD_WAIT")) {
-            const waitMatch = singleError.message.match(/(\d+)/);
-            if (waitMatch) {
-              floodWaitTime = parseInt(waitMatch[1]) * 1000 + 5000;
-              task.sleepUntil = Date.now() + floodWaitTime;
-              await saveTask(task);
-              await new Promise(resolve => setTimeout(resolve, floodWaitTime));
-              task.sleepUntil = null;
-            }
-          }
-        }
-      }
-      
-    } else {
-      // 其他错误，尝试逐个删除
-      task.errors.push(`批量删除失败: ${error.message || error}`);
-      
-      for (const message of messages) {
-        try {
-          await client.deleteMessages(chatId, [message.id], { revoke: true });
-          task.deletedMessages++;
-          await new Promise(resolve => setTimeout(resolve, 50));
-        } catch (singleError) {
-          // 只在日志时间间隔内记录错误，避免刷屏
-          if (Date.now() - task.lastLogTime > 60000) {
-            console.log(`[DA] 单条删除失败: ${message.id}`);
-          }
-        }
-      }
+    // 批量失败，逐个删除
+    for (const message of messages) {
+      try {
+        await client.deleteMessages(chatId, [message.id], { revoke: true });
+        task.deletedMessages++;
+        await sleep(50);
+      } catch {}
     }
     
     await saveTask(task);
+    return false;
   }
-  
-  return { floodWaitTime, consecutiveErrors };
 };
 
 // 主删除命令
@@ -404,19 +297,14 @@ const da = async (msg: Api.Message) => {
   const [, ...args] = parts; // 跳过命令本身
   const sub = (args[0] || "").toLowerCase();
 
-  // 获取客户端
   const client = await getGlobalClient();
   if (!client) {
-    await msg.edit({ text: "❌ 客户端未初始化", parseMode: "html" });
+    await msg.edit({ text: "❌ 客户端错误", parseMode: "html" });
     return;
   }
 
-  // 检查是否在群组中
   if (!msg.chatId || msg.isPrivate) {
-    await msg.edit({
-      text: "❌ <b>此命令只能在群组中使用</b>",
-      parseMode: "html",
-    });
+    await msg.edit({ text: "❌ 仅群组可用", parseMode: "html" });
     return;
   }
 
@@ -477,13 +365,8 @@ const da = async (msg: Api.Message) => {
       return;
     }
 
-    // 安全确认机制 - 处理 true 命令
     if (sub !== "true") {
-      // 未知命令
-      await msg.edit({
-        text: `❌ <b>未知命令:</b> <code>${htmlEscape(sub)}</code>\n\n💡 使用 <code>${mainPrefix}da help</code> 查看帮助`,
-        parseMode: "html"
-      });
+      await msg.edit({ text: "❌ 未知命令", parseMode: "html" });
       return;
     }
 
@@ -614,34 +497,14 @@ const da = async (msg: Api.Message) => {
 
         // 达到批处理大小时执行删除
         if (messages.length >= BATCH_SIZE) {
-          const batchResult = await deleteBatch(
-            client,
-            chatId,
-            messages,
-            task,
-            floodWaitTime
-          );
-          
-          floodWaitTime = batchResult.floodWaitTime;
-          consecutiveErrors = batchResult.consecutiveErrors;
+          await fastDeleteBatch(client, chatId, messages, task);
           messages = [];
-
-          // 如果连续错误太多，暂停任务
-          if (consecutiveErrors >= 5) {
-            task.isRunning = false;
-            task.isPaused = true;
-            task.errors.push(`连续错误${consecutiveErrors}次，任务自动暂停`);
-            await saveTask(task);
-            
-            await sendProgressToSaved(client, task, "自动暂停");
-            return;
-          }
         }
       }
 
       // 删除剩余消息
       if (messages.length > 0) {
-        await deleteBatch(client, chatId, messages, task, floodWaitTime);
+        await fastDeleteBatch(client, chatId, messages, task);
       }
     } else {
       // 普通用户模式：使用优化搜索只删除自己的消息
@@ -678,33 +541,9 @@ const da = async (msg: Api.Message) => {
           const batch = myMessages.slice(i, i + BATCH_SIZE);
           console.log(`[DA] 优化模式：处理批次 ${currentBatch}/${totalBatches}，消息数: ${batch.length}`);
           
-          const batchResult = await deleteBatch(
-            client,
-            chatId,
-            batch,
-            task,
-            floodWaitTime
-          );
-          
-          floodWaitTime = batchResult.floodWaitTime;
-          consecutiveErrors = batchResult.consecutiveErrors;
+          await fastDeleteBatch(client, chatId, batch, task);
 
-          // 更新进度到收藏夹（每隔几个批次更新一次，避免频繁更新）
-          if (currentBatch % 3 === 0 || currentBatch === totalBatches) {
-            const progress = Math.round((currentBatch / totalBatches) * 100);
-            await sendProgressToSaved(client, task, `优化删除进行中 ${progress}%`);
-          }
-
-          // 如果连续错误太多，暂停任务
-          if (consecutiveErrors >= 5) {
-            task.isRunning = false;
-            task.isPaused = true;
-            task.errors.push(`连续错误${consecutiveErrors}次，任务自动暂停`);
-            await saveTask(task);
-            
-            await sendProgressToSaved(client, task, "自动暂停");
-            return;
-          }
+          // 静默处理，无进度反馈
         }
       } catch (error) {
         console.error("[DA] 优化删除失败:", error);
