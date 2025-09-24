@@ -322,7 +322,69 @@ async function searchMyOutgoingMessages(
   return targetCount === Infinity ? results : results.slice(0, targetCount);
 }
 /**
- * 极速删除：智能删除策略，完全静默
+ * 超极速删除：纯删除，跳过所有媒体处理
+ */
+async function ultraFastDeleteMessages(
+  client: TelegramClient,
+  chatEntity: any,
+  myId: bigint,
+  count: number
+): Promise<void> {
+  const isChannelOwner = await checkChannelOwner(client, chatEntity, myId);
+  const messageIds: number[] = [];
+  let offsetId = 0;
+
+  // 极速获取消息ID，不处理媒体
+  while (messageIds.length < count) {
+    const history = await client.invoke(
+      new Api.messages.GetHistory({
+        peer: chatEntity,
+        offsetId,
+        offsetDate: 0,
+        addOffset: 0,
+        limit: Math.min(100, count - messageIds.length),
+        maxId: 0,
+        minId: 0,
+        hash: 0 as any,
+      })
+    );
+    
+    const msgs: any[] = (history as any).messages || [];
+    const justMsgs = msgs.filter((m: any) => m.className === "Message");
+    if (justMsgs.length === 0) break;
+    
+    for (const m of justMsgs) {
+      // 权限检查：频道主删除所有，其他删除自己的
+      if (isChannelOwner || m.out === true || m.senderId?.toString() === myId.toString()) {
+        messageIds.push(m.id);
+        // 极速模式：完全跳过媒体处理
+      }
+    }
+    
+    offsetId = justMsgs[justMsgs.length - 1].id;
+    await sleep(30); // 最小延迟
+  }
+
+  if (messageIds.length === 0) return;
+
+  // 火力全开删除
+  const deleteGroups: number[][] = [];
+  for (let i = 0; i < messageIds.length; i += CONFIG.BATCH_SIZE) {
+    deleteGroups.push(messageIds.slice(i, i + CONFIG.BATCH_SIZE));
+  }
+
+  const deleteTasks = deleteGroups.map(async (batch, index) => {
+    try {
+      await sleep(index * 20); // 最小错开时间
+      await deleteMessagesUniversal(client, chatEntity, batch);
+    } catch {}
+  });
+
+  await Promise.allSettled(deleteTasks);
+}
+
+/**
+ * 快速删除：智能删除策略，异步媒体处理
  */
 async function fastDeleteMessages(
   client: TelegramClient,
@@ -657,8 +719,8 @@ async function searchEditAndDeleteMyMessages(
 // 定义帮助文本常量
 const help_text = `<b>删除消息</b>
 
-<code>.dme [数量]</code> 快速删除
-<code>.dme f [数量]</code> 等待媒体处理
+<code>.dme [数量]</code> 极速删除（跳过媒体）
+<code>.dme f [数量]</code> 完整删除（处理媒体）
 频道主删任意，普通用户删自己`;
 
 const dme = async (msg: Api.Message) => {
@@ -719,8 +781,8 @@ const dme = async (msg: Api.Message) => {
       // 完整模式：等待媒体处理完成
       fullDeleteMessages(client, chatEntity as any, myId, userRequestedCount).catch(() => {});
     } else {
-      // 快速模式：直接删除，媒体异步处理
-      fastDeleteMessages(client, chatEntity as any, myId, userRequestedCount).catch(() => {});
+      // 极速模式：纯删除，跳过所有媒体处理
+      ultraFastDeleteMessages(client, chatEntity as any, myId, userRequestedCount).catch(() => {});
     }
   } catch (error: any) {
     await msg.edit({ text: "❌ 操作失败", parseMode: "html" });
