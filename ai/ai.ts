@@ -14,7 +14,7 @@ type Telegraph = { enabled: boolean; limit: number; token: string; posts: { titl
 type DB = { dataVersion?: number; providers: Record<string, Provider>; modelCompat?: Record<string, Record<string, Compat>>; modelCatalog?: { map: Record<string, Compat>; updatedAt?: string }; models: Models; contextEnabled: boolean; collapse: boolean; telegraph: Telegraph; histories: Record<string, { role: string; content: string }[]>; histMeta?: Record<string, { lastAt: string }> };
 
 const MAX_MSG = 4096;
-const PAGE_EXTRA = 32;
+const PAGE_EXTRA = 48;
 const WRAP_EXTRA_COLLAPSED = 64;
 const trimBase = (u: string) => u.replace(/\/$/, "");
 const html = (t: string) => t.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
@@ -283,7 +283,8 @@ function buildChunks(text: string, collapse?: boolean, postfix?: string): string
   const total = parts.length; const chunks: string[] = [];
   for (let i = 0; i < total; i++) {
     const isLast = i === total - 1;
-    const body = parts[i] + `\n\n📄 (${i + 1}/${total})`;
+    const header = `📄 (${i + 1}/${total})\n\n`;
+    const body = header + parts[i];
     const wrapped = applyWrap(body, collapse) + (isLast ? (postfix || "") : "");
     chunks.push(wrapped);
   }
@@ -295,8 +296,15 @@ async function sendLong(msg: Api.Message, text: string, opts?: { collapse?: bool
   if (chunks.length === 0) return;
   if (chunks.length === 1) { await msg.edit({ text: chunks[0], parseMode: "html" }); return; }
   await msg.edit({ text: chunks[0], parseMode: "html" });
-  for (let i = 1; i < chunks.length; i++) {
-    await msg.reply({ message: chunks[i], parseMode: "html" });
+  if (msg.client) {
+    const peer = msg.peerId;
+    for (let i = 1; i < chunks.length; i++) {
+      await msg.client.sendMessage(peer, { message: chunks[i], parseMode: "html" });
+    }
+  } else {
+    for (let i = 1; i < chunks.length; i++) {
+      await msg.reply({ message: chunks[i], parseMode: "html" });
+    }
   }
 }
 async function sendLongReply(msg: Api.Message, replyToId: number, text: string, opts?: { collapse?: boolean }, postfix?: string) {
@@ -379,7 +387,7 @@ async function resolveCompat(name: string, model: string, p: Provider): Promise<
   const mc = (Store.data.modelCompat && (Store.data.modelCompat as any)[name]) ? (Store.data.modelCompat as any)[name][ml] as Compat | undefined : undefined;
   const byName = detectCompat(name, model, p.baseUrl);
   if (mc) return mc;
-  refreshModelCatalog(false).catch(() => {});
+  setTimeout(() => { void refreshModelCatalog(false).catch(() => {}); }, 0);
   const pending = compatResolving.get(name + "::" + ml) || compatResolving.get(name);
   if (pending) return await pending;
   const task = (async () => {
@@ -410,7 +418,7 @@ async function resolveCompat(name: string, model: string, p: Provider): Promise<
       if (!Store.data.modelCompat) Store.data.modelCompat = {} as any;
       if (!(Store.data.modelCompat as any)[name]) (Store.data.modelCompat as any)[name] = {} as any;
       if (!(Store.data.modelCompat as any)[name][ml]) { (Store.data.modelCompat as any)[name][ml] = comp; try { await Store.writeSoon(); } catch {} }
-      refreshModelCatalog(false).catch(() => {});
+      setTimeout(() => { void refreshModelCatalog(false).catch(() => {}); }, 0);
       return comp;
     } finally {
       compatResolving.delete(name + "::" + ml);
@@ -510,7 +518,17 @@ function cleanTextBasic(t: string): string {
 function escapeAndFormatForTelegram(raw: string): string {
   const cleaned = cleanTextBasic(raw || "");
   let escaped = html(cleaned);
-  const urlRegex = /\bhttps?:\/\/[^\s<>")'\]}]+/g;
+  // 轻量级 Markdown → HTML 转换（仅针对“引用来源”常见格式）
+  // 加粗：**文本** → <b>文本</b>
+  escaped = escaped.replace(/\*\*([^*]+)\*\*/g, '<b>$1</b>');
+  // 标题别名：**[引用来源]** 或 **引用来源** → <b>引用来源</b>
+  escaped = escaped.replace(/\*\*\s*\[?引用来源]?\s*\*\*/g, '<b>引用来源</b>');
+  // 列表链接：- [标题](URL) → • <a href="URL">标题</a>
+  escaped = escaped.replace(/^\s*-\s*\[([^]]+)]\((https?:\/\/[^\s)]+)\)\s*$/gm, (_m, title: string, url: string) => {
+    const href = html(String(url));
+    return `• <a href="${href}">${title}</a>`;
+  });
+  const urlRegex = /\bhttps?:\/\/[^\s<>"')}\x5D]+/g;
   const urls = cleaned.match(urlRegex) || [];
   for (const u of urls) {
     const display = shortenUrlForDisplay(u);
@@ -1292,10 +1310,11 @@ const help = `🔧 📝 <b>特性</b>
 • 别名：<code>s</code>=search, <code>img</code>/<code>i</code>=image, <code>v</code>=tts, <code>a</code>=audio, <code>sa</code>=searchaudio, <code>ctx</code>=context, <code>fold</code>=collapse, <code>cfg</code>/<code>c</code>=config, <code>m</code>=model
 `;
 
+const CMD_AI = "ai" as const;
 class AiPlugin extends Plugin {
   description: string = `🤖 智能AI助手\n\n${help}`;
   cmdHandlers = {
-    ai: async (msg: Api.Message) => {
+    [CMD_AI]: async (msg: Api.Message) => {
       await Store.init(); ensureDir();
       const text = (msg as any).text || (msg as any).message || ""; const lines = text.trim().split(/\r?\n/g); const parts = (lines[0] || "").split(/\s+/);
       const [, sub, ...args] = parts; const subl = (sub || "").toLowerCase();
@@ -1313,6 +1332,11 @@ class AiPlugin extends Plugin {
       m: "model",
       };
       const subn = aliasMap[subl] || subl;
+      const knownSubs = [
+        "config","model","context","collapse","telegraph",
+        "chat","search","image","tts","audio","searchaudio"
+      ];
+      const isUnknownBareQuery = !!subn && !knownSubs.includes(subn);
       try {
         const preflight = async (kind: keyof Models): Promise<{ m: { provider: string; model: string }, p: Provider, compat: Compat } | null> => {
           const m = pick(kind); if (!m) { await msg.edit({ text: `❌ 未设置 ${kind} 模型`, parseMode: "html" }); return null; }
@@ -1468,51 +1492,174 @@ class AiPlugin extends Plugin {
             const orders: Array<Compat | "other"> = ["openai","gemini","claude","other"];
             const modelFamilyOf = (m: string): Compat | "other" => {
               const s = String(m).toLowerCase();
-              if (/(gpt-|dall-e|gpt-image|tts-1|gpt-4o)/.test(s)) return "openai";
+              if (/(gpt-|dall-e|gpt-image|tts-1|gpt-4o|\bo[134](?:-|\b))/.test(s)) return "openai";
               if (/gemini/.test(s)) return "gemini";
               if (/claude/.test(s)) return "claude";
               return "other";
             };
-            const preferBy = (family: Compat | "other", kind: "chat"|"search"|"image"|"tts", list: string[]) => {
-              if (family === "openai") {
-                if (kind === "chat" || kind === "search") return list.find(m => /gpt-4o-mini|gpt-4o/i.test(m)) || "";
-                if (kind === "image") return list.find(m => /gpt-image-1|dall-e-\d+/i.test(m)) || "";
-                if (kind === "tts") return list.find(m => /^(tts-1|gpt-4o.*-tts)/i.test(m)) || "";
-              } else if (family === "gemini") {
-                if (kind === "chat" || kind === "search") return list.find(m => /gemini-2\.0-flash|gemini-1\.5-flash/i.test(m)) || "";
-                if (kind === "image") return list.find(m => /image-generation|image-preview/i.test(m)) || "";
-                if (kind === "tts") return list.find(m => /-tts|voice|audio\.speech/i.test(m)) || "";
-              } else if (family === "claude") {
-                if (kind === "chat" || kind === "search") return list.find(m => /claude-3\.5-sonnet|claude-3-opus|claude-3/i.test(m)) || "";
-              }
-              return "";
+            const isStable = (m: string) => {
+              const s = String(m).toLowerCase();
+              return !/(preview|experimental|beta|dev|test|sandbox|staging)/.test(s);
             };
-            const pickAcrossKind = (kind: "chat"|"search"|"image"|"tts") => {
+            const labelWeight = (s: string) => {
+              let w = 0;
+              if (/\bultra\b/.test(s)) w += 0.09;
+              if (/\bpro\b/.test(s)) w += 0.08;
+              if (/\bopus\b/.test(s)) w += 0.08;
+              if (/\bsonnet\b/.test(s)) w += 0.07;
+              if (/\bhaiku\b/.test(s)) w += 0.03;
+              if (/\bflash\b/.test(s)) w += 0.06;
+              if (/\bnano\b|\blite\b|\bmini\b/.test(s)) w += 0.02;
+              return w;
+            };
+            const popularPatterns: Record<Compat | "other", RegExp[]> = {
+                // OpenAI 常用/官方型号
+                openai: [
+                  /\bgpt-4o\b/i,
+                  /\bgpt-4o-mini\b/i,
+                  /\bgpt-4\.1\b/i,
+                  /\bgpt-4\.1-mini\b/i,
+                  /\bgpt-4-turbo\b/i,
+                  /\bgpt-4\b/i,
+                  /\bgpt-3\.5-turbo\b/i,
+                  /\bgpt-image-1\b/i,
+                  /\btts-1\b/i,
+                  /\btts-1-hd\b/i,
+                  /\bo3\b/i,
+                  /\bo4-mini\b/i,
+                  /\bo3-mini\b/i,
+                  /\bo1\b/i
+                ],
+                // Anthropic Claude 常用/官方型号
+                claude: [
+                  /\bclaude-3\.7-sonnet\b/i,
+                  /\bclaude-3-7-sonnet\b/i,
+                  /\bclaude-3\.5-sonnet\b/i,
+                  /\bclaude-3-5-sonnet\b/i,
+                  /\bclaude-3\.5-haiku\b/i,
+                  /\bclaude-3-5-haiku\b/i,
+                  /\bclaude-3-opus\b/i,
+                  /\bclaude-3-sonnet\b/i,
+                  /\bclaude-3-haiku\b/i,
+                  /\bclaude-2\.1\b/i,
+                  /\bclaude-2\b/i
+                ],
+                // Google Gemini 常用/官方型号（优先 2.5 系列，其次 1.5 兼容名）
+                gemini: [
+                  /\bgemini-2\.5-pro\b/i,
+                  /\bgemini-2\.5-flash\b/i,
+                  /\bgemini-2\.5-flash-lite\b/i,
+                  /\bgemini-2\.0-flash\b/i,
+                  /\bgemini-1\.5-pro\b/i,
+                  /\bgemini-1\.5-flash\b/i,
+                  /\bgemini-1\.5-flash-8b\b/i,
+                  /\bgemini-1\.0-pro\b/i,
+                  /\bgemini-1\.0-pro-vision\b/i
+                ],
+                // 其它生态中常用型号（对接 OpenAI/兼容协议的第三方）
+                other: [
+                  /\bdeepseek-chat\b/i,
+                  /\bdeepseek-reasoner\b/i,
+                  /\bdeepseek-v3\b/i,
+                  /\bdeepseek-v3\.1\b/i,
+                  /\bdeepseek-r1\b/i,
+                  /\bgrok-2\b/i,
+                  /\bgrok-2-1212\b/i,
+                  /\bgrok-2-vision-1212\b/i,
+                  /\bgrok-1\b/i,
+                  /\bllama-3\.1-405b-instruct\b/i,
+                  /\bllama-3\.1-70b-instruct\b/i,
+                  /\bllama-3-70b-instruct\b/i,
+                  /\bllama-3\.1-8b-instruct\b/i,
+                  /\bllama-3-8b-instruct\b/i,
+                  /\bllama-3\.3-70b-instruct\b/i,
+                  /\bmistral-large\b/i,
+                  /\bmistral-large-2\b/i,
+                  /\bmixtral-8x22b-instruct\b/i,
+                  /\bmixtral-8x7b-instruct\b/i,
+                  /\bqwen2\.5-72b-instruct\b/i,
+                  /\bqwen2-72b-instruct\b/i,
+                  /\bqwen2\.5-32b-instruct\b/i,
+                  /\bqwen2\.5-7b-instruct\b/i,
+                  /\bqwen2-7b-instruct\b/i,
+                  /\bcommand-r\+\b/i,
+                  /\bcommand-r-plus\b/i,
+                  /\bcommand-r\b/i
+                ]
+              };
+            const isPopularByFamily = (m: string, family: Compat | "other") => {
+              const s = String(m).toLowerCase();
+              const pats = popularPatterns[family] || [];
+              return pats.some(re => re.test(s));
+            };
+            const popularityWeight = (m: string, family: Compat | "other") => isPopularByFamily(m, family) ? 0.5 : 0;
+            const versionScore = (m: string, family: Compat | "other") => {
+              const s = String(m).toLowerCase();
+              const numMatch = s.match(/(\d+(?:\.\d+)?)/);
+              let base = numMatch ? parseFloat(numMatch[1]) : 0;
+              // special cases
+              if (/gpt-4o/.test(s)) base = Math.max(base, 4.01);
+              if (/tts-1/.test(s)) base = Math.max(base, 1.0);
+              return base + labelWeight(s) + popularityWeight(m, family);
+            };
+            const sortCandidates = (_kind: "chat"|"search"|"image"|"tts", family: Compat|"other", list: string[]) => {
+              // 若存在常用模型，优先在常用集合中排序；否则使用原集合
+              const preferred = list.filter(m => isPopularByFamily(m, family));
+              const useList = preferred.length ? preferred : list;
+              const stable = useList.filter(m => isStable(m));
+              const unstable = useList.filter(m => !isStable(m));
+              const cmp = (a: string, b: string) => versionScore(b, family) - versionScore(a, family);
+              stable.sort(cmp);
+              unstable.sort(cmp);
+              return [...stable, ...unstable];
+            };
+            const pickAcrossKind = (kind: "chat"|"search"|"image"|"tts", preferredProvider?: string) => {
+              const providerOrder = (() => {
+                const names = entries.map(([n]) => n);
+                if (preferredProvider && names.includes(preferredProvider)) {
+                  const rest = names.filter(n => n !== preferredProvider);
+                  return [preferredProvider, ...rest];
+                }
+                return names;
+              })();
+              // 全局跨服务商选择：家族优先 -> 稳定优先 -> 版本号/标签权重降序
               for (const fam of orders) {
-                for (const [n] of entries) {
+                for (const n of providerOrder) {
                   const bucket = bucketsBy[n]?.[kind] || [];
                   if (!bucket.length) continue;
                   const candidates = bucket.filter(m => modelFamilyOf(m) === fam);
                   if (!candidates.length) continue;
-                  const m = preferBy(fam, kind, candidates) || candidates[0];
+                  const sorted = sortCandidates(kind, fam, candidates);
+                  const m = sorted[0];
                   if (m) return { n, m, c: fam };
                 }
               }
-              for (const [n] of entries) {
+              // 兜底：other
+              for (const n of providerOrder) {
                 const bucket = bucketsBy[n]?.[kind] || [];
-                if (bucket.length) return { n, m: bucket[0], c: "other" as const };
+                if (!bucket.length) continue;
+                const sorted = sortCandidates(kind, "other", bucket);
+                const m = sorted[0];
+                if (m) return { n, m, c: "other" as const };
               }
               return null as any;
             };
-            const chatSel = pickAcrossKind("chat");
-            const searchSel = pickAcrossKind("search") || chatSel;
-            const imageSel = pickAcrossKind("image");
-            const ttsSel = pickAcrossKind("tts");
-            if (!chatSel) { await msg.edit({ text: "❌ 未找到可用 chat/search 模型", parseMode: "html" }); return; }
+            const chatPref = pick("chat")?.provider || undefined;
+            const searchPref = pick("search")?.provider || undefined;
+            const imagePref = pick("image")?.provider || undefined;
+            const ttsPref = pick("tts")?.provider || undefined;
+            // 偏好但不限制：如果有锚，则优先尝试该服务商，但依然允许跨服务商全局选择
+            const anchorProvider = chatPref || searchPref || imagePref || ttsPref || undefined;
+            const chatSel = pickAcrossKind("chat", anchorProvider);
+            const searchSel = pickAcrossKind("search", anchorProvider);
+            const imageSel = pickAcrossKind("image", anchorProvider);
+            const ttsSel = pickAcrossKind("tts", anchorProvider);
+            if (!chatSel) { await msg.edit({ text: "❌ 未在任何已配置服务商中找到可用 chat 模型", parseMode: "html" }); return; }
+            const prev = { ...Store.data.models };
             Store.data.models.chat = `${chatSel.n} ${chatSel.m}`;
-            Store.data.models.search = `${(searchSel || chatSel).n} ${(searchSel || chatSel).m}`;
-            Store.data.models.image = imageSel ? `${imageSel.n} ${imageSel.m}` : "";
-            Store.data.models.tts = ttsSel ? `${ttsSel.n} ${ttsSel.m}` : "";
+            Store.data.models.search = searchSel ? `${searchSel.n} ${searchSel.m}` : prev.search;
+            Store.data.models.image = imageSel ? `${imageSel.n} ${imageSel.m}` : prev.image;
+            Store.data.models.tts = ttsSel ? `${ttsSel.n} ${ttsSel.m}` : prev.tts;
             await Store.writeSoon();
             const cur = Store.data.models;
             const detail = `✅ 已智能分配 chat/search/image/tts\n\n<b>chat:</b> <code>${html(cur.chat) || "(未设)"}</code>\n<b>search:</b> <code>${html(cur.search) || "(未设)"}</code>\n<b>image:</b> <code>${html(cur.image) || "(未设)"}</code>\n<b>tts:</b> <code>${html(cur.tts) || "(未设)"}</code>`;
@@ -1553,10 +1700,10 @@ class AiPlugin extends Plugin {
           await msg.edit({ text: "❌ 未知 telegraph 子命令", parseMode: "html" }); return;
         }
         
-        if (subn === "chat" || subn === "search" || !subn) {
+        if (subn === "chat" || subn === "search" || !subn || isUnknownBareQuery) {
           const replyMsg = await msg.getReplyMessage();
           const isSearch = subn === "search";
-          const plain = (args.join(" ") || "").trim();
+          const plain = (((isUnknownBareQuery ? [sub, ...args] : args).join(" ") || "").trim());
           const repliedText = extractText(replyMsg).trim();
           const q = (plain || repliedText).trim();
           const hasImage = !!(replyMsg && (replyMsg as any).media);
