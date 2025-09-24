@@ -286,5 +286,9 @@
   "calc": {
     "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/calc/calc.ts?raw=true",
     "desc": "计算器"
+  },
+  "banana": {
+    "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/banana/banana.ts?raw=true",
+    "desc": "Nano-Banana 图像编辑"
   }
 }
