@@ -1,10 +1,9 @@
 import { Plugin } from "@utils/pluginBase";
 import { Api } from "telegram/tl";
 import { CustomFile } from "telegram/client/uploads";
-import { helpers, utils } from "telegram";
+import { getGlobalClient } from "@utils/globalClient";
 import fs from "fs/promises";
 import path from "path";
-import { getGlobalClient } from "@utils/globalClient";
 
 const CONFIG_FILE_PATH = path.join(
   process.cwd(),
@@ -63,7 +62,6 @@ class SearchService {
       const data = await fs.readFile(CONFIG_FILE_PATH, "utf-8");
       this.config = { ...this.config, ...JSON.parse(data) };
     } catch (error) {
-      // Config file doesn't exist or is invalid, use default.
       console.log("未找到搜索配置，使用默认配置。");
     }
   }
@@ -77,31 +75,37 @@ class SearchService {
     }
   }
 
-  // 发现频道关联的讨论组
   private async discoverLinkedGroup(channel: Api.Channel): Promise<string | undefined> {
     try {
-      // 获取频道的完整信息
       const fullChannel = await this.client.invoke(
         new Api.channels.GetFullChannel({
           channel: channel,
         })
       );
 
-      // 检查是否有关联的讨论组
       if (fullChannel.fullChat.linkedChatId) {
         const linkedChatId = fullChannel.fullChat.linkedChatId;
-        console.log(`频道 ${channel.title} 关联讨论组ID: ${linkedChatId}`);
-
-        // 获取关联讨论组的实体
         const linkedGroup = await this.client.getEntity(linkedChatId);
         if (linkedGroup instanceof Api.Channel && linkedGroup.megagroup) {
-          // 如果有用户名，使用@username，否则直接存储ID用于后续访问
-          const groupHandle = linkedGroup.username ? `@${linkedGroup.username}` : linkedChatId.toString();
-          console.log(`关联讨论组: ${linkedGroup.title} (${linkedGroup.username ? `@${linkedGroup.username}` : `ID: ${linkedChatId}`})`);
-          return groupHandle;
+          if (linkedGroup.username) {
+            return `@${linkedGroup.username}`;
+          } else {
+            try {
+              const inviteLink = await this.client.invoke(
+                new Api.messages.ExportChatInvite({
+                  peer: linkedGroup
+                })
+              );
+              if (inviteLink instanceof Api.ChatInviteExported) {
+                return inviteLink.link;
+              }
+            } catch (linkError: any) {
+              console.log(`获取邀请链接失败: ${linkError.message}`);
+            }
+            return undefined;
+          }
         }
       }
-
       return undefined;
     } catch (error: any) {
       console.log(`获取频道关联讨论组失败: ${error.message}`);
@@ -109,146 +113,63 @@ class SearchService {
     }
   }
 
-  // 智能过滤视频回复，防止跨越到其他频道消息的讨论
-  private filterRelevantVideoReplies(
-    messages: Api.Message[],
-    originalQuery: string,
-    keywordMessage: Api.Message
-  ): Api.Message[] {
-    const relevantVideos: Api.Message[] = [];
-    let foundNewKeywordMessage = false;
-
-    for (const msg of messages) {
-      // 检查是否遇到了新的包含关键词的消息（可能是下一条频道消息的讨论）
-      if (this.isMessageMatching(msg, originalQuery) && msg.id !== keywordMessage.id) {
-        console.log(`检测到新的关键词消息 (ID: ${msg.id})，停止收集视频以避免跨越`);
-        foundNewKeywordMessage = true;
-        break;
-      }
-
-      // 检查是否是纯视频消息
-      const isPureVideo =
-        msg.video &&
-        !(msg.media instanceof Api.MessageMediaWebPage) &&
-        !(
-          msg.entities &&
-          msg.entities.some(
-            (entity: any) =>
-              entity instanceof Api.MessageEntityUrl ||
-              entity instanceof Api.MessageEntityTextUrl
-          )
-        );
-
-      if (isPureVideo && !this.isAdContent(msg)) {
-        relevantVideos.push(msg);
-      }
-
-      // 如果已经收集了足够多的视频（比如20个），也可以停止
-      if (relevantVideos.length >= 20) {
-        console.log(`已收集到足够的视频数量 (${relevantVideos.length})，停止收集`);
-        break;
-      }
-    }
-
-    return relevantVideos;
-  }
-
-  // 在频道中搜索关键词消息，然后在关联讨论组中查找视频
   private async searchInChannelWithLinkedGroup(
     channelInfo: { title: string; handle: string; linkedGroup?: string },
     query: string
   ): Promise<Api.Message[]> {
     const videos: Api.Message[] = [];
+    if (!channelInfo.linkedGroup) return [];
 
     try {
-      const entity = await this.client.getEntity(channelInfo.handle);
-
-      // 在频道中搜索包含关键词的消息
-      const channelMessages = await this.client.getMessages(entity, {
+      const linkedGroupEntity = await this.client.getEntity(channelInfo.linkedGroup);
+      const groupMessages = await this.client.getMessages(linkedGroupEntity, {
         limit: 100,
         search: query,
       });
 
-      console.log(`在频道 ${channelInfo.title} 中找到 ${channelMessages.length} 条包含关键词的消息`);
-
-      // 在关联讨论组中搜索
-      if (channelInfo.linkedGroup) {
-        const linkedGroupEntity = await this.client.getEntity(channelInfo.linkedGroup);
-
-        // 直接在讨论组中搜索包含关键词的消息
-        console.log(`在讨论组中搜索关键词: ${query}`);
-        const groupMessages = await this.client.getMessages(linkedGroupEntity, {
-          limit: 100,
-          search: query,
-        });
-
-        console.log(`在讨论组中找到 ${groupMessages.length} 个包含关键词的消息`);
-
-        // 查找包含关键词的消息，然后寻找其后的视频回复
-        for (const textMsg of groupMessages) {
-          if (this.isMessageMatching(textMsg, query)) {
-            console.log(`找到匹配消息: ${textMsg.message?.substring(0, 50)}... (ID: ${textMsg.id})`);
-
-            // 获取该消息之后的消息，寻找视频回复
-            const followupMessages = await this.client.getMessages(linkedGroupEntity, {
-              limit: 50, // 减少获取数量，避免跨越到其他频道消息
-              minId: textMsg.id,
-              reverse: true, // 按时间正序获取，确保获取的是后续消息
-            });
-
-            console.log(`获取消息 ${textMsg.id} 之后的 ${followupMessages.length} 条消息，消息ID范围: ${followupMessages.map((m: Api.Message) => m.id).join(', ')}`);
-
-            // 智能过滤：只保留与当前关键词相关的视频回复
-            const relevantVideoReplies = this.filterRelevantVideoReplies(followupMessages, query, textMsg);
-
-            console.log(`经过智能过滤后找到 ${relevantVideoReplies.length} 个相关视频回复: ${relevantVideoReplies.map((v: Api.Message) => v.id).join(', ')}`);
-
-            const videoReplies = relevantVideoReplies;
-
-            if (videoReplies.length > 0) {
-              console.log(`找到 ${videoReplies.length} 个视频回复: ${videoReplies.map((v: Api.Message) => v.id).join(', ')}`);
-              videos.push(...videoReplies); // 添加所有找到的视频，供后续随机选择
-              break;
-            }
-          }
-        }
-
-        // 如果没有找到视频回复，尝试直接搜索包含关键词的视频消息
-        if (videos.length === 0) {
-          console.log(`未找到视频回复，尝试直接搜索包含关键词的视频消息`);
-          const groupVideoMessages = await this.client.getMessages(linkedGroupEntity, {
+      for (const textMsg of groupMessages) {
+        if (this.isMessageMatching(textMsg, query) && textMsg.replies) {
+          console.log(`找到匹配消息 #${textMsg.id}，正在精确获取其 ${textMsg.replies.replies} 条评论...`);
+          const comments = await this.client.getMessages(linkedGroupEntity, {
             limit: 100,
-            search: query,
-            filter: new Api.InputMessagesFilterVideo(),
+            replyTo: textMsg.id,
           });
 
-          const pureVideos = groupVideoMessages.filter((v: Api.Message) => {
-            const isPureVideo =
-              v.video &&
-              !(v.media instanceof Api.MessageMediaWebPage) &&
-              !(
-                v.entities &&
-                v.entities.some(
-                  (entity: any) =>
-                    entity instanceof Api.MessageEntityUrl ||
-                    entity instanceof Api.MessageEntityTextUrl
-                )
-              );
-            return isPureVideo && !this.isAdContent(v);
-          });
+          const videoReplies = comments.filter((msg: Api.Message) =>
+            msg.video &&
+            !(msg.media instanceof Api.MessageMediaWebPage) &&
+            !this.isAdContent(msg)
+          );
 
-          if (pureVideos.length > 0) {
-            console.log(`找到 ${pureVideos.length} 个直接匹配的视频: ${pureVideos.map((v: Api.Message) => v.id).join(', ')}`);
-            videos.push(...pureVideos); // 添加所有找到的视频，供后续随机选择
+          if (videoReplies.length > 0) {
+            console.log(`在评论区找到 ${videoReplies.length} 个视频。`);
+            videos.push(...videoReplies);
+            return videos;
           }
         }
       }
 
-      return videos;
-    } catch (error: any) {
-      console.error(`搜索频道关联讨论组失败: ${error.message}`);
-      return [];
+      if (videos.length === 0) {
+        const groupVideoMessages = await this.client.getMessages(linkedGroupEntity, {
+          limit: 100,
+          search: query,
+          filter: new Api.InputMessagesFilterVideo(),
+        });
+
+        const pureVideos = groupVideoMessages.filter((v: Api.Message) =>
+          v.video &&
+          !(v.media instanceof Api.MessageMediaWebPage) &&
+          !this.isAdContent(v)
+        );
+
+        if (pureVideos.length > 0) {
+          videos.push(...pureVideos);
+        }
+      }
+    } catch (linkedGroupError: any) {
+      console.error(`访问关联讨论组失败: ${linkedGroupError.message}`);
     }
+    return videos;
   }
 
   public async handle(msg: Api.Message) {
@@ -256,12 +177,8 @@ class SearchService {
     const useSpoiler = fullArgs.toLowerCase().includes(" -s");
     const useRandom = fullArgs.toLowerCase().includes(" -r");
 
-    if (useSpoiler) {
-      fullArgs = fullArgs.replace(/\s+-s/i, "").trim();
-    }
-    if (useRandom) {
-      fullArgs = fullArgs.replace(/\s+-r/i, "").trim();
-    }
+    if (useSpoiler) fullArgs = fullArgs.replace(/\s+-s/i, "").trim();
+    if (useRandom) fullArgs = fullArgs.replace(/\s+-r/i, "").trim();
 
     const args = fullArgs.split(/\s+/);
     const subCommand = args[0]?.toLowerCase() as SubCommand;
@@ -310,171 +227,109 @@ class SearchService {
     let addedCount = 0;
 
     for (const channelHandle of channels) {
-      try {
-        const normalizedHandle = channelHandle.trim();
-        console.log(`正在尝试添加频道: ${normalizedHandle}`);
+        try {
+            const normalizedHandle = channelHandle.trim();
+            const entity = await this.client.getEntity(normalizedHandle);
 
-        const entity = await this.client.getEntity(normalizedHandle);
-        console.log(`获取到实体: ${entity.className}, ID: ${entity.id}, Title: ${entity.title}`);
-
-        // 检查实体类型，允许频道、群组和讨论组
-        if (!(entity instanceof Api.Channel) && !(entity instanceof Api.Chat)) {
-          const errorMsg = `错误：${normalizedHandle} 不是公开频道、群组或讨论组，而是 ${entity.className}。`;
-          console.log(errorMsg);
-          await msg.edit({ text: errorMsg });
-          continue;
-        }
-
-        // 检查是否为讨论组（megagroup）
-        if (entity instanceof Api.Channel && entity.megagroup === true) {
-          console.log(`添加讨论组: ${entity.title}`);
-        }
-
-        // 检查频道是否为私有频道
-        if (entity instanceof Api.Channel && entity.megagroup === false && entity.broadcast === true) {
-          // 这是一个频道
-          if (!entity.username && entity.accessHash) {
-            console.log(`频道 ${entity.title} 是私有频道，需要通过邀请链接访问`);
-          }
-        }
-
-        if (this.config.channelList.some((c) => c.handle === normalizedHandle)) {
-          await msg.edit({ text: `目标 "${entity.title}" 已存在。` });
-          continue;
-        }
-
-        // 检查是否为频道，如果是则尝试发现关联的讨论组
-        let linkedGroup: string | undefined;
-        if (entity instanceof Api.Channel && !entity.megagroup && entity.broadcast) {
-          try {
-            linkedGroup = await this.discoverLinkedGroup(entity);
-            if (linkedGroup) {
-              console.log(`发现关联讨论组: ${linkedGroup}`);
+            if (!(entity instanceof Api.Channel) && !(entity instanceof Api.Chat)) {
+                await msg.edit({ text: `错误：${normalizedHandle} 不是公开频道、群组或讨论组。` });
+                continue;
             }
-          } catch (error: any) {
-            console.log(`未能发现关联讨论组: ${error.message}`);
-          }
+            if (this.config.channelList.some((c) => c.handle === normalizedHandle)) {
+                await msg.edit({ text: `目标 "${entity.title}" 已存在。` });
+                continue;
+            }
+
+            let linkedGroup: string | undefined;
+            if (entity instanceof Api.Channel && !entity.megagroup && entity.broadcast) {
+                linkedGroup = await this.discoverLinkedGroup(entity);
+            }
+
+            this.config.channelList.push({
+                title: entity.title,
+                handle: normalizedHandle,
+                linkedGroup: linkedGroup,
+            });
+            if (!this.config.defaultChannel) this.config.defaultChannel = normalizedHandle;
+            addedCount++;
+        } catch (error: any) {
+            await msg.edit({ text: `添加频道 ${channelHandle.trim()} 时出错：${error.message}` });
         }
-
-        this.config.channelList.push({
-          title: entity.title,
-          handle: normalizedHandle,
-          linkedGroup: linkedGroup,
-        });
-        if (!this.config.defaultChannel) this.config.defaultChannel = normalizedHandle;
-        addedCount++;
-        console.log(`成功添加频道: ${entity.title}${linkedGroup ? ` (关联讨论组: ${linkedGroup})` : ''}`);
-      } catch (error: any) {
-        const errorMsg = `添加频道 ${channelHandle.trim()} 时出错：${error.message}`;
-        console.error(errorMsg);
-        console.error(`错误详情:`, error);
-
-        // 提供更详细的错误信息
-        let detailedError = error.message;
-        if (error.message.includes('Could not find the input entity')) {
-          detailedError += '\n可能原因：\n1. 频道不存在或已被删除\n2. 频道是私有的，需要先加入\n3. 链接格式不正确\n4. 网络连接问题';
-        } else if (error.message.includes('CHANNEL_PRIVATE')) {
-          detailedError = '频道是私有的，请先加入该频道后再尝试添加。';
-        } else if (error.message.includes('USERNAME_NOT_OCCUPIED')) {
-          detailedError = '用户名不存在，请检查频道链接是否正确。';
-        }
-
-        await msg.edit({
-          text: `❌ ${detailedError}`,
-        });
-      }
     }
-
     await this.saveConfig();
     await msg.edit({ text: `✅ 成功添加 ${addedCount} 个频道。` });
   }
 
   private async handleDelete(msg: Api.Message, args: string) {
-    if (!args)
-      throw new Error("用法: .so del <频道链接> 或 .so del all。使用 \\ 分隔多个频道。");
-
-    // 检查是否是删除所有频道
+    if (!args) throw new Error("用法: .so del <频道链接|序号> [...] 或 .so del all。");
     if (args.toLowerCase().trim() === "all") {
-      const totalCount = this.config.channelList.length;
-      if (totalCount === 0) {
-        await msg.edit({ text: "❓ 当前没有任何频道可删除。" });
+        const count = this.config.channelList.length;
+        this.config.channelList = [];
+        this.config.defaultChannel = null;
+        await this.saveConfig();
+        await msg.edit({ text: `✅ 已清空所有 ${count} 个频道。` });
         return;
-      }
-
-      this.config.channelList = [];
-      this.config.defaultChannel = null;
-      await this.saveConfig();
-      await msg.edit({ text: `✅ 已清空所有频道，共移除 ${totalCount} 个频道。` });
-      return;
     }
 
-    const channels = args.split("\\");
-    let removedCount = 0;
+    const inputs = args.split(/[\s\\]+/).filter(Boolean);
+    const handlesToRemove = new Set<string>();
+    const removedTitles: string[] = [];
+    
+    const currentList = [...this.config.channelList];
 
-    for (const channelHandle of channels) {
-      try {
-        const normalizedHandle = channelHandle.trim();
-
-        const initialLength = this.config.channelList.length;
-        this.config.channelList = this.config.channelList.filter(
-          (c) => c.handle !== normalizedHandle
-        );
-
-        if (this.config.channelList.length === initialLength) {
-          await msg.edit({
-            text: `❓ 目标 "${normalizedHandle}" 不在列表中。`,
-          });
-          continue;
+    for (const input of inputs) {
+        const index = parseInt(input, 10);
+        if (!isNaN(index) && index > 0 && index <= currentList.length) {
+            const handle = currentList[index - 1].handle;
+            handlesToRemove.add(handle);
+        } else {
+            handlesToRemove.add(input);
         }
-
-        if (this.config.defaultChannel === normalizedHandle) {
-          this.config.defaultChannel =
-            this.config.channelList.length > 0
-              ? this.config.channelList[0].handle
-              : null;
-        }
-        removedCount++;
-      } catch (error: any) {
-        await msg.edit({
-          text: `删除频道 ${channelHandle.trim()} 时出错： ${error.message}`,
-        });
-      }
     }
+    
+    if (handlesToRemove.size === 0) {
+        await msg.edit({ text: `❓ 未提供有效的频道链接或序号。` });
+        return;
+    }
+    
+    const originalLength = this.config.channelList.length;
+    
+    this.config.channelList = this.config.channelList.filter(channel => {
+        if (handlesToRemove.has(channel.handle)) {
+            removedTitles.push(channel.title);
+            return false;
+        }
+        return true;
+    });
+    
+    const removedCount = originalLength - this.config.channelList.length;
 
-    await this.saveConfig();
-    await msg.edit({ text: `✅ 成功移除 ${removedCount} 个频道。` });
+    if (removedCount > 0) {
+        if (this.config.defaultChannel && handlesToRemove.has(this.config.defaultChannel)) {
+            this.config.defaultChannel = this.config.channelList.length > 0 ? this.config.channelList[0].handle : null;
+        }
+        await this.saveConfig();
+        await msg.edit({ text: `✅ 成功移除 ${removedCount} 个频道:\n- ${removedTitles.join('\n- ')}` });
+    } else {
+        await msg.edit({ text: `❓ 在列表中未找到指定的频道或序号。` });
+    }
   }
 
   private async handleDefault(msg: Api.Message, args: string) {
-    if (!args)
-      throw new Error(
-        "用法: .so default <频道链接> 或 .so default d 删除默认频道。"
-      );
+    if (!args) throw new Error("用法: .so default <频道链接> 或 .so default d。");
     if (args === "d") {
-      this.config.defaultChannel = null;
-      await this.saveConfig();
-      await msg.edit({ text: `✅ 默认频道已移除。` });
-      return;
+        this.config.defaultChannel = null;
+        await this.saveConfig();
+        await msg.edit({ text: `✅ 默认频道已移除。` });
+        return;
     }
-
-    try {
-      const entity = await this.client.getEntity(args);
-      if (!(entity instanceof Api.Channel) && !(entity instanceof Api.Chat)) {
-        throw new Error("目标不是频道或群组。");
-      }
-
-      const normalizedHandle = args.trim();
-
-      if (!this.config.channelList.some((c) => c.handle === normalizedHandle)) {
+    const normalizedHandle = args.trim();
+    if (!this.config.channelList.some((c) => c.handle === normalizedHandle)) {
         throw new Error("请先使用 `.so add` 添加此频道。");
-      }
-
-      this.config.defaultChannel = normalizedHandle;
-      await this.saveConfig();
-      await msg.edit({ text: `✅ "${entity.title}" 已被设为默认频道。` });
-    } catch (error: any) {
-      throw new Error(`设置默认频道时出错: ${error.message}`);
     }
+    this.config.defaultChannel = normalizedHandle;
+    await this.saveConfig();
+    await msg.edit({ text: `✅ 已将 "${normalizedHandle}" 设为默认频道。` });
   }
 
   private async handleList(msg: Api.Message) {
@@ -482,99 +337,41 @@ class SearchService {
       await msg.edit({ text: "没有添加任何搜索频道。" });
       return;
     }
-
-    let listText = "**当前搜索频道列表 (按搜索顺序):**\n\n";
-    const searchOrderHandles = [
-      ...new Set(
-        [
-          this.config.defaultChannel,
-          ...this.config.channelList.map((c) => c.handle),
-        ].filter(Boolean)
-      ),
-    ];
-    searchOrderHandles.forEach((handle, index) => {
-      const channel = this.config.channelList.find((c) => c.handle === handle);
-      if (channel) {
-        const isDefault =
-          channel.handle === this.config.defaultChannel ? " (默认)" : "";
-        listText += `${index + 1}. ${channel.title}${isDefault}\n`;
-      }
+    let listText = "**当前搜索频道列表:**\n\n";
+    this.config.channelList.forEach((channel, index) => {
+      const isDefault = channel.handle === this.config.defaultChannel ? " (默认)" : "";
+      listText += `${index + 1}. ${channel.title}${isDefault}\n`;
     });
     await msg.edit({ text: listText });
   }
 
   private async handleExport(msg: Api.Message) {
     if (this.config.channelList.length === 0) {
-      await msg.edit({ text: "没有可导出的频道。" });
-      return;
+        await msg.edit({ text: "没有可导出的频道。" });
+        return;
     }
-
-    const backupContent = this.config.channelList
-      .map((c) => c.handle)
-      .join("\n");
-    const tempDir = path.join(process.cwd(), "temp");
-    await fs.mkdir(tempDir, { recursive: true });
-    const backupFilePath = path.join(tempDir, "so_channels_backup.txt");
+    const backupContent = this.config.channelList.map((c) => c.handle).join("\n");
+    const backupFilePath = path.join(process.cwd(), "temp", "so_channels_backup.txt");
+    await fs.mkdir(path.dirname(backupFilePath), { recursive: true });
     await fs.writeFile(backupFilePath, backupContent);
-    await this.client.sendFile(msg.chatId!, {
-      file: backupFilePath,
-      caption: `✅ 您的频道源已导出。\n回复此文件并发送 \`.so import\` 即可恢复。`,
-      replyTo: msg,
-    });
+    await this.client.sendFile(msg.chatId!, { file: backupFilePath, caption: `✅ 您的频道源已导出。`, replyTo: msg });
     await fs.unlink(backupFilePath);
   }
 
   private async handleImport(msg: Api.Message) {
     const replied = await msg.getReplyMessage();
-    if (!replied || !replied.document) {
-      throw new Error("❌ 请回复由 `.so export` 导出的 `.txt` 备份文件。");
-    }
-
-    await msg.edit({ text: `🔥 正在下载并导入...` });
+    if (!replied || !replied.document) throw new Error("❌ 请回复备份文件。");
+    
     const buffer = await this.client.downloadMedia(replied.media!);
-    if (!buffer || buffer.length === 0)
-      throw new Error("下载文件失败或文件为空。");
+    if (!buffer) throw new Error("下载文件失败。");
 
-    const handles = buffer
-      .toString()
-      .split("\n")
-      .map((h: string) => h.trim())
-      .filter(Boolean);
-    if (handles.length === 0) throw new Error("备份文件中没有有效的频道。");
+    const handles = buffer.toString().split("\n").map((h: string) => h.trim()).filter(Boolean);
+    if (handles.length === 0) throw new Error("备份文件无效。");
 
-    await msg.edit({
-      text: `⚙️ 正在清除旧配置并重新添加 ${handles.length} 个源...`,
-    });
-    const newConfig: SearchConfig = { defaultChannel: null, channelList: [], adFilters: [] };
-    let successCount = 0;
-    let firstAddedHandle: string | null = null;
-
-    for (const handle of handles) {
-      try {
-        const entity = await this.client.getEntity(handle);
-        if (
-          (entity instanceof Api.Channel || entity instanceof Api.Chat) &&
-          !newConfig.channelList.some((c) => c.handle === handle)
-        ) {
-          newConfig.channelList.push({
-            title: entity.title,
-            handle: handle,
-          });
-          if (!firstAddedHandle) firstAddedHandle = handle;
-          successCount++;
-        }
-      } catch (e) {
-        console.error(`导入频道 "${handle}" 失败，已跳过。`);
-      }
-    }
-
-    newConfig.defaultChannel = firstAddedHandle;
-    newConfig.adFilters = this.config.adFilters; // 保留现有的广告过滤词
-    this.config = newConfig;
-    await this.saveConfig();
-    await msg.edit({
-      text: `✅ 恢复成功：已导入 ${successCount}/${handles.length} 个频道源。`,
-    });
+    await msg.edit({ text: `⚙️ 正在导入 ${handles.length} 个源...` });
+    this.config.channelList = [];
+    this.config.defaultChannel = null;
+    await this.handleAdd(msg, handles.join("\\"));
   }
 
   private async handleAd(msg: Api.Message, args: string) {
@@ -584,61 +381,37 @@ class SearchService {
 
     switch (subCmd) {
       case "add":
-        if (keywords.length === 0) {
-          throw new Error("请提供要添加的广告关键词，多个关键词用空格分隔。");
-        }
-        const newKeywords = keywords.filter(k => !this.config.adFilters.includes(k));
-        this.config.adFilters.push(...newKeywords);
+        if (keywords.length === 0) throw new Error("请提供关键词。");
+        this.config.adFilters.push(...keywords);
         await this.saveConfig();
-        await msg.edit({ text: `✅ 成功添加 ${newKeywords.length} 个广告过滤关键词。` });
+        await msg.edit({ text: `✅ 成功添加 ${keywords.length} 个广告过滤词。` });
         break;
-
       case "del":
-        if (keywords.length === 0) {
-          throw new Error("请提供要删除的广告关键词，多个关键词用空格分隔。");
-        }
+        if (keywords.length === 0) throw new Error("请提供关键词。");
         const initialLength = this.config.adFilters.length;
         this.config.adFilters = this.config.adFilters.filter(k => !keywords.includes(k));
-        const removedCount = initialLength - this.config.adFilters.length;
         await this.saveConfig();
-        await msg.edit({ text: `✅ 成功删除 ${removedCount} 个广告过滤关键词。` });
+        await msg.edit({ text: `✅ 成功删除 ${initialLength - this.config.adFilters.length} 个广告过滤词。` });
         break;
-
       case "list":
         if (this.config.adFilters.length === 0) {
-          await msg.edit({ text: "当前没有设置广告过滤关键词。" });
+          await msg.edit({ text: "当前没有广告过滤词。" });
         } else {
-          const listText = `**当前广告过滤关键词 (${this.config.adFilters.length}个):**\n\n${this.config.adFilters.join(", ")}`;
-          await msg.edit({ text: listText });
+          await msg.edit({ text: `**当前广告过滤词:**\n\n${this.config.adFilters.join(", ")}` });
         }
         break;
-
       default:
-        throw new Error("用法: .so ad add <关键词> | .so ad del <关键词> | .so ad list");
+        throw new Error("用法: .so ad <add|del|list> [关键词]");
     }
   }
 
-  private async handleKkp(
-    msg: Api.Message,
-    useSpoiler: boolean
-  ) {
-    await this.findAndSendVideo(msg, null, useSpoiler, false, "kkp");
+  private async handleKkp(msg: Api.Message, useSpoiler: boolean) {
+    await this.findAndSendVideo(msg, null, useSpoiler, true, "kkp");
   }
 
-  private async handleSearch(
-    msg: Api.Message,
-    query: string,
-    useSpoiler: boolean,
-    useRandom: boolean
-  ) {
+  private async handleSearch(msg: Api.Message, query: string, useSpoiler: boolean, useRandom: boolean) {
     if (!query) throw new Error("请输入搜索关键词。");
-    await this.findAndSendVideo(
-      msg,
-      query,
-      useSpoiler,
-      useRandom,
-      "search"
-    );
+    await this.findAndSendVideo(msg, query, useSpoiler, useRandom, "search");
   }
 
   private async findAndSendVideo(
@@ -650,419 +423,262 @@ class SearchService {
   ) {
     if (this.config.channelList.length === 0)
       throw new Error("请至少使用 `.so add` 添加一个搜索频道。");
-    await msg.edit({
-      text: type === "kkp" ? "🎲 正在随机寻找视频..." : "🔍 正在搜索视频...",
-    });
-    const searchOrder = [
-      ...new Set(
-        [
-          this.config.defaultChannel,
-          ...this.config.channelList.map((c) => c.handle),
-        ].filter(Boolean) as string[]
-      ),
-    ];
+
+    const initialMessage = type === "kkp" ? "🎲 正在随机寻找视频..." : "🔍 正在搜索视频...";
+    await msg.edit({ text: initialMessage });
+
+    const searchOrder = [...new Set([this.config.defaultChannel, ...this.config.channelList.map((c) => c.handle)].filter(Boolean) as string[])];
+    
     let validVideos: Api.Message[] = [];
-    for (const channelHandle of searchOrder) {
-      const channelInfo = this.config.channelList.find(
-        (c) => c.handle === channelHandle
-      );
+    const processedGroupIds = new Set<string>();
+
+    for (const [index, channelHandle] of searchOrder.entries()) {
+      if (index > 0) {
+        await new Promise(resolve => setTimeout(resolve, 750));
+      }
+
+      const channelInfo = this.config.channelList.find((c) => c.handle === channelHandle);
       if (!channelInfo) continue;
+      
+      let videosInCurrentChannel: Api.Message[] = [];
+
       try {
-        await msg.edit({
-          text: `- 正在搜索... (源: ${searchOrder.indexOf(channelHandle) + 1}/${
-            searchOrder.length
-            })`,
-        });
-
-        // 对于搜索模式，优先使用频道关联讨论组搜索
-        if (type === "search" && channelInfo.linkedGroup && query) {
-          console.log(`使用频道关联讨论组搜索: ${channelInfo.title} -> ${channelInfo.linkedGroup}`);
-          const linkedVideos = await this.searchInChannelWithLinkedGroup(channelInfo, query);
-          validVideos.push(...linkedVideos);
-
-          // 如果在关联讨论组中找到视频，就不再使用传统搜索
-          if (linkedVideos.length > 0) {
-            console.log(`在关联讨论组中找到 ${linkedVideos.length} 个视频，跳过传统搜索`);
-            continue;
-          }
-        }
-
-        // 传统搜索方式（作为备用或用于kkp模式）
+        await msg.edit({ text: `- 正在搜索... (源: ${index + 1}/${searchOrder.length})` });
         const entity = await this.client.getEntity(channelInfo.handle);
-        const isMegagroup = entity instanceof Api.Channel && entity.megagroup === true;
-        const videos = await this.client.getMessages(entity, {
-          limit: isMegagroup ? 200 : 100,
-          filter: new Api.InputMessagesFilterVideo(),
-        });
-        validVideos.push(
-          ...videos.filter((v: Api.Message) => {
-            const isPureVideo =
-              v.video &&
-              !(v.media instanceof Api.MessageMediaWebPage) &&
-              !(
-                v.entities &&
-                v.entities.some(
-                  (entity: any) =>
-                    entity instanceof Api.MessageEntityUrl ||
-                    entity instanceof Api.MessageEntityTextUrl
-                )
-              );
-            if (type === "kkp") {
-              const durationAttr = v.video?.attributes.find(
-                (attr: Api.TypeDocumentAttribute) => attr instanceof Api.DocumentAttributeVideo
-              ) as Api.DocumentAttributeVideo | undefined;
-              return (
-                isPureVideo &&
-                durationAttr &&
-                durationAttr.duration !== undefined &&
-                durationAttr.duration >= 20 &&
-                durationAttr.duration <= 180
-              );
-            }
-            return isPureVideo && this.isMessageMatching(v, query!) && !this.isAdContent(v);
-          })
-        );
-      } catch (error: any) {
-        if (
-          error instanceof Error &&
-          error.message.includes("Could not find the input entity")
-        ) {
-          console.error(`无法找到频道实体 ${channelInfo.title} (${channelInfo.handle})，从配置中移除...`);
-          // 从配置中移除无效的频道
-          this.config.channelList = this.config.channelList.filter(c => c.handle !== channelInfo.handle);
-          if (this.config.defaultChannel === channelInfo.handle) {
-            this.config.defaultChannel = this.config.channelList.length > 0 ? this.config.channelList[0].handle : null;
+
+        if (type === "search" && query) {
+          if (channelInfo.linkedGroup) {
+            const linkedVideos = await this.searchInChannelWithLinkedGroup(channelInfo, query);
+            if (linkedVideos.length > 0) videosInCurrentChannel.push(...linkedVideos);
           }
-          await this.saveConfig();
-          console.log(`已从配置中移除无效频道: ${channelInfo.title}`);
-          continue
-        } else {
-          console.error(
-            `在频道 "${channelInfo.title}" (${channelHandle}) 中失败: ${
-              error instanceof Error ? error.message : error
-            }`
-          );
-          continue;
+
+          const allQueryMessages = await this.client.getMessages(entity, { limit: 200, search: query });
+
+          for (const foundMsg of allQueryMessages) {
+            if (this.isMessageMatching(foundMsg, query)) {
+              if (foundMsg.groupedId) {
+                const groupIdStr = foundMsg.groupedId.toString();
+                if (processedGroupIds.has(groupIdStr)) continue;
+
+                const surroundingMessages = await this.client.getMessages(entity, {
+                    limit: 20,
+                    offsetId: foundMsg.id + 10,
+                });
+                
+                const albumMessages = surroundingMessages.filter((m: Api.Message) => m.groupedId?.equals(foundMsg.groupedId));
+                const videosInAlbum = albumMessages.filter((m: Api.Message) => m.video && !this.isAdContent(m));
+
+                if (videosInAlbum.length > 0) {
+                  videosInCurrentChannel.push(...videosInAlbum);
+                  processedGroupIds.add(groupIdStr);
+                }
+              } else if (foundMsg.video && !this.isAdContent(foundMsg)) {
+                videosInCurrentChannel.push(foundMsg);
+              }
+            }
+          }
+        } else if (type === "kkp") { 
+          const isMegagroup = entity instanceof Api.Channel && entity.megagroup === true;
+          const messages = await this.client.getMessages(entity, {
+            limit: isMegagroup ? 200 : 100,
+            filter: new Api.InputMessagesFilterVideo(),
+          });
+
+          const filteredVideos = messages.filter((v: Api.Message) => {
+            const isPureVideo = v.video && !(v.media instanceof Api.MessageMediaWebPage);
+            if (!isPureVideo || this.isAdContent(v)) return false;
+
+            const durationAttr = v.video?.attributes.find((attr: any) => attr instanceof Api.DocumentAttributeVideo) as Api.DocumentAttributeVideo | undefined;
+            return durationAttr && durationAttr.duration >= 20 && durationAttr.duration <= 180;
+          });
+          videosInCurrentChannel.push(...filteredVideos);
         }
+        
+        if (videosInCurrentChannel.length > 0) {
+          validVideos.push(...videosInCurrentChannel);
+          if (type === "search" && !useRandom) {
+              console.log(`在频道 "${channelInfo.title}" 中找到结果，精确模式下停止搜索。`);
+              break;
+          }
+        }
+
+      } catch (error: any) {
+        if (error.message.includes("Could not find the input entity")) {
+            console.error(`无法找到频道 ${channelInfo.title}，已自动移除。`);
+            this.config.channelList = this.config.channelList.filter(c => c.handle !== channelHandle);
+            if(this.config.defaultChannel === channelHandle) this.config.defaultChannel = null;
+            await this.saveConfig();
+        } else {
+            console.error(`在频道 "${channelInfo.title}" 搜索失败: ${error.message}`);
+        }
+        continue;
       }
     }
+
+    if (validVideos.length > 0) {
+        validVideos = Array.from(new Map(validVideos.map(v => [v.id, v])).values());
+    }
+
     if (validVideos.length === 0) {
-      await msg.edit({
-        text:
-          type === "kkp"
-            ? "🤷‍♂️ 未找到合适的视频。"
-            : "❌ 在任何频道中均未找到匹配结果。",
-      });
+      await msg.edit({ text: type === "kkp" ? "🤷‍♂️ 未找到合适的视频。" : "❌ 在任何频道中均未找到匹配结果。" });
       return;
     }
 
-    let selectedVideo;
+    let selectedVideo: Api.Message;
+
     if (useRandom || type === "kkp") {
+      console.log(`随机模式开启，从 ${validVideos.length} 个视频中选择...`);
       selectedVideo = this.selectRandomVideo(validVideos);
     } else {
-      // 搜索模式下，基于查询内容选择视频，确保不同关键词返回不同视频
-      selectedVideo = this.selectVideoByQuery(validVideos, query || "");
+      console.log(`精确模式，从 ${validVideos.length} 个视频中按相关性选择...`);
+      if (validVideos.length > 1) {
+          const queryNormalized = this.normalizeSearchTerm(query || "");
+          const getScore = (video: Api.Message): number => {
+              let score = 0;
+              const fileNameAttr = video.video?.attributes.find((attr: any): attr is Api.DocumentAttributeFilename => attr instanceof Api.DocumentAttributeFilename);
+              if (fileNameAttr?.fileName) {
+                  const normalizedFileName = this.normalizeSearchTerm(fileNameAttr.fileName);
+                  if (normalizedFileName.includes(queryNormalized)) score += 100;
+              }
+              if (video.message) {
+                  const normalizedMessage = this.normalizeSearchTerm(video.message);
+                  if (normalizedMessage.includes(queryNormalized)) score += 50;
+              }
+              return score;
+          };
+
+          validVideos.sort((a, b) => {
+              const scoreA = getScore(a);
+              const scoreB = getScore(b);
+              if (scoreB !== scoreA) return scoreB - scoreA;
+              
+              const durationA = a.video?.attributes.find((attr: any): attr is Api.DocumentAttributeVideo => attr instanceof Api.DocumentAttributeVideo)?.duration || 0;
+              const durationB = b.video?.attributes.find((attr: any): attr is Api.DocumentAttributeVideo => attr instanceof Api.DocumentAttributeVideo)?.duration || 0;
+              return durationB - durationA;
+          });
+      }
+      selectedVideo = validVideos[0];
     }
 
-    await this.sendVideo(
-      msg,
-      selectedVideo,
-      useSpoiler,
-      query
-    );
+    await msg.edit({ text: `✅ 已找到结果，准备发送...` });
+    
+    const originalMsg = msg;
+    await this.sendVideo(originalMsg, selectedVideo, useSpoiler, query);
+    
+    if (!useSpoiler && originalMsg.out) {
+      try {
+        await originalMsg.delete();
+      } catch (e) {
+        console.warn("删除原始消息失败，可能已被删除");
+      }
+    }
   }
 
-  private async sendVideo(
-    originalMsg: Api.Message,
-    video: Api.Message,
-    useSpoiler: boolean,
-    caption?: string | null
-  ) {
-    await originalMsg.edit({ text: `✅ 已找到结果，准备发送...` });
-
+  private async sendVideo(originalMsg: Api.Message, video: Api.Message, useSpoiler: boolean, caption?: string | null) {
     if (useSpoiler) {
-      // 防剧透模式：强制下载上传
       await this.downloadAndUploadVideo(originalMsg, video, true, caption);
     } else {
-      // 普通模式：先尝试转发，失败时自动下载上传
       try {
-        await this.client.forwardMessages(originalMsg.peerId, {
-          messages: [video.id],
-          fromPeer: video.peerId,
-        });
-        console.log("转发成功");
-        await originalMsg.delete();
+        await this.client.forwardMessages(originalMsg.peerId, { messages: [video.id], fromPeer: video.peerId });
       } catch (forwardError: any) {
-        console.log(`转发失败，尝试下载上传: ${forwardError.message}`);
-        // 转发失败时自动下载上传
+        console.log(`转发失败，自动转为下载上传: ${forwardError.message}`);
         await this.downloadAndUploadVideo(originalMsg, video, false, caption);
       }
     }
   }
 
-  private async downloadAndUploadVideo(
-    originalMsg: Api.Message,
-    video: Api.Message,
-    spoiler: boolean = false,
-    caption?: string | null
-  ): Promise<void> {
+  private async downloadAndUploadVideo(originalMsg: Api.Message, video: Api.Message, spoiler: boolean = false, caption?: string | null): Promise<void> {
     const tempDir = path.join(process.cwd(), "temp");
+    await fs.mkdir(tempDir, { recursive: true });
     const tempFilePath = path.join(tempDir, `video_${Date.now()}.mp4`);
+    const statusMsg = await this.client.sendMessage(originalMsg.chatId!, { message: `🔥 正在下载视频...`, replyTo: originalMsg.id });
 
     try {
-      await originalMsg.edit({ text: `🔥 正在下载视频...` });
+      await this.client.downloadMedia(video.media!, { outputFile: tempFilePath });
+      await statusMsg.edit({ text: `✅ 下载完成，正在上传...` });
 
-      // 下载视频到临时文件
-      await this.client.downloadMedia(video.media!, {
-        outputFile: tempFilePath,
-      });
+      if (!video.video) throw new Error("消息不包含有效的视频媒体。");
+      const fileStat = await fs.stat(tempFilePath);
+      const fileToUpload = new CustomFile(path.basename(tempFilePath), fileStat.size, tempFilePath);
+      
+      const videoAttr = video.video.attributes.find((attr: any): attr is Api.DocumentAttributeVideo => attr instanceof Api.DocumentAttributeVideo);
 
-      await originalMsg.edit({ text: `✅ 下载完成，正在上传...` });
-
-      if (spoiler) {
-        // 防剧透模式：使用特殊的上传方式
-        if (!video.video) throw new Error("消息不包含有效的视频媒体。");
-
-        const fileStat = await fs.stat(tempFilePath);
-        const fileToUpload = new CustomFile(
-          path.basename(tempFilePath),
-          fileStat.size,
-          tempFilePath
-        );
-        const inputFile = await this.client.uploadFile({
-          file: fileToUpload,
-          workers: 1,
-        });
-
-        // 获取原始视频的所有属性
-        const originalAttributes = video.video?.attributes || [];
-        const videoAttr = originalAttributes.find(
-          (attr: Api.TypeDocumentAttribute): attr is Api.DocumentAttributeVideo =>
-            attr instanceof Api.DocumentAttributeVideo
-        );
-
-        // 构建完整的属性列表，保持原始视频的所有特性
-        const attributes = [
-          new Api.DocumentAttributeVideo({
-            duration: videoAttr?.duration || 0,
-            w: videoAttr?.w || 0,
-            h: videoAttr?.h || 0,
-            supportsStreaming: videoAttr?.supportsStreaming || true,
-            roundMessage: videoAttr?.roundMessage || false,
-          }),
-          new Api.DocumentAttributeFilename({
-            fileName: fileToUpload.name,
-          }),
-        ];
-
-        // 添加其他原始属性（如果存在）
-        originalAttributes.forEach((attr: Api.TypeDocumentAttribute) => {
-          if (!(attr instanceof Api.DocumentAttributeVideo) &&
-            !(attr instanceof Api.DocumentAttributeFilename)) {
-            attributes.push(attr as any);
-          }
-        });
-
-        const inputMedia = new Api.InputMediaUploadedDocument({
-          file: inputFile,
-          mimeType: video.video?.mimeType || "video/mp4",
-          attributes: [
-            new Api.DocumentAttributeVideo({
-              duration: videoAttr?.duration || 0,
-              w: videoAttr?.w || 0,
-              h: videoAttr?.h || 0,
-              supportsStreaming: true,
-            }),
-            new Api.DocumentAttributeFilename({
-              fileName: fileToUpload.name,
-            }),
-          ],
-          spoiler: true,
-        });
-
-        await this.client.invoke(
-          new Api.messages.SendMedia({
-            peer: originalMsg.peerId,
-            media: inputMedia,
-            message: caption || video.message || "",
-            randomId: (BigInt(Date.now()) * BigInt(1000) + BigInt(Math.floor(Math.random() * 1000))) as any,
-          })
-        );
-      } else {
-        // 普通模式：作为视频媒体发送
-        const fileStat = await fs.stat(tempFilePath);
-        const fileToUpload = new CustomFile(
-          path.basename(tempFilePath),
-          fileStat.size,
-          tempFilePath
-        );
-
-        // 获取原始视频属性
-        const originalAttributes = video.video?.attributes || [];
-        const videoAttr = originalAttributes.find(
-          (attr: Api.TypeDocumentAttribute): attr is Api.DocumentAttributeVideo =>
-            attr instanceof Api.DocumentAttributeVideo
-        );
-
-        await this.client.sendFile(originalMsg.peerId, {
+      await this.client.sendFile(originalMsg.peerId, {
           file: fileToUpload,
           caption: caption || video.message || "",
-          forceDocument: false, // 确保作为媒体发送
+          forceDocument: false,
+          spoiler: spoiler,
           attributes: [
-            new Api.DocumentAttributeVideo({
-              duration: videoAttr?.duration || 0,
-              w: videoAttr?.w || 0,
-              h: videoAttr?.h || 0,
-              supportsStreaming: true,
-            })
-          ]
-        });
-      }
-
-      console.log("视频发送成功");
-      await originalMsg.delete();
-
-      // 清理临时文件
-      try {
-        await fs.unlink(tempFilePath);
-      } catch (cleanupError) {
-        console.warn("清理临时文件失败:", cleanupError);
-      }
+              new Api.DocumentAttributeVideo({
+                  duration: videoAttr?.duration || 0,
+                  w: videoAttr?.w || 0,
+                  h: videoAttr?.h || 0,
+                  supportsStreaming: true,
+              }),
+              new Api.DocumentAttributeFilename({ fileName: fileToUpload.name }),
+          ],
+          replyTo: originalMsg.id
+      });
+      await statusMsg.delete();
+      if (originalMsg.out) await originalMsg.delete();
     } catch (error: any) {
       console.error("下载上传视频时出错:", error);
-      await originalMsg.edit({ text: `❌ 发送视频失败: ${error.message}` });
-
-      // 清理临时文件
+      await statusMsg.edit({ text: `❌ 发送视频失败: ${error.message}` });
+    } finally {
       try {
         await fs.unlink(tempFilePath);
       } catch (cleanupError) {
         console.warn("清理临时文件失败:", cleanupError);
       }
-
-      throw new Error(`下载上传视频失败: ${error.message}`);
     }
   }
 
   private isMessageMatching(message: Api.Message, query: string): boolean {
     const normalizedQuery = this.normalizeSearchTerm(query);
+    const textSources = [message.text, message.message];
+    const fileNameAttr = message.video?.attributes.find((attr: any): attr is Api.DocumentAttributeFilename => attr instanceof Api.DocumentAttributeFilename);
+    if (fileNameAttr?.fileName) textSources.push(fileNameAttr.fileName);
 
-    // 搜索消息文本
-    if (message.text) {
-      const normalizedText = this.normalizeSearchTerm(message.text);
-      if (this.fuzzyMatch(normalizedText, normalizedQuery)) {
-        return true;
+    for (const source of textSources) {
+      if (source) {
+        const normalizedText = this.normalizeSearchTerm(source);
+        if (this.fuzzyMatch(normalizedText, normalizedQuery)) return true;
       }
     }
-
-    // 搜索消息内容（message字段）
-    if (message.message) {
-      const normalizedMessage = this.normalizeSearchTerm(message.message);
-      if (this.fuzzyMatch(normalizedMessage, normalizedQuery)) {
-        return true;
-      }
-    }
-
-    // 搜索文件名
-    const fileNameAttr = message.video?.attributes.find(
-      (attr: Api.TypeDocumentAttribute): attr is Api.DocumentAttributeFilename =>
-        attr instanceof Api.DocumentAttributeFilename
-    );
-
-    if (fileNameAttr?.fileName) {
-      const normalizedFileName = this.normalizeSearchTerm(fileNameAttr.fileName);
-      if (this.fuzzyMatch(normalizedFileName, normalizedQuery)) {
-        return true;
-      }
-    }
-
     return false;
   }
 
   private normalizeSearchTerm(text: string): string {
-    return text
-      .toLowerCase()
-      // 统一各种分隔符为空格
-      .replace(/[-_\s\.\|\\\/#]+/g, ' ')
-      // 移除多余空格
-      .replace(/\s+/g, ' ')
-      .trim();
+    return text.toLowerCase().replace(/[-_\s\.\|\\\/#]+/g, ' ').replace(/\s+/g, ' ').trim();
   }
 
   private fuzzyMatch(text: string, query: string): boolean {
-    // 直接匹配
-    if (text.includes(query)) {
-      return true;
-    }
-
-    // 分词匹配：检查查询词的所有部分是否都在文本中
+    if (text.includes(query)) return true;
     const queryParts = query.split(' ').filter(part => part.length > 0);
     const textParts = text.split(' ');
 
-    // 对于番号搜索，如果查询包含字母和数字，进行特殊处理
     if (queryParts.length === 1 && /[a-z]+\s*\d+/i.test(query)) {
-      const cleanQuery = query.replace(/\s+/g, '');
-      const cleanText = text.replace(/\s+/g, '');
-      if (cleanText.includes(cleanQuery)) {
-        return true;
-      }
+      if (text.replace(/\s+/g, '').includes(query.replace(/\s+/g, ''))) return true;
     }
 
-    // 检查所有查询词是否都能在文本中找到
-    return queryParts.every(queryPart =>
-      textParts.some(textPart =>
-        textPart.includes(queryPart) || queryPart.includes(textPart)
-      )
-    );
+    return queryParts.every(queryPart => textParts.some(textPart => textPart.includes(queryPart)));
   }
 
   private isAdContent(message: Api.Message): boolean {
-    const text = message.text?.toLowerCase() || "";
-    const fileNameAttr = message.video?.attributes.find(
-      (attr: Api.TypeDocumentAttribute): attr is Api.DocumentAttributeFilename =>
-        attr instanceof Api.DocumentAttributeFilename
-    );
-    const fileName = fileNameAttr?.fileName?.toLowerCase() || "";
-
-    return this.config.adFilters.some(filter =>
-      text.includes(filter) || fileName.includes(filter)
-    );
+    const text = (message.text || message.message || "").toLowerCase();
+    const fileNameAttr = message.video?.attributes.find((attr: any): attr is Api.DocumentAttributeFilename => attr instanceof Api.DocumentAttributeFilename);
+    const fileName = (fileNameAttr?.fileName || "").toLowerCase();
+    return this.config.adFilters.some(filter => text.includes(filter) || fileName.includes(filter));
   }
 
   private selectRandomVideo(videos: Api.Message[]): Api.Message {
     return videos[Math.floor(Math.random() * videos.length)];
   }
-
-  // 基于查询内容选择视频，确保不同关键词返回不同视频
-  private selectVideoByQuery(videos: Api.Message[], query: string): Api.Message {
-    if (videos.length === 0) {
-      throw new Error("视频列表为空");
-    }
-
-    if (videos.length === 1) {
-      return videos[0];
-    }
-
-    // 使用查询字符串的哈希值来确定选择哪个视频
-    let hash = 0;
-    for (let i = 0; i < query.length; i++) {
-      const char = query.charCodeAt(i);
-      hash = ((hash << 5) - hash) + char;
-      hash = hash & hash; // 转换为32位整数
-    }
-
-    // 确保哈希值为正数并映射到视频数组索引
-    const index = Math.abs(hash) % videos.length;
-    console.log(`查询 "${query}" 的哈希索引: ${index}/${videos.length}, 选择视频ID: ${videos[index].id}`);
-
-    return videos[index];
-  }
 }
 
 const so = async (msg: Api.Message) => {
   const client = await getGlobalClient();
-  if (!client) {
-    return;
-  }
+  if (!client) return;
 
   const service = new SearchService(client);
   await service.initialize();
@@ -1082,7 +698,7 @@ class ChannelSearchPlugin extends Plugin {
 
 频道管理:
 - 添加频道: .so add <频道链接> (使用 \\ 分隔)
-- 删除频道: .so del <频道链接> (使用 \\ 分隔) 或 .so del all (删除所有)
+- 删除频道: .so del <频道链接|序号> [...] 或 .so del all (删除所有)
 - 设置默认: .so default <频道链接> 或 .so default d (移除默认)
 - 列出频道: .so list
 - 导出配置: .so export
@@ -1091,14 +707,8 @@ class ChannelSearchPlugin extends Plugin {
 广告过滤:
 - 添加关键词: .so ad add <关键词1> <关键词2> ...
 - 删除关键词: .so ad del <关键词1> <关键词2> ...
-- 查看关键词: .so ad list
-
-搜索逻辑:
-- 优先搜索默认频道
-- 并行搜索多个频道
-- 智能去重和随机选择
-- 自动过滤广告内容
-- 优化的模糊匹配算法`;
+- 查看关键词: .so ad list`;
+  
   cmdHandlers: Record<string, (msg: Api.Message) => Promise<void>> = {
     so,
     search: so,
