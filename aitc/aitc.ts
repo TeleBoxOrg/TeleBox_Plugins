@@ -10,6 +10,7 @@ const CONFIG_KEYS = {
   API_URL: "aitc_api_url",
   MODEL: "aitc_model",
   PROMPT: "aitc_prompt",
+  TEMPERATURE: "aitc_temperature",
 } as const;
 
 const DEFAULT_CONFIG: Record<string, string> = {
@@ -17,7 +18,12 @@ const DEFAULT_CONFIG: Record<string, string> = {
   [CONFIG_KEYS.MODEL]: "gpt-4o-mini",
   [CONFIG_KEYS.PROMPT]:
     "You are an expert in Chinese-English translation, translating user input from Chinese to colloquial English. Users can send content that needs to be translated to the assistant, and the assistant will provide the corresponding translation results, ensuring that they conform to Chinese language conventions. You can adjust the tone and style, taking into account the cultural connotations and regional differences of certain words. As a translator, you need to translate the original text into a translation that meets the standards of accuracy and elegance. Only output the translated content!!!",
+  [CONFIG_KEYS.TEMPERATURE]: "0.2",
 };
+
+const TEMPERATURE_MIN = 0;
+const TEMPERATURE_MAX = 2;
+const TEMPERATURE_RANGE_LABEL = `${TEMPERATURE_MIN}-${TEMPERATURE_MAX}`;
 
 const CONFIG_DB_PATH = path.join(
   createDirectoryInAssets("aitc"),
@@ -106,6 +112,15 @@ const htmlEscape = (text: string): string =>
 
 const trimTrailingSlash = (url: string): string => url.replace(/\/+$/, "");
 
+const clampTemperature = (value: number, fallback: number): number => {
+  if (!Number.isFinite(value)) {
+    return fallback;
+  }
+  if (value < TEMPERATURE_MIN) return TEMPERATURE_MIN;
+  if (value > TEMPERATURE_MAX) return TEMPERATURE_MAX;
+  return value;
+};
+
 async function handleAitcCommand(msg: Api.Message): Promise<void> {
   const rawMessage = msg.message || "";
   const trimmed = rawMessage.trim();
@@ -129,6 +144,7 @@ async function handleAitcCommand(msg: Api.Message): Promise<void> {
         "• <code>aitc model &lt;模型名&gt;</code> - 设置模型\n" +
         "• <code>aitc prompt &lt;提示词&gt;</code> - 设置系统 Prompt\n" +
         "• <code>aitc api &lt;地址&gt;</code> - 自定义 API 地址\n" +
+        `• <code>aitc temp &lt;${TEMPERATURE_RANGE_LABEL}&gt;</code> - 设置模型温度\n` +
         "• <code>aitc info</code> - 查看当前配置",
     );
     return;
@@ -181,16 +197,47 @@ async function handleAitcCommand(msg: Api.Message): Promise<void> {
       await replyWith("✅ <b>Prompt 已更新</b>");
       return;
     }
+    case "temp":
+    case "temperature":
+    case "_set_temperature": {
+      if (!subcommandValue) {
+        await replyWith("❌ <b>请提供温度数值</b>");
+        return;
+      }
+      const parsed = Number.parseFloat(subcommandValue.trim());
+      if (!Number.isFinite(parsed)) {
+        await replyWith("❌ <b>无效的温度值，请输入数字</b>");
+        return;
+      }
+      const clamped = clampTemperature(
+        parsed,
+        Number.parseFloat(DEFAULT_CONFIG[CONFIG_KEYS.TEMPERATURE]),
+      );
+      if (clamped !== parsed) {
+        await replyWith(
+          `❌ <b>温度范围需在 ${TEMPERATURE_MIN}-${TEMPERATURE_MAX} 之间</b>`,
+        );
+        return;
+      }
+      ConfigManager.set(CONFIG_KEYS.TEMPERATURE, clamped.toString());
+      await replyWith("✅ <b>温度已更新</b>");
+      return;
+    }
     case "info":
     case "_info": {
       const apiUrl = ConfigManager.get(CONFIG_KEYS.API_URL);
       const model = ConfigManager.get(CONFIG_KEYS.MODEL);
       const prompt = ConfigManager.get(CONFIG_KEYS.PROMPT);
       const hasKey = !!ConfigManager.get(CONFIG_KEYS.API_KEY, "");
+      const temperature = ConfigManager.get(
+        CONFIG_KEYS.TEMPERATURE,
+        DEFAULT_CONFIG[CONFIG_KEYS.TEMPERATURE],
+      );
       await replyWith(
         `🔧 <b>当前配置</b>\n\n` +
           `• API 地址：<code>${htmlEscape(apiUrl)}</code>\n` +
           `• 模型：<code>${htmlEscape(model)}</code>\n` +
+          `• 温度：<code>${htmlEscape(temperature)}</code>\n` +
           `• Prompt：${htmlEscape(prompt || "(未设置)")}\n` +
           `• API Key：${hasKey ? "已配置" : "未配置"}`,
       );
@@ -239,6 +286,15 @@ async function handleAitcCommand(msg: Api.Message): Promise<void> {
     ConfigManager.get(CONFIG_KEYS.MODEL) || DEFAULT_CONFIG[CONFIG_KEYS.MODEL];
   const prompt =
     ConfigManager.get(CONFIG_KEYS.PROMPT) || DEFAULT_CONFIG[CONFIG_KEYS.PROMPT];
+  const temperature = clampTemperature(
+    Number.parseFloat(
+      ConfigManager.get(
+        CONFIG_KEYS.TEMPERATURE,
+        DEFAULT_CONFIG[CONFIG_KEYS.TEMPERATURE],
+      ),
+    ),
+    Number.parseFloat(DEFAULT_CONFIG[CONFIG_KEYS.TEMPERATURE]),
+  );
 
   await replyWith("⏳ <b>正在请求 OpenAI...</b>");
 
@@ -251,7 +307,7 @@ async function handleAitcCommand(msg: Api.Message): Promise<void> {
           ...(prompt ? [{ role: "system", content: prompt }] : []),
           { role: "user", content: userInput },
         ],
-        temperature: 0.2,
+        temperature,
       },
       {
         headers: {
@@ -294,6 +350,7 @@ class AitcPlugin extends Plugin {
 - aitc model <模型名> - 指定模型
 - aitc api <地址> - 自定义 API 地址
 - aitc prompt <提示词> - 定义系统 Prompt
+- aitc temp <${TEMPERATURE_RANGE_LABEL}> - 调整温度
 - aitc info - 查看当前配置
   `;
   cmdHandlers: Record<string, (msg: Api.Message) => Promise<void>> = {
