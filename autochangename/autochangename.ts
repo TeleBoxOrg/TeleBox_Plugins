@@ -1,8 +1,5 @@
 /**
- * 自动昵称更新插件 - 自动在昵称中显示时间或随机文本
- * 
- * @author TeleBox Team
- * @version 2.1.0
+ * 自动昵称更新插件 v2.2 - 极简模块化重构版
  * @description 支持定时自动更新昵称，显示时间、随机文本或两者组合
  */
 
@@ -15,16 +12,10 @@ import { JSONFilePreset } from "lowdb/node";
 import { cronManager } from "@utils/cronManager";
 import * as path from "path";
 
-// 获取命令前缀
-const prefixes = getPrefixes();
-const mainPrefix = prefixes[0];
-
-// HTML转义函数（必需）
+// === 配置与工具函数 ===
+const [mainPrefix] = getPrefixes();
 const htmlEscape = (text: string): string => 
-  text.replace(/[&<>"']/g, m => ({ 
-    '&': '&amp;', '<': '&lt;', '>': '&gt;', 
-    '"': '&quot;', "'": '&#x27;' 
-  }[m] || m));
+  text.replace(/[&<>"']/g, m => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#x27;'}[m] || m));
 
 // 帮助文本定义（必需）
 const help_text = `🤖 <b>自动昵称更新插件 v2.2</b>
@@ -46,14 +37,26 @@ const help_text = `🤖 <b>自动昵称更新插件 v2.2</b>
 
 <b>📝 文案管理（让昵称更有个性）：</b>
 • <code>${mainPrefix}acn text add 摸鱼中</code> - 添加一条随机文案
-• <code>${mainPrefix}acn text add 忙碌中勿扰</code> - 再添加一条
 • <code>${mainPrefix}acn text del 1</code> - 删除第1条文案
 • <code>${mainPrefix}acn text list</code> - 查看所有文案列表
 • <code>${mainPrefix}acn text clear</code> - 清空所有文案
 
+<b>🎵 多行批量添加示例：</b>
+完整输入格式（复制粘贴即可）：
+<code>${mainPrefix}acn text add 
+属于我俩安逸世界
+不用和别人连线
+我不管你来自深渊
+也不在乎身上鳞片
+爱情能超越一切
+oh yeah</code>
+
+每行自动成为一条独立文案，支持歌词批量导入！
+
 <b>🎨 显示配置（NEW）：</b>
 • <code>${mainPrefix}acn emoji on/off</code> - 开启/关闭时钟emoji 🕐
 • <code>${mainPrefix}acn showtz on/off</code> - 开启/关闭时区显示 GMT+8
+• <code>${mainPrefix}acn tzformat GMT/UTC/city</code> - 设置时区格式(GMT/UTC/城市名/自定义)
 • <code>${mainPrefix}acn order</code> - 查看当前显示顺序
 • <code>${mainPrefix}acn order name,text,time,emoji</code> - 自定义显示顺序
 • <code>${mainPrefix}acn config</code> - 查看所有配置项
@@ -65,10 +68,11 @@ const help_text = `🤖 <b>自动昵称更新插件 v2.2</b>
 • <code>${mainPrefix}acn update</code> 或 <code>${mainPrefix}acn now</code> - 立即更新一次昵称
 • <code>${mainPrefix}acn reset</code> - 恢复原始昵称并停止更新
 
-<b>📊 显示模式说明：</b>
-• <b>time模式</b>: 张三 09:30 🕐
+<b>📊 显示模式说明（默认只显示时间）：</b>
+• <b>time模式</b>: 张三 09:30
 • <b>text模式</b>: 张三 摸鱼中
-• <b>both模式</b>: 张三 摸鱼中 09:30 GMT+8 🕐
+• <b>both模式</b>: 张三 摸鱼中 09:30
+• <b>开启emoji/时区后</b>: 张三 09:30 GMT+8 🕐
 
 <b>🔧 自定义显示顺序示例：</b>
 • <code>name,text,time,emoji</code> → 张三 摸鱼中 09:30 🕐
@@ -98,7 +102,7 @@ const help_text = `🤖 <b>自动昵称更新插件 v2.2</b>
 <code>${mainPrefix}acn mode</code> (切换到both模式)
 <code>${mainPrefix}acn on</code>`;
 
-// 接口定义
+// === 类型定义 ===
 interface UserSettings {
   user_id: number;
   timezone: string;
@@ -108,10 +112,10 @@ interface UserSettings {
   mode: "time" | "text" | "both";
   last_update: string | null;
   text_index: number;
-  // 新增配置选项
-  show_clock_emoji?: boolean;  // 是否显示时钟emoji
-  show_timezone?: boolean;     // 是否显示时区
-  display_order?: string;      // 显示顺序，如 "name,text,time,emoji" 或 "text,time,emoji,name"
+  show_clock_emoji?: boolean;
+  show_timezone?: boolean;
+  display_order?: string;
+  timezone_format?: string;  // 自定义时区格式："GMT" | "UTC" | "city" | "offset" | "custom:xxx"
 }
 
 interface ConfigData {
@@ -119,309 +123,204 @@ interface ConfigData {
   random_texts: string[];
 }
 
-// 数据库管理器（使用lowdb）
+// === 数据管理层 ===
 class DataManager {
   private static db: any = null;
-  private static initialized = false;
   private static initPromise: Promise<void> | null = null;
 
   private static async init(): Promise<void> {
-    if (this.initialized) return;
-    
-    // 防止并发初始化
-    if (this.initPromise) {
-      return this.initPromise;
-    }
+    if (this.db) return;
+    if (this.initPromise) return this.initPromise;
 
     this.initPromise = (async () => {
-      try {
-        const dbPath = path.join(
-          createDirectoryInAssets("autochangename"),
-          "autochangename.json"
-        );
-
-        const defaultData: ConfigData = {
-          users: {},
-          random_texts: []
-        };
-
-        this.db = await JSONFilePreset<ConfigData>(dbPath, defaultData);
-        this.initialized = true;
-        console.log("[AutoChangeName] 数据库初始化成功");
-      } catch (error) {
-        console.error("[AutoChangeName] 数据库初始化失败:", error);
-        throw error;
-      }
+      const dbPath = path.join(createDirectoryInAssets("autochangename"), "autochangename.json");
+      this.db = await JSONFilePreset<ConfigData>(dbPath, { users: {}, random_texts: [] });
+      console.log("[AutoChangeName] 数据库初始化成功");
     })();
-
+    
     return this.initPromise;
   }
 
   static async getUserSettings(userId: number): Promise<UserSettings | null> {
-    if (!userId || isNaN(userId)) {
-      console.warn("[AutoChangeName] 无效的用户ID:", userId);
-      return null;
-    }
-    
+    if (!userId || isNaN(userId)) return null;
     await this.init();
-    if (!this.db) return null;
-    
-    const userKey = userId.toString();
-    return this.db.data.users[userKey] || null;
+    return this.db?.data.users[userId.toString()] || null;
   }
 
   static async saveUserSettings(settings: UserSettings): Promise<boolean> {
-    if (!settings || !settings.user_id) {
-      console.warn("[AutoChangeName] 无效的用户设置");
-      return false;
-    }
-    
+    if (!settings?.user_id) return false;
     await this.init();
-    if (!this.db) return false;
-
     try {
-      const userKey = settings.user_id.toString();
-      
-      // 深拷贝以防止引用问题
-      this.db.data.users[userKey] = JSON.parse(JSON.stringify(settings));
+      this.db.data.users[settings.user_id.toString()] = { ...settings };
       await this.db.write();
       return true;
-    } catch (error) {
-      console.error("[AutoChangeName] 保存用户设置失败:", error);
-      return false;
-    }
+    } catch { return false; }
   }
 
   static async getRandomTexts(): Promise<string[]> {
     await this.init();
-    if (!this.db) return [];
-    return this.db.data.random_texts || [];
+    return this.db?.data.random_texts || [];
   }
 
   static async saveRandomTexts(texts: string[]): Promise<boolean> {
     await this.init();
-    if (!this.db) return false;
-
     try {
-      // 限制文本数量，防止数据过大
-      if (texts.length > 100) {
-        console.warn("[AutoChangeName] 文本数量超过限制，截断至100条");
-        texts = texts.slice(0, 100);
-      }
-      
-      // 过滤和清理文本
-      this.db.data.random_texts = texts
-        .filter(text => text && typeof text === 'string')
-        .map(text => text.trim())
-        .filter(text => text.length > 0 && text.length <= 50);
-      
+      this.db.data.random_texts = texts.slice(0, 100)
+        .filter(t => t && typeof t === 'string')
+        .map(t => t.trim())
+        .filter(t => t.length > 0 && t.length <= 50);
       await this.db.write();
       return true;
-    } catch (error) {
-      console.error("[AutoChangeName] 保存文本失败:", error);
-      return false;
-    }
+    } catch { return false; }
   }
 
   static async getAllEnabledUsers(): Promise<number[]> {
     await this.init();
-    if (!this.db) return [];
-    
-    const users = this.db.data.users;
+    const users = this.db?.data.users || {};
     return Object.keys(users)
       .filter(key => users[key].is_enabled)
       .map(key => parseInt(key));
   }
 }
 
-// 昵称管理器
+// === 昵称管理层 ===
 class NameManager {
   private readonly TASK_NAME = "autochangename_update";
   private static instance: NameManager;
   private isUpdating = false;
+  private profileCache: { data: any; timestamp: number } | null = null;
+  private readonly CACHE_TTL = 60000;
 
   static getInstance(): NameManager {
-    if (!NameManager.instance) {
-      NameManager.instance = new NameManager();
-    }
-    return NameManager.instance;
+    return NameManager.instance ??= new NameManager();
   }
 
-  // 获取当前用户档案（带缓存）
-  private profileCache: { data: any; timestamp: number } | null = null;
-  private readonly CACHE_TTL = 60000; // 缓存1分钟
-  
   async getCurrentProfile(): Promise<{ firstName: string; lastName: string } | null> {
+    if (this.profileCache && Date.now() - this.profileCache.timestamp < this.CACHE_TTL) {
+      return this.profileCache.data;
+    }
+    
     try {
-      // 检查缓存
-      if (this.profileCache && Date.now() - this.profileCache.timestamp < this.CACHE_TTL) {
-        return this.profileCache.data;
-      }
-      
       const client = await getGlobalClient();
       if (!client) return null;
 
       const me = await client.getMe();
-      const profile = {
-        firstName: me.firstName || "",
-        lastName: me.lastName || ""
-      };
+      const profile = { firstName: me.firstName || "", lastName: me.lastName || "" };
       
-      // 更新缓存
-      this.profileCache = {
-        data: profile,
-        timestamp: Date.now()
-      };
-      
+      this.profileCache = { data: profile, timestamp: Date.now() };
       return profile;
-    } catch (error) {
-      console.error("[AutoChangeName] 获取用户档案失败:", error);
+    } catch {
       return null;
     }
   }
 
-  // 保存当前昵称为原始昵称
   async saveCurrentNickname(userId: number): Promise<boolean> {
-    try {
-      const profile = await this.getCurrentProfile();
-      if (!profile) return false;
+    const profile = await this.getCurrentProfile();
+    if (!profile) return false;
 
-      const cleanFirstName = this.cleanTimeFromName(profile.firstName);
-      const cleanLastName = this.cleanTimeFromName(profile.lastName);
+    const settings: UserSettings = {
+      user_id: userId,
+      timezone: "Asia/Shanghai",
+      original_first_name: this.cleanTimeFromName(profile.firstName),
+      original_last_name: this.cleanTimeFromName(profile.lastName) || null,
+      is_enabled: false,
+      mode: "time",
+      last_update: null,
+      text_index: 0,
+      show_clock_emoji: false,  // 默认关闭时钟emoji
+      show_timezone: false,     // 默认关闭时区显示  
+      timezone_format: "GMT",  // 默认时区格式
+      display_order: "name,time"  // 默认只显示姓名和时间
+    };
 
-      const settings: UserSettings = {
-        user_id: userId,
-        timezone: "Asia/Shanghai",
-        original_first_name: cleanFirstName,
-        original_last_name: cleanLastName || null,
-        is_enabled: false,
-        mode: "time",
-        last_update: null,
-        text_index: 0,
-        // 默认配置
-        show_clock_emoji: false,
-        show_timezone: false,
-        display_order: "name,text,time,emoji"  // 默认顺序：姓名 文本 时间 emoji
-      };
-
-      return await DataManager.saveUserSettings(settings);
-    } catch (error) {
-      console.error("[AutoChangeName] 保存昵称失败:", error);
-      return false;
-    }
+    return await DataManager.saveUserSettings(settings);
   }
 
-  // 清理时间模式（优化正则性能）
-  private cleanTimeRegex = /\b\d{1,2}:\d{2}(\s?(AM|PM))?\b/gi;
-  private clockEmojiRegex = /[\u{1F550}-\u{1F567}]/gu;
-  private spaceRegex = /\s+/g;
+  private readonly cleanTimeRegex = /\b\d{1,2}:\d{2}(\s?(AM|PM))?\b/gi;
+  private readonly clockEmojiRegex = /[\u{1F550}-\u{1F567}]/gu;
   
   cleanTimeFromName(name: string): string {
-    if (!name || typeof name !== 'string') return "";
-    
-    // 限制输入长度
-    if (name.length > 128) {
-      name = name.substring(0, 128);
-    }
-    
-    // 移除时间格式
-    let cleanName = name.replace(this.cleanTimeRegex, "");
-    // 移除时间表情符号
-    cleanName = cleanName.replace(this.clockEmojiRegex, "");
-    // 清理多余空格
-    return cleanName.replace(this.spaceRegex, " ").trim();
+    if (!name) return "";
+    return name.substring(0, 128)
+      .replace(this.cleanTimeRegex, "")
+      .replace(this.clockEmojiRegex, "")
+      .replace(/\s+/g, " ")
+      .trim();
   }
 
-  // 格式化时间
   formatTime(timezone: string): string {
     try {
-      const now = new Date();
-      // 验证时区是否有效
-      const testDate = new Date().toLocaleString("en-US", { timeZone: timezone });
-      
-      return now.toLocaleTimeString("zh-CN", {
-        timeZone: timezone,
-        hour12: false,
-        hour: "2-digit",
-        minute: "2-digit"
+      return new Date().toLocaleTimeString("zh-CN", {
+        timeZone: timezone, hour12: false, hour: "2-digit", minute: "2-digit"
       });
-    } catch (error) {
-      console.error("[AutoChangeName] 无效时区:", timezone, "使用默认时区 Asia/Shanghai");
-      try {
-        const now = new Date();
-        return now.toLocaleTimeString("zh-CN", {
-          timeZone: "Asia/Shanghai",
-          hour12: false,
-          hour: "2-digit",
-          minute: "2-digit"
-        });
-      } catch (fallbackError) {
-        // 最后的备用方案
-        const now = new Date();
-        const hours = String(now.getHours()).padStart(2, '0');
-        const minutes = String(now.getMinutes()).padStart(2, '0');
-        return `${hours}:${minutes}`;
-      }
+    } catch {
+      const now = new Date();
+      return `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
     }
   }
 
-  // 获取时钟emoji（根据时间返回对应的时钟表情）
   getClockEmoji(timezone: string): string {
     try {
-      const now = new Date();
-      const hour = parseInt(now.toLocaleTimeString("zh-CN", {
-        timeZone: timezone,
-        hour12: false,
-        hour: "2-digit"
+      const hour = parseInt(new Date().toLocaleTimeString("zh-CN", {
+        timeZone: timezone, hour12: false, hour: "2-digit"
       }).split(':')[0]);
-      
-      // 时钟emoji的Unicode范围：🕐(1点) 到 🕛(12点)
-      const clockEmojis = [
-        '🕛', '🕐', '🕑', '🕒', '🕓', '🕔', 
-        '🕕', '🕖', '🕗', '🕘', '🕙', '🕚'
-      ];
-      
-      // 将24小时制转换为12小时制的索引
-      const emojiIndex = hour % 12;
-      return clockEmojis[emojiIndex];
-    } catch (error) {
-      return '🕐';  // 默认返回1点钟emoji
-    }
+      const clocks = ['🕛', '🕐', '🕑', '🕒', '🕓', '🕔', '🕕', '🕖', '🕗', '🕘', '🕙', '🕚'];
+      return clocks[hour % 12];
+    } catch { return '🕐'; }
   }
 
-  // 获取时区显示格式（如 GMT+8）
-  getTimezoneDisplay(timezone: string): string {
+  // 获取时区显示格式（支持自定义格式）
+  getTimezoneDisplay(timezone: string, format?: string): string {
     try {
+      // 使用更简单的方法计算时区偏移
       const now = new Date();
-      const options = { timeZone: timezone, timeZoneName: 'short' as const };
-      const formatter = new Intl.DateTimeFormat('en-US', options);
-      const parts = formatter.formatToParts(now);
-      const tzPart = parts.find(part => part.type === 'timeZoneName');
+      const utc = new Date(now.getTime() + (now.getTimezoneOffset() * 60000));
+      const targetTime = new Date(utc.toLocaleString('en-US', { timeZone: timezone }));
+      const offsetMs = targetTime.getTime() - utc.getTime();
+      const offsetHours = Math.round(offsetMs / (1000 * 60 * 60));
+      const sign = offsetHours >= 0 ? '+' : '';
       
-      if (tzPart && tzPart.value) {
-        // 尝试转换为GMT格式
-        const offsetMatch = tzPart.value.match(/GMT([+-]\d+)/);
-        if (offsetMatch) {
-          return offsetMatch[0];
+      console.log(`[AutoChangeName] 时区计算: ${timezone} -> 偏移 ${offsetHours} 小时`);
+      
+      // 处理自定义格式
+      if (format) {
+        switch (format) {
+          case 'GMT':
+            return `GMT${sign}${offsetHours}`;
+          case 'UTC':
+            return `UTC${sign}${offsetHours}`;
+          case 'city':
+            // 常见城市映射
+            const cityMap: Record<string, string> = {
+              'Asia/Shanghai': '北京',
+              'Asia/Tokyo': '东京',
+              'Asia/Seoul': '首尔',
+              'Asia/Hong_Kong': '香港',
+              'Asia/Singapore': '新加坡',
+              'America/New_York': '纽约',
+              'America/Los_Angeles': '洛杉矶',
+              'Europe/London': '伦敦',
+              'Europe/Paris': '巴黎'
+            };
+            return cityMap[timezone] || `GMT${sign}${offsetHours}`;
+          case 'offset':
+            return `${sign}${offsetHours}:00`;
+          default:
+            // 自定义格式 "custom:xxx"
+            if (format.startsWith('custom:')) {
+              return format.substring(7);
+            }
+            return `GMT${sign}${offsetHours}`;
         }
-        
-        // 如果已经是GMT格式，直接返回
-        if (tzPart.value.startsWith('GMT')) {
-          return tzPart.value;
-        }
-        
-        // 手动计算偏移量
-        const date1 = new Date(now.toLocaleString('en-US', { timeZone: 'UTC' }));
-        const date2 = new Date(now.toLocaleString('en-US', { timeZone: timezone }));
-        const offset = (date2.getTime() - date1.getTime()) / (1000 * 60 * 60);
-        const sign = offset >= 0 ? '+' : '';
-        return `GMT${sign}${Math.floor(offset)}`;
       }
       
-      return '';
+      // 默认GMT格式
+      const result = `GMT${sign}${offsetHours}`;
+      console.log(`[AutoChangeName] 时区显示结果: ${result}`);
+      return result;
     } catch (error) {
-      console.error("[AutoChangeName] 获取时区显示失败:", error);
-      return '';
+      console.error('[AutoChangeName] 时区计算失败:', error);
+      return 'GMT+8';  // 默认返回 GMT+8
     }
   }
 
@@ -437,8 +336,11 @@ class NameManager {
       time: currentTime,
       text: '',
       emoji: settings.show_clock_emoji ? this.getClockEmoji(settings.timezone) : '',
-      timezone: settings.show_timezone ? this.getTimezoneDisplay(settings.timezone) : ''
+      timezone: settings.show_timezone ? this.getTimezoneDisplay(settings.timezone, settings.timezone_format) : ''
     };
+    
+    // 调试日志：显示各组件值
+    console.log(`[AutoChangeName] 组件值: name="${components.name}", time="${components.time}", emoji="${components.emoji}", timezone="${components.timezone}"`);
 
     // 获取随机文本
     if (settings.mode === "text" || settings.mode === "both") {
@@ -461,21 +363,50 @@ class NameManager {
 
     // 根据用户自定义顺序重新排列组件
     if (settings.display_order) {
-      const customOrder = settings.display_order.split(',').map(s => s.trim());
-      // 过滤出有效的组件
-      const validOrder = customOrder.filter(comp => 
-        displayComponents.includes(comp) && components[comp]
-      );
+      let customOrder = settings.display_order.split(',').map(s => s.trim());
+      console.log(`[AutoChangeName] 用户自定义顺序: [${customOrder.join(', ')}]`);
+      
+      // 自动修复：如果开启了时区但display_order中没有timezone，自动添加
+      if (settings.show_timezone && !customOrder.includes('timezone')) {
+        // 在time后面添加timezone
+        const timeIndex = customOrder.indexOf('time');
+        if (timeIndex !== -1) {
+          customOrder.splice(timeIndex + 1, 0, 'timezone');
+        } else {
+          customOrder.push('timezone');
+        }
+        console.log(`[AutoChangeName] 自动添加timezone到顺序: [${customOrder.join(', ')}]`);
+      }
+      
+      // 自动修复：如果开启了emoji但display_order中没有emoji，自动添加
+      if (settings.show_clock_emoji && !customOrder.includes('emoji')) {
+        customOrder.push('emoji');
+        console.log(`[AutoChangeName] 自动添加emoji到顺序: [${customOrder.join(', ')}]`);
+      }
+      
+      // 过滤出在当前模式下应该显示的组件
+      const validOrder = customOrder.filter(comp => displayComponents.includes(comp));
+      console.log(`[AutoChangeName] 有效的自定义顺序: [${validOrder.join(', ')}]`);
+      
       if (validOrder.length > 0) {
         displayComponents = validOrder;
+      } else {
+        console.log('[AutoChangeName] 自定义顺序无效，使用默认顺序');
       }
     }
 
-    // 组合最终显示文本
+    // 组合最终显示文本（只获取有值的组件内容）
+    console.log(`[AutoChangeName] 显示组件顺序: [${displayComponents.join(', ')}]`);
+    
     const finalParts = displayComponents
-      .map(comp => components[comp])
+      .map(comp => {
+        const value = components[comp];
+        console.log(`[AutoChangeName] 组件 ${comp}: "${value}" (长度: ${value ? value.length : 0})`);
+        return value;
+      })
       .filter(part => part && part.length > 0);
     
+    console.log(`[AutoChangeName] 过滤后的组件: ["${finalParts.join('", "')}"]`);
     const finalName = finalParts.join(' ');
 
     return {
@@ -511,7 +442,8 @@ class NameManager {
         
         // 如果距离上次更新不足30秒，跳过
         if (timeDiff < 30000) {
-          console.log(`[AutoChangeName] 用户 ${userId} 更新过于频繁，跳过`);
+          const remainTime = Math.ceil((30000 - timeDiff) / 1000);
+          console.log(`[AutoChangeName] 用户 ${userId} 更新过于频繁，还需等待 ${remainTime} 秒`);
           return false;
         }
       }
@@ -525,6 +457,10 @@ class NameManager {
       if (newName.lastName && newName.lastName.length > 64) {
         newName.lastName = newName.lastName.substring(0, 64);
       }
+
+      // 打印详细日志
+      console.log(`[AutoChangeName] 用户 ${userId} 昵称更新: "${newName.firstName}"${newName.lastName ? ` 姓氏: "${newName.lastName}"` : ''}`);
+      console.log(`[AutoChangeName] 当前配置 - 模式: ${settings.mode}, emoji: ${settings.show_clock_emoji ? '开' : '关'}, 时区: ${settings.show_timezone ? '开' : '关'}`);
 
       await client.invoke(
         new Api.account.UpdateProfile({
@@ -589,7 +525,7 @@ class NameManager {
             return;
           }
           
-          console.log(`[AutoChangeName] 开始更新 ${enabledUsers.length} 个用户的昵称`);
+          console.log(`[AutoChangeName] ===== 开始更新 ${enabledUsers.length} 个用户的昵称 =====`);
           
           const updatePromises = enabledUsers.map(userId => 
             this.updateUserProfile(userId).catch(error => {
@@ -602,8 +538,10 @@ class NameManager {
           const successCount = results.filter(r => r.status === 'fulfilled' && r.value === true).length;
           
           if (successCount > 0) {
-            console.log(`[AutoChangeName] 成功更新 ${successCount}/${enabledUsers.length} 个用户`);
+            console.log(`[AutoChangeName] 本次更新完成: ${successCount}/${enabledUsers.length} 个用户成功`);
           }
+          console.log(`[AutoChangeName] ===== 更新任务结束 =====`);
+          console.log(''); // 空行分隔
         } catch (error) {
           console.error("[AutoChangeName] 批量更新时发生错误:", error);
         } finally {
@@ -732,6 +670,10 @@ class AutoChangeNamePlugin extends Plugin {
 
           case "config":
             await this.handleShowConfig(msg, userId);
+            break;
+            
+          case "tzformat":
+            await this.handleTimezoneFormat(msg, userId, args.slice(1));
             break;
 
           default:
@@ -907,35 +849,71 @@ class AutoChangeNamePlugin extends Plugin {
     const action = args[0] || "";
     const texts = await DataManager.getRandomTexts();
 
-    if (action === "add" && args.length > 1) {
-      const newText = args.slice(1).join(" ").trim();
+    if (action === "add") {
+      // 从原始消息文本中提取内容，支持真正的多行
+      const rawText = msg.message || "";
+      const cmdPrefix = rawText.split(' ').slice(0, 3).join(' '); // "acn text add"
+      const inputText = rawText.substring(cmdPrefix.length).trim();
       
-      // 验证文本长度
-      if (newText.length > 50) {
-        await msg.edit({
-          text: "❌ <b>文本过长</b>\n\n文本长度不能超过50个字符",
-          parseMode: "html"
-        });
+      if (!inputText) {
+        await msg.edit({ text: "❌ 请提供要添加的文本内容", parseMode: "html" });
         return;
       }
       
-      // 检查重复
-      if (texts.includes(newText)) {
-        await msg.edit({
-          text: "❌ <b>文本已存在</b>\n\n请勿添加重复的文本",
-          parseMode: "html"
-        });
+      // 支持多行文本：按行分割并批量添加
+      console.log(`[AutoChangeName] 原始输入文本: "${inputText}"`);
+      console.log(`[AutoChangeName] 输入文本长度: ${inputText.length}`);
+      
+      // 按行分割批量添加
+      const lines = inputText.split(/\r?\n/).map(line => line.trim()).filter(line => line.length > 0);
+      
+      console.log(`[AutoChangeName] 分割后的行数: ${lines.length}`);
+      console.log(`[AutoChangeName] 分割结果: ["${lines.join('", "')}"]`);
+      
+      if (lines.length === 0) {
+        await msg.edit({ text: "❌ 没有有效的文本内容", parseMode: "html" });
         return;
       }
       
-      texts.push(newText);
+      const validLines: string[] = [];
+      const invalidLines: string[] = [];
+      const duplicateLines: string[] = [];
+      
+      for (const line of lines) {
+        if (line.length > 50) {
+          invalidLines.push(`"${line.substring(0, 30)}..." (过长)`);
+        } else if (texts.includes(line) || validLines.includes(line)) {
+          duplicateLines.push(`"${line}"`);
+        } else {
+          validLines.push(line);
+        }
+      }
+      
+      // 添加有效文本
+      texts.push(...validLines);
       const success = await DataManager.saveRandomTexts(texts);
 
       if (success) {
-        await msg.edit({
-          text: `✅ <b>成功添加随机文本</b>\n\n<b>新文本:</b> <code>${htmlEscape(newText)}</code>\n<b>当前文本数量:</b> ${texts.length}`,
-          parseMode: "html"
-        });
+        let resultText = `✅ <b>文本添加结果</b>\n\n`;
+        
+        if (validLines.length > 0) {
+          resultText += `✅ 成功添加 <b>${validLines.length}</b> 条文本\n`;
+          if (validLines.length <= 3) {
+            resultText += validLines.map(line => `• "${htmlEscape(line)}"`).join('\n') + '\n';
+          }
+        }
+        
+        if (duplicateLines.length > 0) {
+          resultText += `\n⚠️ 跳过 <b>${duplicateLines.length}</b> 条重复文本\n`;
+        }
+        
+        if (invalidLines.length > 0) {
+          resultText += `\n❌ 跳过 <b>${invalidLines.length}</b> 条过长文本\n`;
+        }
+        
+        resultText += `\n📊 当前文本总数: <b>${texts.length}</b>`;
+        
+        await msg.edit({ text: resultText, parseMode: "html" });
       } else {
         await msg.edit({ text: "❌ 添加失败", parseMode: "html" });
       }
@@ -1148,9 +1126,59 @@ class AutoChangeNamePlugin extends Plugin {
       if (settings.is_enabled) {
         await nameManager.updateUserProfile(userId, true);
       }
-      const tzDisplay = nameManager.getTimezoneDisplay(settings.timezone);
+      const tzDisplay = nameManager.getTimezoneDisplay(settings.timezone, settings.timezone_format);
       await msg.edit({
         text: `✅ <b>时区显示已${settings.show_timezone ? "开启" : "关闭"}</b>\n\n${settings.show_timezone ? `当前时区: ${tzDisplay}` : "时区信息已从昵称中移除"}`,
+        parseMode: "html"
+      });
+    } else {
+      await msg.edit({ text: "❌ 设置保存失败", parseMode: "html" });
+    }
+  }
+
+  // 处理时区格式设置
+  private async handleTimezoneFormat(msg: Api.Message, userId: number, args: string[]): Promise<void> {
+    const settings = await DataManager.getUserSettings(userId);
+    if (!settings) {
+      await msg.edit({
+        text: `❌ 请先使用 <code>${mainPrefix}acn save</code> 保存昵称`,
+        parseMode: "html"
+      });
+      return;
+    }
+
+    const format = args[0]?.toLowerCase();
+    
+    if (!format) {
+      await msg.edit({
+        text: `🌐 <b>时区显示格式设置</b>\n\n当前格式: <code>${settings.timezone_format || 'GMT'}</code>\n\n<b>可用格式：</b>\n• <code>GMT</code> - 显示 GMT+8\n• <code>UTC</code> - 显示 UTC+8\n• <code>city</code> - 显示城市名（如：北京）\n• <code>offset</code> - 显示 +8:00\n• <code>custom:自定义文字</code> - 自定义显示\n\n<b>使用示例：</b>\n<code>${mainPrefix}acn tzformat GMT</code>\n<code>${mainPrefix}acn tzformat city</code>\n<code>${mainPrefix}acn tzformat custom:北京时间</code>`,
+        parseMode: "html"
+      });
+      return;
+    }
+
+    // 处理自定义格式
+    let finalFormat = format;
+    if (format.startsWith('custom:')) {
+      finalFormat = args.join(' ');
+    } else if (!['gmt', 'utc', 'city', 'offset'].includes(format)) {
+      await msg.edit({
+        text: `❌ <b>无效格式</b>\n\n请使用: GMT, UTC, city, offset 或 custom:自定义`,
+        parseMode: "html"
+      });
+      return;
+    }
+
+    settings.timezone_format = finalFormat.toUpperCase();
+    const success = await DataManager.saveUserSettings(settings);
+    
+    if (success) {
+      if (settings.is_enabled) {
+        await nameManager.updateUserProfile(userId, true);
+      }
+      const preview = nameManager.getTimezoneDisplay(settings.timezone, settings.timezone_format);
+      await msg.edit({
+        text: `✅ <b>时区格式已更新</b>\n\n新格式: <code>${htmlEscape(settings.timezone_format)}</code>\n预览: <code>${preview}</code>`,
         parseMode: "html"
       });
     } else {
@@ -1231,7 +1259,7 @@ class AutoChangeNamePlugin extends Plugin {
     const texts = await DataManager.getRandomTexts();
     const currentTime = nameManager.formatTime(settings.timezone);
     const clockEmoji = nameManager.getClockEmoji(settings.timezone);
-    const tzDisplay = nameManager.getTimezoneDisplay(settings.timezone);
+    const tzDisplay = nameManager.getTimezoneDisplay(settings.timezone, settings.timezone_format);
 
     const configText = `🔧 <b>当前配置状态</b>\n\n` +
       `<b>基础设置：</b>\n` +
@@ -1242,6 +1270,7 @@ class AutoChangeNamePlugin extends Plugin {
       `<b>显示选项：</b>\n` +
       `• 时钟Emoji: <code>${settings.show_clock_emoji ? "开启" : "关闭"}</code> ${settings.show_clock_emoji ? clockEmoji : ""}\n` +
       `• 时区显示: <code>${settings.show_timezone ? "开启" : "关闭"}</code> ${settings.show_timezone ? tzDisplay : ""}\n` +
+      `• 时区格式: <code>${settings.timezone_format || "GMT"}</code>\n` +
       `• 显示顺序: <code>${settings.display_order || "name,text,time,emoji"}</code>\n\n` +
       `<b>文案设置：</b>\n` +
       `• 文案数量: <code>${texts.length}</code>\n` +
@@ -1295,10 +1324,13 @@ class AutoChangeNamePlugin extends Plugin {
       
       // 检查所有启用的用户是否已保存原始昵称
       let validUsers = 0;
+      const userDetails: string[] = [];
+      
       for (const userId of enabledUsers) {
         const settings = await DataManager.getUserSettings(userId);
         if (settings && settings.original_first_name) {
           validUsers++;
+          userDetails.push(`  - 用户 ${userId}: 模式=${settings.mode}, emoji=${settings.show_clock_emoji ? '开' : '关'}, 时区=${settings.show_timezone ? '开' : '关'}`);
         } else {
           // 如果发现用户没有保存原始昵称，自动禁用其自动更新
           if (settings) {
@@ -1312,6 +1344,10 @@ class AutoChangeNamePlugin extends Plugin {
       if (validUsers > 0) {
         nameManager.startAutoUpdate();
         console.log(`[AutoChangeName] 插件已启动，${validUsers} 个用户已启用自动更新`);
+        if (userDetails.length > 0) {
+          console.log('[AutoChangeName] 用户配置:');
+          userDetails.forEach(detail => console.log(detail));
+        }
       } else {
         console.log("[AutoChangeName] 插件已启动，暂无有效用户启用自动更新");
       }
@@ -1330,14 +1366,26 @@ class AutoChangeNamePlugin extends Plugin {
 // 创建并初始化插件实例
 const plugin = new AutoChangeNamePlugin();
 
-// 自动初始化
-(async () => {
-  try {
-    await plugin.init();
-  } catch (error) {
-    console.error("[AutoChangeName] 自动初始化失败:", error);
-  }
-})();
+// 自动初始化（测试时可通过设置 TELEBOX_AUTO_INIT=false 跳过）
+if (process.env.TELEBOX_AUTO_INIT !== 'false') {
+  (async () => {
+    try {
+      await plugin.init();
+    } catch (error) {
+      console.error("[AutoChangeName] 自动初始化失败:", error);
+    }
+  })();
+}
+
+// 导出测试辅助（纯函数绑定，便于在不初始化插件的情况下进行单元测试）
+export const __test__ = {
+  htmlEscape,
+  cleanTimeFromName: nameManager.cleanTimeFromName.bind(nameManager),
+  formatTime: nameManager.formatTime.bind(nameManager),
+  getClockEmoji: nameManager.getClockEmoji.bind(nameManager),
+  getTimezoneDisplay: nameManager.getTimezoneDisplay.bind(nameManager),
+  generateNewName: nameManager.generateNewName.bind(nameManager)
+};
 
 // 导出插件实例
 export default plugin;
