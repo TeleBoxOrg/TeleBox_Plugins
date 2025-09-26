@@ -37,21 +37,10 @@ const help_text = `🤖 <b>自动昵称更新插件 v2.2</b>
 
 <b>📝 文案管理（让昵称更有个性）：</b>
 • <code>${mainPrefix}acn text add 摸鱼中</code> - 添加一条随机文案
+• <code>${mainPrefix}acn text add</code> + 多行歌词 - 支持真正多行文本批量添加
 • <code>${mainPrefix}acn text del 1</code> - 删除第1条文案
 • <code>${mainPrefix}acn text list</code> - 查看所有文案列表
 • <code>${mainPrefix}acn text clear</code> - 清空所有文案
-
-<b>🎵 多行批量添加示例：</b>
-完整输入格式（复制粘贴即可）：
-<code>${mainPrefix}acn text add 
-属于我俩安逸世界
-不用和别人连线
-我不管你来自深渊
-也不在乎身上鳞片
-爱情能超越一切
-oh yeah</code>
-
-每行自动成为一条独立文案，支持歌词批量导入！
 
 <b>🎨 显示配置（NEW）：</b>
 • <code>${mainPrefix}acn emoji on/off</code> - 开启/关闭时钟emoji 🕐
@@ -272,52 +261,93 @@ class NameManager {
   // 获取时区显示格式（支持自定义格式）
   getTimezoneDisplay(timezone: string, format?: string): string {
     try {
-      // 使用更简单的方法计算时区偏移
+      // 使用正确的方法计算时区偏移
       const now = new Date();
-      const utc = new Date(now.getTime() + (now.getTimezoneOffset() * 60000));
-      const targetTime = new Date(utc.toLocaleString('en-US', { timeZone: timezone }));
-      const offsetMs = targetTime.getTime() - utc.getTime();
-      const offsetHours = Math.round(offsetMs / (1000 * 60 * 60));
-      const sign = offsetHours >= 0 ? '+' : '';
+      const formatter = new Intl.DateTimeFormat('en', {
+        timeZone: timezone,
+        timeZoneName: 'longOffset'
+      });
       
-      console.log(`[AutoChangeName] 时区计算: ${timezone} -> 偏移 ${offsetHours} 小时`);
+      const parts = formatter.formatToParts(now);
+      const offsetPart = parts.find(part => part.type === 'timeZoneName');
       
-      // 处理自定义格式
-      if (format) {
-        switch (format) {
-          case 'GMT':
-            return `GMT${sign}${offsetHours}`;
-          case 'UTC':
-            return `UTC${sign}${offsetHours}`;
-          case 'city':
-            // 常见城市映射
-            const cityMap: Record<string, string> = {
-              'Asia/Shanghai': '北京',
-              'Asia/Tokyo': '东京',
-              'Asia/Seoul': '首尔',
-              'Asia/Hong_Kong': '香港',
-              'Asia/Singapore': '新加坡',
-              'America/New_York': '纽约',
-              'America/Los_Angeles': '洛杉矶',
-              'Europe/London': '伦敦',
-              'Europe/Paris': '巴黎'
-            };
-            return cityMap[timezone] || `GMT${sign}${offsetHours}`;
-          case 'offset':
-            return `${sign}${offsetHours}:00`;
-          default:
-            // 自定义格式 "custom:xxx"
-            if (format.startsWith('custom:')) {
-              return format.substring(7);
+      if (offsetPart && offsetPart.value) {
+        // 解析GMT偏移 (格式: GMT+08:00)
+        const match = offsetPart.value.match(/GMT([+-])(\d{2}):(\d{2})/);
+        if (match) {
+          const sign = match[1];
+          const hours = parseInt(match[2], 10);
+          const minutes = parseInt(match[3], 10);
+          const offsetHours = sign === '+' ? hours : -hours;
+          
+          console.log(`[AutoChangeName] 时区计算: ${timezone} -> 偏移 ${sign}${hours} 小时`);
+          
+          // 处理自定义格式
+          if (format) {
+            switch (format) {
+              case 'GMT':
+                return minutes > 0 ? `GMT${sign}${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}` : `GMT${sign}${hours}`;
+              case 'UTC':
+                return minutes > 0 ? `UTC${sign}${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}` : `UTC${sign}${hours}`;
+              case 'city':
+                // 常见城市映射
+                const cityMap: Record<string, string> = {
+                  'Asia/Shanghai': '北京',
+                  'Asia/Tokyo': '东京',
+                  'Asia/Seoul': '首尔',
+                  'Asia/Hong_Kong': '香港',
+                  'Asia/Singapore': '新加坡',
+                  'Asia/Kolkata': '新德里',
+                  'Asia/Kathmandu': '加德满都',
+                  'Australia/Adelaide': '阿德莱德',
+                  'Australia/Darwin': '达尔文',
+                  'America/New_York': '纽约',
+                  'America/Los_Angeles': '洛杉矶',
+                  'America/Chicago': '芝加哥',
+                  'America/Denver': '丹佛',
+                  'Europe/London': '伦敦',
+                  'Europe/Paris': '巴黎',
+                  'Europe/Berlin': '柏林',
+                  'Europe/Moscow': '莫斯科'
+                };
+                return cityMap[timezone] || (minutes > 0 ? `GMT${sign}${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}` : `GMT${sign}${hours}`);
+              case 'offset':
+                return `${sign}${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}`;
+              default:
+                // 自定义格式 "custom:xxx"
+                if (format.startsWith('custom:')) {
+                  return format.substring(7);
+                }
+                return minutes > 0 ? `GMT${sign}${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}` : `GMT${sign}${hours}`;
             }
-            return `GMT${sign}${offsetHours}`;
+          }
+          
+          // 默认GMT格式 - 处理半小时偏移
+          const result = minutes > 0 ? `GMT${sign}${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}` : `GMT${sign}${hours}`;
+          console.log(`[AutoChangeName] 时区显示结果: ${result}`);
+          return result;
         }
       }
       
-      // 默认GMT格式
-      const result = `GMT${sign}${offsetHours}`;
-      console.log(`[AutoChangeName] 时区显示结果: ${result}`);
-      return result;
+      // 备用方法：使用更精确的时区偏移计算
+      const utcNow = new Date();
+      const localTime = new Date(utcNow.toLocaleString('en-US', { timeZone: timezone }));
+      const utcTime = new Date(utcNow.toLocaleString('en-US', { timeZone: 'UTC' }));
+      
+      const offsetMs = localTime.getTime() - utcTime.getTime();
+      const totalMinutes = Math.round(offsetMs / (1000 * 60));
+      const offsetHours = Math.floor(Math.abs(totalMinutes) / 60);
+      const offsetMinutes = Math.abs(totalMinutes) % 60;
+      const sign = totalMinutes >= 0 ? '+' : '-';
+      
+      console.log(`[AutoChangeName] 备用计算: ${timezone} -> 偏移 ${sign}${offsetHours}:${offsetMinutes.toString().padStart(2, '0')}`);
+      
+      if (offsetMinutes > 0) {
+        return `GMT${sign}${offsetHours.toString().padStart(2, '0')}:${offsetMinutes.toString().padStart(2, '0')}`;
+      } else {
+        return `GMT${sign}${offsetHours}`;
+      }
+      
     } catch (error) {
       console.error('[AutoChangeName] 时区计算失败:', error);
       return 'GMT+8';  // 默认返回 GMT+8
@@ -598,11 +628,30 @@ class AutoChangeNamePlugin extends Plugin {
       const sub = (args[0] || "").toLowerCase();
 
       try {
-        // 获取用户ID
-        const userId = Number(msg.senderId?.toString());
+        // 获取用户ID - 优化频道身份处理
+        let userId: number | null = null;
+        let isChannelMessage = false;
+        
+        // 检查是否为频道身份发言
+        if (msg.fromId && msg.fromId.className === 'PeerChannel') {
+          isChannelMessage = true;
+          await msg.edit({
+            text: `⚠️ <b>频道身份限制</b>\n\n检测到您使用频道身份发送此消息。\n\n<b>自动昵称插件仅支持个人账号使用</b>，无法修改频道资料。\n\n请切换到您的个人账号后重试：\n1. 点击消息输入框旁的头像\n2. 选择您的个人账号\n3. 重新发送命令\n\n💡 使用 <code>${mainPrefix}acn help</code> 查看完整帮助`,
+            parseMode: "html"
+          });
+          return;
+        }
+        
+        // 获取真实用户ID
+        if (msg.senderId) {
+          userId = Number(msg.senderId.toString());
+        } else if (msg.fromId && msg.fromId.className === 'PeerUser') {
+          userId = Number(msg.fromId.userId.toString());
+        }
+        
         if (!userId || isNaN(userId)) {
           await msg.edit({
-            text: `❌ <b>无法获取用户ID</b>\n\n💡 使用 <code>${mainPrefix}acn help</code> 查看帮助`,
+            text: `❌ <b>无法获取用户ID</b>\n\n可能原因：\n• 使用了频道身份发言\n• 消息来源异常\n\n<b>解决方法：</b>\n1. 确保使用个人账号发言\n2. 在私聊或允许的群组中使用\n\n💡 使用 <code>${mainPrefix}acn help</code> 查看完整帮助`,
             parseMode: "html"
           });
           return;
@@ -611,6 +660,29 @@ class AutoChangeNamePlugin extends Plugin {
         // 处理帮助
         if (!sub || sub === "help" || sub === "h") {
           await msg.edit({ text: help_text, parseMode: "html" });
+          return;
+        }
+
+        // 智能首次使用检测和引导
+        const settings = await DataManager.getUserSettings(userId);
+        const isFirstTime = !settings;
+        const needsSave = !settings?.original_first_name;
+        
+        // 对于非save、help、status命令，检查是否需要引导
+        if (isFirstTime && !["save", "help", "h", "status"].includes(sub)) {
+          await msg.edit({
+            text: `👋 <b>新用户引导</b>\n\n看起来您是第一次使用自动昵称插件！\n\n<b>🎯 您想要执行：</b> <code>${sub}</code>\n\n<b>💡 但是需要先完成设置：</b>\n\n<b>第一步：</b> <code>${mainPrefix}acn save</code>\n<i>保存您当前的昵称作为原始昵称</i>\n\n完成后，您就可以使用所有功能了！\n\n<b>快速开始指南：</b>\n1. <code>${mainPrefix}acn save</code> - 保存昵称\n2. <code>${mainPrefix}acn on</code> - 开启自动更新\n3. <code>${mainPrefix}acn help</code> - 查看完整帮助\n\n设置完成后，欢迎回来继续使用 <code>${mainPrefix}acn ${sub}</code> 命令！`,
+            parseMode: "html"
+          });
+          return;
+        }
+        
+        // 对于已有设置但未保存昵称的用户
+        if (needsSave && !isFirstTime && !["save", "help", "h", "status", "reset"].includes(sub)) {
+          await msg.edit({
+            text: `⚠️ <b>配置不完整</b>\n\n<b>您想要执行：</b> <code>${sub}</code>\n\n<b>⚠️ 检测到问题：</b>\n您的配置中缺少原始昵称记录\n\n<b>🔧 解决方法：</b>\n请先执行 <code>${mainPrefix}acn save</code> 保存您的当前昵称\n\n<b>💡 小提示：</b>\n确保当前昵称是"干净"的（不含时间等动态内容），\n这样恢复时才能得到正确的原始昵称。`,
+            parseMode: "html"
+          });
           return;
         }
 
@@ -720,10 +792,23 @@ class AutoChangeNamePlugin extends Plugin {
     if (success) {
       const settings = await DataManager.getUserSettings(userId);
       if (settings) {
-        await msg.edit({
-          text: `✅ <b>当前昵称已保存为原始昵称</b>\n\n<b>姓名:</b> <code>${htmlEscape(settings.original_first_name || "")}</code>\n<b>姓氏:</b> <code>${htmlEscape(settings.original_last_name || "(空)")}</code>\n\n使用 <code>${mainPrefix}acn on</code> 启用动态昵称`,
-          parseMode: "html"
-        });
+        // 检查是否为首次保存
+        const texts = await DataManager.getRandomTexts();
+        const isFirstTimeSave = !settings.last_update;
+        
+        if (isFirstTimeSave) {
+          // 首次保存，提供完整引导
+          await msg.edit({
+            text: `🎉 <b>昵称保存成功！设置完成</b>\n\n<b>✅ 已保存的原始昵称：</b>\n• 姓名: <code>${htmlEscape(settings.original_first_name || "")}</code>\n• 姓氏: <code>${htmlEscape(settings.original_last_name || "(空)")}</code>\n\n<b>🚀 接下来您可以：</b>\n\n<b>1. 立即开始使用</b>\n<code>${mainPrefix}acn on</code> - 开启自动昵称更新\n\n<b>2. 个性化设置（推荐）</b>\n<code>${mainPrefix}acn text add 工作中</code> - 添加状态文案\n<code>${mainPrefix}acn emoji on</code> - 显示时钟表情 🕐\n<code>${mainPrefix}acn showtz on</code> - 显示时区 GMT+8\n\n<b>3. 查看更多功能</b>\n<code>${mainPrefix}acn help</code> - 完整功能指南\n\n<b>💡 小提示：</b>昵称每分钟自动更新，随时可用 <code>${mainPrefix}acn off</code> 关闭`,
+            parseMode: "html"
+          });
+        } else {
+          // 非首次保存，简化提示
+          await msg.edit({
+            text: `✅ <b>昵称已重新保存</b>\n\n<b>姓名:</b> <code>${htmlEscape(settings.original_first_name || "")}</code>\n<b>姓氏:</b> <code>${htmlEscape(settings.original_last_name || "(空)")}</code>\n\n${settings.is_enabled ? '自动更新仍在运行中' : `使用 <code>${mainPrefix}acn on</code> 启用动态昵称`}`,
+            parseMode: "html"
+          });
+        }
       } else {
         await msg.edit({ text: "✅ 昵称已保存", parseMode: "html" });
       }
@@ -744,9 +829,9 @@ class AutoChangeNamePlugin extends Plugin {
         return;
       }
 
-      // 首次使用，必须先手动保存昵称
+      // 首次使用，提供详细的引导
       await msg.edit({
-        text: `❌ <b>首次使用提示</b>\n\n您还没有保存原始昵称！\n请先执行以下命令：\n\n<code>${mainPrefix}acn save</code>\n\n保存昵称后才能开启自动更新功能。\n\n⚠️ <b>重要提示：</b>\n请确保您当前的昵称是纯净的（不包含时间、表情等），\n否则恢复时可能无法还原到正确的原始昵称。`,
+        text: `🎉 <b>欢迎使用自动昵称插件！</b>\n\n这是您第一次使用本插件，让我来帮您快速开始：\n\n<b>📋 第一步：保存当前昵称</b>\n<code>${mainPrefix}acn save</code>\n<i>将您当前的昵称保存为原始昵称（重要！）</i>\n\n<b>🚀 第二步：开启自动更新</b>\n<code>${mainPrefix}acn on</code>\n<i>启用每分钟自动更新昵称功能</i>\n\n<b>🎨 第三步（可选）：个性化设置</b>\n• <code>${mainPrefix}acn text add 工作中</code> - 添加个性文案\n• <code>${mainPrefix}acn emoji on</code> - 开启时钟表情\n• <code>${mainPrefix}acn showtz on</code> - 显示时区信息\n\n<b>⚠️ 重要提醒：</b>\n请确保您当前的昵称是"干净"的（不含时间、emoji等），\n这样才能在需要时完美恢复原始昵称。\n\n<b>🆘 需要帮助？</b>\n使用 <code>${mainPrefix}acn help</code> 查看完整功能说明`,
         parseMode: "html"
       });
       return;
