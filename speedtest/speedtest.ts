@@ -34,6 +34,7 @@ const help_txt = `<b>使用方法:</b>
 <code>${commandName} type photo/sticker/file/txt</code> - 设置优先使用的消息类型
 <code>${commandName} clear</code> - 清除默认服务器
 <code>${commandName} config</code> - 显示配置信息
+<code>${commandName} check</code> - 检查网络连接状态
 <code>${commandName} update</code> - 更新 Speedtest CLI`;
 // HTML escape function
 function htmlEscape(text: string): string {
@@ -383,15 +384,42 @@ async function runSpeedtest(serverId?: number): Promise<SpeedtestResult> {
     const serverArg = serverId ? ` -s ${serverId}` : "";
     const command = `"${SPEEDTEST_PATH}" --accept-license --accept-gdpr -f json${serverArg}`;
 
-    const { stdout, stderr } = await execAsync(command);
+    const { stdout, stderr } = await execAsync(command, { 
+      timeout: 120000 // 120秒超时
+    });
 
-    if (stderr && stderr.includes("NoServersException")) {
-      throw new Error("Unable to connect to the specified server");
+    if (stderr) {
+      console.log("Speedtest stderr:", stderr);
+      if (stderr.includes("NoServersException")) {
+        throw new Error("指定的服务器不可用，请尝试其他服务器或使用自动选择");
+      }
+      if (stderr.includes("Timeout occurred")) {
+        throw new Error("网络连接超时，请检查网络状况或稍后重试");
+      }
+      if (stderr.includes("Cannot read from socket")) {
+        throw new Error("网络连接中断，可能是网络不稳定或防火墙阻止");
+      }
     }
 
     return JSON.parse(stdout);
   } catch (error: any) {
     console.error("Speedtest failed:", error);
+    
+    // 处理超时错误
+    if (error.code === 'ETIMEDOUT' || error.message?.includes('timeout')) {
+      throw new Error("测试超时，可能网络较慢或服务器繁忙，建议：\n1. 检查网络连接\n2. 尝试其他测试服务器\n3. 稍后重试");
+    }
+    
+    // 处理命令执行错误
+    if (error.code === 'ENOENT') {
+      throw new Error("speedtest 程序未找到，请使用 'speedtest update' 重新下载");
+    }
+    
+    // 处理JSON解析错误
+    if (error instanceof SyntaxError) {
+      throw new Error("测试结果格式错误，可能服务器返回了异常数据");
+    }
+    
     throw error;
   }
 }
@@ -403,13 +431,31 @@ async function getAllServers(): Promise<ServerInfo[]> {
     }
 
     const command = `"${SPEEDTEST_PATH}" -f json -L`;
-    const { stdout } = await execAsync(command);
+    const { stdout } = await execAsync(command, { timeout: 30000 });
     const result = JSON.parse(stdout);
 
     return result.servers || [];
   } catch (error: any) {
     console.error("Failed to get servers:", error);
     return [];
+  }
+}
+
+async function checkNetworkConnectivity(): Promise<{connected: boolean; message: string}> {
+  try {
+    // 测试基本网络连接
+    await axios.get('https://www.speedtest.net', { timeout: 10000 });
+    return { connected: true, message: "网络连接正常" };
+  } catch (error: any) {
+    if (error.code === 'ENOTFOUND') {
+      return { connected: false, message: "DNS解析失败，请检查DNS设置" };
+    } else if (error.code === 'ECONNREFUSED') {
+      return { connected: false, message: "连接被拒绝，可能存在防火墙阻止" };
+    } else if (error.code === 'ETIMEDOUT') {
+      return { connected: false, message: "连接超时，网络可能较慢或不稳定" };
+    } else {
+      return { connected: false, message: `网络连接异常: ${error.message}` };
+    }
   }
 }
 
@@ -557,6 +603,26 @@ const speedtest = async (msg: Api.Message) => {
         )}</code>`,
         parseMode: "html",
       });
+    } else if (command === "check") {
+      await msg.edit({
+        text: "🔍 正在检查网络连接...",
+        parseMode: "html",
+      });
+
+      try {
+        const networkStatus = await checkNetworkConnectivity();
+        const statusIcon = networkStatus.connected ? "✅" : "❌";
+        
+        await msg.edit({
+          text: `<blockquote><b>⚡️SPEEDTEST by OOKLA</b></blockquote>\n${statusIcon} <b>网络状态:</b> <code>${networkStatus.message}</code>\n\n<b>建议:</b>\n• 如果连接异常，请检查网络设置\n• 尝试更换网络环境或DNS服务器\n• 确认防火墙允许网络测试`,
+          parseMode: "html",
+        });
+      } catch (error) {
+        await msg.edit({
+          text: `<blockquote><b>⚡️SPEEDTEST by OOKLA</b></blockquote>\n❌ <code>网络检查失败: ${htmlEscape(String(error))}</code>`,
+          parseMode: "html",
+        });
+      }
     } else if (command === "update") {
       await msg.edit({
         text: "🔄 正在更新 Speedtest CLI...",
@@ -583,7 +649,19 @@ const speedtest = async (msg: Api.Message) => {
         });
       }
     } else if (command === "" || !isNaN(parseInt(command))) {
-      await msg.edit({ text: "⚡️ 正在进行速度测试...", parseMode: "html" });
+      await msg.edit({ text: "🔍 正在检查网络连接...", parseMode: "html" });
+
+      // 先进行网络诊断
+      const networkStatus = await checkNetworkConnectivity();
+      if (!networkStatus.connected) {
+        await msg.edit({
+          text: `❌ <b>网络连接异常，无法进行速度测试</b>\n\n<b>检测结果:</b> <code>${networkStatus.message}</code>\n\n💡 <b>建议:</b>\n• 检查网络连接是否正常\n• 尝试更换网络环境或DNS服务器\n• 确认防火墙允许网络测试\n• 使用 <code>${commandName} check</code> 重新检查连接`,
+          parseMode: "html",
+        });
+        return;
+      }
+
+      await msg.edit({ text: "⚡️ 网络连接正常，正在进行速度测试...", parseMode: "html" });
 
       const serverId =
         command && !isNaN(parseInt(command))
@@ -717,10 +795,20 @@ const speedtest = async (msg: Api.Message) => {
         // 兜底为文本
         await msg.edit({ text: description, parseMode: "html" });
       } catch (error) {
+        const errorMsg = error instanceof Error ? error.message : String(error);
+        const isKnownNetworkError = errorMsg.includes('超时') || 
+                                   errorMsg.includes('连接') || 
+                                   errorMsg.includes('socket') ||
+                                   errorMsg.includes('Timeout') ||
+                                   errorMsg.includes('Cannot read');
+        
+        let helpText = "";
+        if (isKnownNetworkError) {
+          helpText = `\n\n💡 <b>解决建议:</b>\n• 检查网络连接是否正常\n• 尝试使用 <code>${commandName} list</code> 查看可用服务器\n• 使用 <code>${commandName} set [ID]</code> 选择其他服务器\n• 如问题持续，请联系网络管理员`;
+        }
+        
         await msg.edit({
-          text: `❌ <b>速度测试失败</b>\n\n<code>${htmlEscape(
-            String(error)
-          )}</code>`,
+          text: `❌ <b>速度测试失败</b>\n\n<code>${htmlEscape(errorMsg)}</code>${helpText}`,
           parseMode: "html",
         });
       }
