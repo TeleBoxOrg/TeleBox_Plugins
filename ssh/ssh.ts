@@ -13,39 +13,13 @@ import archiver from "archiver";
 import dayjs from "dayjs";
 import crypto from "crypto";
 
+// SSH2模块直接导入 - 跳过类型检查
+// @ts-ignore
+import { Client as SSH2Client } from 'ssh2';
+
 const execAsync = promisify(exec);
 const prefixes = getPrefixes();
 const mainPrefix = prefixes[0];
-
-// SSH2模块检测和安装
-let ssh2Available = false;
-let SSH2Client: any = null;
-
-// 检测并安装SSH2模块
-async function checkAndInstallSSH2(): Promise<void> {
-  try {
-    // 尝试加载ssh2模块
-    SSH2Client = (await import('ssh2')).Client;
-    ssh2Available = true;
-    console.log("[ssh] SSH2模块已加载");
-  } catch (error) {
-    console.log("[ssh] SSH2模块未安装，正在自动安装...");
-    try {
-      // 尝试安装ssh2模块
-      await execAsync('npm install ssh2');
-      // 重新尝试加载
-      SSH2Client = (await import('ssh2')).Client;
-      ssh2Available = true;
-      console.log("[ssh] SSH2模块安装成功");
-    } catch (installError) {
-      console.error("[ssh] SSH2模块安装失败:", installError);
-      console.log("[ssh] 部分功能可能受限，请手动安装: npm install ssh2");
-    }
-  }
-}
-
-// 插件启动时检测SSH2
-checkAndInstallSSH2().catch(console.error);
 
 // HTML转义函数
 const htmlEscape = (text: string): string => 
