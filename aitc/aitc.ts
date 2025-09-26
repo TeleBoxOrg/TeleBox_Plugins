@@ -10,6 +10,7 @@ const CONFIG_KEYS = {
   API_URL: "aitc_api_url",
   MODEL: "aitc_model",
   PROMPT: "aitc_prompt",
+  PROMPT_MAP: "aitc_prompts",
   TEMPERATURE: "aitc_temperature",
 } as const;
 
@@ -18,8 +19,28 @@ const DEFAULT_CONFIG: Record<string, string> = {
   [CONFIG_KEYS.MODEL]: "gpt-4o-mini",
   [CONFIG_KEYS.PROMPT]:
     "You are an expert in Chinese-English translation, translating user input from Chinese to colloquial English. Users can send content that needs to be translated to the assistant, and the assistant will provide the corresponding translation results, ensuring that they conform to Chinese language conventions. You can adjust the tone and style, taking into account the cultural connotations and regional differences of certain words. As a translator, you need to translate the original text into a translation that meets the standards of accuracy and elegance. Only output the translated content!!!",
+  [CONFIG_KEYS.PROMPT_MAP]: "{}",
   [CONFIG_KEYS.TEMPERATURE]: "0.2",
 };
+
+const RESERVED_PROMPT_ALIASES = new Set([
+  "apikey",
+  "key",
+  "api",
+  "model",
+  "prompt",
+  "temp",
+  "temperature",
+  "info",
+  "spn",
+  "url",
+  "_set_key",
+  "_set_api",
+  "_set_model",
+  "_set_prompt",
+  "_set_temperature",
+  "_info",
+]);
 
 const TEMPERATURE_MIN = 0;
 const TEMPERATURE_MAX = 2;
@@ -95,6 +116,33 @@ class ConfigManager {
       return {};
     }
   }
+
+  static getPromptMap(): Record<string, string> {
+    const raw = this.get(
+      CONFIG_KEYS.PROMPT_MAP,
+      DEFAULT_CONFIG[CONFIG_KEYS.PROMPT_MAP],
+    );
+    try {
+      const parsed = JSON.parse(raw);
+      if (!parsed || typeof parsed !== "object") return {};
+      const result: Record<string, string> = {};
+      for (const [key, value] of Object.entries(parsed)) {
+        if (typeof key === "string" && typeof value === "string") {
+          result[key] = value;
+        }
+      }
+      return result;
+    } catch (error) {
+      console.error("aitc plugin failed to parse prompt map", error);
+      return {};
+    }
+  }
+
+  static setPrompt(alias: string, prompt: string): void {
+    const map = this.getPromptMap();
+    map[alias] = prompt;
+    this.set(CONFIG_KEYS.PROMPT_MAP, JSON.stringify(map));
+  }
 }
 
 const htmlEscape = (text: string): string =>
@@ -139,12 +187,14 @@ async function handleAitcCommand(msg: Api.Message): Promise<void> {
   if (!trimmed) {
     await replyWith(
       "ℹ️ <b>aitc 插件</b>\n\n" +
-        "• <code>aitc [文本]</code> - 结合当前 Prompt 处理文本\n" +
-        "• <code>aitc apikey &lt;OpenAI Key&gt;</code> - 设置 API Key\n" +
-        "• <code>aitc model &lt;模型名&gt;</code> - 设置模型\n" +
-        "• <code>aitc prompt &lt;提示词&gt;</code> - 设置系统 Prompt\n" +
-        "• <code>aitc api &lt;地址&gt;</code> - 自定义 API 地址\n" +
-        `• <code>aitc temp &lt;${TEMPERATURE_RANGE_LABEL}&gt;</code> - 设置模型温度\n` +
+        "• <code>aitc key &lt;API Key&gt;</code> - 设置API Key\n" +
+        "• <code>aitc url &lt;地址&gt;</code> - 自定义API地址\n" +
+        "• <code>aitc model &lt;模型名&gt;</code> - 指定模型\n" +
+        `• <code>aitc temp &lt;${TEMPERATURE_RANGE_LABEL}&gt;</code> - 调整温度\n` +
+        "• <code>aitc prompt &lt;系统Prompt&gt;</code> - 定义默认Prompt\n" +
+        "• <code>aitc spn &lt;简称&gt; &lt;Prompt文本&gt;</code> - 保存或更新Prompt预设 (set prompt name)\n" +
+        "• <code>aitc &lt;简称&gt; [文本]</code> - 使用预设Prompt处理文本\n" +
+        "• <code>aitc [文本]</code> - 使用默认Prompt处理文本\n" +
         "• <code>aitc info</code> - 查看当前配置",
     );
     return;
@@ -154,27 +204,30 @@ async function handleAitcCommand(msg: Api.Message): Promise<void> {
   const subcommandValue = rest.slice(subcommandToken.length).trimStart();
 
   switch (subcommand) {
+    case "key":
     case "apikey":
     case "_set_key": {
       if (!subcommandValue) {
-        await replyWith("❌ <b>请提供 OpenAI API Key</b>");
+        await replyWith("❌ <b>请提供API Key</b>");
         return;
       }
       ConfigManager.set(CONFIG_KEYS.API_KEY, subcommandValue.trim());
-      await replyWith("✅ <b>API Key 已更新</b>");
+      await replyWith("✅ <b>API Key已更新</b>");
       return;
     }
+    case "url":
     case "api":
+    case "_set_url":
     case "_set_api": {
       if (!subcommandValue) {
-        await replyWith("❌ <b>请提供 API 地址</b>");
+        await replyWith("❌ <b>请提供API地址</b>");
         return;
       }
       ConfigManager.set(
         CONFIG_KEYS.API_URL,
         trimTrailingSlash(subcommandValue.trim()),
       );
-      await replyWith("✅ <b>API 地址已更新</b>");
+      await replyWith("✅ <b>API地址已更新</b>");
       return;
     }
     case "model":
@@ -190,11 +243,11 @@ async function handleAitcCommand(msg: Api.Message): Promise<void> {
     case "prompt":
     case "_set_prompt": {
       if (!subcommandValue) {
-        await replyWith("❌ <b>请提供 Prompt 文本</b>");
+        await replyWith("❌ <b>请提供Prompt文本</b>");
         return;
       }
       ConfigManager.set(CONFIG_KEYS.PROMPT, subcommandValue);
-      await replyWith("✅ <b>Prompt 已更新</b>");
+      await replyWith("✅ <b>Prompt已更新</b>");
       return;
     }
     case "temp":
@@ -223,6 +276,39 @@ async function handleAitcCommand(msg: Api.Message): Promise<void> {
       await replyWith("✅ <b>温度已更新</b>");
       return;
     }
+    case "spn": {
+      const aliasToken = parts[1] || "";
+      if (!aliasToken) {
+        await replyWith(
+          "❌ <b>请提供Prompt简称与内容</b>\n" +
+            "用法：<code>aitc spn &lt;简称&gt; &lt;Prompt文本&gt;</code>",
+        );
+        return;
+      }
+      const alias = aliasToken.toLowerCase();
+      if (!/^[a-z0-9_-]{1,32}$/.test(alias)) {
+        await replyWith(
+          "❌ <b>Prompt简称仅支持1-32位的字母、数字、下划线或连字符</b>",
+        );
+        return;
+      }
+      if (RESERVED_PROMPT_ALIASES.has(alias)) {
+        await replyWith("❌ <b>该简称与内置命令冲突，请换一个</b>");
+        return;
+      }
+      const aliasRest = subcommandValue.slice(aliasToken.length).trimStart();
+      const promptContent = aliasRest.trim();
+      if (!promptContent) {
+        await replyWith(
+          "❌ <b>请提供Prompt内容</b>\n" +
+            "用法：<code>aitc spn &lt;简称&gt; &lt;Prompt文本&gt;</code>",
+        );
+        return;
+      }
+      ConfigManager.setPrompt(alias, promptContent);
+      await replyWith(`✅ <b>Prompt「${htmlEscape(aliasToken)}」已保存</b>`);
+      return;
+    }
     case "info":
     case "_info": {
       const apiUrl = ConfigManager.get(CONFIG_KEYS.API_URL);
@@ -233,12 +319,20 @@ async function handleAitcCommand(msg: Api.Message): Promise<void> {
         CONFIG_KEYS.TEMPERATURE,
         DEFAULT_CONFIG[CONFIG_KEYS.TEMPERATURE],
       );
+      const promptAliasMap = ConfigManager.getPromptMap();
+      const promptAliases = Object.keys(promptAliasMap).sort();
+      const promptAliasText = promptAliases.length
+        ? promptAliases
+            .map((alias) => `<code>${htmlEscape(alias)}</code>`)
+            .join("、")
+        : "(未保存)";
       await replyWith(
         `🔧 <b>当前配置</b>\n\n` +
-          `• API 地址：<code>${htmlEscape(apiUrl)}</code>\n` +
+          `• API URL：<code>${htmlEscape(apiUrl)}</code>\n` +
           `• 模型：<code>${htmlEscape(model)}</code>\n` +
           `• 温度：<code>${htmlEscape(temperature)}</code>\n` +
-          `• Prompt：${htmlEscape(prompt || "(未设置)")}\n` +
+          `• 默认Prompt：${htmlEscape(prompt || "(未设置)")}\n` +
+          `• Prompt预设：${promptAliasText}\n` +
           `• API Key：${hasKey ? "已配置" : "未配置"}`,
       );
       return;
@@ -251,7 +345,18 @@ async function handleAitcCommand(msg: Api.Message): Promise<void> {
     }
   }
 
+  const promptMap = ConfigManager.getPromptMap();
   let userInput = rest;
+  let systemPrompt: string | null = null;
+
+  if (subcommandToken) {
+    const aliasPrompt = promptMap[subcommandToken.toLowerCase()];
+    if (aliasPrompt) {
+      systemPrompt = aliasPrompt;
+      userInput = rest.slice(subcommandToken.length).trimStart();
+    }
+  }
+
   if (!userInput) {
     try {
       const reply = await msg.getReplyMessage();
@@ -265,6 +370,12 @@ async function handleAitcCommand(msg: Api.Message): Promise<void> {
     }
   }
 
+  if (systemPrompt === null) {
+    systemPrompt =
+      ConfigManager.get(CONFIG_KEYS.PROMPT) ||
+      DEFAULT_CONFIG[CONFIG_KEYS.PROMPT];
+  }
+
   if (!userInput) {
     await replyWith("❌ <b>请在命令后提供文本或回复一条消息</b>");
     return;
@@ -273,7 +384,7 @@ async function handleAitcCommand(msg: Api.Message): Promise<void> {
   const apiKey = ConfigManager.get(CONFIG_KEYS.API_KEY, "");
   if (!apiKey) {
     await replyWith(
-      "❌ <b>未配置 API Key</b>\n请使用 <code>aitc _set_key &lt;OpenAI Key&gt;</code> 设置后再试",
+      "❌ <b>未配置API Key</b>\n请使用 <code>aitc _set_key &lt;OpenAI Key&gt;</code> 设置后再试",
     );
     return;
   }
@@ -284,8 +395,6 @@ async function handleAitcCommand(msg: Api.Message): Promise<void> {
   );
   const model =
     ConfigManager.get(CONFIG_KEYS.MODEL) || DEFAULT_CONFIG[CONFIG_KEYS.MODEL];
-  const prompt =
-    ConfigManager.get(CONFIG_KEYS.PROMPT) || DEFAULT_CONFIG[CONFIG_KEYS.PROMPT];
   const temperature = clampTemperature(
     Number.parseFloat(
       ConfigManager.get(
@@ -296,7 +405,7 @@ async function handleAitcCommand(msg: Api.Message): Promise<void> {
     Number.parseFloat(DEFAULT_CONFIG[CONFIG_KEYS.TEMPERATURE]),
   );
 
-  await replyWith("⏳ <b>正在请求 OpenAI...</b>");
+  await replyWith("⏳ <b>正在请求...</b>");
 
   try {
     const response = await axios.post(
@@ -304,7 +413,7 @@ async function handleAitcCommand(msg: Api.Message): Promise<void> {
       {
         model,
         messages: [
-          ...(prompt ? [{ role: "system", content: prompt }] : []),
+          ...(systemPrompt ? [{ role: "system", content: systemPrompt }] : []),
           { role: "user", content: userInput },
         ],
         temperature,
@@ -320,7 +429,7 @@ async function handleAitcCommand(msg: Api.Message): Promise<void> {
 
     const content = response.data?.choices?.[0]?.message?.content;
     if (!content || typeof content !== "string") {
-      throw new Error("OpenAI API 返回空结果");
+      throw new Error("API 返回空结果");
     }
 
     const translated = content.trim();
@@ -338,19 +447,21 @@ async function handleAitcCommand(msg: Api.Message): Promise<void> {
     if (message.length > 200) {
       message = message.slice(0, 200) + "...";
     }
-    await replyWith(`❌ <b>OpenAI 调用失败：</b>${htmlEscape(message)}`);
+    await replyWith(`❌ <b>调用失败：</b>${htmlEscape(message)}`);
   }
 }
 
 class AitcPlugin extends Plugin {
   description: string = `
-自定义 Prompt 的 OpenAI 转写插件：
-- aitc [文本] - 根据 Prompt 处理输入
-- aitc apikey <OpenAI Key> - 设置 API Key
-- aitc model <模型名> - 指定模型
-- aitc api <地址> - 自定义 API 地址
-- aitc prompt <提示词> - 定义系统 Prompt
-- aitc temp <${TEMPERATURE_RANGE_LABEL}> - 调整温度
+自定义 Prompt 的 AI 转写插件：
+- aitc url &lt;地址&gt; - 自定义API地址（兼容OpenAI SDK，默认OpenAI）
+- aitc key &lt;API Key&gt; - 设置API Key
+- aitc model &lt;模型名&gt; - 指定模型（默认gpt-4o-mini）
+- aitc temp &lt;${TEMPERATURE_RANGE_LABEL}&gt; - 调整模型温度（默认0.2）
+- aitc prompt &lt;默认Prompt&gt; - 设置默认Prompt（默认转写为英文）
+- aitc spn &lt;Prompt简称&gt; &lt;Prompt内容&gt; - 保存或更新Prompt预设
+- aitc &lt;Prompt简称&gt; [文本] - 使用预设Prompt处理文本
+- aitc [文本] - 使用默认Prompt处理文本
 - aitc info - 查看当前配置
   `;
   cmdHandlers: Record<string, (msg: Api.Message) => Promise<void>> = {
