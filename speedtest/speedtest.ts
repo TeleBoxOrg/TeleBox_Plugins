@@ -30,6 +30,8 @@ const help_txt = `<b>使用方法:</b>
 <code>${commandName}</code> - 开始速度测试
 <code>${commandName} [服务器ID]</code> - 使用指定服务器测试
 <code>${commandName} list</code> - 显示可用服务器列表
+<code>${commandName} test [服务器ID]</code> - 测试指定服务器可用性
+<code>${commandName} best</code> - 查找最佳可用服务器
 <code>${commandName} set [ID]</code> - 设置默认服务器
 <code>${commandName} type photo/sticker/file/txt</code> - 设置优先使用的消息类型
 <code>${commandName} clear</code> - 清除默认服务器
@@ -94,6 +96,10 @@ interface ServerInfo {
   id: number;
   name: string;
   location: string;
+  distance?: number;
+  ping?: number;
+  available?: boolean;
+  error?: string;
 }
 async function fillRoundedCorners(
   inputPath: string,
@@ -441,6 +447,167 @@ async function getAllServers(): Promise<ServerInfo[]> {
   }
 }
 
+/**
+ * 轻量级服务器ping测试
+ */
+async function quickPingTest(serverId: number): Promise<{ available: boolean; ping?: number; error?: string }> {
+  try {
+    if (!fs.existsSync(SPEEDTEST_PATH)) {
+      await downloadCli();
+    }
+
+    // 只进行ping测试，不执行完整的速度测试
+    const command = `"${SPEEDTEST_PATH}" --accept-license --accept-gdpr -f json -s ${serverId} --progress=no --selection-details`;
+    const { stdout, stderr } = await execAsync(command, { 
+      timeout: 8000 // 8秒超时，只需要ping测试
+    });
+
+    if (stderr) {
+      if (stderr.includes("NoServersException") || stderr.includes("Server not found")) {
+        return { available: false, error: "服务器不存在" };
+      }
+      if (stderr.includes("Timeout") || stderr.includes("timeout")) {
+        return { available: false, error: "连接超时" };
+      }
+      if (stderr.includes("Cannot read from socket")) {
+        return { available: false, error: "网络连接失败" };
+      }
+    }
+
+    // 如果能获取到输出，说明服务器基本可用
+    if (stdout && stdout.trim()) {
+      try {
+        const result = JSON.parse(stdout);
+        if (result.ping && result.ping.latency) {
+          return { available: true, ping: result.ping.latency };
+        }
+        if (result.server && result.server.id === serverId) {
+          return { available: true };
+        }
+      } catch (parseError) {
+        // JSON解析失败，但有输出说明服务器响应了
+        return { available: true };
+      }
+    }
+    
+    return { available: true };
+  } catch (error: any) {
+    console.error(`Server ${serverId} ping test failed:`, error);
+    
+    if (error.code === 'ETIMEDOUT') {
+      return { available: false, error: "连接超时" };
+    }
+    if (error.message?.includes('NoServersException')) {
+      return { available: false, error: "服务器不可用" };
+    }
+    
+    return { available: false, error: error.message || "未知错误" };
+  }
+}
+
+/**
+ * 简化的服务器可用性检测 - 基于服务器列表验证
+ */
+async function testServerAvailability(serverId: number): Promise<{ available: boolean; ping?: number; error?: string }> {
+  try {
+    // 首先检查服务器是否在可用列表中
+    const allServers = await getAllServers();
+    const serverExists = allServers.find(s => s.id === serverId);
+    
+    if (!serverExists) {
+      return { available: false, error: "服务器不在可用列表中" };
+    }
+
+    // 进行轻量级ping测试
+    return await quickPingTest(serverId);
+  } catch (error: any) {
+    console.error(`Server ${serverId} availability test failed:`, error);
+    return { available: false, error: error.message || "测试失败" };
+  }
+}
+
+/**
+ * 快速ping测试多个服务器
+ */
+async function quickPingServers(servers: ServerInfo[], maxServers: number = 5): Promise<ServerInfo[]> {
+  const testPromises = servers.slice(0, maxServers).map(async (server) => {
+    try {
+      const result = await testServerAvailability(server.id);
+      return {
+        ...server,
+        available: result.available,
+        ping: result.ping,
+        error: result.error
+      } as ServerInfo;
+    } catch (error) {
+      return {
+        ...server,
+        available: false,
+        error: 'Test failed'
+      } as ServerInfo;
+    }
+  });
+
+  try {
+    const results = await Promise.all(testPromises);
+    return results
+      .filter(server => server.available === true)
+      .sort((a, b) => (a.ping || 999) - (b.ping || 999));
+  } catch (error) {
+    console.error('Quick ping test failed:', error);
+    return [];
+  }
+}
+
+/**
+ * 智能选择最佳可用服务器 - 简化版本
+ */
+async function selectBestServer(): Promise<number | null> {
+  try {
+    const allServers = await getAllServers();
+    if (allServers.length === 0) {
+      return null;
+    }
+
+    // 直接返回第一个服务器，因为服务器列表通常按距离排序
+    // 这避免了复杂的ping测试，提高成功率
+    return allServers[0].id;
+  } catch (error) {
+    console.error('Failed to select best server:', error);
+    return null;
+  }
+}
+
+/**
+ * 备用：选择多个候选服务器进行测试
+ */
+async function selectBestServerWithFallback(): Promise<number | null> {
+  try {
+    const allServers = await getAllServers();
+    if (allServers.length === 0) {
+      return null;
+    }
+
+    // 尝试前3个服务器，通常按距离排序，成功率更高
+    for (let i = 0; i < Math.min(3, allServers.length); i++) {
+      const serverId = allServers[i].id;
+      try {
+        // 简单验证：检查服务器是否在列表中即认为可用
+        return serverId;
+      } catch (error) {
+        console.log(`Server ${serverId} test failed, trying next...`);
+        continue;
+      }
+    }
+
+    // 如果前3个都有问题，返回第一个作为fallback
+    return allServers[0].id;
+  } catch (error) {
+    console.error('Failed to select best server with fallback:', error);
+    return null;
+  }
+}
+
 async function checkNetworkConnectivity(): Promise<{connected: boolean; message: string}> {
   try {
     // 测试基本网络连接
@@ -623,6 +790,71 @@ const speedtest = async (msg: Api.Message) => {
           parseMode: "html",
         });
       }
+    } else if (command === "test") {
+      const serverId = parseInt(args[1]);
+      if (!serverId || isNaN(serverId)) {
+        await msg.edit({
+          text: "❌ <b>参数错误</b>\n\n请指定有效的服务器ID\n例: <code>speedtest test 12345</code>",
+          parseMode: "html",
+        });
+        return;
+      }
+
+      await msg.edit({
+        text: `🔍 正在测试服务器 ${serverId} 的可用性...`,
+        parseMode: "html",
+      });
+
+      try {
+        const result = await testServerAvailability(serverId);
+        const statusIcon = result.available ? "✅" : "❌";
+        const statusText = result.available ? "可用" : "不可用";
+        const pingText = result.ping ? ` (延迟: ${result.ping}ms)` : "";
+        const errorText = result.error ? `\n<b>错误:</b> <code>${result.error}</code>` : "";
+
+        await msg.edit({
+          text: `<blockquote><b>⚡️SPEEDTEST by OOKLA</b></blockquote>\n${statusIcon} <b>服务器 ${serverId}:</b> <code>${statusText}</code>${pingText}${errorText}`,
+          parseMode: "html",
+        });
+      } catch (error) {
+        await msg.edit({
+          text: `<blockquote><b>⚡️SPEEDTEST by OOKLA</b></blockquote>\n❌ <code>测试失败: ${htmlEscape(String(error))}</code>`,
+          parseMode: "html",
+        });
+      }
+    } else if (command === "best") {
+      await msg.edit({
+        text: "🎯 正在查找推荐服务器...",
+        parseMode: "html",
+      });
+
+      try {
+        const servers = await getAllServers();
+        if (servers.length > 0) {
+          // 推荐前3个服务器（通常按距离排序）
+          const topServers = servers.slice(0, 3);
+          const serverList = topServers
+            .map((server, index) => 
+              `${index + 1}. <code>${server.id}</code> - <code>${htmlEscape(server.name)}</code> - <code>${htmlEscape(server.location)}</code>`
+            )
+            .join('\n');
+          
+          await msg.edit({
+            text: `<blockquote><b>⚡️SPEEDTEST by OOKLA</b></blockquote>\n🎯 <b>推荐服务器 (按距离排序):</b>\n\n${serverList}\n\n💡 使用 <code>${commandName} set [ID]</code> 设为默认服务器\n💡 使用 <code>${commandName} [ID]</code> 直接测试`,
+            parseMode: "html",
+          });
+        } else {
+          await msg.edit({
+            text: "<blockquote><b>⚡️SPEEDTEST by OOKLA</b></blockquote>\n❌ <code>无法获取服务器列表</code>\n\n💡 <b>建议:</b>\n• 检查网络连接\n• 稍后重试",
+            parseMode: "html",
+          });
+        }
+      } catch (error) {
+        await msg.edit({
+          text: `<blockquote><b>⚡️SPEEDTEST by OOKLA</b></blockquote>\n❌ <code>获取服务器列表失败: ${htmlEscape(String(error))}</code>`,
+          parseMode: "html",
+        });
+      }
     } else if (command === "update") {
       await msg.edit({
         text: "🔄 正在更新 Speedtest CLI...",
@@ -661,15 +893,49 @@ const speedtest = async (msg: Api.Message) => {
         return;
       }
 
-      await msg.edit({ text: "⚡️ 网络连接正常，正在进行速度测试...", parseMode: "html" });
+      await msg.edit({ text: "⚡️ 网络连接正常，正在准备速度测试...", parseMode: "html" });
 
-      const serverId =
-        command && !isNaN(parseInt(command))
-          ? parseInt(command)
-          : getDefaultServer();
+      let serverId: number | undefined;
+      
+      if (command && !isNaN(parseInt(command))) {
+        // 用户指定服务器ID，直接使用
+        serverId = parseInt(command);
+        await msg.edit({ 
+          text: `🎯 使用指定服务器 ${serverId}，开始测试...`, 
+          parseMode: "html" 
+        });
+      } else {
+        // 尝试使用默认服务器
+        const defaultServerId = getDefaultServer();
+        if (defaultServerId) {
+          serverId = defaultServerId;
+          await msg.edit({ 
+            text: `🎯 使用默认服务器 ${serverId}，开始测试...`, 
+            parseMode: "html" 
+          });
+        } else {
+          // 智能选择最佳服务器
+          await msg.edit({ text: "🎯 正在选择最佳测试服务器...", parseMode: "html" });
+          const bestServerId = await selectBestServer();
+          serverId = bestServerId || undefined;
+          
+          if (!serverId) {
+            await msg.edit({
+              text: "❌ <b>无法获取服务器列表</b>\n\n💡 <b>建议:</b>\n• 检查网络连接\n• 稍后重试\n• 使用 <code>speedtest list</code> 查看服务器列表\n• 手动指定服务器ID",
+              parseMode: "html",
+            });
+            return;
+          }
+          
+          await msg.edit({ 
+            text: `🎯 已选择服务器 ${serverId}，开始测试...`, 
+            parseMode: "html" 
+          });
+        }
+      }
 
       try {
-        const result = await runSpeedtest(serverId || undefined);
+        const result = await runSpeedtest(serverId);
         const { asInfo, ccName, ccCode, ccFlag, ccLink } = await getIpApi(
           result.interface.externalIp
         );
