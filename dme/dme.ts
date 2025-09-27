@@ -18,15 +18,20 @@ const CONFIG = {
     "https://raw.githubusercontent.com/TeleBoxDev/TeleBox/main/telebox.png",
   TROLL_IMAGE_PATH: "./assets/dme/dme_troll_image.png",
   BATCH_SIZE: 50,
+  MIN_BATCH_SIZE: 5, // 最小批次大小
+  MAX_BATCH_SIZE: 100, // 最大批次大小
   SEARCH_LIMIT: 100,
   MAX_SEARCH_MULTIPLIER: 10,
   MIN_MAX_SEARCH: 2000,
-  DEFAULT_BATCH_LIMIT: 30, // 默认最大搜索批次数
+  DEFAULT_BATCH_LIMIT: 30,
+  RETRY_ATTEMPTS: 3, // 重试次数
   DELAYS: {
     BATCH: 200,
     EDIT_WAIT: 1000,
     SEARCH: 100,
     RESULT_DISPLAY: 3000,
+    RETRY: 2000, // 重试延迟
+    NETWORK_ERROR: 5000, // 网络错误延迟
   },
 } as const;
 
@@ -78,25 +83,45 @@ async function getTrollImage(): Promise<string | null> {
 }
 
 /**
- * 通用删除消息函数 - 增强跨平台同步
+ * 带重试机制的删除消息函数
+ */
+async function deleteMessagesWithRetry(
+  client: TelegramClient,
+  chatEntity: any,
+  messageIds: number[],
+  retryCount: number = 0
+): Promise<number> {
+  try {
+    await client.deleteMessages(chatEntity, messageIds, { revoke: true });
+    
+    // 强制刷新更新状态，确保跨平台同步
+    try {
+      await client.invoke(new Api.updates.GetState());
+      console.log(`[DME] 已触发跨平台同步刷新`);
+    } catch (syncError) {
+      console.log(`[DME] 同步刷新失败，但不影响删除操作:`, syncError);
+    }
+    
+    return messageIds.length;
+  } catch (error: any) {
+    if (retryCount < CONFIG.RETRY_ATTEMPTS) {
+      console.log(`[DME] 删除失败，第 ${retryCount + 1} 次重试:`, error.message);
+      await sleep(CONFIG.DELAYS.RETRY * (retryCount + 1));
+      return deleteMessagesWithRetry(client, chatEntity, messageIds, retryCount + 1);
+    }
+    throw error;
+  }
+}
+
+/**
+ * 通用删除消息函数 - 增强版本
  */
 async function deleteMessagesUniversal(
   client: TelegramClient,
   chatEntity: any,
   messageIds: number[]
 ): Promise<number> {
-  // 删除消息
-  await client.deleteMessages(chatEntity, messageIds, { revoke: true });
-
-  // 强制刷新更新状态，确保跨平台同步
-  try {
-    await client.invoke(new Api.updates.GetState());
-    console.log(`[DME] 已触发跨平台同步刷新`);
-  } catch (error) {
-    console.log(`[DME] 同步刷新失败，但不影响删除操作:`, error);
-  }
-
-  return messageIds.length;
+  return deleteMessagesWithRetry(client, chatEntity, messageIds);
 }
 
 /**
@@ -163,7 +188,7 @@ async function editMediaMessageToAntiRecall(
 }
 
 /**
- * 使用messages.search直接搜索自己的消息 - 高效版本
+ * 增强的消息搜索函数 - 带容错机制
  */
 async function searchMyMessagesOptimized(
   client: TelegramClient,
@@ -174,50 +199,58 @@ async function searchMyMessagesOptimized(
   const allMyMessages: Api.Message[] = [];
   let offsetId = 0;
   const targetCount = userRequestedCount === 999999 ? Infinity : userRequestedCount;
+  let consecutiveFailures = 0;
+  const maxFailures = 3;
 
-  console.log(`[DME] 使用优化搜索模式，直接定位自己的消息`);
+  console.log(`[DME] 使用增强搜索模式，直接定位自己的消息`);
 
   try {
-    while (allMyMessages.length < targetCount) {
-      // 使用messages.search直接搜索自己的消息
-      const searchResult = await client.invoke(
-        new Api.messages.Search({
-          peer: chatEntity,
-          q: "", // 空查询搜索所有消息
-          fromId: await client.getInputEntity(myId.toString()), // 修复：转换为字符串
-          filter: new Api.InputMessagesFilterEmpty(), // 不过滤消息类型
-          minDate: 0,
-          maxDate: 0,
-          offsetId: offsetId,
-          addOffset: 0,
-          limit: Math.min(100, targetCount - allMyMessages.length),
-          maxId: 0,
-          minId: 0,
-          hash: 0 as any
-        })
-      );
+    while (allMyMessages.length < targetCount && consecutiveFailures < maxFailures) {
+      try {
+        const searchResult = await client.invoke(
+          new Api.messages.Search({
+            peer: chatEntity,
+            q: "",
+            fromId: await client.getInputEntity(myId.toString()),
+            filter: new Api.InputMessagesFilterEmpty(),
+            minDate: 0,
+            maxDate: 0,
+            offsetId: offsetId,
+            addOffset: 0,
+            limit: Math.min(100, targetCount - allMyMessages.length),
+            maxId: 0,
+            minId: 0,
+            hash: 0 as any
+          })
+        );
 
-      // 修复：正确处理搜索结果类型
-      const resultMessages = (searchResult as any).messages;
-      if (!resultMessages || resultMessages.length === 0) {
-        console.log(`[DME] 搜索完成，共找到 ${allMyMessages.length} 条自己的消息`);
-        break;
+        const resultMessages = (searchResult as any).messages;
+        if (!resultMessages || resultMessages.length === 0) {
+          console.log(`[DME] 搜索完成，共找到 ${allMyMessages.length} 条自己的消息`);
+          break;
+        }
+
+        const messages = resultMessages.filter((m: any) => 
+          m.className === "Message" && m.senderId?.toString() === myId.toString()
+        );
+
+        if (messages.length > 0) {
+          allMyMessages.push(...messages);
+          offsetId = messages[messages.length - 1].id;
+          console.log(`[DME] 批次搜索到 ${messages.length} 条消息，总计 ${allMyMessages.length} 条`);
+          consecutiveFailures = 0; // 重置失败计数
+        } else {
+          break;
+        }
+
+        await sleep(CONFIG.DELAYS.SEARCH);
+      } catch (searchError: any) {
+        consecutiveFailures++;
+        console.log(`[DME] 搜索失败 ${consecutiveFailures}/${maxFailures}:`, searchError.message);
+        if (consecutiveFailures < maxFailures) {
+          await sleep(CONFIG.DELAYS.NETWORK_ERROR);
+        }
       }
-
-      const messages = resultMessages.filter((m: any) => 
-        m.className === "Message" && m.senderId?.toString() === myId.toString()
-      );
-
-      if (messages.length > 0) {
-        allMyMessages.push(...messages);
-        offsetId = messages[messages.length - 1].id;
-        console.log(`[DME] 批次搜索到 ${messages.length} 条消息，总计 ${allMyMessages.length} 条`);
-      } else {
-        break;
-      }
-
-      // 避免API限制
-      await sleep(200);
     }
   } catch (error: any) {
     console.error("[DME] 优化搜索失败，回退到传统模式:", error);
@@ -238,6 +271,62 @@ function isSavedMessagesPeer(chatEntity: any, myId: bigint): boolean {
     ((chatEntity?.className === "PeerUser" || chatEntity?.className === "InputPeerUser") &&
       chatEntity?.userId?.toString?.() === myId.toString())
   );
+}
+
+/**
+ * 自适应批次删除函数
+ */
+async function adaptiveBatchDelete(
+  client: TelegramClient,
+  chatEntity: any,
+  messageIds: number[]
+): Promise<{ deletedCount: number; failedCount: number }> {
+  if (messageIds.length === 0) {
+    return { deletedCount: 0, failedCount: 0 };
+  }
+
+  let deletedCount = 0;
+  let failedCount = 0;
+  let currentBatchSize: number = CONFIG.BATCH_SIZE;
+  
+  console.log(`[DME] 开始自适应批次删除，总计 ${messageIds.length} 条消息`);
+  
+  for (let i = 0; i < messageIds.length; i += currentBatchSize) {
+    const batch = messageIds.slice(i, i + currentBatchSize);
+    
+    try {
+      const deleted = await deleteMessagesWithRetry(client, chatEntity, batch);
+      deletedCount += deleted;
+      
+      // 成功则逐步增大批次
+      if (currentBatchSize < CONFIG.MAX_BATCH_SIZE) {
+        currentBatchSize = Math.min(currentBatchSize + 10, CONFIG.MAX_BATCH_SIZE);
+      }
+      
+      console.log(`[DME] 批次删除成功: ${deleted}/${batch.length} 条，下批大小: ${currentBatchSize}`);
+      await sleep(CONFIG.DELAYS.BATCH);
+      
+    } catch (error: any) {
+      console.error(`[DME] 批次删除失败:`, error.message);
+      failedCount += batch.length;
+      
+      // 失败则减小批次大小
+      if (currentBatchSize > CONFIG.MIN_BATCH_SIZE) {
+        currentBatchSize = Math.max(CONFIG.MIN_BATCH_SIZE, Math.floor(currentBatchSize / 2));
+        console.log(`[DME] 调整批次大小为: ${currentBatchSize}`);
+      }
+      
+      // 网络错误时等待更长时间
+      if (error.message?.includes('FLOOD') || error.message?.includes('NETWORK')) {
+        await sleep(CONFIG.DELAYS.NETWORK_ERROR);
+      } else {
+        await sleep(CONFIG.DELAYS.RETRY);
+      }
+    }
+  }
+  
+  console.log(`[DME] 批次删除完成，成功: ${deletedCount}，失败: ${failedCount}`);
+  return { deletedCount, failedCount };
 }
 
 /**
@@ -454,49 +543,11 @@ async function searchEditAndDeleteMyMessages(
     await sleep(CONFIG.DELAYS.EDIT_WAIT);
   }
 
-  // 删除消息
-  console.log(`[DME] 开始删除 ${messagesToProcess.length} 条消息...`);
+  // 自适应批次删除消息
+  console.log(`[DME] 开始自适应批次删除 ${messagesToProcess.length} 条消息...`);
   const deleteIds = messagesToProcess.map((m: Api.Message) => m.id);
-  let deletedCount = 0;
-  let deleteBatch = 0;
-
-  for (let i = 0; i < deleteIds.length; i += CONFIG.BATCH_SIZE) {
-    deleteBatch++;
-    const batch = deleteIds.slice(i, i + CONFIG.BATCH_SIZE);
-
-    try {
-      const batchDeleted = await deleteMessagesUniversal(
-        client,
-        chatEntity,
-        batch
-      );
-      deletedCount += batchDeleted;
-      console.log(
-        `[DME] 删除批次 ${deleteBatch}: 成功删除 ${batchDeleted} 条，进度 ${deletedCount}/${deleteIds.length}`
-      );
-
-      await sleep(CONFIG.DELAYS.BATCH);
-    } catch (error: any) {
-      if (error.message?.includes("FLOOD_WAIT")) {
-        const waitTime = parseInt(error.message.match(/\d+/)?.[0] || "60");
-        console.log(`[DME] 删除时触发API限制，休眠 ${waitTime} 秒...`);
-
-        for (let j = waitTime; j > 0; j -= 10) {
-          if (j % 10 === 0 || j < 10) {
-            console.log(`[DME] 删除等待中... 剩余 ${j} 秒`);
-          }
-          await sleep(Math.min(j, 10) * 1000);
-        }
-
-        i -= CONFIG.BATCH_SIZE; // 重试当前批次
-        console.log(`[DME] 休眠结束，重试批次 ${deleteBatch}`);
-      } else {
-        console.error("[DME] 删除批次失败:", error);
-        // 其他错误等待后继续
-        await sleep(5000);
-      }
-    }
-  }
+  const result = await adaptiveBatchDelete(client, chatEntity, deleteIds);
+  const deletedCount = result.deletedCount;
 
   console.log(`[DME] 删除完成，共删除 ${deletedCount} 条消息`);
 
