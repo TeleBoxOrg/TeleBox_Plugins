@@ -541,7 +541,9 @@ async function autoFixSpeedtest(): Promise<void> {
   console.log("Auto-fix completed successfully");
 }
 
-async function runSpeedtest(serverId?: number): Promise<SpeedtestResult> {
+async function runSpeedtest(serverId?: number, retryCount: number = 0): Promise<SpeedtestResult> {
+  const MAX_RETRIES = 1; // 最多重试1次，避免无限循环
+  
   try {
     // 检查并诊断可执行文件
     if (!fs.existsSync(SPEEDTEST_PATH)) {
@@ -549,13 +551,15 @@ async function runSpeedtest(serverId?: number): Promise<SpeedtestResult> {
       await downloadCli();
     }
 
-    // 诊断可执行文件状态
-    const diagnosis = await diagnoseSpeedtestExecutable();
-    if (!diagnosis.canRun) {
-      console.log(`Speedtest executable issue detected: ${diagnosis.error}`);
-      if (diagnosis.needsReinstall) {
-        console.log("Attempting auto-fix...");
-        await autoFixSpeedtest();
+    // 只在第一次尝试时进行诊断，避免重复诊断
+    if (retryCount === 0) {
+      const diagnosis = await diagnoseSpeedtestExecutable();
+      if (!diagnosis.canRun) {
+        console.log(`Speedtest executable issue detected: ${diagnosis.error}`);
+        if (diagnosis.needsReinstall) {
+          console.log("Attempting auto-fix...");
+          await autoFixSpeedtest();
+        }
       }
     }
 
@@ -572,7 +576,7 @@ async function runSpeedtest(serverId?: number): Promise<SpeedtestResult> {
         // 如果指定服务器不可用，尝试自动选择
         if (serverId) {
           console.log(`Server ${serverId} not available, trying auto selection...`);
-          return await runSpeedtest(); // 递归调用，不指定服务器ID
+          return await runSpeedtest(undefined, retryCount); // 递归调用，不指定服务器ID，保持重试计数
         }
         throw new Error("指定的服务器不可用，请尝试其他服务器或使用自动选择");
       }
@@ -584,20 +588,75 @@ async function runSpeedtest(serverId?: number): Promise<SpeedtestResult> {
       }
     }
 
-    return JSON.parse(stdout);
+    // 尝试解析JSON结果，处理可能的部分失败情况
+    let result: any;
+    try {
+      result = JSON.parse(stdout);
+      
+      // 检查JSON中是否包含错误信息
+      if (result.error) {
+        if (result.error.includes("Cannot read")) {
+          throw new Error(`网络连接错误: ${result.error}\n\n这是网络环境问题，不是程序问题。建议：\n1. 检查网络连接稳定性\n2. 尝试其他测试服务器\n3. 稍后重试`);
+        }
+        throw new Error(`测试失败: ${result.error}`);
+      }
+    } catch (parseError) {
+      console.log("JSON parse failed, checking for partial results...");
+      
+      // 如果JSON解析失败，检查是否有部分文本结果
+      if (stdout.includes("Download:") && stdout.includes("Upload: FAILED")) {
+        throw new Error("上传测试失败，网络环境可能不支持上传测试。下载测试正常完成，但无法获取完整结果。\n\n建议：\n1. 尝试其他测试服务器\n2. 检查网络防火墙设置\n3. 稍后重试");
+      }
+      
+      // 检查是否是JSON格式的错误
+      if (stdout.includes('"error":"Cannot read')) {
+        throw new Error('网络连接错误: Cannot read\n\n这是网络环境问题，不是程序问题。建议：\n1. 检查网络连接稳定性\n2. 尝试其他测试服务器\n3. 稍后重试');
+      }
+      
+      throw parseError;
+    }
+    
+    // 处理上传测试失败的情况
+    if (!result.upload || result.upload.bandwidth === undefined) {
+      console.log("Upload test failed, but download succeeded");
+      // 创建一个包含部分结果的对象
+      result.upload = {
+        bandwidth: 0,
+        bytes: 0,
+        elapsed: 0
+      };
+      result.uploadFailed = true; // 标记上传失败
+    }
+
+    return result;
   } catch (error: any) {
     console.error("Speedtest failed:", error);
     
-    // 检查是否是可执行文件问题
-    if (error.message?.includes('Command failed') && error.message?.includes(SPEEDTEST_PATH)) {
-      console.log("Detected executable issue, attempting auto-fix...");
+    // 检查是否是真正的可执行文件问题（排除网络问题）
+    const isNetworkError = error.message?.includes('Cannot read') ||
+                           error.message?.includes('Upload: FAILED') ||
+                           error.message?.includes('网络连接错误') ||
+                           error.message?.includes('网络环境问题');
+                           
+    const isExecutableIssue = error.message?.includes('Command failed') && 
+                              error.message?.includes(SPEEDTEST_PATH) &&
+                              !isNetworkError &&
+                              retryCount < MAX_RETRIES;
+    
+    if (isExecutableIssue) {
+      console.log(`Detected executable issue, attempting auto-fix... (retry ${retryCount + 1}/${MAX_RETRIES})`);
       try {
         await autoFixSpeedtest();
-        // 重试一次
-        return await runSpeedtest(serverId);
+        // 重试一次，增加重试计数
+        return await runSpeedtest(serverId, retryCount + 1);
       } catch (fixError: any) {
         throw new Error(`speedtest可执行文件问题，自动修复失败: ${fixError.message || String(fixError)}\n\n请尝试手动执行 'speedtest update' 命令`);
       }
+    }
+    
+    // 如果已达到最大重试次数，不再尝试修复
+    if (retryCount >= MAX_RETRIES && error.message?.includes('Command failed')) {
+      throw new Error(`speedtest执行失败，已达到最大重试次数 (${MAX_RETRIES})。\n\n错误信息: ${error.message}\n\n建议:\n1. 检查网络连接\n2. 手动执行 'speedtest update' 重新安装\n3. 检查系统权限和防火墙设置`);
     }
     
     // 如果是指定服务器失败，尝试自动选择
@@ -606,7 +665,7 @@ async function runSpeedtest(serverId?: number): Promise<SpeedtestResult> {
                      error.message?.includes('不可用'))) {
       console.log(`Server ${serverId} failed, trying auto selection...`);
       try {
-        return await runSpeedtest(); // 递归调用，不指定服务器ID
+        return await runSpeedtest(undefined, retryCount); // 递归调用，不指定服务器ID，保持重试计数
       } catch (fallbackError) {
         // 如果fallback也失败，抛出原始错误
         throw error;
@@ -1185,6 +1244,14 @@ const speedtest = async (msg: Api.Message) => {
           result.interface.name
         );
 
+        // 处理上传失败的情况
+        const uploadRate = (result as any).uploadFailed 
+          ? "FAILED" 
+          : await unitConvert(result.upload.bandwidth);
+        const uploadData = (result as any).uploadFailed 
+          ? "FAILED" 
+          : await unitConvert(result.upload.bytes, true);
+        
         const description = [
           `<blockquote><b>⚡️SPEEDTEST by OOKLA @${ccCode}${ccFlag}</b></blockquote>`,
           `<code>Name</code>  <code>${htmlEscape(result.isp)}</code> ${asInfo}`,
@@ -1201,16 +1268,11 @@ const speedtest = async (msg: Api.Message) => {
           `<code>Ping</code>  <code>⇔${result.ping.latency}ms</code> <code>±${result.ping.jitter}ms</code>`,
           `<code>Rate</code>  <code>↓${await unitConvert(
             result.download.bandwidth
-          )}</code> <code>↑${await unitConvert(
-            result.upload.bandwidth
-          )}</code>`,
+          )}</code> <code>↑${uploadRate}</code>`,
           `<code>Data</code>  <code>↓${await unitConvert(
             result.download.bytes,
             true
-          )}</code> <code>↑${await unitConvert(
-            result.upload.bytes,
-            true
-          )}</code>`,
+          )}</code> <code>↑${uploadData}</code>`,
           `<code>Stat</code>  <code>RX ${await unitConvert(
             rxBytes,
             true
@@ -1219,14 +1281,21 @@ const speedtest = async (msg: Api.Message) => {
             .replace("T", " ")
             .split(".")[0]
             .replace("Z", "")}</code>`,
-        ].join("\n");
+        ];
+
+        // 如果上传失败，添加说明
+        if ((result as any).uploadFailed) {
+          description.push(`<code>Note</code>  <code>上传测试失败，可能是网络环境限制</code>`);
+        }
+
+        const finalDescription = description.join("\n");
 
         // 根据优先顺序发送
         const order = getMessageOrder();
         const trySend = async (type: MessageType): Promise<boolean> => {
           try {
             if (type === "txt") {
-              await msg.edit({ text: description, parseMode: "html" });
+              await msg.edit({ text: finalDescription, parseMode: "html" });
               return true;
             }
 
@@ -1238,7 +1307,7 @@ const speedtest = async (msg: Api.Message) => {
             if (type === "photo") {
               await msg.client?.sendFile(msg.peerId, {
                 file: imagePath,
-                caption: description,
+                caption: finalDescription,
                 parseMode: "html",
               });
               try {
@@ -1251,7 +1320,7 @@ const speedtest = async (msg: Api.Message) => {
             } else if (type === "file") {
               await msg.client?.sendFile(msg.peerId, {
                 file: imagePath,
-                caption: description,
+                caption: finalDescription,
                 parseMode: "html",
                 forceDocument: true,
               });
@@ -1285,7 +1354,7 @@ const speedtest = async (msg: Api.Message) => {
                   fs.unlinkSync(stickerPath);
                 } catch {}
                 // 同时展示文字说明
-                await msg.edit({ text: description, parseMode: "html" });
+                await msg.edit({ text: finalDescription, parseMode: "html" });
                 return true;
               }
             }
@@ -1301,7 +1370,7 @@ const speedtest = async (msg: Api.Message) => {
         }
 
         // 兜底为文本
-        await msg.edit({ text: description, parseMode: "html" });
+        await msg.edit({ text: finalDescription, parseMode: "html" });
       } catch (error) {
         const errorMsg = error instanceof Error ? error.message : String(error);
         const isKnownNetworkError = errorMsg.includes('超时') || 
