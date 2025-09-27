@@ -37,6 +37,8 @@ const help_txt = `<b>使用方法:</b>
 <code>${commandName} clear</code> - 清除默认服务器
 <code>${commandName} config</code> - 显示配置信息
 <code>${commandName} check</code> - 检查网络连接状态
+<code>${commandName} diagnose</code> - 诊断speedtest可执行文件问题
+<code>${commandName} fix</code> - 自动修复speedtest安装问题
 <code>${commandName} update</code> - 更新 Speedtest CLI`;
 // HTML escape function
 function htmlEscape(text: string): string {
@@ -51,7 +53,13 @@ function htmlEscape(text: string): string {
 const execAsync = promisify(exec);
 const ASSETS_DIR = createDirectoryInAssets("speedtest");
 const TEMP_DIR = createDirectoryInTemp("speedtest");
-const SPEEDTEST_PATH = path.join(ASSETS_DIR, "speedtest");
+
+// 根据平台确定可执行文件名
+function getSpeedtestExecutableName(): string {
+  return process.platform === "win32" ? "speedtest.exe" : "speedtest";
+}
+
+const SPEEDTEST_PATH = path.join(ASSETS_DIR, getSpeedtestExecutableName());
 const SPEEDTEST_JSON = path.join(ASSETS_DIR, "speedtest.json");
 const SPEEDTEST_VERSION = "1.2.0";
 
@@ -232,13 +240,16 @@ async function downloadCli(): Promise<void> {
 
     // 检查是否已存在
     if (fs.existsSync(SPEEDTEST_PATH)) {
+      console.log(`Speedtest CLI already exists at: ${SPEEDTEST_PATH}`);
       return;
     }
 
     const platform = process.platform;
     const arch = process.arch;
+    console.log(`Downloading speedtest CLI for platform: ${platform}, arch: ${arch}`);
 
     let filename: string;
+    
     if (platform === "linux") {
       const archMap: { [key: string]: string } = {
         x64: "x86_64",
@@ -249,40 +260,87 @@ async function downloadCli(): Promise<void> {
       filename = `ookla-speedtest-${SPEEDTEST_VERSION}-linux-${mappedArch}.tgz`;
     } else if (platform === "win32") {
       filename = `ookla-speedtest-${SPEEDTEST_VERSION}-win64.zip`;
+    } else if (platform === "darwin") {
+      // macOS support
+      filename = `ookla-speedtest-${SPEEDTEST_VERSION}-macosx-universal.tgz`;
     } else {
       throw new Error(`Unsupported platform: ${platform}`);
     }
 
     const url = `https://install.speedtest.net/app/cli/${filename}`;
+    console.log(`Downloading from: ${url}`);
+    
     const response = await axios.get(url, { responseType: "arraybuffer" });
-
     const tempFile = path.join(ASSETS_DIR, filename);
+    
+    console.log(`Saving to temp file: ${tempFile}`);
     fs.writeFileSync(tempFile, response.data);
 
+    // 验证文件是否下载成功
+    if (!fs.existsSync(tempFile)) {
+      throw new Error(`Failed to save downloaded file: ${tempFile}`);
+    }
+
     // 解压文件
-    if (platform === "linux") {
+    if (platform === "linux" || platform === "darwin") {
+      console.log(`Extracting tar.gz file: ${tempFile}`);
       await execAsync(`tar -xzf "${tempFile}" -C "${ASSETS_DIR}"`);
+      
+      // 验证可执行文件是否存在
+      if (!fs.existsSync(SPEEDTEST_PATH)) {
+        throw new Error(`Speedtest executable not found after extraction: ${SPEEDTEST_PATH}`);
+      }
+      
       await execAsync(`chmod +x "${SPEEDTEST_PATH}"`);
+      console.log(`Set executable permissions for: ${SPEEDTEST_PATH}`);
     } else if (platform === "win32") {
       // Windows 需要解压 zip 文件
+      console.log(`Extracting zip file: ${tempFile}`);
       const AdmZip = require("adm-zip");
       const zip = new AdmZip(tempFile);
       zip.extractAllTo(ASSETS_DIR, true);
+      
+      // 验证可执行文件是否存在
+      if (!fs.existsSync(SPEEDTEST_PATH)) {
+        throw new Error(`Speedtest executable not found after extraction: ${SPEEDTEST_PATH}`);
+      }
     }
 
     // 清理临时文件
-    fs.unlinkSync(tempFile);
+    try {
+      fs.unlinkSync(tempFile);
+      console.log(`Cleaned up temp file: ${tempFile}`);
+    } catch (cleanupError) {
+      console.warn(`Failed to cleanup temp file: ${tempFile}`, cleanupError);
+    }
 
     // 清理额外文件
     const extraFiles = ["speedtest.5", "speedtest.md"];
     for (const file of extraFiles) {
       const filePath = path.join(ASSETS_DIR, file);
       if (fs.existsSync(filePath)) {
-        fs.unlinkSync(filePath);
+        try {
+          fs.unlinkSync(filePath);
+          console.log(`Cleaned up extra file: ${filePath}`);
+        } catch (cleanupError) {
+          console.warn(`Failed to cleanup extra file: ${filePath}`, cleanupError);
+        }
       }
     }
+
+    console.log(`Speedtest CLI successfully installed at: ${SPEEDTEST_PATH}`);
   } catch (error: any) {
     console.error("Failed to download speedtest CLI:", error);
+    
+    // 清理可能存在的损坏文件
+    try {
+      if (fs.existsSync(SPEEDTEST_PATH)) {
+        fs.unlinkSync(SPEEDTEST_PATH);
+      }
+    } catch (cleanupError) {
+      console.warn("Failed to cleanup damaged speedtest file:", cleanupError);
+    }
+    
     throw error;
   }
 }
@@ -381,10 +439,124 @@ async function getInterfaceTraffic(interfaceName: string): Promise<{
   return { rxBytes: 0, txBytes: 0, mtu: 0 };
 }
 
+/**
+ * 诊断speedtest可执行文件问题
+ */
+async function diagnoseSpeedtestExecutable(): Promise<{ canRun: boolean; error?: string; needsReinstall: boolean }> {
+  try {
+    // 检查文件是否存在
+    if (!fs.existsSync(SPEEDTEST_PATH)) {
+      return { canRun: false, error: "可执行文件不存在", needsReinstall: true };
+    }
+
+    // 检查文件权限（Unix系统）
+    if (process.platform !== "win32") {
+      try {
+        const stats = fs.statSync(SPEEDTEST_PATH);
+        if (!(stats.mode & parseInt('111', 8))) {
+          console.log("Fixing executable permissions...");
+          await execAsync(`chmod +x "${SPEEDTEST_PATH}"`);
+        }
+      } catch (permError) {
+        return { canRun: false, error: "权限检查失败", needsReinstall: true };
+      }
+    }
+
+    // 尝试运行版本检查
+    try {
+      const { stdout, stderr } = await execAsync(`"${SPEEDTEST_PATH}" --version`, { timeout: 10000 });
+      if (stdout && stdout.includes("Speedtest")) {
+        return { canRun: true, needsReinstall: false };
+      }
+    } catch (versionError) {
+      console.log("Version check failed:", versionError);
+    }
+
+    // 尝试基本帮助命令
+    try {
+      const { stdout, stderr } = await execAsync(`"${SPEEDTEST_PATH}" --help`, { timeout: 10000 });
+      if (stdout && (stdout.includes("Speedtest") || stdout.includes("usage"))) {
+        return { canRun: true, needsReinstall: false };
+      }
+    } catch (helpError) {
+      console.log("Help check failed:", helpError);
+    }
+
+    return { canRun: false, error: "可执行文件无法运行，可能是架构不匹配或文件损坏", needsReinstall: true };
+  } catch (error: any) {
+    return { canRun: false, error: error.message || "诊断失败", needsReinstall: true };
+  }
+}
+
+/**
+ * 自动修复speedtest安装问题
+ */
+async function autoFixSpeedtest(): Promise<void> {
+  console.log("Starting auto-fix for speedtest...");
+  
+  // 清理可能损坏的文件
+  const filesToClean = [
+    SPEEDTEST_PATH,
+    path.join(ASSETS_DIR, "speedtest.exe"),
+    path.join(ASSETS_DIR, "speedtest"),
+  ];
+  
+  for (const file of filesToClean) {
+    if (fs.existsSync(file)) {
+      try {
+        fs.unlinkSync(file);
+        console.log(`Cleaned up file: ${file}`);
+      } catch (cleanupError) {
+        console.warn(`Failed to cleanup file: ${file}`, cleanupError);
+      }
+    }
+  }
+
+  // 清理临时文件
+  try {
+    const tempFiles = fs.readdirSync(ASSETS_DIR).filter(file => 
+      file.endsWith('.tgz') || file.endsWith('.zip')
+    );
+    for (const tempFile of tempFiles) {
+      try {
+        fs.unlinkSync(path.join(ASSETS_DIR, tempFile));
+        console.log(`Cleaned up temp file: ${tempFile}`);
+      } catch (cleanupError) {
+        console.warn(`Failed to cleanup temp file: ${tempFile}`, cleanupError);
+      }
+    }
+  } catch (readDirError) {
+    console.warn("Failed to read assets directory:", readDirError);
+  }
+
+  // 重新下载
+  await downloadCli();
+  
+  // 验证修复结果
+  const diagnosis = await diagnoseSpeedtestExecutable();
+  if (!diagnosis.canRun) {
+    throw new Error(`自动修复失败: ${diagnosis.error}`);
+  }
+  
+  console.log("Auto-fix completed successfully");
+}
+
 async function runSpeedtest(serverId?: number): Promise<SpeedtestResult> {
   try {
+    // 检查并诊断可执行文件
     if (!fs.existsSync(SPEEDTEST_PATH)) {
+      console.log("Speedtest executable not found, downloading...");
       await downloadCli();
+    }
+
+    // 诊断可执行文件状态
+    const diagnosis = await diagnoseSpeedtestExecutable();
+    if (!diagnosis.canRun) {
+      console.log(`Speedtest executable issue detected: ${diagnosis.error}`);
+      if (diagnosis.needsReinstall) {
+        console.log("Attempting auto-fix...");
+        await autoFixSpeedtest();
+      }
     }
 
     const serverArg = serverId ? ` -s ${serverId}` : "";
@@ -397,6 +569,11 @@ async function runSpeedtest(serverId?: number): Promise<SpeedtestResult> {
     if (stderr) {
       console.log("Speedtest stderr:", stderr);
       if (stderr.includes("NoServersException")) {
+        // 如果指定服务器不可用，尝试自动选择
+        if (serverId) {
+          console.log(`Server ${serverId} not available, trying auto selection...`);
+          return await runSpeedtest(); // 递归调用，不指定服务器ID
+        }
         throw new Error("指定的服务器不可用，请尝试其他服务器或使用自动选择");
       }
       if (stderr.includes("Timeout occurred")) {
@@ -410,6 +587,31 @@ async function runSpeedtest(serverId?: number): Promise<SpeedtestResult> {
     return JSON.parse(stdout);
   } catch (error: any) {
     console.error("Speedtest failed:", error);
+    
+    // 检查是否是可执行文件问题
+    if (error.message?.includes('Command failed') && error.message?.includes(SPEEDTEST_PATH)) {
+      console.log("Detected executable issue, attempting auto-fix...");
+      try {
+        await autoFixSpeedtest();
+        // 重试一次
+        return await runSpeedtest(serverId);
+      } catch (fixError: any) {
+        throw new Error(`speedtest可执行文件问题，自动修复失败: ${fixError.message || String(fixError)}\n\n请尝试手动执行 'speedtest update' 命令`);
+      }
+    }
+    
+    // 如果是指定服务器失败，尝试自动选择
+    if (serverId && (error.message?.includes('NoServersException') || 
+                     error.message?.includes('Server not found') ||
+                     error.message?.includes('不可用'))) {
+      console.log(`Server ${serverId} failed, trying auto selection...`);
+      try {
+        return await runSpeedtest(); // 递归调用，不指定服务器ID
+      } catch (fallbackError) {
+        // 如果fallback也失败，抛出原始错误
+        throw error;
+      }
+    }
     
     // 处理超时错误
     if (error.code === 'ETIMEDOUT' || error.message?.includes('timeout')) {
@@ -506,11 +708,11 @@ async function quickPingTest(serverId: number): Promise<{ available: boolean; pi
 }
 
 /**
- * 简化的服务器可用性检测 - 基于服务器列表验证
+ * 简化的服务器可用性检测 - 仅检查服务器是否在列表中
  */
 async function testServerAvailability(serverId: number): Promise<{ available: boolean; ping?: number; error?: string }> {
   try {
-    // 首先检查服务器是否在可用列表中
+    // 只检查服务器是否在可用列表中，不进行实际ping测试
     const allServers = await getAllServers();
     const serverExists = allServers.find(s => s.id === serverId);
     
@@ -518,8 +720,8 @@ async function testServerAvailability(serverId: number): Promise<{ available: bo
       return { available: false, error: "服务器不在可用列表中" };
     }
 
-    // 进行轻量级ping测试
-    return await quickPingTest(serverId);
+    // 服务器在列表中就认为可用
+    return { available: true };
   } catch (error: any) {
     console.error(`Server ${serverId} availability test failed:`, error);
     return { available: false, error: error.message || "测试失败" };
@@ -855,6 +1057,47 @@ const speedtest = async (msg: Api.Message) => {
           parseMode: "html",
         });
       }
+    } else if (command === "diagnose") {
+      await msg.edit({
+        text: "🔍 正在诊断speedtest可执行文件...",
+        parseMode: "html",
+      });
+
+      try {
+        const diagnosis = await diagnoseSpeedtestExecutable();
+        const statusIcon = diagnosis.canRun ? "✅" : "❌";
+        const statusText = diagnosis.canRun ? "正常" : "异常";
+        const errorText = diagnosis.error ? `\n<b>问题:</b> <code>${diagnosis.error}</code>` : "";
+        const fixText = diagnosis.needsReinstall ? `\n\n💡 <b>建议:</b> 使用 <code>${commandName} fix</code> 自动修复` : "";
+
+        await msg.edit({
+          text: `<blockquote><b>⚡️SPEEDTEST by OOKLA</b></blockquote>\n${statusIcon} <b>可执行文件状态:</b> <code>${statusText}</code>${errorText}\n<b>平台:</b> <code>${process.platform}</code>\n<b>架构:</b> <code>${process.arch}</code>\n<b>路径:</b> <code>${SPEEDTEST_PATH}</code>\n<b>存在:</b> <code>${fs.existsSync(SPEEDTEST_PATH) ? '是' : '否'}</code>${fixText}`,
+          parseMode: "html",
+        });
+      } catch (error) {
+        await msg.edit({
+          text: `<blockquote><b>⚡️SPEEDTEST by OOKLA</b></blockquote>\n❌ <code>诊断失败: ${htmlEscape(String(error))}</code>`,
+          parseMode: "html",
+        });
+      }
+    } else if (command === "fix") {
+      await msg.edit({
+        text: "🔧 正在自动修复speedtest安装问题...",
+        parseMode: "html",
+      });
+
+      try {
+        await autoFixSpeedtest();
+        await msg.edit({
+          text: `<blockquote><b>⚡️SPEEDTEST by OOKLA</b></blockquote>\n✅ <code>自动修复完成</code>\n<b>平台:</b> <code>${process.platform}</code>\n<b>路径:</b> <code>${SPEEDTEST_PATH}</code>\n\n💡 现在可以正常使用speedtest功能了`,
+          parseMode: "html",
+        });
+      } catch (error) {
+        await msg.edit({
+          text: `<blockquote><b>⚡️SPEEDTEST by OOKLA</b></blockquote>\n❌ <code>自动修复失败: ${htmlEscape(String(error))}</code>\n\n💡 <b>建议:</b>\n• 检查网络连接\n• 确认有足够的磁盘空间\n• 检查文件权限\n• 尝试手动执行 <code>${commandName} update</code>`,
+          parseMode: "html",
+        });
+      }
     } else if (command === "update") {
       await msg.edit({
         text: "🔄 正在更新 Speedtest CLI...",
@@ -862,21 +1105,54 @@ const speedtest = async (msg: Api.Message) => {
       });
 
       try {
-        // 删除现有文件强制重新下载
-        if (fs.existsSync(SPEEDTEST_PATH)) {
-          fs.unlinkSync(SPEEDTEST_PATH);
+        // 删除现有文件和可能的损坏文件强制重新下载
+        const filesToClean = [
+          SPEEDTEST_PATH,
+          path.join(ASSETS_DIR, "speedtest.exe"),
+          path.join(ASSETS_DIR, "speedtest"),
+        ];
+        
+        for (const file of filesToClean) {
+          if (fs.existsSync(file)) {
+            try {
+              fs.unlinkSync(file);
+              console.log(`Cleaned up existing file: ${file}`);
+            } catch (cleanupError) {
+              console.warn(`Failed to cleanup file: ${file}`, cleanupError);
+            }
+          }
+        }
+
+        // 清理可能存在的临时文件
+        const tempFiles = fs.readdirSync(ASSETS_DIR).filter(file => 
+          file.endsWith('.tgz') || file.endsWith('.zip')
+        );
+        for (const tempFile of tempFiles) {
+          try {
+            fs.unlinkSync(path.join(ASSETS_DIR, tempFile));
+            console.log(`Cleaned up temp file: ${tempFile}`);
+          } catch (cleanupError) {
+            console.warn(`Failed to cleanup temp file: ${tempFile}`, cleanupError);
+          }
         }
 
         await downloadCli();
-        await msg.edit({
-          text: "<blockquote><b>⚡️SPEEDTEST by OOKLA</b></blockquote>\n<code>Speedtest® CLI 已更新到最新版本</code>",
-          parseMode: "html",
-        });
+        
+        // 验证安装是否成功
+        if (fs.existsSync(SPEEDTEST_PATH)) {
+          await msg.edit({
+            text: `<blockquote><b>⚡️SPEEDTEST by OOKLA</b></blockquote>\n<code>Speedtest® CLI 已更新到最新版本</code>\n<code>平台: ${process.platform}</code>\n<code>路径: ${SPEEDTEST_PATH}</code>`,
+            parseMode: "html",
+          });
+        } else {
+          throw new Error(`安装验证失败，可执行文件不存在: ${SPEEDTEST_PATH}`);
+        }
       } catch (error) {
+        console.error("Update failed:", error);
         await msg.edit({
-          text: `<blockquote><b>⚡️SPEEDTEST by OOKLA</b></blockquote>\n<code>更新失败: ${htmlEscape(
+          text: `<blockquote><b>⚡️SPEEDTEST by OOKLA</b></blockquote>\n❌ <code>更新失败: ${htmlEscape(
             String(error)
-          )}</code>`,
+          )}</code>\n\n💡 <b>建议:</b>\n• 检查网络连接\n• 确认有足够的磁盘空间\n• 检查文件权限`,
           parseMode: "html",
         });
       }
@@ -893,49 +1169,15 @@ const speedtest = async (msg: Api.Message) => {
         return;
       }
 
-      await msg.edit({ text: "⚡️ 网络连接正常，正在准备速度测试...", parseMode: "html" });
+      await msg.edit({ text: "⚡️ 网络连接正常，正在进行速度测试...", parseMode: "html" });
 
-      let serverId: number | undefined;
-      
-      if (command && !isNaN(parseInt(command))) {
-        // 用户指定服务器ID，直接使用
-        serverId = parseInt(command);
-        await msg.edit({ 
-          text: `🎯 使用指定服务器 ${serverId}，开始测试...`, 
-          parseMode: "html" 
-        });
-      } else {
-        // 尝试使用默认服务器
-        const defaultServerId = getDefaultServer();
-        if (defaultServerId) {
-          serverId = defaultServerId;
-          await msg.edit({ 
-            text: `🎯 使用默认服务器 ${serverId}，开始测试...`, 
-            parseMode: "html" 
-          });
-        } else {
-          // 智能选择最佳服务器
-          await msg.edit({ text: "🎯 正在选择最佳测试服务器...", parseMode: "html" });
-          const bestServerId = await selectBestServer();
-          serverId = bestServerId || undefined;
-          
-          if (!serverId) {
-            await msg.edit({
-              text: "❌ <b>无法获取服务器列表</b>\n\n💡 <b>建议:</b>\n• 检查网络连接\n• 稍后重试\n• 使用 <code>speedtest list</code> 查看服务器列表\n• 手动指定服务器ID",
-              parseMode: "html",
-            });
-            return;
-          }
-          
-          await msg.edit({ 
-            text: `🎯 已选择服务器 ${serverId}，开始测试...`, 
-            parseMode: "html" 
-          });
-        }
-      }
+      const serverId =
+        command && !isNaN(parseInt(command))
+          ? parseInt(command)
+          : getDefaultServer();
 
       try {
-        const result = await runSpeedtest(serverId);
+        const result = await runSpeedtest(serverId || undefined);
         const { asInfo, ccName, ccCode, ccFlag, ccLink } = await getIpApi(
           result.interface.externalIp
         );
