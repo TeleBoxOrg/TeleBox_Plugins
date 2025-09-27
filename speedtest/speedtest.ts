@@ -39,7 +39,11 @@ const help_txt = `<b>使用方法:</b>
 <code>${commandName} check</code> - 检查网络连接状态
 <code>${commandName} diagnose</code> - 诊断speedtest可执行文件问题
 <code>${commandName} fix</code> - 自动修复speedtest安装问题
-<code>${commandName} update</code> - 更新 Speedtest CLI`;
+<code>${commandName} update</code> - 更新 Speedtest CLI
+
+<b>系统speedtest支持:</b>
+在任何测试命令中添加 <code>--system</code> 或 <code>-s</code> 标志使用系统已安装的speedtest
+例: <code>${commandName} --system</code> 或 <code>${commandName} -s 12345</code>`;
 // HTML escape function
 function htmlEscape(text: string): string {
   return text
@@ -541,11 +545,103 @@ async function autoFixSpeedtest(): Promise<void> {
   console.log("Auto-fix completed successfully");
 }
 
-async function runSpeedtest(serverId?: number, retryCount: number = 0): Promise<SpeedtestResult> {
+/**
+ * 使用系统已安装的 speedtest 可执行文件运行测试
+ * 优先尝试 `speedtest`，如果不存在再尝试 `speedtest-cli`
+ */
+async function runSystemSpeedtest(serverId?: number, retryCount: number = 0): Promise<SpeedtestResult> {
+  const MAX_RETRIES = 1;
+  try {
+    // 查找系统可执行文件
+    const candidates = process.platform === 'win32' ? ['speedtest.exe', 'speedtest-cli.exe'] : ['speedtest', 'speedtest-cli'];
+    let exe: string | null = null;
+    
+    for (const name of candidates) {
+      try {
+        // which 返回路径或者抛错
+        const { stdout } = await execAsync(`which ${name}`, { timeout: 5000 });
+        if (stdout && stdout.trim()) {
+          exe = stdout.trim();
+          break;
+        }
+      } catch (e) {
+        // ignore
+      }
+    }
+
+    if (!exe) {
+      // on windows try where
+      if (process.platform === 'win32') {
+        for (const name of ['speedtest', 'speedtest-cli']) {
+          try {
+            const { stdout } = await execAsync(`where ${name}`, { timeout: 5000 });
+            if (stdout && stdout.trim()) {
+              exe = stdout.split(/\r?\n/)[0].trim();
+              break;
+            }
+          } catch {}
+        }
+      }
+    }
+
+    if (!exe) {
+      throw new Error('系统未安装 speedtest，可使用不带 --system 的默认行为或运行 .speedtest update 安装内置 CLI');
+    }
+
+    const serverArg = serverId ? ` -s ${serverId}` : '';
+    const command = `${exe} --accept-license --accept-gdpr -f json${serverArg}`;
+
+    const { stdout, stderr } = await execAsync(command, { timeout: 120000 });
+
+    if (stderr && stderr.trim()) {
+      console.log('System speedtest stderr:', stderr);
+    }
+
+    let result: any;
+    try {
+      result = JSON.parse(stdout);
+      
+      // 检查JSON中是否包含错误信息
+      if (result.error) {
+        if (result.error.includes("Cannot read")) {
+          throw new Error(`网络连接错误: ${result.error}\n\n这是网络环境问题，不是程序问题。建议：\n1. 检查网络连接稳定性\n2. 尝试其他测试服务器\n3. 稍后重试`);
+        }
+        throw new Error(`测试失败: ${result.error}`);
+      }
+    } catch (parseError) {
+      if (stdout.includes('"error":"Cannot read')) {
+        throw new Error('网络连接错误: Cannot read\n\n这是网络环境问题，不是程序问题。建议：\n1. 检查网络连接稳定性\n2. 尝试其他测试服务器\n3. 稍后重试');
+      }
+      throw new Error('系统 speedtest 返回非 JSON 输出');
+    }
+
+    if (!result.upload || result.upload.bandwidth === undefined) {
+      result.upload = { bandwidth: 0, bytes: 0, elapsed: 0 };
+      result.uploadFailed = true;
+    }
+
+    return result;
+  } catch (error: any) {
+    console.error('runSystemSpeedtest failed:', error);
+    // 如果是可执行文件本身的问题，尝试回退到内置可执行文件一次
+    if (retryCount < MAX_RETRIES && (error.message?.includes('系统未安装') || error.message?.includes('Command failed'))) {
+      console.log('System speedtest failed, falling back to built-in speedtest...');
+      return await runSpeedtest(serverId, retryCount + 1, false);
+    }
+    throw error;
+  }
+}
+
+async function runSpeedtest(serverId?: number, retryCount: number = 0, useSystem: boolean = false): Promise<SpeedtestResult> {
   const MAX_RETRIES = 1; // 最多重试1次，避免无限循环
   
   try {
-    // 检查并诊断可执行文件
+    // 如果要求使用系统 speedtest，则尝试系统可执行文件
+    if (useSystem) {
+      return await runSystemSpeedtest(serverId, retryCount);
+    }
+
+    // 检查并诊断内置可执行文件
     if (!fs.existsSync(SPEEDTEST_PATH)) {
       console.log("Speedtest executable not found, downloading...");
       await downloadCli();
@@ -576,7 +672,7 @@ async function runSpeedtest(serverId?: number, retryCount: number = 0): Promise<
         // 如果指定服务器不可用，尝试自动选择
         if (serverId) {
           console.log(`Server ${serverId} not available, trying auto selection...`);
-          return await runSpeedtest(undefined, retryCount); // 递归调用，不指定服务器ID，保持重试计数
+          return await runSpeedtest(undefined, retryCount, useSystem); // 递归调用，不指定服务器ID，保持重试计数
         }
         throw new Error("指定的服务器不可用，请尝试其他服务器或使用自动选择");
       }
@@ -648,7 +744,7 @@ async function runSpeedtest(serverId?: number, retryCount: number = 0): Promise<
       try {
         await autoFixSpeedtest();
         // 重试一次，增加重试计数
-        return await runSpeedtest(serverId, retryCount + 1);
+        return await runSpeedtest(serverId, retryCount + 1, useSystem);
       } catch (fixError: any) {
         throw new Error(`speedtest可执行文件问题，自动修复失败: ${fixError.message || String(fixError)}\n\n请尝试手动执行 'speedtest update' 命令`);
       }
@@ -665,7 +761,7 @@ async function runSpeedtest(serverId?: number, retryCount: number = 0): Promise<
                      error.message?.includes('不可用'))) {
       console.log(`Server ${serverId} failed, trying auto selection...`);
       try {
-        return await runSpeedtest(undefined, retryCount); // 递归调用，不指定服务器ID，保持重试计数
+        return await runSpeedtest(undefined, retryCount, useSystem); // 递归调用，不指定服务器ID，保持重试计数
       } catch (fallbackError) {
         // 如果fallback也失败，抛出原始错误
         throw error;
@@ -955,8 +1051,12 @@ async function convertImageToStickerWebp(
 }
 
 const speedtest = async (msg: Api.Message) => {
-  const args = msg.message.slice(1).split(" ").slice(1);
+  const rawArgs = msg.message.slice(1).split(" ").slice(1);
+  // 支持位置参数和旗标（如 --system 或 -s）
+  const flags = rawArgs.filter(a => a.startsWith('--') || a.startsWith('-'));
+  const args = rawArgs.filter(a => !a.startsWith('--') && !a.startsWith('-'));
   const command = args[0] || "";
+  const useSystem = flags.includes('--system') || flags.includes('-s');
 
   try {
     if (command === "list") {
@@ -1236,7 +1336,7 @@ const speedtest = async (msg: Api.Message) => {
           : getDefaultServer();
 
       try {
-        const result = await runSpeedtest(serverId || undefined);
+        const result = await runSpeedtest(serverId || undefined, 0, useSystem);
         const { asInfo, ccName, ccCode, ccFlag, ccLink } = await getIpApi(
           result.interface.externalIp
         );
