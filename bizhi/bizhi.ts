@@ -53,20 +53,33 @@ const pluginName = "bizhi";
 const commandName = `${mainPrefix}${pluginName}`;
 
 const help_text = `
-随机获取一张高品质壁纸\n\n<code>${commandName} [分类] [-f]</code>\n分类可选：meizi, dongman, fengjing, suiji\n如 <code>${commandName} dongman</code>\n\n✨ 优先从wallhaven.cc获取高品质原图（≥1920×1080）\n📐 只获取16:9宽高比壁纸，适配主流显示器\n📊 显示分辨率和文件大小信息\n📁 使用 -f 参数发送源文件而非图片
+随机获取一张高品质壁纸\n\n<code>${commandName} [分类] [-f]</code>\n分类可选：meizi, dongman, fengjing, suiji\n如 <code>${commandName} dongman</code>\n\n✨ 优先从wallhaven.cc获取高品质原图（≥1920×1080）\n🎨 优先内容：动漫、二次元、油画、摄影、日本风景、夜景\n📐 只获取16:9宽高比壁纸，适配主流显示器\n💾 文件大小≥3MB，确保高清画质\n📊 显示分辨率和文件大小信息\n📁 使用 -f 参数发送源文件而非图片
 `;
 
 /**
- * 分类映射：将用户输入映射到wallhaven分类
+ * 分类映射：将用户输入映射到wallhaven分类和优先标签
  */
-function mapCategoryToWallhaven(lx: string): string {
-  const categoryMap: Record<string, string> = {
-    'meizi': 'people',
-    'dongman': 'anime', 
-    'fengjing': 'general',
-    'suiji': ''
+function mapCategoryToWallhaven(lx: string): { category: string; tags: string[] } {
+  const categoryMap: Record<string, { category: string; tags: string[] }> = {
+    'meizi': { 
+      category: 'people', 
+      tags: ['photography', 'portrait', 'aesthetic'] 
+    },
+    'dongman': { 
+      category: 'anime', 
+      tags: ['anime', 'illustration', 'digital painting', 'Studio Ghibli', 'anime screenshot'] 
+    },
+    'fengjing': { 
+      category: 'general', 
+      tags: ['nature', 'Japan', 'night', 'architecture', 'oil painting', 'photography'] 
+    },
+    'suiji': { 
+      category: '', 
+      tags: ['anime', 'oil painting', 'photography', 'Japan', 'night', 'illustration'] 
+    }
   };
-  return categoryMap[lx] || '';
+  
+  return categoryMap[lx] || { category: '', tags: ['anime', 'oil painting', 'photography', 'Japan', 'night'] };
 }
 
 /**
@@ -84,7 +97,7 @@ function generateRandomSeed(): string {
 /**
  * 从wallhaven获取高品质壁纸
  */
-async function fetchFromWallhaven(category: string): Promise<WallhavenWallpaper> {
+async function fetchFromWallhaven(categoryInfo: { category: string; tags: string[] }): Promise<WallhavenWallpaper> {
   const baseUrl = 'https://wallhaven.cc/api/v1/search';
   
   // 使用混合策略：60%完全随机，25%高质量，15%最新
@@ -114,14 +127,23 @@ async function fetchFromWallhaven(category: string): Promise<WallhavenWallpaper>
     params.append('order', 'desc');
   }
   
-  // 随机页码增加多样性（1-5页）
-  if (Math.random() < 0.3) {
-    const randomPage = Math.floor(Math.random() * 5) + 1;
+  // 添加优先标签搜索
+  if (categoryInfo.tags.length > 0) {
+    // 随机选择1-2个优先标签
+    const selectedTags = categoryInfo.tags
+      .sort(() => Math.random() - 0.5)
+      .slice(0, Math.random() < 0.7 ? 1 : 2);
+    params.append('q', selectedTags.join('+'));
+  }
+  
+  // 随机页码增加多样性（1-3页，减少范围确保质量）
+  if (Math.random() < 0.2) {
+    const randomPage = Math.floor(Math.random() * 3) + 1;
     params.append('page', randomPage.toString());
   }
   
-  if (category) {
-    params.append('categories', category === 'people' ? '001' : category === 'anime' ? '010' : '100');
+  if (categoryInfo.category) {
+    params.append('categories', categoryInfo.category === 'people' ? '001' : categoryInfo.category === 'anime' ? '010' : '100');
   }
   
   const response = await axios.get(`${baseUrl}?${params}`, {
@@ -136,12 +158,23 @@ async function fetchFromWallhaven(category: string): Promise<WallhavenWallpaper>
     throw new Error('No wallpapers found');
   }
   
-  // 从结果中随机选择一张
-  const randomIndex = Math.floor(Math.random() * data.data.length);
-  const selectedWallpaper = data.data[randomIndex];
+  // 过滤符合文件大小要求的壁纸（≥3MB）
+  const minFileSize = 3 * 1024 * 1024; // 3MB in bytes
+  const qualifiedWallpapers = data.data.filter(wallpaper => 
+    wallpaper.file_size >= minFileSize &&
+    wallpaper.dimension_x >= 1920 && 
+    wallpaper.dimension_y >= 1080
+  );
   
-  // 验证图片质量 - 如果分辨率不够，重新获取
-  if (selectedWallpaper.dimension_x < 1920 || selectedWallpaper.dimension_y < 1080) {
+  // 如果没有符合条件的壁纸，从所有结果中选择
+  const wallpapersToChooseFrom = qualifiedWallpapers.length > 0 ? qualifiedWallpapers : data.data;
+  
+  // 从符合条件的壁纸中随机选择一张
+  const randomIndex = Math.floor(Math.random() * wallpapersToChooseFrom.length);
+  const selectedWallpaper = wallpapersToChooseFrom[randomIndex];
+  
+  // 验证图片质量 - 如果分辨率或文件大小不够，重新获取
+  if (selectedWallpaper.dimension_x < 1920 || selectedWallpaper.dimension_y < 1080 || selectedWallpaper.file_size < minFileSize) {
     // 使用更高分辨率要求重试，保持16:9比例
     params.set('atleast', '2560x1440');
     params.set('ratios', '16x9'); // 确保重试时也是16:9
@@ -158,7 +191,14 @@ async function fetchFromWallhaven(category: string): Promise<WallhavenWallpaper>
     
     const retryData: WallhavenResponse = retryResponse.data;
     if (retryData.data && retryData.data.length > 0) {
-      return retryData.data[Math.floor(Math.random() * retryData.data.length)];
+      // 重试时也应用文件大小过滤
+      const retryQualified = retryData.data.filter(wallpaper => 
+        wallpaper.file_size >= minFileSize &&
+        wallpaper.dimension_x >= 2560 && 
+        wallpaper.dimension_y >= 1440
+      );
+      const retryWallpapers = retryQualified.length > 0 ? retryQualified : retryData.data;
+      return retryWallpapers[Math.floor(Math.random() * retryWallpapers.length)];
     }
   }
   
@@ -193,8 +233,8 @@ async function getWallpaper(lx: string): Promise<{imageBuffer: Buffer, filename:
   
   try {
     // 优先尝试wallhaven
-    const wallhavenCategory = mapCategoryToWallhaven(lx);
-    const wallpaper = await fetchFromWallhaven(wallhavenCategory);
+    const wallhavenCategoryInfo = mapCategoryToWallhaven(lx);
+    const wallpaper = await fetchFromWallhaven(wallhavenCategoryInfo);
     
     // 确保使用原图路径，添加质量信息
     const imgResponse = await axios.get(wallpaper.path, {
