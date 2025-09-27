@@ -53,7 +53,7 @@ const pluginName = "bizhi";
 const commandName = `${mainPrefix}${pluginName}`;
 
 const help_text = `
-随机获取一张高品质壁纸\n\n<code>${commandName} [分类] [-f]</code>\n分类可选：meizi, dongman, fengjing, suiji\n如 <code>${commandName} dongman</code>\n\n✨ 优先从wallhaven.cc获取高品质原图（≥1920×1080）\n📊 显示分辨率和文件大小信息\n📁 使用 -f 参数发送源文件而非图片
+随机获取一张高品质壁纸\n\n<code>${commandName} [分类] [-f]</code>\n分类可选：meizi, dongman, fengjing, suiji\n如 <code>${commandName} dongman</code>\n\n✨ 优先从wallhaven.cc获取高品质原图（≥1920×1080）\n📐 只获取16:9宽高比壁纸，适配主流显示器\n📊 显示分辨率和文件大小信息\n📁 使用 -f 参数发送源文件而非图片
 `;
 
 /**
@@ -103,7 +103,8 @@ async function fetchFromWallhaven(category: string): Promise<WallhavenWallpaper>
     sorting,
     purity: '100',         // SFW only
     per_page: '24',        // 获取更多选项
-    atleast: '1920x1080'   // 最小分辨率要求
+    atleast: '1920x1080',  // 最小分辨率要求
+    ratios: '16x9'         // 只要16:9宽高比
   });
   
   // 随机排序时添加seed确保真正随机
@@ -141,8 +142,9 @@ async function fetchFromWallhaven(category: string): Promise<WallhavenWallpaper>
   
   // 验证图片质量 - 如果分辨率不够，重新获取
   if (selectedWallpaper.dimension_x < 1920 || selectedWallpaper.dimension_y < 1080) {
-    // 使用更高分辨率要求重试
+    // 使用更高分辨率要求重试，保持16:9比例
     params.set('atleast', '2560x1440');
+    params.set('ratios', '16x9'); // 确保重试时也是16:9
     if (sorting === 'random') {
       params.set('seed', generateRandomSeed()); // 新的随机种子
     }
