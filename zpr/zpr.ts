@@ -55,18 +55,6 @@ const getHeaders = (proxyHost: string) => {
     return baseHeaders;
 };
 
-// 状态更新消息辅助函数
-const updateStatus = async (message: Api.Message, text: string) => {
-    try {
-        await message.edit({
-            text,
-            parseMode: "html"
-        });
-    } catch (error) {
-        console.warn("[zpr] 状态更新失败:", error);
-    }
-};
-
 const dataPath = createDirectoryInAssets("zpr");
 
 // 配置管理器
@@ -275,6 +263,134 @@ interface MediaGroup {
     hasSpoiler?: boolean;
 }
 
+// 辅助函数：编辑HTML消息
+const editHtmlMessage = async (msg: Api.Message, text: string) => {
+    try {
+        await msg.edit({ text, parseMode: "html" });
+    } catch (error) {
+        console.warn("[zpr] 消息编辑失败:", error);
+    }
+};
+
+// 辅助函数：处理404错误
+const handle404Error = (proxyHost: string, failedProxies: string[]) => {
+    failedProxies.push(proxyHost);
+    return true; // 表示遇到404错误
+};
+
+// 辅助函数：检查是否为超时错误
+const isTimeoutError = (error: any): boolean => {
+    return error.code === 'ECONNABORTED' || 
+           error.message?.includes('timeout') ||
+           error.message?.includes('canceled') ||
+           error.message?.includes('cancelled') ||
+           error.name === 'AbortError' ||
+           error.code === 'ETIMEDOUT';
+};
+
+interface DownloadResult {
+    mediaGroup: MediaGroup | null;
+    usedProxy?: string;  // 成功时使用的代理
+    failureReason?: 'network' | '404' | 'other';  // 失败原因
+    hadNetworkFailures?: boolean;  // 是否在成功前遇到过网络错误
+    failedProxies?: string[];  // 失败的代理列表
+}
+
+// 单张图片下载函数，包含完整的代理重试逻辑
+async function downloadSingleImage(
+    item: SetuData, 
+    index: number, 
+    r18: number, 
+    currentProxy: string,
+    allProxies: string[]
+): Promise<DownloadResult> {
+    const { pid, title, width, height, urls } = item;
+    const imgName = `${pid}_${index}.jpg`;
+    const filePath = path.join(dataPath, imgName);
+    
+    // 将当前配置的代理放在第一位，其他代理作为备选
+    const proxyList = [currentProxy, ...allProxies.filter(proxy => proxy !== currentProxy)];
+    
+    let lastError: string = "";
+    let has404Error = false;
+    let hadNetworkFailures = false;  // 跟踪是否遇到过网络错误
+    let failedProxies: string[] = [];  // 记录失败的代理
+    
+    for (const proxyHost of proxyList) {
+        try {
+            const imgController = new AbortController();
+            const imgTimeoutId = setTimeout(() => imgController.abort(), 30000);
+            
+            try {
+                const imgResponse = await axios.get(urls.regular, {
+                    headers: getHeaders(proxyHost),
+                    timeout: 30000,
+                    responseType: 'arraybuffer',
+                    signal: imgController.signal
+                });
+                
+                if (imgResponse.status === 200) {
+                    await fs.writeFile(filePath, imgResponse.data as any);
+                    
+                    return {
+                        mediaGroup: {
+                            type: 'photo',
+                            media: filePath,
+                            caption: `<b>🎨 ${htmlEscape(title)}</b>
+
+🆔 <b>作品ID:</b> <a href="https://www.pixiv.net/artworks/${pid}">${pid}</a>
+🔗 <b>原图:</b> <a href="${htmlEscape(urls.original)}">高清查看</a>
+📐 <b>尺寸:</b> <code>${width}×${height}</code>
+
+<i>📡 来源: Pixiv</i>`,
+                            hasSpoiler: r18 === 1
+                        },
+                        usedProxy: proxyHost,
+                        hadNetworkFailures: hadNetworkFailures,  // 报告是否之前有网络错误
+                        failedProxies: failedProxies  // 报告失败的代理
+                    };
+                } else if (imgResponse.status === 404) {
+                    has404Error = handle404Error(proxyHost, failedProxies);
+                    continue; // 尝试下一个代理
+                } else {
+                    lastError = `HTTP ${imgResponse.status}`;
+                    failedProxies.push(proxyHost);
+                    continue; // 尝试下一个代理
+                }
+            } finally {
+                clearTimeout(imgTimeoutId);
+            }
+            
+        } catch (error: any) {
+            if (error.response && error.response.status === 404) {
+                has404Error = handle404Error(proxyHost, failedProxies);
+                continue; // 尝试下一个代理
+            }
+            
+            // 检查是否为超时错误
+            if (isTimeoutError(error)) {
+                lastError = `连接超时: ${error.message}`;
+                hadNetworkFailures = true;  // 标记遇到了网络错误
+                failedProxies.push(proxyHost);
+            } else {
+                lastError = error.message;
+                hadNetworkFailures = true;  // 其他网络错误也标记
+                failedProxies.push(proxyHost);
+            }
+            // 所有网络错误（包括超时）都尝试下一个代理
+            continue;
+        }
+    }
+    
+    // 所有代理都尝试失败了
+    if (has404Error) {
+        return { mediaGroup: null, failureReason: '404', failedProxies: failedProxies };
+    } else {
+        // 超时、连接失败等都归类为网络问题
+        return { mediaGroup: null, failureReason: 'network', failedProxies: failedProxies };
+    }
+}
+
 async function getResult(message: Api.Message, r18 = 0, tag = "", num = 1): Promise<[MediaGroup[] | null, string]> {
     const client = await getGlobalClient();
     if (!client) {
@@ -287,142 +403,113 @@ async function getResult(message: Api.Message, r18 = 0, tag = "", num = 1): Prom
     const allProxies = Object.values(PROXY_HOSTS);
     const currentProxy = await ZprConfigManager.getProxyHost();
     
-    // 将当前代理放在列表最前面
-    const proxyHosts = [currentProxy, ...allProxies.filter(proxy => proxy !== currentProxy)];
-    
-    // 用于存储最后一次错误
-    let lastError = "";
-    let finalSetuList: MediaGroup[] = [];
-    
-    // 对每个代理进行尝试
-    for (const proxyHost of proxyHosts) {
+    try {
+        await editHtmlMessage(message, `🔄 正在连接API...`);
+        
+        // 直接调用API，使用当前配置的代理参数
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 10000);
+        
+        let response;
         try {
-            await updateStatus(message, `🔄 正在通过 ${proxyHost} 连接...`);
-            
-            // 首先尝试API调用
-            const controller = new AbortController();
-            const timeoutId = setTimeout(() => controller.abort(), 10000);
-            
-            let response;
-            try {
-                response = await axios.get(
-                    `https://api.lolicon.app/setu/v2?num=${num}&r18=${r18}&tag=${tag}&size=regular&size=original&proxy=${proxyHost}&excludeAI=true`,
-                    {
-                        headers: baseHeaders,
-                        timeout: 10000,
-                        signal: controller.signal
-                    }
-                );
-            } finally {
-                clearTimeout(timeoutId);
-            }
-            
-            if (response.status !== 200) {
-                console.warn(`[zpr] 代理 ${proxyHost} API响应状态异常:`, response.status);
-                continue;
-            }
-            
-            await updateStatus(message, "🔍 已进入二次元 . . .");
-            
-            const result: SetuData[] = (response.data as ApiResponse).data;
-            if (!result.length) {
-                console.warn(`[zpr] 代理 ${proxyHost} 未返回图片数据`);
-                continue;
-            }
-            
-            const setuList: MediaGroup[] = [];
-            let downloadSuccess = true;
-            
-            await updateStatus(message, "📥 努力获取中 。。。");
-            
-            // 尝试下载所有图片
-            for (let i = 0; i < Math.min(num, result.length); i++) {
-                const item = result[i];
-                if (!item) continue;
-                
-                const urls = item.urls.regular;
-                const original = item.urls.original;
-                const { pid, title, width, height } = item;
-                const imgName = `${pid}_${i}.jpg`;
-                const filePath = path.join(dataPath, imgName);
-                
-                try {
-                    // 创建一个取消令牌用于图片下载
-                    const imgController = new AbortController();
-                    const imgTimeoutId = setTimeout(() => imgController.abort(), 30000);
-                    
-                    try {
-                        const imgResponse = await axios.get(urls, {
-                            headers: getHeaders(proxyHost),
-                            timeout: 30000,
-                            responseType: 'arraybuffer',
-                            signal: imgController.signal
-                        });
-                        
-                        if (imgResponse.status !== 200) {
-                            downloadSuccess = false;
-                            break;
-                        }
-                        
-                        await fs.writeFile(filePath, imgResponse.data as any);
-                
-                        setuList.push({
-                            type: 'photo',
-                            media: filePath,
-                            caption: `<b>🎨 ${htmlEscape(title)}</b>
-
-🆔 <b>作品ID:</b> <a href="https://www.pixiv.net/artworks/${pid}">${pid}</a>
-🔗 <b>原图:</b> <a href="${htmlEscape(original)}">高清查看</a>
-📐 <b>尺寸:</b> <code>${width}×${height}</code>
-
-<i>📡 来源: Pixiv</i>`,
-                            hasSpoiler: r18 === 1
-                        });
-                    } finally {
-                        clearTimeout(imgTimeoutId);
-                    }
-                } catch (error: any) {
-                    console.warn(`[zpr] 图片下载失败 (${proxyHost}):`, error.message);
-                    downloadSuccess = false;
-                    break;
+            response = await axios.get(
+                `https://api.lolicon.app/setu/v2?num=${num}&r18=${r18}&tag=${tag}&size=regular&size=original&proxy=${currentProxy}&excludeAI=true`,
+                {
+                    headers: baseHeaders,
+                    timeout: 10000,
+                    signal: controller.signal
                 }
-            }
-            
-            if (downloadSuccess && setuList.length > 0) {
-                // 所有操作都成功完成，返回结果
-                finalSetuList = setuList;
-                
-                // 如果使用的是非当前默认的代理，并且完全成功了，更新默认代理
-                if (proxyHost !== currentProxy) {
-                    try {
-                        await updateStatus(message, `📡 更新默认代理为: ${proxyHost}`);
-                        await ZprConfigManager.setProxyHost(proxyHost);
-                        console.log(`[zpr] 已切换到更稳定的代理: ${proxyHost}`);
-                    } catch (err) {
-                        console.warn(`[zpr] 更新默认代理失败:`, err);
-                        // 即使更新代理失败，也不影响本次下载的结果
-                    }
-                }
-                return [setuList, des];
-            }
-            
-            // 如果下载失败，清理已下载的文件
-            for (const item of setuList) {
-                try {
-                    await fs.unlink(item.media);
-                } catch (err) {
-                    console.warn(`[zpr] 清理图片文件失败: ${item.media}`, err);
-                }
-            }
-            
-        } catch (error: any) {
-            lastError = error.message || "未知错误";
-            console.warn(`[zpr] 代理 ${proxyHost} 异常:`, lastError);
+            );
+        } finally {
+            clearTimeout(timeoutId);
         }
+        
+        if (response.status !== 200) {
+            return [null, `API请求失败: HTTP ${response.status}`];
+        }
+        
+        await editHtmlMessage(message, "🔍 已进入二次元 . . .");
+        
+        const result: SetuData[] = (response.data as ApiResponse).data;
+        if (!result.length) {
+            return [null, "未找到符合条件的图片"];
+        }
+        
+        await editHtmlMessage(message, "📥 努力获取中 。。。");
+        
+        // 并发下载所有图片，每张图片都有自己的代理重试机制
+        const downloadPromises = result.slice(0, num).map((item, index) => 
+            downloadSingleImage(item, index, r18, currentProxy, allProxies)
+        );
+        
+        const downloadResults = await Promise.all(downloadPromises);
+        
+        // 统计下载结果
+        const successfulDownloads = downloadResults
+            .filter(result => result.mediaGroup !== null)
+            .map(result => result.mediaGroup!);
+            
+        const failedCount = downloadResults.length - successfulDownloads.length;
+        const networkFailures = downloadResults.filter(result => result.failureReason === 'network').length;
+        const error404Count = downloadResults.filter(result => result.failureReason === '404').length;
+        
+        // 计算有网络错误经历的图片数量（包括最终成功的）
+        const imagesWithNetworkIssues = downloadResults.filter(result => 
+            result.failureReason === 'network' || result.hadNetworkFailures
+        ).length;
+        
+        if (successfulDownloads.length === 0) {
+            if (networkFailures > 0) {
+                return [null, "所有图片下载失败（网络连接问题，已尝试所有代理）"];
+            } else {
+                return [null, "所有图片下载失败（图片不存在）"];
+            }
+        }
+        
+        // 智能代理配置更新逻辑（仅基于图片下载成功率）
+        let shouldUpdateProxy = false;
+        let reasonForUpdate = "";
+        let bestProxy = "";
+        
+        if (imagesWithNetworkIssues > 0) {
+            // 只要有图片遇到网络问题（即使最终成功），就检查是否有更好的代理
+            const nonDefaultSuccesses = downloadResults.filter(result => 
+                result.mediaGroup !== null && result.usedProxy !== currentProxy
+            );
+            
+            if (nonDefaultSuccesses.length > 0) {
+                // 找到最常用的非默认代理
+                const proxyUsage: Record<string, number> = {};
+                nonDefaultSuccesses.forEach(result => {
+                    const proxy = result.usedProxy!;
+                    proxyUsage[proxy] = (proxyUsage[proxy] || 0) + 1;
+                });
+                
+                bestProxy = Object.entries(proxyUsage)
+                    .sort(([,a], [,b]) => b - a)[0][0];
+                    
+                shouldUpdateProxy = true;
+                reasonForUpdate = "图片下载成功率";
+            }
+        }
+        
+        if (shouldUpdateProxy) {
+            try {
+                await editHtmlMessage(message, `📡 更新默认代理为: ${bestProxy}`);
+                await ZprConfigManager.setProxyHost(bestProxy);
+                console.log(`[zpr] 已切换到更稳定的代理: ${bestProxy}`);
+            } catch (err) {
+                console.warn(`[zpr] 更新默认代理失败:`, err);
+            }
+        }
+        
+        console.log(`[zpr] 成功下载 ${successfulDownloads.length}/${result.length} 张图片`);
+        return [successfulDownloads, des];
+        
+    } catch (error: any) {
+        console.error("[zpr] API请求失败:", error);
+        return [null, `API请求失败: ${error.message || "未知错误"}`];
     }
-    
-    // 所有代理都尝试失败了
-    return [null, `所有代理服务器均连接失败。最后的错误: ${lastError}`];
 }
 
 class ZprPlugin extends Plugin {
@@ -433,7 +520,7 @@ class ZprPlugin extends Plugin {
             try {
                 const client = await getGlobalClient();
                 if (!client) {
-                    await msg.edit({ text: "❌ 客户端未初始化", parseMode: "html" });
+                    await editHtmlMessage(msg, "❌ 客户端未初始化");
                     return;
                 }
 
@@ -446,7 +533,7 @@ class ZprPlugin extends Plugin {
                 // 处理帮助命令
                 if (sub === "help" || sub === "h" || 
                     (args.length > 1 && (args[args.length - 1].toLowerCase() === "help" || args[args.length - 1].toLowerCase() === "h"))) {
-                    await msg.edit({ text: help_text, parseMode: "html" });
+                    await editHtmlMessage(msg, help_text);
                     return;
                 }
 
@@ -455,8 +542,7 @@ class ZprPlugin extends Plugin {
                     if (args.length === 1) {
                         // 查看当前反代设置
                         const currentProxy = await ZprConfigManager.getProxyHost();
-                        await msg.edit({
-                            text: `🔗 <b>当前反代设置</b>
+                        await editHtmlMessage(msg, `🔗 <b>当前反代设置</b>
 
 <b>当前地址:</b> <code>${htmlEscape(currentProxy)}</code>
 
@@ -465,9 +551,7 @@ ${Object.entries(PROXY_HOSTS).map(([key, value]) =>
 `• <code>${value}</code> - ${key}`).join('\n')}
 
 <b>使用方法:</b>
-<code>${mainPrefix}zpr proxy [地址]</code> - 设置反代地址`,
-                            parseMode: "html"
-                        });
+<code>${mainPrefix}zpr proxy [地址]</code> - 设置反代地址`);
                         return;
                     }
                     
@@ -476,32 +560,23 @@ ${Object.entries(PROXY_HOSTS).map(([key, value]) =>
                     const validHosts = Object.values(PROXY_HOSTS);
                     
                     if (!validHosts.includes(newProxy)) {
-                        await msg.edit({
-                            text: `❌ <b>无效的反代地址</b>
+                        await editHtmlMessage(msg, `❌ <b>无效的反代地址</b>
 
 <b>可用地址:</b>
 ${Object.entries(PROXY_HOSTS).map(([key, value]) => 
-`• <code>${value}</code> - ${key}`).join('\n')}`,
-                            parseMode: "html"
-                        });
+`• <code>${value}</code> - ${key}`).join('\n')}`);
                         return;
                     }
                     
                     const success = await ZprConfigManager.setProxyHost(newProxy);
                     if (success) {
-                        await msg.edit({
-                            text: `✅ <b>反代地址已更新</b>
+                        await editHtmlMessage(msg, `✅ <b>反代地址已更新</b>
 
 <b>新地址:</b> <code>${htmlEscape(newProxy)}</code>
 
-设置已保存，下次获取图片时将使用新的反代地址。`,
-                            parseMode: "html"
-                        });
+设置已保存，下次获取图片时将使用新的反代地址。`);
                     } else {
-                        await msg.edit({
-                            text: "❌ <b>设置失败</b>\n\n无法保存配置，请稍后重试。",
-                            parseMode: "html"
-                        });
+                        await editHtmlMessage(msg, "❌ <b>设置失败</b>\n\n无法保存配置，请稍后重试。");
                     }
                     return;
                 }
@@ -534,26 +609,17 @@ ${Object.entries(PROXY_HOSTS).map(([key, value]) =>
                     }
                 }
 
-                await msg.edit({
-                    text: "🔄 正在前往二次元。。。",
-                    parseMode: "html"
-                });
+                await editHtmlMessage(msg, "🔄 正在前往二次元。。。");
 
                 const [photoList, des] = await getResult(msg, r18, tag, num);
                 
                 if (!photoList) {
-                    await msg.edit({
-                        text: `❌ <b>获取失败:</b> ${htmlEscape(des)}`,
-                        parseMode: "html"
-                    });
+                    await editHtmlMessage(msg, `❌ <b>获取失败:</b> ${htmlEscape(des)}`);
                     return;
                 }
                 
                 try {
-                    await msg.edit({
-                        text: "📤 传送中。。。",
-                        parseMode: "html"
-                    });
+                    await editHtmlMessage(msg, "📤 传送中。。。");
                 } catch {}
                 
                 try {
@@ -587,10 +653,7 @@ ${Object.entries(PROXY_HOSTS).map(([key, value]) =>
                                 ? "此群组不允许发送媒体。"
                                 : `发送失败: ${htmlEscape(error.message || "未知错误")}`;
                             
-                            await msg.edit({
-                                text: `❌ <b>发送失败:</b> ${errorMsg}`,
-                                parseMode: "html"
-                            });
+                            await editHtmlMessage(msg, `❌ <b>发送失败:</b> ${errorMsg}`);
                             throw error; // 继续抛出错误以中断循环
                         } finally {
                             // 无论发送是否成功，都尝试清理临时文件
@@ -608,17 +671,11 @@ ${Object.entries(PROXY_HOSTS).map(([key, value]) =>
                     } catch {}
                 } catch (error: any) {
                     console.error("[zpr] 插件执行失败:", error);
-                    await msg.edit({
-                        text: `❌ <b>插件执行失败:</b> ${htmlEscape(error.message || "未知错误")}`,
-                        parseMode: "html"
-                    });
+                    await editHtmlMessage(msg, `❌ <b>插件执行失败:</b> ${htmlEscape(error.message || "未知错误")}`);
                 }
             } catch (error: any) {
                 console.error("[zpr] 插件执行失败:", error);
-                await msg.edit({
-                    text: `❌ <b>插件执行失败:</b> ${htmlEscape(error.message || "未知错误")}`,
-                    parseMode: "html"
-                });
+                await editHtmlMessage(msg, `❌ <b>插件执行失败:</b> ${htmlEscape(error.message || "未知错误")}`);
             }
         }
     };
