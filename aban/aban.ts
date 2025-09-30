@@ -618,8 +618,11 @@ class CommandHandlers {
           resultText = `✅ 已踢出 ${htmlEscape(display)}`;
           break;
         case 'ban':
+          // 先删除消息，再封禁
+          const deleteSuccess = await BanManager.deleteHistoryInCurrentChat(client, message.peerId, uid);
           success = await BanManager.banUser(client, message.peerId, uid);
-          resultText = `✅ 已封禁 ${htmlEscape(display)}`;
+          const deleteText = deleteSuccess ? '(已清理消息)' : '';
+          resultText = `✅ 已封禁 ${htmlEscape(display)} ${deleteText}`;
           break;
         case 'unban':
           success = await BanManager.unbanUser(client, message.peerId, uid);
