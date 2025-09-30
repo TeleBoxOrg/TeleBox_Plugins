@@ -259,10 +259,6 @@ class RatePlugin extends Plugin {
       {
         name: 'CoinGecko Main',
         url: `https://api.coingecko.com/api/v3/simple/price?ids=${coinIdsStr}&vs_currencies=${currenciesStr}&include_last_updated_at=true`
-      },
-      {
-        name: 'CoinGecko Alternative',
-        url: `https://api.coingecko.com/api/v3/simple/price?ids=${coinIdsStr}&vs_currencies=${currenciesStr}&include_last_updated_at=true`
       }
     ];
     
@@ -333,64 +329,63 @@ class RatePlugin extends Plugin {
     throw lastError || new Error('无法获取价格数据');
   }
 
-  private formatPrice(price: number, currency: string): string {
-    const currencySymbols: Record<string, string> = {
-      'usd': '$',
-      'cny': '¥',
-      'eur': '€',
-      'jpy': '¥',
-      'krw': '₩',
-      'gbp': '£',
-      'try': '₺',
-      'ngn': '₦',
-      'aud': 'A$',
-      'cad': 'C$',
-      'chf': 'CHF',
-      'hkd': 'HK$',
-      'sgd': 'S$',
-      'nzd': 'NZ$',
-      'sek': 'kr',
-      'nok': 'kr',
-      'dkk': 'kr',
-      'pln': 'zł',
-      'czk': 'Kč',
-      'huf': 'Ft',
-      'ron': 'lei',
-      'bgn': 'лв',
-      'hrk': 'kn',
-      'rub': '₽',
-      'uah': '₴',
-      'inr': '₹',
-      'thb': '฿',
-      'myr': 'RM',
-      'idr': 'Rp',
-      'php': '₱',
-      'vnd': '₫',
-      'pkr': '₨',
-      'lkr': '₨',
-      'bdt': '৳',
-      'mmk': 'K',
-      'sar': '﷼',
-      'aed': 'د.إ',
-      'ils': '₪',
-      'zar': 'R',
-      'brl': 'R$',
-      'ars': '$',
-      'clp': '$',
-      'cop': '$',
-      'pen': 'S/',
-      'mxn': '$'
-    };
-
-    const symbol = currencySymbols[currency.toLowerCase()] || currency.toUpperCase();
-    
-    if (price >= 1) {
-      return `${symbol}${price.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
-    } else if (price >= 0.01) {
-      return `${symbol}${price.toFixed(4)}`;
+  private formatPrice(value: number): string {
+    if (value >= 1) {
+      return value.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    } else if (value >= 0.01) {
+      return value.toFixed(4);
+    } else if (value >= 0.0001) {
+      return value.toFixed(6);
     } else {
-      return `${symbol}${price.toFixed(8)}`;
+      return value.toExponential(2);
     }
+  }
+
+  private formatAmount(value: number): string {
+    if (value >= 1) {
+      return value.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    } else {
+      return value.toFixed(6);
+    }
+  }
+
+  private buildFiatToFiatResponse(amount: number, convertedAmount: number, rate: number, sourceSymbol: string, targetSymbol: string): string {
+    return `💱 <b>汇率</b>\n\n` +
+      `<code>${this.formatAmount(amount)} ${sourceSymbol} ≈</code>\n` +
+      `<code>${this.formatAmount(convertedAmount)} ${targetSymbol}</code>\n\n` +
+      `📊 <b>汇率:</b> <code>1 ${sourceSymbol} = ${this.formatAmount(rate)} ${targetSymbol}</code>\n` +
+      `⏰ <b>更新时间:</b> ${new Date().toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' })}`;
+  }
+
+  private buildCryptoToCryptoResponse(amount: number, convertedAmount: number, conversionRate: number, price: number, targetPrice: number, sourceSymbol: string, targetSymbol: string, lastUpdated: Date): string {
+    return `💱 <b>汇率</b>\n\n` +
+      `<code>${this.formatAmount(amount)} ${sourceSymbol} ≈</code>\n` +
+      `<code>${this.formatAmount(convertedAmount)} ${targetSymbol}</code>\n\n` +
+      `💎 <b>兑换比率:</b> <code>1 ${sourceSymbol} = ${this.formatAmount(conversionRate)} ${targetSymbol}</code>\n` +
+      `📊 <b>基准价格:</b> <code>${sourceSymbol} $${this.formatPrice(price)} • ${targetSymbol} $${this.formatPrice(targetPrice)}</code>\n` +
+      `⏰ <b>数据更新:</b> ${lastUpdated.toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' })}`;
+  }
+
+  private buildFiatToCryptoResponse(amount: number, cryptoAmount: number, price: number, cryptoSymbol: string, fiatSymbol: string, lastUpdated: Date): string {
+    return `💱 <b>汇率</b>\n\n` +
+      `<code>${this.formatAmount(amount)} ${fiatSymbol} ≈</code>\n` +
+      `<code>${this.formatAmount(cryptoAmount)} ${cryptoSymbol}</code>\n\n` +
+      `💎 <b>当前汇率:</b> <code>1 ${cryptoSymbol} = ${this.formatPrice(price)} ${fiatSymbol}</code>\n` +
+      `⏰ <b>数据更新:</b> ${lastUpdated.toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' })}`;
+  }
+
+  private buildCryptoToFiatResponse(amount: number, totalValue: number, price: number, cryptoSymbol: string, fiatSymbol: string, lastUpdated: Date): string {
+    return `💱 <b>汇率</b>\n\n` +
+      `<code>${this.formatAmount(amount)} ${cryptoSymbol} ≈</code>\n` +
+      `<code>${this.formatAmount(totalValue)} ${fiatSymbol}</code>\n\n` +
+      `💎 <b>当前汇率:</b> <code>1 ${cryptoSymbol} = ${this.formatPrice(price)} ${fiatSymbol}</code>\n` +
+      `⏰ <b>数据更新:</b> ${lastUpdated.toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' })}`;
+  }
+
+  private buildPriceResponse(price: number, cryptoSymbol: string, fiatSymbol: string, lastUpdated: Date): string {
+    return `💱 <b>汇率</b>\n\n` +
+      `<code>1 ${cryptoSymbol} = ${this.formatPrice(price)} ${fiatSymbol}</code>\n\n` +
+      `⏰ <b>数据更新:</b> ${lastUpdated.toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' })}`;
   }
 
   private getCoinName(coinId: string): string {
@@ -598,33 +593,11 @@ class RatePlugin extends Plugin {
         lastUpdated = market.lastUpdated;
       }
 
-      // 格式化价格显示 - 显示完整数字
-      const formatPrice = (value: number): string => {
-        if (value >= 1) {
-          return value.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-        } else if (value >= 0.01) {
-          return value.toFixed(4);
-        } else if (value >= 0.0001) {
-          return value.toFixed(6);
-        } else {
-          return value.toExponential(2);
-        }
-      };
-
-      // 格式化数量显示 - 显示完整数字
-      const formatAmount = (value: number): string => {
-        if (value >= 1) {
-          return value.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-        } else {
-          return value.toFixed(6);
-        }
-      };
 
       // 构建响应消息
       let responseText: string;
       
       if (isFiatFiat) {
-        // 法币间汇率转换（直连外汇API）
         const sourceFiatSymbol = input1!.toUpperCase();
         const targetFiatSymbol = input2!.toUpperCase();
         try {
@@ -635,27 +608,18 @@ class RatePlugin extends Plugin {
             return;
           }
           const convertedAmount = amount * rate;
-          responseText = `💱 <b>汇率</b>\n\n` +
-            `<code>${formatAmount(amount)} ${sourceFiatSymbol} ≈</code>\n` +
-            `<code>${formatAmount(convertedAmount)} ${targetFiatSymbol}</code>\n\n` +
-            `📊 <b>汇率:</b> <code>1 ${sourceFiatSymbol} = ${formatAmount(rate)} ${targetFiatSymbol}</code>\n` +
-            `⏰ <b>更新时间:</b> ${new Date().toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' })}`;
+          responseText = this.buildFiatToFiatResponse(amount, convertedAmount, rate, sourceFiatSymbol, targetFiatSymbol);
         } catch (error: any) {
           await msg.edit({ text: `❌ <b>获取汇率失败:</b> ${error.message}`, parseMode: 'html' });
           return;
         }
       } else if (isCryptoCrypto) {
-        // 加密货币间转换 - 需要获取目标加密货币价格
         const targetCryptoCurrency = this.currencyCache[targetCrypto!.toLowerCase()];
         let targetCryptoId: string;
-        
         if (!targetCryptoCurrency) {
           const searchResult = await this.searchCurrency(targetCrypto!);
           if (!searchResult) {
-            await msg.edit({
-              text: `🔍 <b>未识别的目标货币:</b> "${htmlEscape(targetCrypto!)}"\n\n💡 请检查拼写或使用完整货币名称`,
-              parseMode: "html"
-            });
+            await msg.edit({ text: `🔍 <b>未识别的目标货币:</b> "${htmlEscape(targetCrypto!)}"\n\n💡 请检查拼写或使用完整货币名称`, parseMode: "html" });
             return;
           }
           targetCryptoId = searchResult.id;
@@ -663,70 +627,40 @@ class RatePlugin extends Plugin {
           targetCryptoId = targetCryptoCurrency.id;
         }
 
-        // 获取目标加密货币价格
-        let targetPriceData: any;
+        let targetResponse: CoinGeckoResponse;
         try {
-          const targetResponse = await this.fetchCryptoPrice([targetCryptoId], ['usd']);
-          targetPriceData = targetResponse[targetCryptoId];
+          targetResponse = await this.fetchCryptoPrice([targetCryptoId], ['usd']);
         } catch (error: any) {
-          await msg.edit({
-            text: `❌ <b>获取目标货币价格失败:</b> ${error.message}`,
-            parseMode: "html"
-          });
+          await msg.edit({ text: `❌ <b>获取目标货币价格失败:</b> ${error.message}`, parseMode: "html" });
           return;
         }
-        
+
+        const targetPriceData = targetResponse[targetCryptoId];
         if (!targetPriceData || !targetPriceData.usd) {
-          await msg.edit({
-            text: "❌ <b>API错误:</b> 无法获取目标货币价格数据，请稍后重试",
-            parseMode: "html"
-          });
+          await msg.edit({ text: "❌ <b>API错误:</b> 无法获取目标货币价格数据，请稍后重试", parseMode: "html" });
           return;
         }
 
         const targetPrice = targetPriceData.usd;
         const conversionRate = price / targetPrice;
         const convertedAmount = amount * conversionRate;
-        
         const sourceCryptoSymbol = currency1?.symbol?.toUpperCase() || cryptoInput?.toUpperCase() || 'UNKNOWN';
         const targetCryptoSymbol = currency2?.symbol?.toUpperCase() || targetCrypto?.toUpperCase() || 'UNKNOWN';
-        
-        responseText = `💱 <b>汇率</b>\n\n` +
-          `<code>${formatAmount(amount)} ${sourceCryptoSymbol} ≈</code>\n` +
-          `<code>${formatAmount(convertedAmount)} ${targetCryptoSymbol}</code>\n\n` +
-          `💎 <b>兑换比率:</b> <code>1 ${sourceCryptoSymbol} = ${formatAmount(conversionRate)} ${targetCryptoSymbol}</code>\n` +
-          `📊 <b>基准价格:</b> <code>${sourceCryptoSymbol} $${formatPrice(price)} • ${targetCryptoSymbol} $${formatPrice(targetPrice)}</code>\n` +
-          `⏰ <b>数据更新:</b> ${lastUpdated.toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' })}`;
+        responseText = this.buildCryptoToCryptoResponse(amount, convertedAmount, conversionRate, price, targetPrice, sourceCryptoSymbol, targetCryptoSymbol, lastUpdated);
       } else if (isReverse) {
-        // 法币到加密货币的转换
         const cryptoAmount = amount / price;
         const cryptoSymbol = (isReverse ? currency2?.symbol : currency1?.symbol)?.toUpperCase() || cryptoInput?.toUpperCase() || 'UNKNOWN';
         const fiatSymbol = (isReverse ? currency1?.symbol : currency2?.symbol)?.toUpperCase() || fiatInput?.toUpperCase() || 'UNKNOWN';
-        
-        responseText = `💱 <b>汇率</b>\n\n` +
-          `<code>${formatAmount(amount)} ${fiatSymbol} ≈</code>\n` +
-          `<code>${formatAmount(cryptoAmount)} ${cryptoSymbol}</code>\n\n` +
-          `💎 <b>当前汇率:</b> <code>1 ${cryptoSymbol} = ${formatPrice(price)} ${fiatSymbol}</code>\n` +
-          `⏰ <b>数据更新:</b> ${lastUpdated.toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' })}`;
+        responseText = this.buildFiatToCryptoResponse(amount, cryptoAmount, price, cryptoSymbol, fiatSymbol, lastUpdated);
       } else if (amount !== 1) {
-        // 加密货币到法币的数量转换
         const totalValue = amount * price;
         const cryptoSymbol = currency1?.symbol?.toUpperCase() || cryptoInput?.toUpperCase() || 'UNKNOWN';
         const fiatSymbol = currency2?.symbol?.toUpperCase() || fiatInput?.toUpperCase() || 'UNKNOWN';
-        
-        responseText = `💱 <b>汇率</b>\n\n` +
-          `<code>${formatAmount(amount)} ${cryptoSymbol} ≈</code>\n` +
-          `<code>${formatAmount(totalValue)} ${fiatSymbol}</code>\n\n` +
-          `💎 <b>当前汇率:</b> <code>1 ${cryptoSymbol} = ${formatPrice(price)} ${fiatSymbol}</code>\n` +
-          `⏰ <b>数据更新:</b> ${lastUpdated.toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' })}`;
+        responseText = this.buildCryptoToFiatResponse(amount, totalValue, price, cryptoSymbol, fiatSymbol, lastUpdated);
       } else {
-        // 基础价格查询
         const cryptoSymbol = currency1?.symbol?.toUpperCase() || cryptoInput?.toUpperCase() || 'UNKNOWN';
         const fiatSymbol = currency2?.symbol?.toUpperCase() || fiatInput?.toUpperCase() || 'UNKNOWN';
-        
-        responseText = `💱 <b>汇率</b>\n\n` +
-          `<code>1 ${cryptoSymbol} = ${formatPrice(price)} ${fiatSymbol}</code>\n\n` +
-          `⏰ <b>数据更新:</b> ${lastUpdated.toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' })}`;
+        responseText = this.buildPriceResponse(price, cryptoSymbol, fiatSymbol, lastUpdated);
       }
 
       await msg.edit({
@@ -737,7 +671,12 @@ class RatePlugin extends Plugin {
       console.error('[RatePlugin] 操作失败:', error);
       
       let errorMessage = '未知错误';
-      if (error instanceof Error) {
+      let errorCode = '';
+      
+      if (axios.isAxiosError(error)) {
+        errorCode = error.code || '';
+        errorMessage = error.message;
+      } else if (error instanceof Error) {
         errorMessage = error.message;
       } else if (typeof error === 'string') {
         errorMessage = error;
@@ -746,18 +685,25 @@ class RatePlugin extends Plugin {
       // 提供更友好的错误提示
       let userMessage = `❌ <b>操作失败</b>\n\n`;
       
-      if (errorMessage.includes('网络')) {
-        userMessage += `🌐 网络连接问题，请检查:\n`;
-        userMessage += `• 网络是否正常连接\n`;
-        userMessage += `• 是否能访问国际网站\n`;
-        userMessage += `• 防火墙或代理设置\n\n`;
-        userMessage += `💡 稍后重试或使用代理`;
+      // 检查网络不可达错误
+      if (errorCode === 'ENOTFOUND' || errorCode === 'ECONNREFUSED' || errorCode === 'ENETUNREACH') {
+        userMessage += `🌐 <b>服务不可达</b>\n\n`;
+        userMessage += `无法连接到汇率服务器，可能原因:\n`;
+        userMessage += `• DNS 解析失败\n`;
+        userMessage += `• 网络连接中断\n`;
+        userMessage += `• 防火墙阻止访问\n`;
+        userMessage += `• 需要配置代理\n\n`;
+        userMessage += `💡 请检查网络设置后重试`;
+      } else if (errorCode === 'ECONNABORTED' || errorMessage.includes('超时') || errorMessage.includes('timeout')) {
+        userMessage += `⏱ <b>请求超时</b>\n\n`;
+        userMessage += `网络延迟过高或服务器响应缓慢\n\n`;
+        userMessage += `💡 请稍后重试`;
       } else if (errorMessage.includes('限流') || errorMessage.includes('429')) {
-        userMessage += `⏱ API请求过于频繁\n\n`;
+        userMessage += `⏱ <b>API请求过于频繁</b>\n\n`;
         userMessage += `请等待几分钟后再试`;
-      } else if (errorMessage.includes('超时')) {
-        userMessage += `⏱ 请求超时\n\n`;
-        userMessage += `可能是网络延迟较高，请稍后重试`;
+      } else if (errorMessage.includes('网络')) {
+        userMessage += `🌐 <b>网络连接问题</b>\n\n`;
+        userMessage += `请检查网络连接是否正常`;
       } else {
         userMessage += `错误详情: ${errorMessage}\n\n`;
         userMessage += `💡 如果问题持续，请联系管理员`;
@@ -767,16 +713,6 @@ class RatePlugin extends Plugin {
         text: userMessage,
         parseMode: "html"
       });
-    }
-  }
-
-  private formatCryptoAmount(amount: number): string {
-    if (amount >= 1) {
-      return amount.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 6 });
-    } else if (amount >= 0.000001) {
-      return amount.toFixed(8);
-    } else {
-      return amount.toExponential(4);
     }
   }
 }
