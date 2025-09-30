@@ -1,8 +1,8 @@
-/*!
- * name=javDB
- * desc=番号查询（TeleBox 标准插件）
- * priority=10
- * author=原作者𝑺𝒍𝒊𝒗𝒆𝒓𝒌𝒊𝒔𝒔 @ios151支持telebox
+/**
+ * @name javdb
+ * @desc JavDB 番号查询插件
+ * @priority 10
+ * @author 原作者 𝑺𝒍𝒊𝒗𝒆𝒓𝒌𝒊𝒔𝒔 | TeleBox @ios151
  */
 
 //@ts-nocheck
@@ -19,10 +19,14 @@ import { getPrefixes } from "@utils/pluginManager";
 import { Api } from "telegram";
 import { CustomFile } from "telegram/client/uploads";
 
-/*********************** 工具与常量 ************************/
+// ==================== 工具函数与常量 ====================
+/** 获取命令前缀 */
 const mainPrefix = (getPrefixes()[0] || ".");
+
+/** Telegram 消息最大长度限制 */
 const MAX_MESSAGE_LENGTH = 4096;
 
+/** HTML 转义函数（安全处理用户输入）*/
 const htmlEscape = (text: string): string =>
   text.replace(/[&<>"']/g, (m) => ({
     "&": "&amp;",
@@ -32,6 +36,7 @@ const htmlEscape = (text: string): string =>
     "'": "&#x27;",
   }[m] || m));
 
+/** 分割 HTML 文本为多个分段（避免超过长度限制）*/
 function chunkHtml(text: string, limit = MAX_MESSAGE_LENGTH): string[] {
   if (text.length <= limit) return [text];
   const out: string[] = [];
@@ -51,6 +56,7 @@ function chunkHtml(text: string, limit = MAX_MESSAGE_LENGTH): string[] {
   return out;
 }
 
+/** 发送长消息（自动分割为多条）*/
 async function sendLongMessage(msg: Api.Message, html: string) {
   const parts = chunkHtml(html);
   const first = parts[0] + (parts.length > 1 ? `\n\n📄 (1/${parts.length})` : "");
@@ -64,7 +70,8 @@ async function sendLongMessage(msg: Api.Message, html: string) {
   }
 }
 
-/*********************** 抓取逻辑（函数化，避免“未使用方法”） ************************/
+// ==================== 类型定义 ====================
+/** 电影搜索结果项 */
 type MovieItem = {
   code: string;
   link: string;
@@ -73,6 +80,8 @@ type MovieItem = {
   score: string;
   meta: string;
 };
+
+/** 电影详细信息 */
 type MovieDetail = Partial<{
   director: string;
   maker: string;
@@ -85,8 +94,13 @@ type MovieDetail = Partial<{
   score: string;
 }>;
 
+// ==================== 网络请求函数 ====================
+/** 根据番号搜索电影 */
 async function searchByCode(code: string): Promise<MovieItem[]> {
+  // 构建搜索 URL
   const url = `https://javdb.com/search?q=${encodeURIComponent(code)}&f=all`;
+  
+  // 发送 HTTP 请求
   const { data } = await axios.get<string>(url, {
     headers: {
       accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
@@ -96,7 +110,10 @@ async function searchByCode(code: string): Promise<MovieItem[]> {
     timeout: 15000,
   });
 
+  // 解析 HTML 响应
   const $ = cheerio.load(data);
+  
+  // 提取搜索结果
   return $(".movie-list .item").toArray().map((el) => {
     const $a = $(el).find("a");
     const title = $a.find(".video-title").text().trim();
@@ -114,7 +131,9 @@ async function searchByCode(code: string): Promise<MovieItem[]> {
   });
 }
 
+/** 获取电影详细信息 */
 async function fetchDetail(url: string): Promise<MovieDetail> {
+  // 请求详情页面
   const { data: html } = await axios.get<string>(url, {
     headers: {
       accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
@@ -124,12 +143,16 @@ async function fetchDetail(url: string): Promise<MovieDetail> {
     timeout: 15000,
   });
 
+  // 解析 HTML
   const $ = cheerio.load(html);
+  
+  // 定义解析工具函数
   const getPanelValue = (label: string) =>
     $(`.panel-block strong:contains("${label}")`).parent().find(".value").text().trim();
   const getPanelLinkValue = (label: string) =>
     $(`.panel-block strong:contains("${label}")`).parent().find(".value a").first().text().trim();
 
+  // 提取基本信息
   const detail: MovieDetail = {};
   const director = getPanelLinkValue("導演");
   const maker = getPanelLinkValue("片商");
@@ -142,6 +165,7 @@ async function fetchDetail(url: string): Promise<MovieDetail> {
   if (duration) detail.duration = duration;
   if (releaseDate) detail.releaseDate = releaseDate;
 
+  // 提取演员信息
   const actorsBlock = $(`.panel-block strong:contains("演員")`).parent().find(".value");
   const actors = actorsBlock.find("a").map((_, el) => {
     const $el = $(el);
@@ -150,13 +174,16 @@ async function fetchDetail(url: string): Promise<MovieDetail> {
   }).get();
   if (actors.length) detail.actors = actors;
 
+  // 提取标签信息
   const tagsBlock = $(`.panel-block strong:contains("類別")`).parent().find(".value");
   const tags = tagsBlock.find("a").map((_, el) => $(el).text().trim()).get();
   if (tags.length) detail.tags = tags;
 
+  // 提取评分
   const sc = $(".score .value").first().text().trim();
   if (sc) detail.score = sc;
 
+  // 提取预览图
   const previewImages = $(".preview-images .tile-item.preview-images-item")
     .map((_, el) => $(el).attr("href") || "")
     .get();
@@ -165,7 +192,8 @@ async function fetchDetail(url: string): Promise<MovieDetail> {
   return detail;
 }
 
-/*********************** 打分/文本处理 ************************/
+// ==================== 文本处理函数 ====================
+/** 生成评分星级显示 */
 function generateRating(text: string): string {
   const m = text.match(/(\d+(?:\.\d+)?)/);
   if (!m) return "暂无评分";
@@ -180,6 +208,7 @@ function generateRating(text: string): string {
   return `${stars} ${score.toFixed(2)}分`;
 }
 
+/** 从标题提取番号和描述 */
 function extractInfo(title: string): { id: string | null; description: string | null } {
   const idRegex = /[A-Z]+-\d+/;
   const m = title?.match(idRegex) || null;
@@ -188,16 +217,25 @@ function extractInfo(title: string): { id: string | null; description: string | 
   return { id, description: descM ? descM[2] : null };
 }
 
-/*********************** 插件实现 ************************/
+// ==================== 插件实现 ====================
 const help_text = `🎬 <b>JavDB 番号查询</b>
 
-<b>用法：</b>
-<code>${mainPrefix}av 番号</code> 例如 <code>${mainPrefix}av ABP-123</code>
-<code>${mainPrefix}javdb 番号</code>（等价）
+<b>指令格式：</b>
+<code>${mainPrefix}javdb &lt;番号&gt;</code>
+<code>${mainPrefix}av &lt;番号&gt;</code>
+<code>${mainPrefix}jav &lt;番号&gt;</code>
+<code>${mainPrefix}jd &lt;番号&gt;</code>
 
-<b>说明：</b>
-• 抓取 javdb.com 搜索结果并展示详情/演员/标签/评分
-• 直接附带 MissAV 在线观看链接`;
+<b>使用示例：</b>
+<code>${mainPrefix}av ABP-123</code>
+<code>${mainPrefix}javdb SSIS-001</code>
+<code>${mainPrefix}av start 128</code> （支持空格，自动转为 START-128）
+
+<b>功能说明：</b>
+• 查询 JavDB 数据库，获取番号详情
+• 显示导演、系列、演员、标签等信息
+• 封面图自动添加剧透标记，60秒后自动销毁
+• 附带 JavDB 和 MissAV 在线观看链接`;
 
 class JavDBPlugin extends Plugin {
   description: string = `JavDB 番号查询\n\n${help_text}`;
@@ -205,14 +243,15 @@ class JavDBPlugin extends Plugin {
 
   constructor() {
     super();
-    // 避免未使用字段告警
+    // 注册指令别名（独立指令模式）
     const h = this.handleAv.bind(this);
-    this.cmdHandlers["av"] = h;
-    this.cmdHandlers["jav"] = h;
-    this.cmdHandlers["jd"] = h;
-    this.cmdHandlers["javdb"] = h;
+    this.cmdHandlers["javdb"] = h;  // 主指令
+    this.cmdHandlers["av"] = h;     // 别名1：通用
+    this.cmdHandlers["jav"] = h;    // 别名2：简写
+    this.cmdHandlers["jd"] = h;     // 别名3：超短
   }
 
+  /** 处理番号查询指令 */
   private async handleAv(msg: Api.Message) {
     const client = await getGlobalClient();
     if (!client) {
@@ -220,6 +259,7 @@ class JavDBPlugin extends Plugin {
       return;
     }
 
+    // 解析参数
     const text = (msg as any).message || (msg as any).text || "";
     const parts = text.trim().split(/\s+/g);
     const [, ...args] = parts;
@@ -230,11 +270,13 @@ class JavDBPlugin extends Plugin {
       return;
     }
 
-    const code = queryRaw.toUpperCase();
+    // 规范化番号格式：去除多余空格，将空格替换为连字符
+    // 例："start 128" -> "START-128"
+    const code = queryRaw.trim().replace(/\s+/g, "-").toUpperCase();
 
     try {
+      // 步骤1：搜索番号
       await msg.edit({ text: "🔎 正在查询...", parseMode: "html" });
-
       const items = await searchByCode(code);
       const item = items.find((it) => it.code === code) || items[0];
 
@@ -243,8 +285,10 @@ class JavDBPlugin extends Plugin {
         return;
       }
 
+      // 步骤2：获取详细信息
       const detail = await fetchDetail(item.link);
 
+      // 步骤3：格式化数据
       const { id } = extractInfo(item.title);
       const scoreText = generateRating(detail.score || item.score || "");
 
@@ -256,6 +300,7 @@ class JavDBPlugin extends Plugin {
       if (detail.actors?.length) fields.push(`演员：${htmlEscape(detail.actors.map(a => a.name).join("、"))}`);
       if (detail.tags?.length) fields.push(`标签：${htmlEscape(detail.tags.join("、"))}`);
 
+      // 步骤4：构建显示文本
       const missUrl = `https://missav.ws/${encodeURIComponent(code)}`;
       const caption = [
         `番号：${htmlEscape(id || code)}`,
@@ -265,12 +310,13 @@ class JavDBPlugin extends Plugin {
         `\n🔗 <a href="${htmlEscape(item.link)}">JavDB</a> | <a href="${htmlEscape(missUrl)}">MissAV</a>`,
       ].filter(Boolean).join("\n");
 
+      // 步骤5：处理封面图
       const rawThumb = item.thumb || "";
       const photoUrl = rawThumb.startsWith("http") ? rawThumb : `https:${rawThumb}`;
       let sent: Api.Message | undefined;
 
       try {
-        // 下载封面
+        // 下载封面图
         const imgResp = await axios.get<ArrayBuffer>(photoUrl, {
           responseType: "arraybuffer",
           timeout: 20000,
@@ -282,12 +328,12 @@ class JavDBPlugin extends Plugin {
         });
         if (imgResp.status !== 200 || !imgResp.data) throw new Error(`下载封面失败: HTTP ${imgResp.status}`);
 
-        // 写入临时文件
+        // 保存到临时文件
         const tmpPath = path.join(os.tmpdir(), `javdb_cover_${Date.now()}.jpg`);
         await fs.promises.writeFile(tmpPath, Buffer.from(imgResp.data as any));
 
         try {
-          // 上传并加剧透
+          // 上传文件并发送（带剧透标记）
           const toUpload = new CustomFile(path.basename(tmpPath), fs.statSync(tmpPath).size, tmpPath);
           const handle = await client.uploadFile({ file: toUpload, workers: 1 });
 
@@ -298,30 +344,42 @@ class JavDBPlugin extends Plugin {
             replyTo: (msg as any).replyToMsgId,
           });
 
+          // 删除原查询消息
           try { await msg.delete({ revoke: true }); } catch {}
         } finally {
+          // 清理临时文件
           try { await fs.promises.unlink(tmpPath); } catch {}
         }
       } catch {
+        // 封面下载失败，仅发送文本
         await sendLongMessage(msg, caption);
       }
 
+      // 定时销毁（60秒）
       if (sent) {
         setTimeout(async () => {
           try { await client.deleteMessages(msg.peerId!, [sent!.id], { revoke: true }); } catch {}
         }, 60_000);
       }
     } catch (error: any) {
+      // 错误处理
+      console.error("[javdb] 查询失败:", error);
       const m = String(error?.message || error);
+      
+      // 处理 Telegram API 频率限制
       if (m.includes("FLOOD_WAIT")) {
         const wait = parseInt(m.match(/\d+/)?.[0] || "60", 10);
         await msg.edit({ text: `⏳ <b>请求过于频繁</b>\n\n需要等待 ${wait} 秒后重试`, parseMode: "html" });
         return;
       }
+      
+      // 处理消息过长错误
       if (m.includes("MESSAGE_TOO_LONG")) {
         await msg.edit({ text: "❌ <b>消息过长</b>\n\n请减少内容或以文件方式发送", parseMode: "html" });
         return;
       }
+      
+      // 通用错误处理
       await msg.edit({ text: `❌ <b>查询失败：</b>${htmlEscape(m)}`, parseMode: "html" });
     }
   }
