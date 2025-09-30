@@ -1824,6 +1824,7 @@ ${apiKey ? "✅" : "⚪"} <b>AI搜索:</b> ${apiKey ? "已启用" : "未配置"}
 <code>${commandName} set proxy socks5://127.0.0.1:1080</code>
 <code>${commandName} set proxy http://127.0.0.1:8080</code>
 <code>${commandName} set proxy socks5://127.0.0.1:40000</code> (WireProxy)
+<code>${commandName} set proxy none</code> (清空代理)
 
 <b>音质示例：</b>
 <code>${commandName} set quality 320k</code>
@@ -1835,7 +1836,13 @@ ${apiKey ? "✅" : "⚪"} <b>AI搜索:</b> ${apiKey ? "已启用" : "未配置"}
     }
 
     const [rawKey, ...valueParts] = args;
-    const value = valueParts.join(" ");
+    let value = valueParts.join(" ");
+
+    // 支持 none/clear/空 来清空配置
+    const clearKeywords = ["none", "clear", "空", "取消"];
+    if (clearKeywords.includes(value.toLowerCase().trim())) {
+      value = "";
+    }
 
     // 将用户友好键映射为内部存储键
     const keyMap: Record<string, string> = {
@@ -1893,9 +1900,13 @@ ${apiKey ? "✅" : "⚪"} <b>AI搜索:</b> ${apiKey ? "已启用" : "未配置"}
           successMsg += `🍪 YouTube Cookie 已设置\n现在可以绕过地区限制了`;
           break;
         case "proxy":
-          successMsg += `🌐 代理服务器已配置\n地址: <code>${Utils.escape(
-            value
-          )}</code>`;
+          if (finalValue) {
+            successMsg += `🌐 代理服务器已配置\n地址: <code>${Utils.escape(
+              finalValue
+            )}</code>`;
+          } else {
+            successMsg += `🌐 代理已清空\n现在将直连下载`;
+          }
           break;
         case "api_key":
           successMsg += `🤖 AI 搜索功能已启用\n可以更智能地搜索音乐了`;
