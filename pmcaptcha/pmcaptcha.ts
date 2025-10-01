@@ -357,6 +357,51 @@ function trackMessage(userId: number): boolean {
   return false;
 }
 
+// Helper function to move a peer to a specific folder
+async function setFolder(client: TelegramClient, userId: number, folderId: number): Promise<boolean> {
+  try {
+    const userEntity = await client.getInputEntity(userId);
+    await client.invoke(
+      new Api.folders.EditPeerFolders({
+        folderPeers: [new Api.InputFolderPeer({ peer: userEntity, folderId })]
+      })
+    );
+    return true;
+  } catch (error) {
+    console.error(`[PMCaptcha] Failed to set folder ${folderId} for user ${userId}:`, error);
+    return false;
+  }
+}
+
+// Archive conversation
+async function archiveConversation(client: TelegramClient, userId: number): Promise<boolean> {
+  console.log(`[PMCaptcha] Archiving conversation with user ${userId}`);
+  return setFolder(client, userId, 1); // 1 = Archive
+}
+
+// Unarchive conversation and enable notifications
+async function unarchiveConversation(client: TelegramClient, userId: number): Promise<boolean> {
+  console.log(`[PMCaptcha] Unarchiving conversation for user ${userId}`);
+  
+  // Restore notifications first
+  try {
+    await client.invoke(
+      new Api.account.UpdateNotifySettings({
+        peer: new Api.InputNotifyPeer({ peer: await client.getInputEntity(userId) }),
+        settings: new Api.InputPeerNotifySettings({
+          muteUntil: 0, // Unmute
+          sound: new Api.NotificationSoundDefault()
+        })
+      })
+    );
+  } catch (error) {
+    console.error(`[PMCaptcha] Failed to update notify settings for ${userId}:`, error);
+  }
+
+  // Move to main folder
+  return setFolder(client, userId, 0); // 0 = Main folder (All Chats)
+}
+
 // Delete and report user (both sides)
 async function deleteAndReportUser(
   client: TelegramClient,
@@ -460,6 +505,9 @@ async function startStickerChallenge(
   const timeout = dbHelpers.getSetting(CONFIG_KEYS.STICKER_TIMEOUT, 180) * 1000;
 
   try {
+    // Archive the conversation first
+    await archiveConversation(client, userId);
+
     const challengeMsg = await client.sendMessage(userId, {
       message: `🔒 <b>人机验证</b>\n\n👋 您好！为了确保您是真实用户，请完成以下验证：\n\n📌 <b>验证方式：</b>\n发送任意<b>表情包（Sticker）</b>即可通过验证\n\n⏰ <b>时间限制：</b> ${
         timeout > 0 ? `${timeout / 1000}秒` : "无限制"
@@ -506,17 +554,10 @@ async function handleChallengeTimeout(client: TelegramClient, userId: number) {
   const challenge = activeChallenges.get(userId);
   if (!challenge) return;
 
-  try {
-    await client.sendMessage(userId, {
-      message: "❌ <b>验证超时</b>\n\n验证时间已到，请重新开始验证。",
-      parseMode: "html",
-    });
-  } catch (error) {
-    console.error(
-      `[PMCaptcha] Failed to send timeout message to user ${userId}:`,
-      error
-    );
-  }
+  console.log(`[PMCaptcha] Challenge timeout for user ${userId}, deleting and reporting`);
+  
+  // Delete and report user for timeout
+  await deleteAndReportUser(client, userId, "verification timeout");
 
   // Clean up
   activeChallenges.delete(userId);
@@ -538,6 +579,9 @@ async function verifyStickerResponse(
     
     // Update statistics
     dbHelpers.updateStats(1, 0);
+
+    // Unarchive conversation and enable notifications
+    await unarchiveConversation(client, userId);
 
     try {
       await client.sendMessage(userId, {
@@ -561,17 +605,21 @@ async function verifyStickerResponse(
     console.log(`[PMCaptcha] User ${userId} passed sticker verification`);
     return true;
   } else {
-    // Failed - send retry message
-    try {
-      await client.sendMessage(userId, {
-        message: "❌ <b>验证失败</b>\n\n请发送表情包进行验证，不是文字消息。",
-        parseMode: "html",
-      });
-    } catch (error) {
-      console.error(
-        `[PMCaptcha] Failed to send retry message to user ${userId}:`,
-        error
-      );
+    // Failed - check if user has exceeded retry attempts
+    const challenge = activeChallenges.get(userId);
+    if (challenge) {
+      // For now, we'll be strict and delete/report on any non-sticker message
+      console.log(`[PMCaptcha] User ${userId} failed verification (sent non-sticker), deleting and reporting`);
+      
+      // Delete and report user for verification failure
+      await deleteAndReportUser(client, userId, "verification failed");
+      
+      // Clean up
+      if (challenge.timer) {
+        clearTimeout(challenge.timer);
+      }
+      activeChallenges.delete(userId);
+      dbHelpers.removeChallengeState(userId);
     }
     return false;
   }
