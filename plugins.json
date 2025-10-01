@@ -294,5 +294,13 @@
   "javdb": {
     "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/javdb/javdb.ts?raw=true",
     "desc": "寻找番号封面"
+  },
+  "pingdc": {
+    "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/pingdc/pingdc.ts?raw=true",
+    "desc": "Telegram数据中心延迟测试"
+  },
+  "autodelcmd": {
+    "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/autodelcmd/autodelcmd.ts?raw=true",
+    "desc": "自动删除命令消息插件"
   }
 }
