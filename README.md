@@ -17,6 +17,7 @@ npm i <插件名>
 - `audio_to_voice` - 音乐转音频  
 - `autochangename` - 自动定时修改用户名插  
 - `autodel` - 定时删除消息  
+- `autodelcmd` - 自动删除命令消息插件  
 - `banana` - Nano-Banana 图像编辑  
 - `bin` - 卡头检测  
 - `bizhi` - 发送一张壁纸  
@@ -60,6 +61,7 @@ npm i <插件名>
 - `ntp` - NTP 时间同步插件  
 - `oxost` - 回复聊天中的文件与媒体 得到一个临时的下载链接  
 - `pic_to_sticker` - 图片转表情  
+- `pingdc` - Telegram数据中心延迟测试  
 - `pmcaptcha` - pmcaptcha私聊验证  
 - `q` - 消息引用生成贴纸  
 - `qr` - QR 二维码插件  
