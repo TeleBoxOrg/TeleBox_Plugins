@@ -61,7 +61,6 @@ npm i <插件名>
 - `ntp` - NTP 时间同步插件  
 - `oxost` - 回复聊天中的文件与媒体 得到一个临时的下载链接  
 - `pic_to_sticker` - 图片转表情  
-- `pingdc` - Telegram数据中心延迟测试  
 - `pmcaptcha` - pmcaptcha私聊验证  
 - `q` - 消息引用生成贴纸  
 - `qr` - QR 二维码插件  
