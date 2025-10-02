@@ -140,7 +140,6 @@ class DependencyManager {
     const commands = [
       "yt-dlp --version",
       "python3 -m yt_dlp --version",
-      "python -m yt_dlp --version",
     ];
 
     for (const cmd of commands) {
@@ -824,7 +823,6 @@ class Downloader {
     const ytdlpCommands = [
       "yt-dlp --version",
       "python3 -m yt_dlp --version",
-      "python -m yt_dlp --version",
       "youtube-dl --version", // Fallback to youtube-dl
     ];
 
@@ -896,7 +894,6 @@ class Downloader {
         `yt-dlp ${baseCmd} --prefer-insecure --legacy-server-connect${authParams}`
       );
       commands.push(`python3 -m yt_dlp ${baseCmd}${authParams}`);
-      commands.push(`python -m yt_dlp ${baseCmd}${authParams}`);
 
       let stdout = "";
       for (const cmd of commands) {
@@ -996,21 +993,42 @@ class Downloader {
   }
 
   private convertCookie(cookie: string): string {
-    // Simple cookie format converter
+    // 1. 如果已经包含制表符，直接返回（格式正确）
     if (cookie.includes("\t")) {
-      // Already in Netscape format
       return cookie;
     }
 
-    // Convert from key=value format to Netscape
-    const lines = ["# Netscape HTTP Cookie File", ""];
+    // 2. 检测并修复空格分隔的 Netscape 格式 cookie
+    const lines = cookie.split("\n").filter((line) => line.trim());
+    const fixedLines: string[] = ["# Netscape HTTP Cookie File", ""];
+
+    for (const line of lines) {
+      // 跳过注释行
+      if (line.startsWith("#")) continue;
+
+      // 检测是否是 Netscape 格式（包含多个空格分隔的字段）
+      const fields = line.split(/\s+/);
+      if (fields.length === 7) {
+        // 这是空格分隔的 Netscape 格式，转换为制表符分隔
+        fixedLines.push(fields.join("\t"));
+        continue;
+      }
+    }
+
+    // 如果成功转换了至少一个 cookie 条目，返回修复后的结果
+    if (fixedLines.length > 2) {
+      return fixedLines.join("\n");
+    }
+
+    // 3. 否则，尝试从 key=value 格式转换
+    const resultLines = ["# Netscape HTTP Cookie File", ""];
     const pairs = cookie.split(/;\s*/).filter((p) => p.includes("="));
 
     for (const pair of pairs) {
       const [name, value] = pair.split("=");
       if (name && value) {
         // YouTube cookie defaults
-        lines.push(
+        resultLines.push(
           `.youtube.com\tTRUE\t/\tTRUE\t${
             Math.floor(Date.now() / 1000) + 31536000
           }\t${name.trim()}\t${value.trim()}`
@@ -1018,7 +1036,7 @@ class Downloader {
       }
     }
 
-    return lines.join("\n");
+    return resultLines.join("\n");
   }
 
   // 使用 gdstudio 音乐 API 获取专辑封面，保存到 destPath
