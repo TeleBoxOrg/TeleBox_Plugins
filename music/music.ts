@@ -1261,13 +1261,13 @@ class Downloader {
               // 如果不是jpg，转换为jpg
               if (ext !== ".jpg") {
                 await execAsync(
-                  `ffmpeg -i "${possiblePath}" -vf "scale=320:320:force_original_aspect_ratio=increase,crop=320:320" "${thumbnailPath}" -y`
+                  `ffmpeg -i "${possiblePath}" -vf "scale=500:500:force_original_aspect_ratio=increase,crop=500:500" "${thumbnailPath}" -y`
                 );
                 fs.unlinkSync(possiblePath);
               } else {
                 // 调整大小为正方形
                 await execAsync(
-                  `ffmpeg -i "${possiblePath}" -vf "scale=320:320:force_original_aspect_ratio=increase,crop=320:320" "${thumbnailPath}_temp.jpg" -y`
+                  `ffmpeg -i "${possiblePath}" -vf "scale=500:500:force_original_aspect_ratio=increase,crop=500:500" "${thumbnailPath}_temp.jpg" -y`
                 );
                 fs.renameSync(`${thumbnailPath}_temp.jpg`, thumbnailPath);
               }
