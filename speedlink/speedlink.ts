@@ -1,8 +1,11 @@
 /**
  * SpeedLink Multi-Server Management Plugin for TeleBox
  *
- * Version: 5.9.2 (Fixed)
+ * Version: 5.9.5 (Fixed & Modified)
  * Features:
+ * - Command message is now deleted immediately after the status message appears.
+ * - All status and result messages are sent as standalone messages.
+ * - Removed the initial "Preparing to start..." message for multi-server tests.
  * - Completed all help text URLs.
  * - Fixed local speed test execution path.
  * - Real-time feedback during first-run dependency installation.
@@ -427,7 +430,7 @@ const speedtest = async (msg: Api.Message): Promise<void> => {
           return;
         }
         const [username, hostWithPort] = connection.split("@");
-        
+
         // --- START: MODIFIED CODE FOR IPV6 PARSING ---
         if (!hostWithPort) {
           await msg.edit({ text: `❌ <b>连接格式错误</b>`, parseMode: "html" });
@@ -435,15 +438,21 @@ const speedtest = async (msg: Api.Message): Promise<void> => {
         }
         const lastColonIndex = hostWithPort.lastIndexOf(":");
         if (lastColonIndex === -1) {
-            await msg.edit({ text: `❌ <b>连接格式错误: 缺少端口号</b>`, parseMode: "html" });
-            return;
+          await msg.edit({
+            text: `❌ <b>连接格式错误: 缺少端口号</b>`,
+            parseMode: "html",
+          });
+          return;
         }
         const host = hostWithPort.substring(0, lastColonIndex);
         const portStr = hostWithPort.substring(lastColonIndex + 1);
         const port = parseInt(portStr, 10);
 
         if (!username || !host || isNaN(port)) {
-          await msg.edit({ text: `❌ <b>连接格式错误或端口号无效</b>`, parseMode: "html" });
+          await msg.edit({
+            text: `❌ <b>连接格式错误或端口号无效</b>`,
+            parseMode: "html",
+          });
           return;
         }
         // --- END: MODIFIED CODE FOR IPV6 PARSING ---
@@ -620,15 +629,13 @@ const speedtest = async (msg: Api.Message): Promise<void> => {
         return;
       }
 
-      await msg.edit({
-        text: `🚀 准备就绪，即将开始 **${targetServers.length}** 个服务器的测速任务...`,
-        parseMode: "html",
-      });
+      // Immediately delete the command message
+      await msg.delete();
 
       for (const server of targetServers) {
         if (!server) continue; // Should not happen with the filter, but for type safety
-        
-        const statusMsg = await msg.reply({
+
+        const statusMsg = await msg.client?.sendMessage(msg.peerId, {
           message: `⚡️ [${targetServers.indexOf(server) + 1}/${
             targetServers.length
           }] 正在为 <b>${htmlEscape(server.name)}</b> 进行远程测速...`,
@@ -645,7 +652,9 @@ const speedtest = async (msg: Api.Message): Promise<void> => {
             finalCommand = `sshpass -p '${password.replace(
               /'/g,
               "'\\''"
-            )}' ssh -p ${server.port} -o StrictHostKeyChecking=no -o ConnectTimeout=10 ${
+            )}' ssh -p ${
+              server.port
+            } -o StrictHostKeyChecking=no -o ConnectTimeout=10 ${
               server.username
             }@${server.host} '${remoteSpeedtestCmd}'`;
           } else {
@@ -666,7 +675,6 @@ const speedtest = async (msg: Api.Message): Promise<void> => {
             result.interface.externalIp
           );
 
-          // FIX: Expanded the caption to include all details for remote tests.
           const caption = [
             `<b>${htmlEscape(server.name)}</b> ${ccFlag}`,
             `<code>Name</code>  <code>${htmlEscape(result.isp)} ${asInfo}</code>`,
@@ -697,7 +705,6 @@ const speedtest = async (msg: Api.Message): Promise<void> => {
               file: imagePath,
               caption: caption,
               parseMode: "html",
-              replyTo: msg,
             });
             fs.unlinkSync(imagePath);
           } else {
@@ -720,7 +727,6 @@ const speedtest = async (msg: Api.Message): Promise<void> => {
           }
         }
       }
-      await msg.delete(); // Delete the original `sl all` or `sl 1 3 5` message
       return;
     }
 
@@ -754,7 +760,28 @@ const speedtest = async (msg: Api.Message): Promise<void> => {
       return;
     }
 
-    await msg.edit({ text: initialText, parseMode: "html" });
+    let statusMsg: Api.Message | undefined;
+    try {
+      // Send the status message and immediately delete the original command.
+      statusMsg = await msg.client?.sendMessage(msg.peerId, {
+        message: initialText,
+        parseMode: "html",
+      });
+      await msg.delete();
+    } catch (e) {
+      // Fallback: If sending a new message or deleting fails, edit the original.
+      console.error(
+        "Failed to send/delete, falling back to editing original message:",
+        e
+      );
+      try {
+        await msg.edit({ text: initialText, parseMode: "html" });
+        statusMsg = msg;
+      } catch (editError) {
+        console.error("Critical: Fallback edit also failed.", editError);
+        // Can't do anything with messages, just proceed with the test.
+      }
+    }
 
     try {
       const speedtestCmdBase = `--accept-license --accept-gdpr -f json`;
@@ -777,10 +804,10 @@ const speedtest = async (msg: Api.Message): Promise<void> => {
         }
       } else {
         if (!fs.existsSync(SPEEDTEST_PATH)) {
-          await msg.edit({
-            text: "本地 Speedtest CLI 不存在，正在为您下载...",
-            parseMode: "html",
-          });
+          const downloadingMsg = "本地 Speedtest CLI 不存在，正在为您下载...";
+          if (statusMsg)
+            await statusMsg.edit({ text: downloadingMsg, parseMode: "html" });
+          else await msg.edit({ text: downloadingMsg, parseMode: "html" });
           await downloadCli();
         }
         finalCommand = `"${SPEEDTEST_PATH}" ${speedtestCmdBase}`;
@@ -815,8 +842,8 @@ const speedtest = async (msg: Api.Message): Promise<void> => {
           true
         )} ↑${await unitConvert(result.upload.bytes, true)}</code>`,
         `<code>Time</code>  <code>${result.timestamp
-          .replace("T", " ")
-          .replace("Z", "")}</code>`,
+          。replace("T", " ")
+          。replace("Z", "")}</code>`,
       ].join("\n");
 
       const imagePath = await saveSpeedtestImage(result.result.url);
@@ -826,17 +853,23 @@ const speedtest = async (msg: Api.Message): Promise<void> => {
           caption: caption,
           parseMode: "html",
         });
-        await msg.delete();
         fs.unlinkSync(imagePath);
       } else {
-        await msg.edit({ text: caption, parseMode: "html" });
+        await msg.client?.sendMessage(msg.peerId, {
+          message: caption,
+          parseMode: "html",
+        });
       }
+      // Cleanup on success
+      if (statusMsg) await statusMsg.delete();
     } catch (error: any) {
       let errorMsg = String(error.stderr || error.message || error);
-      await msg.edit({
-        text: `❌ <b>速度测试失败</b>\n\n<code>${htmlEscape(errorMsg)}</code>`,
-        parseMode: "html",
-      });
+      const errorText = `❌ <b>速度测试失败</b>\n\n<code>${htmlEscape(
+        errorMsg
+      )}</code>`;
+      if (statusMsg) {
+        await statusMsg.edit({ text: errorText, parseMode: "html" });
+      }
     }
   } catch (error: any) {
     console.error(`SpeedLink Plugin (${PLUGIN_NAME}) critical error:`, error);
