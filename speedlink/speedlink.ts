@@ -842,8 +842,8 @@ const speedtest = async (msg: Api.Message): Promise<void> => {
           true
         )} ↑${await unitConvert(result.upload.bytes, true)}</code>`,
         `<code>Time</code>  <code>${result.timestamp
-          。replace("T", " ")
-          。replace("Z", "")}</code>`,
+          .replace("T", " ")
+          .replace("Z", "")}</code>`,
       ].join("\n");
 
       const imagePath = await saveSpeedtestImage(result.result.url);
