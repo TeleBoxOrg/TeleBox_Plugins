@@ -66,6 +66,7 @@ npm i <插件名>
 - `qr` - QR 二维码插件  
 - `rate` - 货币实时汇率查询与计算  
 - `search` - 频道消息搜索工具  
+- `service` - systemd服务状态查看工具  
 - `shift` - 智能消息转发系统  
 - `speedlink` - 对其他服务器测速  
 - `speedtest` - 网络速度测试工具  
