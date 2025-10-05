@@ -298,5 +298,9 @@
   "autodelcmd": {
     "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/autodelcmd/autodelcmd.ts?raw=true",
     "desc": "自动删除命令消息插件"
+  },
+  "service": {
+    "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/service/service.ts?raw=true",
+    "desc": "systemd服务状态查看工具"
   }
 }

@@ -122,7 +122,7 @@ class AutoDeleteService {
       await this.delayDelete(msg, 10);
     }
     // 120秒删除的命令
-    else if (["h", "help", "dc", "ip", "ping", "pingdc", "sysinfo", "whois"].includes(command)) {
+    else if (["h", "help", "dc", "ip", "ping", "pingdc", "sysinfo", "whois", "bf", "update", "trace","service"].includes(command)) {
       console.log(`[autodelcmd] 将在 120 秒后删除消息 (${command})`);
       await this.delayDelete(msg, 120);
     }
@@ -170,8 +170,8 @@ class AutoDeletePlugin extends Plugin {
   - lang, alias, reload
   - tpm (除了 tpm s / tpm search / tpm ls / tpm i / tpm install)
 
-• 超长延迟 (120秒):
-  - h, help, dc, ip, ping, pingdc, sysinfo, whois
+• 长延迟 (120秒):
+  - h, help, dc, ip, ping, pingdc, sysinfo, whois, bf, update, trace
   - tpm s, tpm search, tpm ls, tpm i, tpm install
   - s, speedtest, spt, v (同时删除响应消息)
 
