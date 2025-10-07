@@ -285,6 +285,8 @@ async function scheduleTask(task: AcronTask) {
     const now = Date.now();
     try {
       const client = await getGlobalClient();
+      // NOTE: https://docs.telethon.dev/en/stable/concepts/entities.html
+      await client.get_dialogs();
       const chatIdNum = toInt((task as any).chatId);
       const entityLike = (chatIdNum as any) ?? task.chat;
 
@@ -693,11 +695,12 @@ class AcronPlugin extends Plugin {
                   );
               }
               if (nextDt) {
-                const dt: Date = (typeof (nextDt as any)?.toJSDate === "function")
-                  ? (nextDt as any).toJSDate()
-                  : (nextDt instanceof Date)
-                  ? nextDt
-                  : new Date(Number(nextDt));
+                const dt: Date =
+                  typeof (nextDt as any)?.toJSDate === "function"
+                    ? (nextDt as any).toJSDate()
+                    : nextDt instanceof Date
+                    ? nextDt
+                    : new Date(Number(nextDt));
                 lines.push(`下次: ${formatDate(dt)}`);
               }
               if (t.lastRunAt) {
