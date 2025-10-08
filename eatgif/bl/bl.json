@@ -5,7 +5,7 @@
     {
       "url": "bl/bl0.png",
       "delay": 70,
-      "me": {
+      "you": {
         "x": 88,
         "y": -12,
         "rotate": -20,
@@ -15,7 +15,7 @@
     {
       "url": "bl/bl1.png",
       "delay": 70,
-      "me": {
+      "you": {
         "x": 88,
         "y": -12,
         "rotate": -20,
@@ -25,7 +25,7 @@
     {
       "url": "bl/bl2.png",
       "delay": 70,
-      "me": {
+      "you": {
         "x": 88,
         "y": -12,
         "rotate": -20,
@@ -35,7 +35,7 @@
     {
       "url": "bl/bl3.png",
       "delay": 70,
-      "me": {
+      "you": {
         "x": 87,
         "y": -12,
         "rotate": -20,
@@ -45,7 +45,7 @@
     {
       "url": "bl/bl4.png",
       "delay": 70,
-      "me": {
+      "you": {
         "x": 92,
         "y": -6,
         "rotate": -20,
@@ -55,7 +55,7 @@
     {
       "url": "bl/bl5.png",
       "delay": 70,
-      "me": {
+      "you": {
         "x": 83,
         "y": -6,
         "rotate": -20,
@@ -65,7 +65,7 @@
     {
       "url": "bl/bl6.png",
       "delay": 70,
-      "me": {
+      "you": {
         "x": 80,
         "y": 1,
         "rotate": -20,
@@ -75,7 +75,7 @@
     {
       "url": "bl/bl7.png",
       "delay": 70,
-      "me": {
+      "you": {
         "x": 68,
         "y": 4,
         "rotate": -20,
@@ -85,7 +85,7 @@
     {
       "url": "bl/bl8.png",
       "delay": 70,
-      "me": {
+      "you": {
         "x": 56,
         "y": 11,
         "rotate": -20,
@@ -95,7 +95,7 @@
     {
       "url": "bl/bl9.png",
       "delay": 70,
-      "me": {
+      "you": {
         "x": 67,
         "y": 8,
         "rotate": -20,
@@ -105,7 +105,7 @@
     {
       "url": "bl/bl10.png",
       "delay": 70,
-      "me": {
+      "you": {
         "x": 80,
         "y": 19,
         "rotate": -20,
@@ -115,7 +115,7 @@
     {
       "url": "bl/bl11.png",
       "delay": 70,
-      "me": {
+      "you": {
         "x": 89,
         "y": 22,
         "rotate": -20,
@@ -125,7 +125,7 @@
     {
       "url": "bl/bl12.png",
       "delay": 70,
-      "me": {
+      "you": {
         "x": 86,
         "y": 23,
         "rotate": -20,
@@ -135,7 +135,7 @@
     {
       "url": "bl/bl13.png",
       "delay": 70,
-      "me": {
+      "you": {
         "x": 82,
         "y": 22,
         "rotate": -20,
@@ -145,7 +145,7 @@
     {
       "url": "bl/bl14.png",
       "delay": 70,
-      "me": {
+      "you": {
         "x": 79,
         "y": 22,
         "rotate": -20,
@@ -155,7 +155,7 @@
     {
       "url": "bl/bl15.png",
       "delay": 70,
-      "me": {
+      "you": {
         "x": 84,
         "y": 23,
         "rotate": -20,
@@ -165,7 +165,7 @@
     {
       "url": "bl/bl16.png",
       "delay": 70,
-      "me": {
+      "you": {
         "x": 92,
         "y": 34,
         "rotate": -20,
@@ -175,7 +175,7 @@
     {
       "url": "bl/bl17.png",
       "delay": 70,
-      "me": {
+      "you": {
         "x": 90,
         "y": 40,
         "rotate": -20,
@@ -185,7 +185,7 @@
     {
       "url": "bl/bl18.png",
       "delay": 70,
-      "me": {
+      "you": {
         "x": 90,
         "y": 37,
         "rotate": -20,
@@ -195,7 +195,7 @@
     {
       "url": "bl/bl19.png",
       "delay": 70,
-      "me": {
+      "you": {
         "x": 82,
         "y": 30,
         "rotate": -20,
@@ -205,7 +205,7 @@
     {
       "url": "bl/bl20.png",
       "delay": 70,
-      "me": {
+      "you": {
         "x": 70,
         "y": 38,
         "rotate": -20,
@@ -215,7 +215,7 @@
     {
       "url": "bl/bl21.png",
       "delay": 70,
-      "me": {
+      "you": {
         "x": 74,
         "y": 28,
         "rotate": -20,
@@ -225,7 +225,7 @@
     {
       "url": "bl/bl22.png",
       "delay": 70,
-      "me": {
+      "you": {
         "x": 83,
         "y": 29,
         "rotate": -20,
@@ -235,7 +235,7 @@
     {
       "url": "bl/bl23.png",
       "delay": 70,
-      "me": {
+      "you": {
         "x": 96,
         "y": 44,
         "rotate": -20,
@@ -245,7 +245,7 @@
     {
       "url": "bl/bl24.png",
       "delay": 70,
-      "me": {
+      "you": {
         "x": 94,
         "y": 45,
         "rotate": -20,
@@ -255,7 +255,7 @@
     {
       "url": "bl/bl25.png",
       "delay": 70,
-      "me": {
+      "you": {
         "x": 95,
         "y": 46,
         "rotate": -20,
@@ -265,7 +265,7 @@
     {
       "url": "bl/bl26.png",
       "delay": 70,
-      "me": {
+      "you": {
         "x": 83,
         "y": 55,
         "rotate": -20,
@@ -275,7 +275,7 @@
     {
       "url": "bl/bl27.png",
       "delay": 70,
-      "me": {
+      "you": {
         "x": 77,
         "y": 58,
         "rotate": -20,
@@ -285,7 +285,7 @@
     {
       "url": "bl/bl28.png",
       "delay": 70,
-      "me": {
+      "you": {
         "x": 75,
         "y": 60,
         "rotate": -20,
@@ -295,7 +295,7 @@
     {
       "url": "bl/bl29.png",
       "delay": 70,
-      "me": {
+      "you": {
         "x": 89,
         "y": 54,
         "rotate": -20,
@@ -305,7 +305,7 @@
     {
       "url": "bl/bl30.png",
       "delay": 70,
-      "me": {
+      "you": {
         "x": 93,
         "y": 54,
         "rotate": -20,
@@ -315,7 +315,7 @@
     {
       "url": "bl/bl31.png",
       "delay": 70,
-      "me": {
+      "you": {
         "x": 107,
         "y": 50,
         "rotate": -20,
@@ -325,7 +325,7 @@
     {
       "url": "bl/bl32.png",
       "delay": 70,
-      "me": {
+      "you": {
         "x": 119,
         "y": 49,
         "rotate": -20,
@@ -335,7 +335,7 @@
     {
       "url": "bl/bl33.png",
       "delay": 70,
-      "me": {
+      "you": {
         "x": 113,
         "y": 54,
         "rotate": -20,
@@ -345,7 +345,7 @@
     {
       "url": "bl/bl34.png",
       "delay": 70,
-      "me": {
+      "you": {
         "x": 107,
         "y": 48,
         "rotate": -20,
@@ -355,7 +355,7 @@
     {
       "url": "bl/bl35.png",
       "delay": 70,
-      "me": {
+      "you": {
         "x": 97,
         "y": 61,
         "rotate": -20,
@@ -365,7 +365,7 @@
     {
       "url": "bl/bl36.png",
       "delay": 70,
-      "me": {
+      "you": {
         "x": 90,
         "y": 64,
         "rotate": -20,
@@ -375,7 +375,7 @@
     {
       "url": "bl/bl37.png",
       "delay": 70,
-      "me": {
+      "you": {
         "x": 85,
         "y": 66,
         "rotate": -20,
@@ -385,7 +385,7 @@
     {
       "url": "bl/bl38.png",
       "delay": 70,
-      "me": {
+      "you": {
         "x": 86,
         "y": 65,
         "rotate": -20,
@@ -395,7 +395,7 @@
     {
       "url": "bl/bl39.png",
       "delay": 70,
-      "me": {
+      "you": {
         "x": 88,
         "y": 78,
         "rotate": -20,
@@ -405,7 +405,7 @@
     {
       "url": "bl/bl40.png",
       "delay": 70,
-      "me": {
+      "you": {
         "x": 88,
         "y": 78,
         "rotate": -20,

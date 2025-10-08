@@ -5,7 +5,7 @@
     {
       "url": "ddw/ddw26.jpg",
       "delay": 50,
-      "me": {
+      "you": {
         "x": 119,
         "y": 23,
         "mask": "ddw/me.png"
@@ -14,7 +14,7 @@
     {
       "url": "ddw/ddw27.jpg",
       "delay": 50,
-      "me": {
+      "you": {
         "x": 119,
         "y": 32,
         "mask": "ddw/me.png"
@@ -23,7 +23,7 @@
     {
       "url": "ddw/ddw28.jpg",
       "delay": 50,
-      "me": {
+      "you": {
         "x": 116,
         "y": 27,
         "mask": "ddw/me.png"
@@ -32,7 +32,7 @@
     {
       "url": "ddw/ddw29.jpg",
       "delay": 50,
-      "me": {
+      "you": {
         "x": 113,
         "y": 23,
         "mask": "ddw/me.png"
@@ -41,7 +41,7 @@
     {
       "url": "ddw/ddw31.jpg",
       "delay": 50,
-      "me": {
+      "you": {
         "x": 113,
         "y": 23,
         "mask": "ddw/me.png"
@@ -50,7 +50,7 @@
     {
       "url": "ddw/ddw32.jpg",
       "delay": 50,
-      "me": {
+      "you": {
         "x": 114,
         "y": 17,
         "mask": "ddw/me.png"
@@ -59,7 +59,7 @@
     {
       "url": "ddw/ddw33.jpg",
       "delay": 50,
-      "me": {
+      "you": {
         "x": 111,
         "y": 13,
         "mask": "ddw/me.png"
@@ -68,7 +68,7 @@
     {
       "url": "ddw/ddw34.jpg",
       "delay": 50,
-      "me": {
+      "you": {
         "x": 114,
         "y": 15,
         "mask": "ddw/me.png"
@@ -77,7 +77,7 @@
     {
       "url": "ddw/ddw35.jpg",
       "delay": 50,
-      "me": {
+      "you": {
         "x": 111,
         "y": 10,
         "mask": "ddw/me.png"
@@ -86,7 +86,7 @@
     {
       "url": "ddw/ddw36.jpg",
       "delay": 50,
-      "me": {
+      "you": {
         "x": 109,
         "y": 11,
         "mask": "ddw/me.png"
@@ -95,7 +95,7 @@
     {
       "url": "ddw/ddw37.jpg",
       "delay": 50,
-      "me": {
+      "you": {
         "x": 104,
         "y": 17,
         "mask": "ddw/me.png"
@@ -104,7 +104,7 @@
     {
       "url": "ddw/ddw38.jpg",
       "delay": 50,
-      "me": {
+      "you": {
         "x": 102,
         "y": 14,
         "mask": "ddw/me.png"
@@ -113,7 +113,7 @@
     {
       "url": "ddw/ddw39.jpg",
       "delay": 50,
-      "me": {
+      "you": {
         "x": 99,
         "y": 14,
         "mask": "ddw/me.png"
@@ -122,7 +122,7 @@
     {
       "url": "ddw/ddw40.jpg",
       "delay": 50,
-      "me": {
+      "you": {
         "x": 96,
         "y": 16,
         "mask": "ddw/me.png"
@@ -131,7 +131,7 @@
     {
       "url": "ddw/ddw41.jpg",
       "delay": 50,
-      "me": {
+      "you": {
         "x": 93,
         "y": 14,
         "mask": "ddw/me.png"
@@ -140,7 +140,7 @@
     {
       "url": "ddw/ddw42.jpg",
       "delay": 50,
-      "me": {
+      "you": {
         "x": 89,
         "y": 15,
         "mask": "ddw/me.png"
@@ -149,7 +149,7 @@
     {
       "url": "ddw/ddw43.jpg",
       "delay": 50,
-      "me": {
+      "you": {
         "x": 86,
         "y": 18,
         "mask": "ddw/me.png"
@@ -158,7 +158,7 @@
     {
       "url": "ddw/ddw44.jpg",
       "delay": 50,
-      "me": {
+      "you": {
         "x": 83,
         "y": 14,
         "mask": "ddw/me.png"
@@ -167,7 +167,7 @@
     {
       "url": "ddw/ddw45.jpg",
       "delay": 50,
-      "me": {
+      "you": {
         "x": 81,
         "y": 16,
         "mask": "ddw/me.png"
@@ -176,7 +176,7 @@
     {
       "url": "ddw/ddw47.jpg",
       "delay": 50,
-      "me": {
+      "you": {
         "x": 74,
         "y": 15,
         "mask": "ddw/me.png"
@@ -185,7 +185,7 @@
     {
       "url": "ddw/ddw48.jpg",
       "delay": 50,
-      "me": {
+      "you": {
         "x": 70,
         "y": 16,
         "mask": "ddw/me.png"
@@ -194,7 +194,7 @@
     {
       "url": "ddw/ddw49.jpg",
       "delay": 50,
-      "me": {
+      "you": {
         "x": 69,
         "y": 20,
         "mask": "ddw/me.png"
@@ -203,7 +203,7 @@
     {
       "url": "ddw/ddw50.jpg",
       "delay": 50,
-      "me": {
+      "you": {
         "x": 66,
         "y": 17,
         "mask": "ddw/me.png"
@@ -212,7 +212,7 @@
     {
       "url": "ddw/ddw51.jpg",
       "delay": 50,
-      "me": {
+      "you": {
         "x": 62,
         "y": 17,
         "mask": "ddw/me.png"
@@ -221,7 +221,7 @@
     {
       "url": "ddw/ddw52.jpg",
       "delay": 50,
-      "me": {
+      "you": {
         "x": 57,
         "y": 21,
         "mask": "ddw/me.png"
@@ -230,7 +230,7 @@
     {
       "url": "ddw/ddw53.jpg",
       "delay": 50,
-      "me": {
+      "you": {
         "x": 57,
         "y": 15,
         "mask": "ddw/me.png"
@@ -239,7 +239,7 @@
     {
       "url": "ddw/ddw54.jpg",
       "delay": 50,
-      "me": {
+      "you": {
         "x": 53,
         "y": 17,
         "mask": "ddw/me.png"
@@ -248,7 +248,7 @@
     {
       "url": "ddw/ddw55.jpg",
       "delay": 50,
-      "me": {
+      "you": {
         "x": 51,
         "y": 20,
         "mask": "ddw/me.png"
@@ -257,7 +257,7 @@
     {
       "url": "ddw/ddw56.jpg",
       "delay": 50,
-      "me": {
+      "you": {
         "x": 47,
         "y": 19,
         "mask": "ddw/me.png"
@@ -266,7 +266,7 @@
     {
       "url": "ddw/ddw57.jpg",
       "delay": 50,
-      "me": {
+      "you": {
         "x": 47,
         "y": 18,
         "mask": "ddw/me.png"
@@ -275,7 +275,7 @@
     {
       "url": "ddw/ddw58.jpg",
       "delay": 50,
-      "me": {
+      "you": {
         "x": 43,
         "y": 19,
         "mask": "ddw/me.png"
@@ -284,7 +284,7 @@
     {
       "url": "ddw/ddw59.jpg",
       "delay": 50,
-      "me": {
+      "you": {
         "x": 42,
         "y": 22,
         "mask": "ddw/me.png"
@@ -293,7 +293,7 @@
     {
       "url": "ddw/ddw61.jpg",
       "delay": 50,
-      "me": {
+      "you": {
         "x": 37,
         "y": 21,
         "mask": "ddw/me.png"
@@ -302,7 +302,7 @@
     {
       "url": "ddw/ddw62.jpg",
       "delay": 50,
-      "me": {
+      "you": {
         "x": 35,
         "y": 24,
         "mask": "ddw/me.png"
@@ -311,7 +311,7 @@
     {
       "url": "ddw/ddw63.jpg",
       "delay": 50,
-      "me": {
+      "you": {
         "x": 33,
         "y": 22,
         "mask": "ddw/me.png"
@@ -320,7 +320,7 @@
     {
       "url": "ddw/ddw64.jpg",
       "delay": 50,
-      "me": {
+      "you": {
         "x": 32,
         "y": 22,
         "mask": "ddw/me.png"
@@ -329,7 +329,7 @@
     {
       "url": "ddw/ddw65.jpg",
       "delay": 50,
-      "me": {
+      "you": {
         "x": 32,
         "y": 25,
         "mask": "ddw/me.png"
@@ -338,7 +338,7 @@
     {
       "url": "ddw/ddw66.jpg",
       "delay": 50,
-      "me": {
+      "you": {
         "x": 31,
         "y": 22,
         "mask": "ddw/me.png"
@@ -347,7 +347,7 @@
     {
       "url": "ddw/ddw67.jpg",
       "delay": 50,
-      "me": {
+      "you": {
         "x": 31,
         "y": 23,
         "mask": "ddw/me.png"
@@ -356,7 +356,7 @@
     {
       "url": "ddw/ddw68.jpg",
       "delay": 50,
-      "me": {
+      "you": {
         "x": 31,
         "y": 28,
         "mask": "ddw/me.png"
@@ -365,7 +365,7 @@
     {
       "url": "ddw/ddw69.jpg",
       "delay": 50,
-      "me": {
+      "you": {
         "x": 32,
         "y": 25,
         "mask": "ddw/me.png"
@@ -374,7 +374,7 @@
     {
       "url": "ddw/ddw70.jpg",
       "delay": 50,
-      "me": {
+      "you": {
         "x": 32,
         "y": 23,
         "mask": "ddw/me.png"
@@ -383,7 +383,7 @@
     {
       "url": "ddw/ddw71.jpg",
       "delay": 50,
-      "me": {
+      "you": {
         "x": 33,
         "y": 30,
         "mask": "ddw/me.png"
@@ -392,7 +392,7 @@
     {
       "url": "ddw/ddw72.jpg",
       "delay": 50,
-      "me": {
+      "you": {
         "x": 33,
         "y": 27,
         "mask": "ddw/me.png"
@@ -401,7 +401,7 @@
     {
       "url": "ddw/ddw73.jpg",
       "delay": 50,
-      "me": {
+      "you": {
         "x": 33,
         "y": 28,
         "mask": "ddw/me.png"
@@ -410,7 +410,7 @@
     {
       "url": "ddw/ddw74.jpg",
       "delay": 50,
-      "me": {
+      "you": {
         "x": 33,
         "y": 29,
         "mask": "ddw/me.png"
@@ -419,7 +419,7 @@
     {
       "url": "ddw/ddw75.jpg",
       "delay": 50,
-      "me": {
+      "you": {
         "x": 35,
         "y": 28,
         "mask": "ddw/me.png"
@@ -428,7 +428,7 @@
     {
       "url": "ddw/ddw77.jpg",
       "delay": 50,
-      "me": {
+      "you": {
         "x": 33,
         "y": 30,
         "mask": "ddw/me.png"
@@ -437,7 +437,7 @@
     {
       "url": "ddw/ddw78.jpg",
       "delay": 50,
-      "me": {
+      "you": {
         "x": 38,
         "y": 31,
         "mask": "ddw/me.png"
@@ -446,7 +446,7 @@
     {
       "url": "ddw/ddw79.jpg",
       "delay": 50,
-      "me": {
+      "you": {
         "x": 39,
         "y": 30,
         "mask": "ddw/me.png"
@@ -455,7 +455,7 @@
     {
       "url": "ddw/ddw80.jpg",
       "delay": 50,
-      "me": {
+      "you": {
         "x": 40,
         "y": 30,
         "mask": "ddw/me.png"
@@ -464,7 +464,7 @@
     {
       "url": "ddw/ddw81.jpg",
       "delay": 50,
-      "me": {
+      "you": {
         "x": 41,
         "y": 30,
         "mask": "ddw/me.png"
@@ -473,7 +473,7 @@
     {
       "url": "ddw/ddw82.jpg",
       "delay": 50,
-      "me": {
+      "you": {
         "x": 41,
         "y": 29,
         "mask": "ddw/me.png"
@@ -482,7 +482,7 @@
     {
       "url": "ddw/ddw83.jpg",
       "delay": 50,
-      "me": {
+      "you": {
         "x": 44,
         "y": 32,
         "mask": "ddw/me.png"
@@ -491,7 +491,7 @@
     {
       "url": "ddw/ddw84.jpg",
       "delay": 50,
-      "me": {
+      "you": {
         "x": 45,
         "y": 29,
         "mask": "ddw/me.png"
@@ -500,7 +500,7 @@
     {
       "url": "ddw/ddw85.jpg",
       "delay": 50,
-      "me": {
+      "you": {
         "x": 48,
         "y": 28,
         "mask": "ddw/me.png"
@@ -509,7 +509,7 @@
     {
       "url": "ddw/ddw86.jpg",
       "delay": 50,
-      "me": {
+      "you": {
         "x": 50,
         "y": 33,
         "mask": "ddw/me.png"
@@ -518,7 +518,7 @@
     {
       "url": "ddw/ddw87.jpg",
       "delay": 50,
-      "me": {
+      "you": {
         "x": 53,
         "y": 28,
         "mask": "ddw/me.png"
@@ -527,7 +527,7 @@
     {
       "url": "ddw/ddw88.jpg",
       "delay": 50,
-      "me": {
+      "you": {
         "x": 54,
         "y": 31,
         "mask": "ddw/me.png"
@@ -536,7 +536,7 @@
     {
       "url": "ddw/ddw89.jpg",
       "delay": 50,
-      "me": {
+      "you": {
         "x": 57,
         "y": 32,
         "mask": "ddw/me.png"
@@ -545,7 +545,7 @@
     {
       "url": "ddw/ddw91.jpg",
       "delay": 50,
-      "me": {
+      "you": {
         "x": 63,
         "y": 29,
         "mask": "ddw/me.png"
@@ -554,7 +554,7 @@
     {
       "url": "ddw/ddw92.jpg",
       "delay": 50,
-      "me": {
+      "you": {
         "x": 62,
         "y": 29,
         "mask": "ddw/me.png"
@@ -563,7 +563,7 @@
     {
       "url": "ddw/ddw93.jpg",
       "delay": 50,
-      "me": {
+      "you": {
         "x": 66,
         "y": 28,
         "mask": "ddw/me.png"
@@ -572,7 +572,7 @@
     {
       "url": "ddw/ddw94.jpg",
       "delay": 50,
-      "me": {
+      "you": {
         "x": 70,
         "y": 29,
         "mask": "ddw/me.png"
@@ -581,7 +581,7 @@
     {
       "url": "ddw/ddw95.jpg",
       "delay": 50,
-      "me": {
+      "you": {
         "x": 70,
         "y": 28,
         "mask": "ddw/me.png"
@@ -590,7 +590,7 @@
     {
       "url": "ddw/ddw96.jpg",
       "delay": 50,
-      "me": {
+      "you": {
         "x": 74,
         "y": 28,
         "mask": "ddw/me.png"
@@ -599,7 +599,7 @@
     {
       "url": "ddw/ddw97.jpg",
       "delay": 50,
-      "me": {
+      "you": {
         "x": 77,
         "y": 26,
         "mask": "ddw/me.png"
@@ -608,7 +608,7 @@
     {
       "url": "ddw/ddw98.jpg",
       "delay": 50,
-      "me": {
+      "you": {
         "x": 79,
         "y": 28,
         "mask": "ddw/me.png"
@@ -617,7 +617,7 @@
     {
       "url": "ddw/ddw99.jpg",
       "delay": 50,
-      "me": {
+      "you": {
         "x": 81,
         "y": 27,
         "mask": "ddw/me.png"
@@ -626,7 +626,7 @@
     {
       "url": "ddw/ddw100.jpg",
       "delay": 50,
-      "me": {
+      "you": {
         "x": 85,
         "y": 27,
         "mask": "ddw/me.png"
@@ -635,7 +635,7 @@
     {
       "url": "ddw/ddw101.jpg",
       "delay": 50,
-      "me": {
+      "you": {
         "x": 88,
         "y": 29,
         "mask": "ddw/me.png"
@@ -644,7 +644,7 @@
     {
       "url": "ddw/ddw102.jpg",
       "delay": 50,
-      "me": {
+      "you": {
         "x": 91,
         "y": 27,
         "mask": "ddw/me.png"
@@ -653,7 +653,7 @@
     {
       "url": "ddw/ddw103.jpg",
       "delay": 50,
-      "me": {
+      "you": {
         "x": 94,
         "y": 24,
         "mask": "ddw/me.png"
@@ -662,7 +662,7 @@
     {
       "url": "ddw/ddw104.jpg",
       "delay": 50,
-      "me": {
+      "you": {
         "x": 95,
         "y": 27,
         "mask": "ddw/me.png"
@@ -671,7 +671,7 @@
     {
       "url": "ddw/ddw105.jpg",
       "delay": 50,
-      "me": {
+      "you": {
         "x": 98,
         "y": 26,
         "mask": "ddw/me.png"
@@ -680,7 +680,7 @@
     {
       "url": "ddw/ddw107.jpg",
       "delay": 50,
-      "me": {
+      "you": {
         "x": 99,
         "y": 28,
         "mask": "ddw/me.png"
@@ -689,7 +689,7 @@
     {
       "url": "ddw/ddw108.jpg",
       "delay": 50,
-      "me": {
+      "you": {
         "x": 97,
         "y": 34,
         "mask": "ddw/me.png"
@@ -698,7 +698,7 @@
     {
       "url": "ddw/ddw109.jpg",
       "delay": 50,
-      "me": {
+      "you": {
         "x": 102,
         "y": 38,
         "mask": "ddw/me.png"
@@ -707,7 +707,7 @@
     {
       "url": "ddw/ddw110.jpg",
       "delay": 50,
-      "me": {
+      "you": {
         "x": 99,
         "y": 40,
         "mask": "ddw/me.png"
@@ -716,7 +716,7 @@
     {
       "url": "ddw/ddw111.jpg",
       "delay": 50,
-      "me": {
+      "you": {
         "x": 101,
         "y": 47,
         "mask": "ddw/me.png"
@@ -725,7 +725,7 @@
     {
       "url": "ddw/ddw112.jpg",
       "delay": 50,
-      "me": {
+      "you": {
         "x": 106,
         "y": 43,
         "mask": "ddw/me.png"
@@ -734,7 +734,7 @@
     {
       "url": "ddw/ddw113.jpg",
       "delay": 50,
-      "me": {
+      "you": {
         "x": 109,
         "y": 40,
         "mask": "ddw/me.png"
@@ -743,7 +743,7 @@
     {
       "url": "ddw/ddw114.jpg",
       "delay": 50,
-      "me": {
+      "you": {
         "x": 112,
         "y": 43,
         "mask": "ddw/me.png"
@@ -752,7 +752,7 @@
     {
       "url": "ddw/ddw115.jpg",
       "delay": 50,
-      "me": {
+      "you": {
         "x": 116,
         "y": 41,
         "mask": "ddw/me.png"
@@ -761,7 +761,7 @@
     {
       "url": "ddw/ddw116.jpg",
       "delay": 50,
-      "me": {
+      "you": {
         "x": 116,
         "y": 39,
         "mask": "ddw/me.png"
@@ -770,7 +770,7 @@
     {
       "url": "ddw/ddw117.jpg",
       "delay": 50,
-      "me": {
+      "you": {
         "x": 121,
         "y": 45,
         "mask": "ddw/me.png"
@@ -779,7 +779,7 @@
     {
       "url": "ddw/ddw118.jpg",
       "delay": 50,
-      "me": {
+      "you": {
         "x": 123,
         "y": 38,
         "mask": "ddw/me.png"
@@ -788,7 +788,7 @@
     {
       "url": "ddw/ddw119.jpg",
       "delay": 50,
-      "me": {
+      "you": {
         "x": 126,
         "y": 35,
         "mask": "ddw/me.png"
