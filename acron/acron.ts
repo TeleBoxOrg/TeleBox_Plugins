@@ -286,7 +286,7 @@ async function scheduleTask(task: AcronTask) {
     try {
       const client = await getGlobalClient();
       // NOTE: https://docs.telethon.dev/en/stable/concepts/entities.html
-      await client.get_dialogs();
+      await client.getDialogs();
       const chatIdNum = toInt((task as any).chatId);
       const entityLike = (chatIdNum as any) ?? task.chat;
 
