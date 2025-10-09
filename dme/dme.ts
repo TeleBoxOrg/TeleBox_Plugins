@@ -417,6 +417,210 @@ async function searchMyOutgoingMessages(
 
   return targetCount === Infinity ? results : results.slice(0, targetCount);
 }
+
+/**
+ * 检测群组是否禁止转发和复制（受限群组）
+ */
+async function isRestrictedGroup(client: TelegramClient, chatEntity: any): Promise<boolean> {
+  try {
+    // 检查群组类型和权限
+    if (chatEntity.className === "Chat" || chatEntity.className === "Channel") {
+      // 尝试获取群组完整信息
+      const fullChat = await client.invoke(
+        new Api.messages.GetFullChat({ chatId: chatEntity.id })
+      ).catch(() => null);
+      
+      if (fullChat) {
+        const chatFull = (fullChat as any).fullChat;
+        // 检查是否有内容保护标志
+        if (chatFull.noforwards === true) {
+          console.log(`[DME] 检测到禁止转发群组`);
+          return true;
+        }
+      }
+      
+      // 检查频道权限
+      if (chatEntity.className === "Channel") {
+        const channelFull = await client.invoke(
+          new Api.channels.GetFullChannel({ channel: chatEntity })
+        ).catch(() => null);
+        
+        if (channelFull) {
+          const fullChannel = (channelFull as any).fullChat;
+          if (fullChannel.noforwards === true) {
+            console.log(`[DME] 检测到禁止转发频道`);
+            return true;
+          }
+        }
+      }
+    }
+    
+    return false;
+  } catch (error: any) {
+    console.log(`[DME] 权限检测失败，假设为受限群组:`, error.message);
+    return true; // 检测失败时保守处理，使用传统模式
+  }
+}
+
+/**
+ * 传统遍历消息流式处理 - 适用于禁止转发和复制的群组
+ */
+async function traditionalStreamProcessing(
+  client: TelegramClient,
+  chatEntity: any,
+  myId: bigint,
+  userRequestedCount: number,
+  isAntiRecallMode: boolean = false
+): Promise<{
+  processedCount: number;
+  actualCount: number;
+  editedCount: number;
+}> {
+  console.log(`[DME] 使用传统遍历消息流式处理模式`);
+  
+  const targetCount = userRequestedCount === 999999 ? Infinity : userRequestedCount;
+  const trollImagePath = isAntiRecallMode ? await getTrollImage() : null;
+  
+  let totalProcessed = 0;
+  let totalEdited = 0;
+  let totalDeleted = 0;
+  let offsetId = 0;
+  let consecutiveEmptyBatches = 0;
+  const maxEmptyBatches = 3;
+  const HISTORY_BATCH = 100; // 每批获取历史消息数量
+
+  // 传统模式：逐批获取历史消息，筛选自己的消息进行处理
+  while (totalProcessed < targetCount && consecutiveEmptyBatches < maxEmptyBatches) {
+    try {
+      // 获取历史消息
+      const history = await client.invoke(
+        new Api.messages.GetHistory({
+          peer: chatEntity,
+          offsetId,
+          offsetDate: 0,
+          addOffset: 0,
+          limit: HISTORY_BATCH,
+          maxId: 0,
+          minId: 0,
+          hash: 0 as any,
+        })
+      );
+
+      const allMessages: any[] = (history as any).messages || [];
+      const validMessages = allMessages.filter((m: any) => m.className === "Message");
+      
+      if (validMessages.length === 0) {
+        consecutiveEmptyBatches++;
+        console.log(`[DME] 空批次 ${consecutiveEmptyBatches}/${maxEmptyBatches}`);
+        await sleep(CONFIG.DELAYS.SEARCH);
+        continue;
+      }
+
+      // 筛选出自己的消息
+      const myMessages = validMessages.filter((m: any) => {
+        // 检查发送者ID或out标志
+        return m.senderId?.toString() === myId.toString() || m.out === true;
+      });
+
+      if (myMessages.length === 0) {
+        // 更新offsetId继续搜索
+        offsetId = validMessages[validMessages.length - 1].id;
+        consecutiveEmptyBatches++;
+        await sleep(CONFIG.DELAYS.SEARCH);
+        continue;
+      }
+
+      consecutiveEmptyBatches = 0; // 重置空批次计数
+      
+      // 限制处理数量
+      const messagesToProcess = targetCount === Infinity 
+        ? myMessages 
+        : myMessages.slice(0, targetCount - totalProcessed);
+
+      console.log(`[DME] 传统模式找到 ${messagesToProcess.length} 条自己的消息`);
+
+      // 防撤回模式：先编辑媒体消息
+      if (isAntiRecallMode && trollImagePath) {
+        const mediaMessages = messagesToProcess.filter((m: Api.Message) => {
+          if (!m.media || m.media instanceof Api.MessageMediaWebPage) return false;
+          if (m.media instanceof Api.MessageMediaDocument) {
+            const doc = m.media.document;
+            if (doc instanceof Api.Document) {
+              const isSticker = doc.attributes?.some(attr => 
+                attr instanceof Api.DocumentAttributeSticker
+              );
+              if (isSticker) return false;
+            }
+          }
+          return true;
+        });
+
+        if (mediaMessages.length > 0) {
+          console.log(`[DME] 传统模式编辑 ${mediaMessages.length} 条媒体消息`);
+          const editPromises = mediaMessages.map((msg: Api.Message) => 
+            editMediaMessageToAntiRecall(client, msg, trollImagePath, chatEntity)
+              .catch(() => false)
+          );
+          const editResults = await Promise.allSettled(editPromises);
+          const edited = editResults.filter(r => r.status === "fulfilled" && r.value === true).length;
+          totalEdited += edited;
+          console.log(`[DME] 传统模式成功编辑 ${edited} 条媒体`);
+          
+          // 编辑后等待一段时间
+          await sleep(CONFIG.DELAYS.EDIT_WAIT);
+        }
+      }
+
+      // 删除这批消息
+      const deleteIds = messagesToProcess.map((m: Api.Message) => m.id);
+      if (deleteIds.length > 0) {
+        try {
+          // 分小批次删除，避免API限制
+          const DELETE_BATCH_SIZE = 20;
+          for (let i = 0; i < deleteIds.length; i += DELETE_BATCH_SIZE) {
+            const batch = deleteIds.slice(i, i + DELETE_BATCH_SIZE);
+            await deleteMessagesWithRetry(client, chatEntity, batch);
+            totalDeleted += batch.length;
+            await sleep(CONFIG.DELAYS.BATCH);
+          }
+          console.log(`[DME] 传统模式删除 ${deleteIds.length} 条，总计 ${totalDeleted} 条`);
+        } catch (error: any) {
+          console.error(`[DME] 传统模式删除失败:`, error.message);
+        }
+      }
+
+      totalProcessed += messagesToProcess.length;
+      
+      // 如果已达到目标数量，停止处理
+      if (totalProcessed >= targetCount) {
+        break;
+      }
+      
+      // 更新偏移ID继续搜索
+      offsetId = validMessages[validMessages.length - 1].id;
+      await sleep(CONFIG.DELAYS.SEARCH);
+      
+    } catch (error: any) {
+      console.error(`[DME] 传统模式批次处理失败:`, error.message);
+      consecutiveEmptyBatches++;
+      await sleep(CONFIG.DELAYS.RETRY);
+      
+      if (consecutiveEmptyBatches >= maxEmptyBatches) {
+        console.log(`[DME] 传统模式达到最大重试次数，停止处理`);
+        break;
+      }
+    }
+  }
+
+  console.log(`[DME] 传统模式处理完成，删除 ${totalDeleted} 条，编辑 ${totalEdited} 条`);
+
+  return {
+    processedCount: totalDeleted,
+    actualCount: totalProcessed,
+    editedCount: totalEdited,
+  };
+}
+
 /**
  * 快速删除模式 - 直接调用官方API删除消息
  */
@@ -430,11 +634,20 @@ async function quickDeleteMyMessages(
   actualCount: number;
   editedCount: number;
 }> {
+  // 检测是否为受限群组（禁止转发和复制）
+  const isRestricted = await isRestrictedGroup(client, chatEntity);
+  if (isRestricted) {
+    console.log(`[DME] 检测到受限群组，切换到传统遍历模式`);
+    return await traditionalStreamProcessing(client, chatEntity, myId, userRequestedCount, false);
+  }
+  
   console.log(`[DME] 使用快速删除模式`);
   
   const targetCount = userRequestedCount === 999999 ? Infinity : userRequestedCount;
   const allMyMessages: Api.Message[] = [];
   let offsetId = 0;
+  let searchFailCount = 0;
+  const maxSearchFails = 2;
 
   // 搜索自己的消息
   while (allMyMessages.length < targetCount) {
@@ -475,12 +688,20 @@ async function quickDeleteMyMessages(
       await sleep(CONFIG.DELAYS.SEARCH);
     } catch (error: any) {
       console.error(`[DME] 搜索失败:`, error.message);
+      searchFailCount++;
+      
+      // 如果连续搜索失败，切换到传统模式
+      if (searchFailCount >= maxSearchFails) {
+        console.log(`[DME] API搜索多次失败，切换到传统遍历模式`);
+        return await traditionalStreamProcessing(client, chatEntity, myId, userRequestedCount, false);
+      }
       break;
     }
   }
 
   if (allMyMessages.length === 0) {
-    return { processedCount: 0, actualCount: 0, editedCount: 0 };
+    console.log(`[DME] API搜索无结果，尝试传统遍历模式`);
+    return await traditionalStreamProcessing(client, chatEntity, myId, userRequestedCount, false);
   }
 
   const messagesToDelete = targetCount === Infinity ? allMyMessages : allMyMessages.slice(0, targetCount);
@@ -550,6 +771,13 @@ async function searchEditAndDeleteMyMessages(
     }
   }
   
+  // 检测是否为受限群组（禁止转发和复制）
+  const isRestricted = await isRestrictedGroup(client, chatEntity);
+  if (isRestricted) {
+    console.log(`[DME] 检测到受限群组，切换到传统遍历模式`);
+    return await traditionalStreamProcessing(client, chatEntity, myId, userRequestedCount, true);
+  }
+  
   console.log(`[DME] 流式处理模式，目标数量: ${userRequestedCount === 999999 ? "全部" : userRequestedCount}`);
 
   const targetCount = userRequestedCount === 999999 ? Infinity : userRequestedCount;
@@ -559,6 +787,8 @@ async function searchEditAndDeleteMyMessages(
   let totalEdited = 0;
   let totalDeleted = 0;
   let offsetId = 0;
+  let searchFailCount = 0;
+  const maxSearchFails = 2;
   const STREAM_BATCH = 50; // 每批处理50条
 
   // 流式处理：搜索一批，处理一批，删除一批
@@ -637,9 +867,28 @@ async function searchEditAndDeleteMyMessages(
       await sleep(CONFIG.DELAYS.BATCH);
     } catch (error: any) {
       console.error(`[DME] 流式处理批次失败:`, error.message);
+      searchFailCount++;
+      
+      // 如果连续搜索失败，切换到传统模式
+      if (searchFailCount >= maxSearchFails) {
+        console.log(`[DME] API搜索多次失败，切换到传统遍历模式`);
+        const traditionalResult = await traditionalStreamProcessing(client, chatEntity, myId, userRequestedCount, true);
+        return {
+          processedCount: totalDeleted + traditionalResult.processedCount,
+          actualCount: totalProcessed + traditionalResult.actualCount,
+          editedCount: totalEdited + traditionalResult.editedCount,
+        };
+      }
+      
       await sleep(CONFIG.DELAYS.RETRY);
       break;
     }
+  }
+
+  // 如果API搜索没有找到任何消息，尝试传统模式
+  if (totalProcessed === 0) {
+    console.log(`[DME] API搜索无结果，尝试传统遍历模式`);
+    return await traditionalStreamProcessing(client, chatEntity, myId, userRequestedCount, true);
   }
 
   console.log(`[DME] 流式处理完成，删除 ${totalDeleted} 条，编辑 ${totalEdited} 条`);
@@ -665,6 +914,11 @@ const help_text = `🗑️ <b>智能防撤回删除插件</b>
 • <code>${mainPrefix}dme [数量]</code> - 快速删除指定数量的消息
 • <code>${mainPrefix}dme -f [数量]</code> - 防撤回模式（替换媒体后删除）
 • <code>${mainPrefix}dme help</code> - 显示帮助信息
+
+<b>智能适配：</b>
+• 自动检测禁止转发和复制的群组
+• 受限群组自动切换传统遍历模式
+• API搜索失败时自动回退处理
 
 <b>示例：</b>
 • <code>${mainPrefix}dme 10</code> - 快速删除最近10条消息
