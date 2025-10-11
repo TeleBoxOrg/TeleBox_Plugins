@@ -3,6 +3,7 @@ import { Api } from "telegram";
 import { Plugin } from "@utils/pluginBase";
 import { getGlobalClient } from "@utils/globalClient";
 import { getPrefixes } from "@utils/pluginManager";
+import { AliasDB } from "@utils/aliasDB";
 import fs from "fs/promises";
 import path from "path";
 
@@ -26,6 +27,19 @@ interface ExitMessageData {
 
 interface AutoDeleteConfig {
   exitMsg?: ExitMessageData;
+}
+
+// 解析别名到原始命令
+function resolveAlias(command: string): string {
+  try {
+    const aliasDB = new AliasDB();
+    const originalCommand = aliasDB.get(command);
+    aliasDB.close();
+    return originalCommand || command; // 如果没有别名，返回原始命令
+  } catch (error) {
+    console.error("[autodelcmd] 解析别名时出错:", error);
+    return command; // 出错时返回原始命令
+  }
 }
 
 class AutoDeleteService {
@@ -104,33 +118,43 @@ class AutoDeleteService {
     // 只处理自己发出的消息
     if (!msg.out) return;
 
-    console.log(`[autodelcmd] 处理命令: ${command}, 参数: ${JSON.stringify(parameters)}`);
+    // 解析别名到原始命令
+    const originalCommand = resolveAlias(command);
+    
+    console.log(`[autodelcmd] 处理命令: ${command} -> ${originalCommand}, 参数: ${JSON.stringify(parameters)}`);
 
-    // 针对特定命令的自动删除逻辑
+    // 针对特定命令的自动删除逻辑，使用解析后的原始命令进行匹配
     
     // tpm 命令特殊处理：s, search, ls, i, install 参数时 120秒，其他 10秒
-    if (command === "tpm") {
+    if (originalCommand === "tpm") {
       if (parameters && parameters.length > 0 && ["s", "search", "ls", "i", "install"].includes(parameters[0])) {
-        console.log(`[autodelcmd] 将在 120 秒后删除消息 (${command} ${parameters[0]})`);
+        console.log(`[autodelcmd] 将在 120 秒后删除消息 (${command} -> ${originalCommand} ${parameters[0]})`);
         await this.delayDelete(msg, 120);
       } else {
-        console.log(`[autodelcmd] 将在 10 秒后删除消息 (${command})`);
+        console.log(`[autodelcmd] 将在 10 秒后删除消息 (${command} -> ${originalCommand})`);
+        await this.delayDelete(msg, 10);
+      }
+    }
+    // eat 命令特殊处理：set 参数时 10秒
+    else if (originalCommand === "eat") {
+      if (parameters && parameters.length > 0 && ["set"].includes(parameters[0])) {
+        console.log(`[autodelcmd] 将在 10 秒后删除消息 (${command} -> ${originalCommand} ${parameters[0]})`);
         await this.delayDelete(msg, 10);
       }
     }
     // 其他 10秒删除的命令
-    else if (["lang", "alias", "reload"].includes(command)) {
-      console.log(`[autodelcmd] 将在 10 秒后删除消息 (${command})`);
+    else if (["lang", "alias", "reload"].includes(originalCommand)) {
+      console.log(`[autodelcmd] 将在 10 秒后删除消息 (${command} -> ${originalCommand})`);
       await this.delayDelete(msg, 10);
     }
     // 120秒删除的命令
-    else if (["h", "help", "dc", "ip", "ping", "pingdc", "sysinfo", "whois", "bf", "update", "trace","service"].includes(command)) {
-      console.log(`[autodelcmd] 将在 120 秒后删除消息 (${command})`);
+    else if (["h", "help", "dc", "ip", "ping", "pingdc", "sysinfo", "whois", "bf", "update", "trace","service"].includes(originalCommand)) {
+      console.log(`[autodelcmd] 将在 120 秒后删除消息 (${command} -> ${originalCommand})`);
       await this.delayDelete(msg, 120);
     }
     // s, speedtest, spt, v 命令：删除命令及相关响应
-    else if (["s", "speedtest", "spt", "v"].includes(command)) {
-      console.log(`[autodelcmd] 将在 120 秒后删除消息及相关响应 (${command})`);
+    else if (["s", "speedtest", "spt", "v"].includes(originalCommand)) {
+      console.log(`[autodelcmd] 将在 120 秒后删除消息及相关响应 (${command} -> ${originalCommand})`);
       try {
         const chatId = msg.chatId || msg.peerId;
         const messages = await this.client.getMessages(chatId, { limit: 100 });
@@ -165,6 +189,7 @@ class AutoDeletePlugin extends Plugin {
 **功能说明:**
 - 自动监听并延迟删除特定命令的消息
 - 支持所有配置的自定义前缀
+- 支持别名命令的自动删除（会解析别名到原始命令）
 - 支持不同命令的不同延迟时间
 - 启动时自动清理退出消息
 
@@ -172,15 +197,21 @@ class AutoDeletePlugin extends Plugin {
 • 短延迟 (10秒): 
   - lang, alias, reload
   - tpm (除了 tpm s / tpm search / tpm ls / tpm i / tpm install)
+  - eat set
 
 • 长延迟 (120秒):
-  - h, help, dc, ip, ping, pingdc, sysinfo, whois, bf, update, trace
+  - h, help, dc, ip, ping, pingdc, sysinfo, whois, bf, update, trace, service
   - tpm s, tpm search, tpm ls, tpm i, tpm install
   - s, speedtest, spt, v (同时删除响应消息)
+
+**别名支持:**
+- 插件会自动解析别名到原始命令
+- 例如：如果设置了别名 h2 -> help，那么 h2 命令也会按照 help 的规则执行自动删除
 
 **使用方法:**
 插件会在后台自动运行，无需手动触发。
 会自动检测当前配置的所有前缀（可通过 prefix 命令管理）。
+会自动解析别名命令（通过 alias 命令管理的别名）。
 加载插件后，符合规则的命令消息将自动延迟删除。`;
 
   cmdHandlers: Record<string, (msg: Api.Message) => Promise<void>> = {};
