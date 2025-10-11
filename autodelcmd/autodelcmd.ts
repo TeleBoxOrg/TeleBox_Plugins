@@ -1,6 +1,8 @@
+//@ts-nocheck
 import { Api } from "telegram";
 import { Plugin } from "@utils/pluginBase";
 import { getGlobalClient } from "@utils/globalClient";
+import { getPrefixes } from "@utils/pluginManager";
 import fs from "fs/promises";
 import path from "path";
 
@@ -162,6 +164,7 @@ class AutoDeletePlugin extends Plugin {
 
 **功能说明:**
 - 自动监听并延迟删除特定命令的消息
+- 支持所有配置的自定义前缀
 - 支持不同命令的不同延迟时间
 - 启动时自动清理退出消息
 
@@ -177,6 +180,7 @@ class AutoDeletePlugin extends Plugin {
 
 **使用方法:**
 插件会在后台自动运行，无需手动触发。
+会自动检测当前配置的所有前缀（可通过 prefix 命令管理）。
 加载插件后，符合规则的命令消息将自动延迟删除。`;
 
   cmdHandlers: Record<string, (msg: Api.Message) => Promise<void>> = {};
@@ -191,8 +195,20 @@ class AutoDeletePlugin extends Plugin {
       const messageText = msg.message?.trim() || "";
       if (!messageText) return;
       
-      // 检查是否以 . 或 。 开头
-      if (!messageText.startsWith(".") && !messageText.startsWith("。")) return;
+      // 获取当前配置的前缀列表
+      const currentPrefixes = getPrefixes();
+      
+      // 检查消息是否以任何一个配置的前缀开头
+      let matchedPrefix: string | null = null;
+      for (const prefix of currentPrefixes) {
+        if (messageText.startsWith(prefix)) {
+          matchedPrefix = prefix;
+          break;
+        }
+      }
+      
+      // 如果没有匹配的前缀，跳过处理
+      if (!matchedPrefix) return;
 
       const client = await getGlobalClient();
       if (!client) return;
@@ -208,12 +224,12 @@ class AutoDeletePlugin extends Plugin {
       const parts = messageText.trim().split(/\s+/);
       // 移除前缀获取命令名 (例如 ".tpm" -> "tpm")
       const commandWithPrefix = parts[0];
-      const command = commandWithPrefix.substring(1); // 移除第一个字符（前缀）
+      const command = commandWithPrefix.substring(matchedPrefix.length); // 移除匹配的前缀
       const parameters = parts.slice(1); // 其余都是参数
       
       if (!command) return; // 如果只有前缀没有命令，跳过
       
-      console.log(`[autodelcmd] 检测到命令: ${command}, 参数: ${JSON.stringify(parameters)}, 原始消息: ${messageText}`);
+      console.log(`[autodelcmd] 检测到命令: ${command}, 参数: ${JSON.stringify(parameters)}, 前缀: ${matchedPrefix}, 原始消息: ${messageText}`);
 
       // 处理命令后删除
       await serviceInstance.handleCommandPostprocess(msg, command, parameters);
