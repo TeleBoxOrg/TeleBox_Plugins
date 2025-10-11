@@ -1,40 +1,171 @@
-/**
- * Convert plugin for TeleBox
- * 
- * 将回复的视频消息转换为 MP3 音频文件
- * 使用方法：回复一个视频消息，然后发送 .convert 命令
- */
-
 import { Plugin } from "@utils/pluginBase";
 import { getGlobalClient } from "@utils/globalClient";
 import { getPrefixes } from "@utils/pluginManager";
-import { createDirectoryInAssets } from "@utils/pathHelpers";
 import { Api } from "telegram";
 import * as fs from "fs";
 import * as path from "path";
 import { exec } from "child_process";
 import { promisify } from "util";
+import axios from "axios";
+import Database from "better-sqlite3";
+import { Converter } from "opencc-js";
 
 const execAsync = promisify(exec);
 
-// 获取命令前缀
+// --- Basic Setup ---
 const prefixes = getPrefixes();
-const mainPrefix = prefixes[0];
+const mainPrefix = prefixes[0] || ".";
+const toSimplified = Converter({ from: "tw", to: "cn" });
 
-// HTML转义函数
-const htmlEscape = (text: string): string => 
-  text.replace(/[&<>"']/g, m => ({ 
-    '&': '&amp;', '<': '&lt;', '>': '&gt;', 
-    '"': '&quot;', "'": '&#x27;' 
+const htmlEscape = (text: string): string =>
+  text.replace(/[&<>"']/g, (m) => ({
+    "&": "&amp;", "<": "&lt;", ">": "&gt;",
+    '"': "&quot;", "'": "&#x27;",
   }[m] || m));
 
+// --- Gemini AI Configuration & Client ---
+const dbDir = path.join(process.cwd(), "assets", "convert");
+if (!fs.existsSync(dbDir)) {
+    fs.mkdirSync(dbDir, { recursive: true });
+}
+const GEMINI_CONFIG_DB_PATH = path.join(dbDir, "gemini_config.db");
+const GEMINI_API_KEY = "convert_gemini_api_key";
+
+class GeminiConfigManager {
+  private static db: Database.Database;
+  private static initialized = false;
+
+  private static init(): void {
+    if (this.initialized) return;
+    try {
+      this.db = new Database(GEMINI_CONFIG_DB_PATH);
+      this.db.exec(`CREATE TABLE IF NOT EXISTS config (key TEXT PRIMARY KEY, value TEXT NOT NULL)`);
+      this.initialized = true;
+    } catch (error) {
+      console.error("[convert] Failed to initialize Gemini config DB:", error);
+    }
+  }
+
+  static get(key: string): string {
+    this.init();
+    if (!this.db) {
+        console.error("[convert] DB not initialized, cannot get config.");
+        return "";
+    }
+    try {
+      const row = this.db.prepare("SELECT value FROM config WHERE key = ?").get(key) as { value: string } | undefined;
+      return row ? row.value : "";
+    } catch (error) {
+      console.error("[convert] Failed to read config:", error);
+      return "";
+    }
+  }
+
+  static set(key: string, value: string): void {
+    this.init();
+    if (!this.db) {
+        console.error("[convert] DB not initialized, cannot set config.");
+        return;
+    }
+    try {
+      this.db.prepare(`INSERT OR REPLACE INTO config (key, value) VALUES (?, ?)`).run(key, value);
+    } catch (error) {
+      console.error("[convert] Failed to save config:", error);
+    }
+  }
+}
+
+class GeminiClient {
+    private apiKey: string;
+    constructor(apiKey: string) {
+        this.apiKey = apiKey;
+    }
+
+    async searchMusic(query: string): Promise<string> {
+        const model = "gemini-1.5-flash-latest";
+        const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`;
+        
+        const systemPrompt = toSimplified(`You are a music information expert. Return information in the following format ONLY, without any other text:
+
+歌曲名: [Song Title]
+歌手: [Artist Name]
+专辑: [Album Name]
+
+If info is unknown, use "未知".`);
+        
+        const userPrompt = toSimplified(`Find precise info for this song: '${query}'. Correct typos and find the most famous version. If not found, use user's query '${query}' as the song title.`);
+
+        const requestData = {
+            contents: [{ role: "user", parts: [{ text: userPrompt }] }],
+            systemInstruction: { parts: [{ text: systemPrompt }] },
+            tools: [{ "google_search": {} }],
+        };
+
+        try {
+            const response = await axios.post(url, requestData, {
+                headers: { "x-goog-api-key": this.apiKey, "Content-Type": "application/json" },
+                timeout: 30000,
+            });
+            return response.data?.candidates?.[0]?.content?.parts?.[0]?.text || '';
+        } catch (error: any) {
+            const errorMsg = error.response?.data?.error?.message || error.message;
+            throw new Error(`Gemini API Error: ${errorMsg}`);
+        }
+    }
+}
+
+// --- Helper Functions ---
+interface SongInfo {
+    title: string;
+    artist: string;
+    album: string;
+}
+
+function extractSongInfo(response: string, userInput: string): SongInfo {
+    const lines = response.split('\n');
+    let title = '', artist = '', album = '';
+    for (const line of lines) {
+        if (line.includes('歌曲名')) { title = line.split(/[:：]/)[1]?.trim(); }
+        else if (line.includes('歌手')) { artist = line.split(/[:：]/)[1]?.trim(); }
+        else if (line.includes('专辑')) { album = line.split(/[:：]/)[1]?.trim(); }
+    }
+    return {
+        title: title || userInput,
+        artist: artist || '未知',
+        album: album || '未知',
+    };
+}
+
+async function searchAndDownloadCover(query: string, savePath: string): Promise<boolean> {
+    try {
+        const searchUrl = `https://itunes.apple.com/search?term=${encodeURIComponent(query)}&entity=song&limit=1`;
+        const { data } = await axios.get(searchUrl);
+        if (data.results && data.results.length > 0) {
+            let imageUrl = data.results[0].artworkUrl100;
+            if (imageUrl) {
+                imageUrl = imageUrl.replace('100x100bb.jpg', '600x600bb.jpg');
+                const response = await axios.get(imageUrl, { responseType: 'stream' });
+                const writer = fs.createWriteStream(savePath);
+                response.data.pipe(writer);
+                return new Promise((resolve, reject) => {
+                    writer.on('finish', () => resolve(true));
+                    writer.on('error', () => reject(false));
+                });
+            }
+        }
+    } catch (error) {
+        console.error("Cover search failed:", error);
+    }
+    return false;
+}
+
+
+// --- Main Converter Class ---
 class VideoConverter {
-  private tempDir: string;
-  private outputDir: string;
+  public readonly tempDir: string;
 
   constructor() {
     this.tempDir = path.join(process.cwd(), "temp", "convert");
-    this.outputDir = createDirectoryInAssets("convert_output");
     this.ensureDirectories();
   }
 
@@ -42,317 +173,256 @@ class VideoConverter {
     if (!fs.existsSync(this.tempDir)) {
       fs.mkdirSync(this.tempDir, { recursive: true });
     }
-    if (!fs.existsSync(this.outputDir)) {
-      fs.mkdirSync(this.outputDir, { recursive: true });
-    }
   }
 
   safeFilename(filename: string): string {
     return filename
       .replace(/[^\w\s.-]/g, "")
       .replace(/\s+/g, "_")
-      .substring(0, 50);
+      .substring(0, 100);
   }
 
   async convertVideoToMp3(inputPath: string, outputPath: string): Promise<boolean> {
     try {
-      // 使用 FFmpeg 将视频转换为 MP3
-      const cmd = `ffmpeg -i "${inputPath}" -vn -acodec libmp3lame -ab 192k -ar 44100 -y "${outputPath}"`;
-      
-      console.log(`执行转换命令: ${cmd}`);
-      await execAsync(cmd, { timeout: 300000 }); // 5分钟超时
-      
+      const cmd = `ffmpeg -i "${inputPath}" -vn -acodec libmp3lame -q:a 2 -y "${outputPath}"`;
+      await execAsync(cmd, { timeout: 300000 });
       return fs.existsSync(outputPath);
     } catch (error) {
-      console.error("视频转换失败:", error);
+      console.error("Video conversion failed:", error);
       return false;
     }
   }
+  
+  async addMetadataAndCover(inputMp3: string, outputPath: string, metadata: SongInfo, coverPath?: string): Promise<boolean> {
+    try {
+        let cmd = `ffmpeg -i "${inputMp3}" -c:a copy -id3v2_version 3`;
+        if (coverPath) {
+            cmd += ` -i "${coverPath}" -map 0:a -map 1:v -disposition:v:0 attached_pic`;
+        }
+        cmd += ` -metadata title="${metadata.title.replace(/"/g, '\\"')}"`;
+        cmd += ` -metadata artist="${metadata.artist.replace(/"/g, '\\"')}"`;
+        cmd += ` -metadata album="${metadata.album.replace(/"/g, '\\"')}"`;
+        cmd += ` -y "${outputPath}"`;
+        
+        await execAsync(cmd, { timeout: 120000 });
+        return fs.existsSync(outputPath);
+    } catch (error) {
+        console.error("Failed to add metadata:", error);
+        return false;
+    }
+  }
+
 
   async getVideoDuration(filePath: string): Promise<number> {
     try {
-      const cmd = `ffprobe -v quiet -show_entries format=duration -of csv="p=0" "${filePath}"`;
+      const cmd = `ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 "${filePath}"`;
       const { stdout } = await execAsync(cmd);
       return parseFloat(stdout.trim()) || 0;
     } catch (error) {
-      console.error("获取视频时长失败:", error);
+      console.error("Failed to get video duration:", error);
       return 0;
     }
   }
 
-  getTempDir(): string {
-    return this.tempDir;
+  cleanupTempFiles(...files: (string | undefined)[]): void {
+    for (const file of files) {
+        if (file && fs.existsSync(file)) {
+            try {
+                fs.unlinkSync(file);
+            } catch (err) {
+                console.debug(`Failed to delete temp file ${path.basename(file)}:`, err);
+            }
+        }
+    }
   }
 
-  cleanupTempFiles(pattern?: string): void {
+  cleanupAllTempFiles(): void {
     try {
-      const files = fs.readdirSync(this.tempDir);
-      for (const file of files) {
-        if (pattern && !file.includes(pattern)) continue;
-        
-        const filePath = path.join(this.tempDir, file);
-        try {
-          fs.unlinkSync(filePath);
-          console.debug(`清理临时文件: ${file}`);
-        } catch (err) {
-          console.debug(`删除文件失败 ${file}:`, err);
+        const files = fs.readdirSync(this.tempDir);
+        for (const file of files) {
+            fs.unlinkSync(path.join(this.tempDir, file));
         }
-      }
     } catch (error) {
-      console.debug("清理临时文件出错:", error);
+        console.debug("Error cleaning up temp directory:", error);
     }
   }
 }
 
-// 全局转换器实例
+// --- Plugin Definition ---
 const converter = new VideoConverter();
 
-// 帮助文档
-const help_text = `🎬 <b>视频转音频插件</b>
+const help_text = toSimplified(`🎬 <b>视频转音频 AI 助手</b>
 
-<b>📥 使用方法：</b>
-• 回复一个视频消息
-• 发送 <code>${mainPrefix}convert</code> 命令
-• 等待转换完成并接收 MP3 文件
+<b>✅ 功能:</b>
+ • <b>AI 智能识别:</b> 使用 <code>u</code> 参数，AI 将自动查找最匹配的歌曲元数据和封面。
+ • <b>自定义文件名:</b> 不使用 <code>u</code> 参数时，可直接指定输出的 MP3 文件名。
+ • <b>高质量转换:</b> 将视频的音轨转换为高质量的 MP3 文件。
+ • <b>元数据嵌入:</b> AI 模式下，会自动将歌曲名、歌手、专辑和封面嵌入文件。
 
-<b>✅ 支持格式：</b>
-• 所有 Telegram 支持的视频格式
-• 自动提取音频轨道
-• 输出为高质量 MP3 (192kbps)
+<b>📝 命令用法:</b>
 
-<b>⚠️ 注意事项：</b>
-• 仅对视频消息有效，文字消息无效
-• 需要系统安装 FFmpeg
-• 转换时间取决于视频长度
-• 临时文件会自动清理
+ • <b>AI 智能转换 (推荐):</b>
+   <code>${mainPrefix}convert u &lt;歌曲名&gt;</code>
+   示例: <code>${mainPrefix}convert u 稻香</code>
 
-<b>🔧 其他命令：</b>
-• <code>${mainPrefix}convert help</code> - 显示此帮助信息
-• <code>${mainPrefix}convert clear</code> - 清理临时文件`;
+ • <b>标准转换 (自定义文件名):</b>
+   <code>${mainPrefix}convert [文件名]</code>
+   示例: <code>${mainPrefix}convert 周杰伦-稻香-演唱会版</code>
+   <i>注意: 如果不提供文件名，将使用视频原名。</i>
+
+ • <b>AI 功能配置:</b>
+   <code>${mainPrefix}convert apikey &lt;你的 Gemini API Key&gt;</code>
+   <code>${mainPrefix}convert apikey</code> (查看当前 Key)
+   <code>${mainPrefix}convert apikey clear</code> (清除 Key)
+
+ • <b>其他命令:</b>
+   <code>${mainPrefix}convert clear</code> (清理临时文件)
+   <code>${mainPrefix}convert help</code> (显示此帮助信息)`);
 
 class ConvertPlugin extends Plugin {
-  description: string = `视频转音频插件 - 将回复的视频消息转换为 MP3 音频`;
+  description: string = help_text;
   
-  cmdHandlers: Record<string, (msg: Api.Message, trigger?: Api.Message) => Promise<void>> = {
-    convert: async (msg: Api.Message, trigger?: Api.Message) => {
-      const client = await getGlobalClient();
-      if (!client) {
-        await msg.edit({ text: "❌ 客户端未初始化", parseMode: "html" });
-        return;
-      }
+  cmdHandlers: Record<string, (msg: Api.Message) => Promise<void>> = {
+    convert: async (msg: Api.Message) => {
+        const parts = msg.text?.trim()?.split(/\s+/) || [];
+        const args = parts.slice(1);
+        const subCommand = (args[0] || "").toLowerCase();
 
-      // 参数解析
-      const lines = msg.text?.trim()?.split(/\r?\n/g) || [];
-      const parts = lines?.[0]?.split(/\s+/) || [];
-      const [, ...args] = parts; // 跳过命令本身
-      const sub = (args[0] || "").toLowerCase();
-
-      try {
-        // 显示帮助信息
-        if (sub === "help" || sub === "h") {
-          await msg.edit({
-            text: help_text,
-            parseMode: "html"
-          });
-          return;
+        try {
+            if (subCommand === "help" || subCommand === "h" || args.length === 0 && !msg.replyTo) {
+                await msg.edit({ text: help_text, parseMode: "html" });
+            } else if (subCommand === "clear") {
+                await this.handleClearCommand(msg);
+            } else if (subCommand === "apikey") {
+                await this.handleApiKeyCommand(msg, args.slice(1).join(" "));
+            } else {
+                await this.handleVideoConversion(msg, args);
+            }
+        } catch (error: any) {
+            console.error("[convert] Plugin execution failed:", error);
+            await msg.edit({
+                text: `❌ <b>插件执行失败:</b> ${htmlEscape(error.message)}`,
+                parseMode: "html"
+            });
         }
-
-        // 清理临时文件
-        if (sub === "clear") {
-          await this.handleClearCommand(msg);
-          return;
-        }
-
-        // 主要转换功能
-        await this.handleVideoConversion(msg);
-
-      } catch (error: any) {
-        console.error("[convert] 插件执行失败:", error);
-        await msg.edit({
-          text: `❌ <b>插件执行失败:</b> ${htmlEscape(error.message)}`,
-          parseMode: "html"
-        });
-      }
     }
   };
 
-  private async handleVideoConversion(msg: Api.Message): Promise<void> {
+  private async handleVideoConversion(msg: Api.Message, args: string[]): Promise<void> {
     const client = await getGlobalClient();
-    if (!client) {
-      await msg.edit({ text: "❌ 客户端未初始化", parseMode: "html" });
-      return;
-    }
-
-    // 检查是否回复了消息
     const reply = await msg.getReplyMessage();
-    if (!reply) {
-      await msg.edit({
-        text: `❌ <b>使用错误</b>\n\n请回复一个视频消息使用此命令\n\n💡 <b>使用方法:</b> 回复视频消息后发送 <code>${mainPrefix}convert</code>`,
-        parseMode: "html"
-      });
+
+    if (!client || !reply || (!reply.document && !reply.video)) {
+      await msg.edit({ text: `❌ <b>使用错误</b>\n\n请回复一个视频消息后再使用此命令。\n\n发送 <code>${mainPrefix}convert help</code> 查看帮助。`, parseMode: "html" });
       return;
     }
+    
+    const doc = reply.video || reply.document;
+    const fileNameAttr = doc?.attributes?.find((a: any) => a.fileName) as Api.DocumentAttributeFilename | undefined;
+    const originalFileName = fileNameAttr?.fileName || "video.mp4";
 
-    // 检查回复的消息是否包含视频
-    if (!reply.document && !reply.video) {
-      await msg.edit({
-        text: `❌ <b>消息类型错误</b>\n\n回复的消息不是视频文件\n\n💡 <b>提示:</b> 只能转换视频消息，文字消息无效`,
-        parseMode: "html"
-      });
-      return;
-    }
-
-    // 检查是否为视频文件
-    let isVideo = false;
-    let fileName = "video";
-    let fileSize = 0;
-
-    if (reply.video) {
-      isVideo = true;
-      fileName = "telegram_video";
-      fileSize = Number(reply.video.size) || 0;
-    } else if (reply.document) {
-      // 检查文档是否为视频
-      const mimeType = reply.document.mimeType || "";
-      const docFileName = reply.document.attributes?.find(
-        attr => attr instanceof Api.DocumentAttributeFilename
-      )?.fileName || "document";
-      
-      if (mimeType.startsWith("video/") || 
-          /\.(mp4|avi|mkv|mov|wmv|flv|webm|m4v)$/i.test(docFileName)) {
-        isVideo = true;
-        fileName = docFileName;
-        fileSize = Number(reply.document.size) || 0;
-      }
-    }
-
-    if (!isVideo) {
-      await msg.edit({
-        text: `❌ <b>文件类型不支持</b>\n\n回复的文件不是视频格式\n\n✅ <b>支持的格式:</b> MP4, AVI, MKV, MOV, WMV, FLV, WebM, M4V`,
-        parseMode: "html"
-      });
-      return;
-    }
-
-    // 检查文件大小（限制为 100MB）
-    const maxSize = 100 * 1024 * 1024; // 100MB
-    if (fileSize > maxSize) {
-      const sizeMB = (fileSize / (1024 * 1024)).toFixed(2);
-      await msg.edit({
-        text: `❌ <b>文件过大</b>\n\n文件大小: ${sizeMB} MB\n最大支持: 100 MB\n\n💡 <b>建议:</b> 请使用较小的视频文件`,
-        parseMode: "html"
-      });
-      return;
-    }
-
-    await msg.edit({ text: "📥 正在下载视频文件...", parseMode: "html" });
-
-    // 生成临时文件路径
+    await msg.edit({ text: "📥 正在下载视频...", parseMode: "html" });
+    
     const timestamp = Date.now();
-    const safeFileName = converter.safeFilename(fileName);
-    const tempVideoPath = path.join(converter.getTempDir(), `video_${timestamp}_${safeFileName}`);
-    const tempAudioPath = path.join(converter.getTempDir(), `audio_${timestamp}.mp3`);
+    const tempVideoPath = path.join(converter.tempDir, `${timestamp}_video`);
+    const tempAudioPath = path.join(converter.tempDir, `${timestamp}.mp3`);
+    let finalAudioPath = tempAudioPath;
+    let tempCoverPath: string | undefined;
 
     try {
-      // 下载视频文件
-      await client.downloadMedia(reply, { outputFile: tempVideoPath });
-      
-      if (!fs.existsSync(tempVideoPath)) {
-        throw new Error("视频文件下载失败");
-      }
+        await client.downloadMedia(reply, { outputFile: tempVideoPath });
+        if (!fs.existsSync(tempVideoPath)) throw new Error("视频下载失败");
 
-      await msg.edit({ text: "🔄 正在转换为 MP3 音频...", parseMode: "html" });
+        await msg.edit({ text: "🔄 正在转换为 MP3...", parseMode: "html" });
+        if (!await converter.convertVideoToMp3(tempVideoPath, tempAudioPath)) {
+            throw new Error("视频转换失败，请检查 FFmpeg 是否已安装");
+        }
 
-      // 获取视频时长
-      const duration = await converter.getVideoDuration(tempVideoPath);
-      
-      // 转换视频为 MP3
-      const success = await converter.convertVideoToMp3(tempVideoPath, tempAudioPath);
-      
-      if (!success) {
-        throw new Error("视频转换失败，请检查 FFmpeg 是否已安装");
-      }
+        const useAi = (args[0] || "").toLowerCase() === 'u';
+        const userQuery = useAi ? args.slice(1).join(' ') : args.join(' ');
+        
+        let audioFileName: string;
+        let songInfo: SongInfo = { title: "", artist: "", album: "" };
 
-      if (!fs.existsSync(tempAudioPath)) {
-        throw new Error("转换后的音频文件未找到");
-      }
+        if (useAi && userQuery) {
+            const apiKey = GeminiConfigManager.get(GEMINI_API_KEY);
+            if (!apiKey) throw new Error("Gemini API Key 未设置。\n请使用 `.convert apikey <key>` 命令设置。");
 
-      await msg.edit({ text: "📤 正在发送 MP3 文件...", parseMode: "html" });
+            await msg.edit({ text: "🤖 AI 正在识别歌曲信息...", parseMode: "html" });
+            const gemini = new GeminiClient(apiKey);
+            const aiResponse = await gemini.searchMusic(userQuery);
+            songInfo = extractSongInfo(aiResponse, userQuery);
 
-      // 获取音频文件信息
-      const audioStats = fs.statSync(tempAudioPath);
-      const audioSizeMB = (audioStats.size / (1024 * 1024)).toFixed(2);
+            await msg.edit({ text: `🎵 AI 识别结果:\n<b>歌名:</b> ${htmlEscape(songInfo.title)}\n<b>歌手:</b> ${htmlEscape(songInfo.artist)}\n\n正在查找封面...` , parseMode: "html"});
+            
+            tempCoverPath = path.join(converter.tempDir, `${timestamp}.jpg`);
+            const coverFound = await searchAndDownloadCover(`${songInfo.title} ${songInfo.artist}`, tempCoverPath);
+            if (!coverFound) tempCoverPath = undefined;
+            
+            await msg.edit({ text: "✍️ 正在写入元数据...", parseMode: "html" });
+            const tempFinalAudioPath = path.join(converter.tempDir, `${timestamp}_final.mp3`);
+            if (await converter.addMetadataAndCover(tempAudioPath, tempFinalAudioPath, songInfo, tempCoverPath)) {
+                finalAudioPath = tempFinalAudioPath;
+            }
+            audioFileName = `${converter.safeFilename(songInfo.title)} - ${converter.safeFilename(songInfo.artist)}.mp3`;
 
-      // 生成音频文件名
-      const audioFileName = `${converter.safeFilename(fileName.replace(/\.[^.]+$/, ""))}.mp3`;
+        } else if (userQuery) {
+            audioFileName = `${converter.safeFilename(userQuery)}.mp3`;
+            songInfo.title = userQuery;
+        } else {
+            audioFileName = `${converter.safeFilename(originalFileName.replace(/\.[^.]+$/, ""))}.mp3`;
+            songInfo.title = originalFileName.replace(/\.[^.]+$/, "");
+        }
 
-      // 发送音频文件
-      await client.sendFile(msg.peerId, {
-        file: tempAudioPath,
-        attributes: [
-          new Api.DocumentAttributeAudio({
-            duration: Math.round(duration),
-            title: audioFileName,
-            performer: "Video Converter",
-          }),
-        ],
-        replyTo: msg.replyToMsgId,
-        forceDocument: false,
-      });
+        await msg.edit({ text: "📤 正在发送文件...", parseMode: "html" });
+        const duration = await converter.getVideoDuration(tempVideoPath);
+        
+        await client.sendFile(msg.peerId, {
+            file: finalAudioPath,
+            thumb: tempCoverPath,
+            attributes: [
+              new Api.DocumentAttributeAudio({
+                duration: Math.round(duration),
+                title: songInfo.title || path.basename(audioFileName, '.mp3'),
+                performer: songInfo.artist || "Video Converter",
+              }),
+            ],
+            replyTo: msg.id,
+            forceDocument: false,
+        });
 
-      // 发送成功消息
-      await msg.edit({
-        text: `✅ <b>转换完成</b>\n\n📁 <b>文件名:</b> <code>${htmlEscape(audioFileName)}</code>\n⏱️ <b>时长:</b> ${Math.round(duration)} 秒\n📦 <b>大小:</b> ${audioSizeMB} MB\n🎵 <b>格式:</b> MP3 (192kbps)`,
-        parseMode: "html"
-      });
-
-      console.log(`视频转换成功: ${fileName} -> ${audioFileName}`);
+        await msg.delete();
 
     } catch (error: any) {
-      console.error("视频转换失败:", error);
-      const errorMessage = error.message || String(error);
-      const displayError = errorMessage.length > 100 ? errorMessage.substring(0, 100) + "..." : errorMessage;
-      
-      await msg.edit({
-        text: `❌ <b>转换失败</b>\n\n<b>错误信息:</b> ${htmlEscape(displayError)}\n\n💡 <b>可能原因:</b>\n• FFmpeg 未安装或配置错误\n• 视频文件损坏\n• 磁盘空间不足\n• 网络连接问题`,
-        parseMode: "html"
-      });
+        console.error("Conversion failed:", error);
+        await msg.edit({ text: `❌ <b>转换失败</b>\n\n<b>错误:</b> ${htmlEscape(error.message)}`, parseMode: "html" });
     } finally {
-      // 清理临时文件
-      try {
-        if (fs.existsSync(tempVideoPath)) {
-          fs.unlinkSync(tempVideoPath);
-        }
-        if (fs.existsSync(tempAudioPath)) {
-          fs.unlinkSync(tempAudioPath);
-        }
-      } catch (cleanupError) {
-        console.debug("清理临时文件失败:", cleanupError);
-      }
+        converter.cleanupTempFiles(tempVideoPath, tempAudioPath, finalAudioPath, tempCoverPath);
     }
   }
 
   private async handleClearCommand(msg: Api.Message): Promise<void> {
-    try {
-      await msg.edit({ text: "🧹 正在清理临时文件...", parseMode: "html" });
+    await msg.edit({ text: "🧹 正在清理临时文件...", parseMode: "html" });
+    converter.cleanupAllTempFiles();
+    await msg.edit({ text: "✅ 临时文件已清理", parseMode: "html" });
+  }
 
-      // 清理所有临时文件
-      converter.cleanupTempFiles();
-
-      await msg.edit({
-        text: "✅ <b>清理完成</b>\n\n临时文件已清理",
-        parseMode: "html"
-      });
-      console.log("Convert plugin 临时文件已清理");
-    } catch (error: any) {
-      console.error("Clear command failed:", error);
-      const errorMessage = error.message || String(error);
-      const displayError = errorMessage.length > 100 ? errorMessage.substring(0, 100) + "..." : errorMessage;
-      await msg.edit({
-        text: `❌ <b>清理失败</b>\n\n<b>错误信息:</b> ${htmlEscape(displayError)}`,
-        parseMode: "html"
-      });
+  private async handleApiKeyCommand(msg: Api.Message, apiKey: string): Promise<void> {
+    if (!apiKey) {
+      const currentKey = GeminiConfigManager.get(GEMINI_API_KEY);
+      const text = currentKey
+        ? `🔑 当前 API Key: <code>...${currentKey.slice(-4)}</code>`
+        : "❌ 未设置 API Key。";
+      await msg.edit({ text, parseMode: "html" });
+      return;
     }
+    if (apiKey.toLowerCase() === "clear") {
+      GeminiConfigManager.set(GEMINI_API_KEY, "");
+      await msg.edit({ text: "✅ API Key 已清除。" });
+      return;
+    }
+    GeminiConfigManager.set(GEMINI_API_KEY, apiKey);
+    await msg.edit({ text: "✅ API Key 已保存。" });
   }
 }
 
