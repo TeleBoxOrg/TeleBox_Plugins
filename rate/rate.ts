@@ -12,6 +12,214 @@ interface CoinGeckoResponse {
   };
 }
 
+// 内置法币映射表 - 全球190+国家和地区法币
+const FIAT_CURRENCIES: Record<string, { symbol: string, name: string, aliases?: string[] }> = {
+  // 主要发达国家
+  'usd': { symbol: 'USD', name: 'US Dollar' },
+  'eur': { symbol: 'EUR', name: 'Euro' },
+  'gbp': { symbol: 'GBP', name: 'British Pound' },
+  'jpy': { symbol: 'JPY', name: 'Japanese Yen' },
+  'cny': { symbol: 'CNY', name: 'Chinese Yuan', aliases: ['rmb', 'yuan', 'cnh'] },
+  'cad': { symbol: 'CAD', name: 'Canadian Dollar' },
+  'aud': { symbol: 'AUD', name: 'Australian Dollar' },
+  'chf': { symbol: 'CHF', name: 'Swiss Franc' },
+  'nzd': { symbol: 'NZD', name: 'New Zealand Dollar' },
+  
+  // 北欧国家
+  'sek': { symbol: 'SEK', name: 'Swedish Krona' },
+  'nok': { symbol: 'NOK', name: 'Norwegian Krone' },
+  'dkk': { symbol: 'DKK', name: 'Danish Krone' },
+  'isk': { symbol: 'ISK', name: 'Icelandic Krona' },
+  
+  // 东欧国家
+  'pln': { symbol: 'PLN', name: 'Polish Zloty' },
+  'czk': { symbol: 'CZK', name: 'Czech Koruna' },
+  'huf': { symbol: 'HUF', name: 'Hungarian Forint' },
+  'ron': { symbol: 'RON', name: 'Romanian Leu' },
+  'bgn': { symbol: 'BGN', name: 'Bulgarian Lev' },
+  'hrk': { symbol: 'HRK', name: 'Croatian Kuna' },
+  'rsd': { symbol: 'RSD', name: 'Serbian Dinar' },
+  'bam': { symbol: 'BAM', name: 'Bosnia-Herzegovina Convertible Mark' },
+  'mkd': { symbol: 'MKD', name: 'Macedonian Denar' },
+  'all': { symbol: 'ALL', name: 'Albanian Lek' },
+  'rub': { symbol: 'RUB', name: 'Russian Ruble' },
+  'uah': { symbol: 'UAH', name: 'Ukrainian Hryvnia' },
+  'byn': { symbol: 'BYN', name: 'Belarusian Ruble' },
+  'mdl': { symbol: 'MDL', name: 'Moldovan Leu' },
+  
+  // 土耳其和高加索
+  'try': { symbol: 'TRY', name: 'Turkish Lira' },
+  'gel': { symbol: 'GEL', name: 'Georgian Lari' },
+  'amd': { symbol: 'AMD', name: 'Armenian Dram' },
+  'azn': { symbol: 'AZN', name: 'Azerbaijani Manat' },
+  
+  // 美洲
+  'brl': { symbol: 'BRL', name: 'Brazilian Real' },
+  'mxn': { symbol: 'MXN', name: 'Mexican Peso' },
+  'ars': { symbol: 'ARS', name: 'Argentine Peso' },
+  'cop': { symbol: 'COP', name: 'Colombian Peso' },
+  'pen': { symbol: 'PEN', name: 'Peruvian Sol' },
+  'clp': { symbol: 'CLP', name: 'Chilean Peso' },
+  'uyu': { symbol: 'UYU', name: 'Uruguayan Peso' },
+  'pyg': { symbol: 'PYG', name: 'Paraguayan Guarani' },
+  'bob': { symbol: 'BOB', name: 'Bolivian Boliviano' },
+  'ves': { symbol: 'VES', name: 'Venezuelan Bolívar' },
+  'gyd': { symbol: 'GYD', name: 'Guyanese Dollar' },
+  'srd': { symbol: 'SRD', name: 'Surinamese Dollar' },
+  'ttd': { symbol: 'TTD', name: 'Trinidad and Tobago Dollar' },
+  'jmd': { symbol: 'JMD', name: 'Jamaican Dollar' },
+  'bbd': { symbol: 'BBD', name: 'Barbadian Dollar' },
+  'bsd': { symbol: 'BSD', name: 'Bahamian Dollar' },
+  'bzd': { symbol: 'BZD', name: 'Belize Dollar' },
+  'crc': { symbol: 'CRC', name: 'Costa Rican Colón' },
+  'gtq': { symbol: 'GTQ', name: 'Guatemalan Quetzal' },
+  'hnl': { symbol: 'HNL', name: 'Honduran Lempira' },
+  'nio': { symbol: 'NIO', name: 'Nicaraguan Córdoba' },
+  'pab': { symbol: 'PAB', name: 'Panamanian Balboa' },
+  'dop': { symbol: 'DOP', name: 'Dominican Peso' },
+  'htg': { symbol: 'HTG', name: 'Haitian Gourde' },
+  'cub': { symbol: 'CUP', name: 'Cuban Peso' },
+  
+  // 亚太地区
+  'sgd': { symbol: 'SGD', name: 'Singapore Dollar' },
+  'hkd': { symbol: 'HKD', name: 'Hong Kong Dollar' },
+  'krw': { symbol: 'KRW', name: 'South Korean Won' },
+  'inr': { symbol: 'INR', name: 'Indian Rupee' },
+  'thb': { symbol: 'THB', name: 'Thai Baht' },
+  'myr': { symbol: 'MYR', name: 'Malaysian Ringgit' },
+  'php': { symbol: 'PHP', name: 'Philippine Peso' },
+  'idr': { symbol: 'IDR', name: 'Indonesian Rupiah' },
+  'vnd': { symbol: 'VND', name: 'Vietnamese Dong' },
+  'lak': { symbol: 'LAK', name: 'Lao Kip' },
+  'khr': { symbol: 'KHR', name: 'Cambodian Riel' },
+  'mmk': { symbol: 'MMK', name: 'Myanmar Kyat' },
+  'bnd': { symbol: 'BND', name: 'Brunei Dollar' },
+  'twd': { symbol: 'TWD', name: 'Taiwan Dollar' },
+  'mop': { symbol: 'MOP', name: 'Macanese Pataca' },
+  'fjd': { symbol: 'FJD', name: 'Fijian Dollar' },
+  'pgk': { symbol: 'PGK', name: 'Papua New Guinea Kina' },
+  'sbd': { symbol: 'SBD', name: 'Solomon Islands Dollar' },
+  'vuv': { symbol: 'VUV', name: 'Vanuatu Vatu' },
+  'top': { symbol: 'TOP', name: 'Tongan Paʻanga' },
+  'wst': { symbol: 'WST', name: 'Samoan Tala' },
+  
+  // 南亚
+  'lkr': { symbol: 'LKR', name: 'Sri Lankan Rupee' },
+  'pkr': { symbol: 'PKR', name: 'Pakistani Rupee' },
+  'bdt': { symbol: 'BDT', name: 'Bangladeshi Taka' },
+  'npr': { symbol: 'NPR', name: 'Nepalese Rupee' },
+  'btn': { symbol: 'BTN', name: 'Bhutanese Ngultrum' },
+  'mvr': { symbol: 'MVR', name: 'Maldivian Rufiyaa' },
+  'afn': { symbol: 'AFN', name: 'Afghan Afghani' },
+  
+  // 中亚
+  'kzt': { symbol: 'KZT', name: 'Kazakhstani Tenge' },
+  'uzs': { symbol: 'UZS', name: 'Uzbekistani Som' },
+  'kgs': { symbol: 'KGS', name: 'Kyrgyzstani Som' },
+  'tjs': { symbol: 'TJS', name: 'Tajikistani Somoni' },
+  'tmm': { symbol: 'TMT', name: 'Turkmenistani Manat' },
+  
+  // 中东
+  'zar': { symbol: 'ZAR', name: 'South African Rand' },
+  'ils': { symbol: 'ILS', name: 'Israeli Shekel' },
+  'aed': { symbol: 'AED', name: 'UAE Dirham' },
+  'sar': { symbol: 'SAR', name: 'Saudi Riyal' },
+  'qar': { symbol: 'QAR', name: 'Qatari Riyal' },
+  'kwd': { symbol: 'KWD', name: 'Kuwaiti Dinar' },
+  'bhd': { symbol: 'BHD', name: 'Bahraini Dinar' },
+  'omr': { symbol: 'OMR', name: 'Omani Rial' },
+  'jod': { symbol: 'JOD', name: 'Jordanian Dinar' },
+  'lbp': { symbol: 'LBP', name: 'Lebanese Pound' },
+  'syp': { symbol: 'SYP', name: 'Syrian Pound' },
+  'iqd': { symbol: 'IQD', name: 'Iraqi Dinar' },
+  'irr': { symbol: 'IRR', name: 'Iranian Rial' },
+  'yer': { symbol: 'YER', name: 'Yemeni Rial' },
+  
+  // 非洲北部
+  'egp': { symbol: 'EGP', name: 'Egyptian Pound' },
+  'mad': { symbol: 'MAD', name: 'Moroccan Dirham' },
+  'dzd': { symbol: 'DZD', name: 'Algerian Dinar' },
+  'tnd': { symbol: 'TND', name: 'Tunisian Dinar' },
+  'lyd': { symbol: 'LYD', name: 'Libyan Dinar' },
+  'sdg': { symbol: 'SDG', name: 'Sudanese Pound' },
+  'etb': { symbol: 'ETB', name: 'Ethiopian Birr' },
+  'ern': { symbol: 'ERN', name: 'Eritrean Nakfa' },
+  'djf': { symbol: 'DJF', name: 'Djiboutian Franc' },
+  'sos': { symbol: 'SOS', name: 'Somali Shilling' },
+  
+  // 非洲西部
+  'ngn': { symbol: 'NGN', name: 'Nigerian Naira' },
+  'ghs': { symbol: 'GHS', name: 'Ghanaian Cedi' },
+  'xof': { symbol: 'XOF', name: 'West African CFA Franc' },
+  'sll': { symbol: 'SLL', name: 'Sierra Leonean Leone' },
+  'lrd': { symbol: 'LRD', name: 'Liberian Dollar' },
+  'gmd': { symbol: 'GMD', name: 'Gambian Dalasi' },
+  'gnf': { symbol: 'GNF', name: 'Guinean Franc' },
+  'cvs': { symbol: 'CVE', name: 'Cape Verdean Escudo' },
+  
+  // 非洲东部
+  'kes': { symbol: 'KES', name: 'Kenyan Shilling' },
+  'ugx': { symbol: 'UGX', name: 'Ugandan Shilling' },
+  'tzs': { symbol: 'TZS', name: 'Tanzanian Shilling' },
+  'rwf': { symbol: 'RWF', name: 'Rwandan Franc' },
+  'bif': { symbol: 'BIF', name: 'Burundian Franc' },
+  'mzn': { symbol: 'MZN', name: 'Mozambican Metical' },
+  'mwk': { symbol: 'MWK', name: 'Malawian Kwacha' },
+  'zmw': { symbol: 'ZMW', name: 'Zambian Kwacha' },
+  'zwd': { symbol: 'ZWL', name: 'Zimbabwean Dollar' },
+  'mga': { symbol: 'MGA', name: 'Malagasy Ariary' },
+  'mur': { symbol: 'MUR', name: 'Mauritian Rupee' },
+  'scr': { symbol: 'SCR', name: 'Seychellois Rupee' },
+  'kmf': { symbol: 'KMF', name: 'Comorian Franc' },
+  
+  // 非洲中部
+  'xaf': { symbol: 'XAF', name: 'Central African CFA Franc' },
+  'cdf': { symbol: 'CDF', name: 'Congolese Franc' },
+  'aoa': { symbol: 'AOA', name: 'Angolan Kwanza' },
+  'std': { symbol: 'STN', name: 'São Tomé and Príncipe Dobra' },
+  'gqe': { symbol: 'XAF', name: 'Equatorial Guinea CFA Franc' },
+  
+  // 非洲南部
+  'bwp': { symbol: 'BWP', name: 'Botswana Pula' },
+  'nad': { symbol: 'NAD', name: 'Namibian Dollar' },
+  'szl': { symbol: 'SZL', name: 'Swazi Lilangeni' },
+  'lsl': { symbol: 'LSL', name: 'Lesotho Loti' }
+};
+
+// 内置加密货币映射表 - 前30名主流加密货币
+const CRYPTO_CURRENCIES: Record<string, { symbol: string, name: string, aliases?: string[] }> = {
+  'btc': { symbol: 'BTC', name: 'Bitcoin', aliases: ['bitcoin'] },
+  'eth': { symbol: 'ETH', name: 'Ethereum', aliases: ['ethereum'] },
+  'usdt': { symbol: 'USDT', name: 'Tether', aliases: ['tether'] },
+  'bnb': { symbol: 'BNB', name: 'BNB', aliases: ['binancecoin'] },
+  'sol': { symbol: 'SOL', name: 'Solana', aliases: ['solana'] },
+  'usdc': { symbol: 'USDC', name: 'USD Coin', aliases: ['usd-coin'] },
+  'xrp': { symbol: 'XRP', name: 'XRP', aliases: ['ripple'] },
+  'doge': { symbol: 'DOGE', name: 'Dogecoin', aliases: ['dogecoin'] },
+  'ton': { symbol: 'TON', name: 'Toncoin', aliases: ['toncoin'] },
+  'ada': { symbol: 'ADA', name: 'Cardano', aliases: ['cardano'] },
+  'shib': { symbol: 'SHIB', name: 'Shiba Inu', aliases: ['shiba-inu'] },
+  'avax': { symbol: 'AVAX', name: 'Avalanche', aliases: ['avalanche-2'] },
+  'trx': { symbol: 'TRX', name: 'TRON', aliases: ['tron'] },
+  'dot': { symbol: 'DOT', name: 'Polkadot', aliases: ['polkadot'] },
+  'link': { symbol: 'LINK', name: 'Chainlink', aliases: ['chainlink'] },
+  'matic': { symbol: 'MATIC', name: 'Polygon', aliases: ['matic-network'] },
+  'wbtc': { symbol: 'WBTC', name: 'Wrapped Bitcoin', aliases: ['wrapped-bitcoin'] },
+  'ltc': { symbol: 'LTC', name: 'Litecoin', aliases: ['litecoin'] },
+  'bch': { symbol: 'BCH', name: 'Bitcoin Cash', aliases: ['bitcoin-cash'] },
+  'uni': { symbol: 'UNI', name: 'Uniswap', aliases: ['uniswap'] },
+  'atom': { symbol: 'ATOM', name: 'Cosmos', aliases: ['cosmos'] },
+  'etc': { symbol: 'ETC', name: 'Ethereum Classic', aliases: ['ethereum-classic'] },
+  'xlm': { symbol: 'XLM', name: 'Stellar', aliases: ['stellar'] },
+  'okb': { symbol: 'OKB', name: 'OKB' },
+  'icp': { symbol: 'ICP', name: 'Internet Computer', aliases: ['internet-computer'] },
+  'fil': { symbol: 'FIL', name: 'Filecoin', aliases: ['filecoin'] },
+  'hbar': { symbol: 'HBAR', name: 'Hedera', aliases: ['hedera-hashgraph'] },
+  'ldo': { symbol: 'LDO', name: 'Lido DAO', aliases: ['lido-dao'] },
+  'crv': { symbol: 'CRV', name: 'Curve DAO Token', aliases: ['curve-dao-token'] },
+  'arb': { symbol: 'ARB', name: 'Arbitrum', aliases: ['arbitrum'] }
+};
+
 // HTML转义工具
 const htmlEscape = (text: string): string => 
   text.replace(/[&<>"']/g, m => ({ 
@@ -48,9 +256,23 @@ class RatePlugin extends Plugin {
 
   // 规范化货币代码（别名归一）
   private normalizeCode(s: string | undefined): string {
-    const map: Record<string, string> = { rmb: 'cny', yuan: 'cny', cnh: 'cny' };
     const k = (s || '').toLowerCase();
-    return map[k] || k;
+    
+    // 检查法币别名
+    for (const [code, info] of Object.entries(FIAT_CURRENCIES)) {
+      if (info.aliases?.includes(k)) {
+        return code;
+      }
+    }
+    
+    // 检查加密货币别名
+    for (const [code, info] of Object.entries(CRYPTO_CURRENCIES)) {
+      if (info.aliases?.includes(k)) {
+        return code;
+      }
+    }
+    
+    return k;
   }
 
   // 获取法币汇率（带多源回退与5分钟缓存）
@@ -105,36 +327,135 @@ class RatePlugin extends Plugin {
     return { base, quote, amount };
   }
 
-  // 获取加密货币对法币价格，失败则经USD桥接回退
-  private async getCryptoPrice(cryptoId: string, fiat: string): Promise<{ price: number, lastUpdated: Date }> {
+  // (新) 获取币安价格
+  private async fetchBinancePrice(symbol: string): Promise<number> {
     try {
-      const resp = await this.fetchCryptoPrice([cryptoId], [fiat]);
-      const data = resp[cryptoId];
-      const p = data?.[fiat];
-      if (typeof p === 'number') {
-        const ts = data.last_updated_at ? new Date(data.last_updated_at * 1000) : new Date();
-        return { price: p, lastUpdated: ts };
+      const url = `https://api.binance.com/api/v3/ticker/price?symbol=${symbol.toUpperCase()}`;
+      const { data } = await axios.get(url, { timeout: 5000 });
+      if (data && data.price) {
+        return parseFloat(data.price);
       }
-    } catch {}
-    // 回退：USD桥接
-    const usdResp = await this.fetchCryptoPrice([cryptoId], ['usd']);
-    const usdData = usdResp[cryptoId];
-    const usdPrice = usdData?.usd;
-    const ts = usdData?.last_updated_at ? new Date(usdData.last_updated_at * 1000) : new Date();
-    if (typeof usdPrice !== 'number') throw new Error('无法获取USD价格');
-    if (fiat.toLowerCase() === 'usd') {
-      return { price: usdPrice, lastUpdated: ts };
+    } catch (error) {
+      if (axios.isAxiosError(error) && error.response?.status === 400) {
+        // 交易对不存在，这不是一个严重错误，静默处理
+      } else {
+        console.warn(`[RatePlugin] Binance API for ${symbol} failed:`, error);
+      }
     }
-    const rates = await this.fetchFiatRates('usd');
-    const rate = rates[fiat.toLowerCase()];
-    if (!rate) throw new Error('无法获取法币汇率');
-    return { price: usdPrice * rate, lastUpdated: ts };
+    throw new Error(`Binance pair not found for ${symbol}`);
+  }
+
+  // (全智能) 获取任意两种货币之间的汇率
+  private async getUniversalPrice(symbol1: string, symbol2: string, type1: 'crypto' | 'fiat', type2: 'crypto' | 'fiat'): Promise<{ price: number, lastUpdated: Date }> {
+    const s1 = symbol1.toUpperCase();
+    const s2 = symbol2.toUpperCase();
+
+    // 情况1: 加密货币 -> 加密货币
+    if (type1 === 'crypto' && type2 === 'crypto') {
+      return await this.getCryptoCryptoPrice(s1, s2);
+    }
+    
+    // 情况2: 加密货币 -> 法币
+    if (type1 === 'crypto' && type2 === 'fiat') {
+      return await this.getCryptoFiatPrice(s1, s2);
+    }
+    
+    // 情况3: 法币 -> 加密货币
+    if (type1 === 'fiat' && type2 === 'crypto') {
+      try {
+        const cryptoToFiat = await this.getCryptoFiatPrice(s2, s1);
+        return { price: 1 / cryptoToFiat.price, lastUpdated: cryptoToFiat.lastUpdated };
+      } catch (error) {
+        throw new Error(`无法获取 ${s2} 对 ${s1} 的价格来计算反向汇率`);
+      }
+    }
+    
+    // 情况4: 法币 -> 法币
+    if (type1 === 'fiat' && type2 === 'fiat') {
+      const rates = await this.fetchFiatRates(s1.toLowerCase());
+      const rate = rates[s2.toLowerCase()];
+      if (!rate) throw new Error(`无法获取 ${s1} 到 ${s2} 的汇率`);
+      return { price: rate, lastUpdated: new Date() };
+    }
+
+    throw new Error(`不支持的货币类型组合: ${type1} -> ${type2}`);
+  }
+
+  // 加密货币对加密货币
+  private async getCryptoCryptoPrice(crypto1: string, crypto2: string): Promise<{ price: number, lastUpdated: Date }> {
+    // 1. 直接交易对
+    try {
+      const price = await this.fetchBinancePrice(`${crypto1}${crypto2}`);
+      return { price, lastUpdated: new Date() };
+    } catch {}
+
+    try {
+      const price = await this.fetchBinancePrice(`${crypto2}${crypto1}`);
+      return { price: 1 / price, lastUpdated: new Date() };
+    } catch {}
+
+    // 2. 通过稳定币桥接
+    const bridges = ['USDT', 'BUSD', 'USDC'];
+    for (const bridge of bridges) {
+      try {
+        const price1 = await this.fetchBinancePrice(`${crypto1}${bridge}`);
+        const price2 = await this.fetchBinancePrice(`${crypto2}${bridge}`);
+        return { price: price1 / price2, lastUpdated: new Date() };
+      } catch {}
+    }
+
+    throw new Error(`无法找到 ${crypto1} 和 ${crypto2} 之间的交易对`);
+  }
+
+  // 加密货币对法币
+  private async getCryptoFiatPrice(crypto: string, fiat: string): Promise<{ price: number, lastUpdated: Date }> {
+    const bridges = ['USDT', 'BUSD', 'USDC'];
+    let lastError: string = '';
+    
+    for (const bridge of bridges) {
+      try {
+        console.log(`[RatePlugin] 尝试通过 ${bridge} 桥接: ${crypto} -> ${fiat}`);
+        
+        // 获取加密货币对稳定币价格
+        const cryptoPrice = await this.fetchBinancePrice(`${crypto}${bridge}`);
+        console.log(`[RatePlugin] ${crypto}${bridge} 价格: ${cryptoPrice}`);
+        
+        // 如果目标就是稳定币
+        if (fiat.toUpperCase() === bridge) {
+          return { price: cryptoPrice, lastUpdated: new Date() };
+        }
+        
+        // 获取稳定币对法币汇率 (1 USDT = 1 USD)
+        let bridgeForFiat = bridge.toLowerCase();
+        if (bridge === 'USDT' || bridge === 'BUSD' || bridge === 'USDC') {
+          bridgeForFiat = 'usd';
+        }
+        
+        console.log(`[RatePlugin] 获取 ${bridgeForFiat} 到 ${fiat} 的汇率`);
+        const fiatRates = await this.fetchFiatRates(bridgeForFiat);
+        const fiatRate = fiatRates[fiat.toLowerCase()];
+        
+        if (fiatRate) {
+          const finalPrice = cryptoPrice * fiatRate;
+          console.log(`[RatePlugin] 最终价格: ${crypto} = ${finalPrice} ${fiat}`);
+          return { price: finalPrice, lastUpdated: new Date() };
+        } else {
+          lastError = `无法获取 ${bridgeForFiat} 到 ${fiat} 的汇率`;
+        }
+      } catch (error: any) {
+        lastError = `${bridge} 桥接失败: ${error.message}`;
+        console.warn(`[RatePlugin] ${lastError}`);
+      }
+    }
+
+    throw new Error(`无法获取 ${crypto} 对 ${fiat} 的价格。最后错误: ${lastError}`);
   }
 
   // 动态判断是否为法币（优先使用网络列表，失败则回退本地列表）
   private async isFiat(query: string): Promise<boolean> {
     const now = Date.now();
-    if (!this.vsFiats || now - this.vsFiatsTs > 6 * 60 * 60 * 1000) {
+    // 强制刷新法币列表以确保 TRY 被正确识别
+    if (!this.vsFiats || now - this.vsFiatsTs > 6 * 60 * 60 * 1000 || query.toLowerCase() === 'try') {
       // 1) CoinGecko vs_currencies
       try {
         const { data } = await axios.get('https://api.coingecko.com/api/v3/simple/supported_vs_currencies', { timeout: 8000 });
@@ -158,176 +479,69 @@ class RatePlugin extends Plugin {
           this.vsFiatsTs = now;
         } catch {}
       }
-      // 最后兜底：空集合（不使用本地映射）
-      if (!this.vsFiats) {
-        this.vsFiats = new Set();
+      // 最后兜底：使用常见法币列表（仅法币）
+      if (!this.vsFiats || this.vsFiats.size === 0) {
+        const commonFiats = ['usd', 'eur', 'gbp', 'jpy', 'cny', 'cad', 'aud', 'chf', 'nzd', 'sek', 'nok', 'dkk', 'pln', 'czk', 'huf', 'ron', 'bgn', 'hrk', 'rub', 'try', 'brl', 'mxn', 'sgd', 'hkd', 'krw', 'inr', 'thb', 'myr', 'php', 'idr', 'vnd', 'zar', 'ils', 'aed', 'sar', 'egp', 'kwd', 'qar', 'bhd', 'omr', 'jod', 'lbp', 'mad', 'dzd', 'tnd', 'ngn', 'ghs', 'kes', 'ugx', 'tzs', 'zmw', 'bwp', 'mur', 'scr', 'mvr', 'lkr', 'pkr', 'bdt', 'npr'];
+        this.vsFiats = new Set(commonFiats);
         this.vsFiatsTs = now;
+        console.log(`[RatePlugin] 使用本地法币列表，包含 ${this.vsFiats.size} 种货币`);
       }
     }
     return this.vsFiats.has(query.toLowerCase());
   }
 
-  // 搜索货币的API函数 - 支持加密货币和法币
+  // (优化) 搜索货币 - 使用内置映射优先识别
   private async searchCurrency(query: string): Promise<{id: string, symbol: string, name: string, type: 'crypto' | 'fiat'} | null> {
-    // 检查缓存
-    const cached = this.currencyCache[query.toLowerCase()];
-    if (cached) {
-      return cached;
-    }
+    const qLower = query.toLowerCase();
     
-    // 优先动态检查是否为法币 - 避免与加密货币符号冲突
-    if (await this.isFiat(query)) {
-      const result = {
-        id: query.toLowerCase(),
-        symbol: query.toUpperCase(),
-        name: query.toUpperCase(),
-        type: 'fiat' as const
+    if (this.currencyCache[qLower]) {
+      return this.currencyCache[qLower];
+    }
+
+    console.log(`[RatePlugin] 识别货币类型: ${query}`);
+    
+    // 先检查内置法币映射
+    if (FIAT_CURRENCIES[qLower]) {
+      const fiatInfo = FIAT_CURRENCIES[qLower];
+      const result = { 
+        id: qLower, 
+        symbol: fiatInfo.symbol, 
+        name: fiatInfo.name, 
+        type: 'fiat' as const 
       };
-      this.currencyCache[query.toLowerCase()] = result;
+      this.currencyCache[qLower] = result;
+      console.log(`[RatePlugin] ${query} 从内置映射识别为法币`);
       return result;
     }
     
-    const searchEndpoints = [
-      `https://api.coingecko.com/api/v3/search?query=${encodeURIComponent(query)}`,
-      `https://api.coingecko.com/api/v3/coins/list`
-    ];
-    
-    for (const endpoint of searchEndpoints) {
-      try {
-        const response = await axios.get(endpoint, {
-          timeout: 8000,
-          headers: {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-            'Accept': 'application/json'
-          }
-        });
-        
-        if (endpoint.includes('search')) {
-          // 使用搜索API
-          const coins = response.data?.coins || [];
-          const match = coins.find((coin: any) => 
-            coin.symbol?.toLowerCase() === query.toLowerCase() ||
-            coin.id?.toLowerCase() === query.toLowerCase() ||
-            coin.name?.toLowerCase().includes(query.toLowerCase())
-          );
-          if (match) {
-            const result = { 
-              id: match.id, 
-              symbol: match.symbol, 
-              name: match.name, 
-              type: 'crypto' as const
-            };
-            // 缓存结果
-            this.currencyCache[query.toLowerCase()] = result;
-            return result;
-          }
-        } else {
-          // 使用完整列表API
-          const coins = response.data || [];
-          const match = coins.find((coin: any) => 
-            coin.symbol?.toLowerCase() === query.toLowerCase() ||
-            coin.id?.toLowerCase() === query.toLowerCase()
-          );
-          if (match) {
-            const result = { 
-              id: match.id, 
-              symbol: match.symbol, 
-              name: match.name, 
-              type: 'crypto' as const
-            };
-            // 缓存结果
-            this.currencyCache[query.toLowerCase()] = result;
-            return result;
-          }
-        }
-      } catch (error) {
-        console.warn(`[RatePlugin] 搜索货币失败: ${error}`);
-        continue;
-      }
+    // 再检查内置加密货币映射
+    if (CRYPTO_CURRENCIES[qLower]) {
+      const cryptoInfo = CRYPTO_CURRENCIES[qLower];
+      const result = { 
+        id: qLower, 
+        symbol: cryptoInfo.symbol, 
+        name: cryptoInfo.name, 
+        type: 'crypto' as const 
+      };
+      this.currencyCache[qLower] = result;
+      console.log(`[RatePlugin] ${query} 从内置映射识别为加密货币`);
+      return result;
     }
     
-    
-    return null;
+    // 回退到动态检查
+    if (await this.isFiat(qLower)) {
+      console.log(`[RatePlugin] ${query} 动态识别为法币`);
+      const result = { id: qLower, symbol: query.toUpperCase(), name: query.toUpperCase(), type: 'fiat' as const };
+      this.currencyCache[qLower] = result;
+      return result;
+    }
+
+    console.log(`[RatePlugin] ${query} 默认识别为加密货币`);
+    const result = { id: qLower, symbol: query.toUpperCase(), name: query.toUpperCase(), type: 'crypto' as const };
+    this.currencyCache[qLower] = result;
+    return result;
   }
 
-  private async fetchCryptoPrice(coinIds: string[], currencies: string[]): Promise<CoinGeckoResponse> {
-    const coinIdsStr = coinIds.join(',');
-    const currenciesStr = currencies.join(',');
-    
-    // 尝试多个API端点
-    const apiEndpoints = [
-      {
-        name: 'CoinGecko Main',
-        url: `https://api.coingecko.com/api/v3/simple/price?ids=${coinIdsStr}&vs_currencies=${currenciesStr}&include_last_updated_at=true`
-      }
-    ];
-    
-    let lastError: Error | null = null;
-    
-    for (const endpoint of apiEndpoints) {
-      try {
-        console.log(`[RatePlugin] 尝试使用 ${endpoint.name}...`);
-        
-        const response = await axios.get(endpoint.url, {
-          timeout: 10000,
-          headers: {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-            'Accept': 'application/json',
-            'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8'
-          },
-          validateStatus: (status) => status < 500 // 接受所有非5xx响应
-        });
-        
-        if (response.status === 429) {
-          console.warn(`[RatePlugin] ${endpoint.name} 限流，尝试下一个端点...`);
-          lastError = new Error('API请求过于频繁');
-          continue;
-        }
-        
-        if (response.status !== 200) {
-          console.warn(`[RatePlugin] ${endpoint.name} 返回状态码 ${response.status}`);
-          lastError = new Error(`API返回错误状态: ${response.status}`);
-          continue;
-        }
-        
-        if (response.data && typeof response.data === 'object') {
-          console.log(`[RatePlugin] 成功从 ${endpoint.name} 获取数据`);
-          return response.data;
-        }
-        
-        lastError = new Error('API返回数据格式错误');
-        
-      } catch (error: any) {
-        console.error(`[RatePlugin] ${endpoint.name} 请求失败:`, error.message);
-        
-        if (axios.isAxiosError(error)) {
-          const axiosError = error as AxiosError;
-          
-          if (axiosError.code === 'ECONNABORTED') {
-            lastError = new Error('请求超时');
-          } else if (axiosError.response) {
-            const status = axiosError.response.status;
-            if (status === 429) {
-              lastError = new Error('API限流，请稍后重试');
-            } else if (status >= 500) {
-              lastError = new Error('服务器错误，请稍后重试');
-            } else {
-              lastError = new Error(`API错误: ${status}`);
-            }
-          } else if (axiosError.request) {
-            lastError = new Error('网络连接失败');
-          } else {
-            lastError = new Error(axiosError.message || '请求失败');
-          }
-        } else {
-          lastError = error;
-        }
-      }
-    }
-    
-    // 所有端点都失败了
-    throw lastError || new Error('无法获取价格数据');
-  }
 
   private formatPrice(value: number): string {
     if (value >= 1) {
@@ -388,39 +602,6 @@ class RatePlugin extends Plugin {
       `⏰ <b>数据更新:</b> ${lastUpdated.toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' })}`;
   }
 
-  private getCoinName(coinId: string): string {
-    const nameMap: Record<string, string> = {
-      // 主流币种
-      'bitcoin': '比特币 (BTC)',
-      'ethereum': '以太坊 (ETH)',
-      'binancecoin': '币安币 (BNB)',
-      'cardano': '艾达币 (ADA)',
-      'polkadot': '波卡 (DOT)',
-      'solana': '索拉纳 (SOL)',
-      'avalanche-2': '雪崩 (AVAX)',
-      'matic-network': '马蹄 (MATIC)',
-      'chainlink': '链接 (LINK)',
-      'uniswap': '独角兽 (UNI)',
-      'litecoin': '莱特币 (LTC)',
-      'ripple': '瑞波币 (XRP)',
-      'dogecoin': '狗狗币 (DOGE)',
-      'shiba-inu': '柴犬币 (SHIB)',
-      
-      // 稳定币
-      'tether': '泰达币 (USDT)',
-      'usd-coin': '美元币 (USDC)',
-      'binance-usd': '币安美元 (BUSD)',
-      'dai': '戴币 (DAI)',
-      'true-usd': '真美元 (TUSD)',
-      'paxos-standard': '帕克索斯 (USDP)',
-      'gemini-dollar': '双子星美元 (GUSD)',
-      'husd': '火币美元 (HUSD)',
-      'fei-usd': 'FEI美元 (FEI)',
-      'frax': '分数算法 (FRAX)',
-      'liquity-usd': '流动性美元 (LUSD)'
-    };
-    return nameMap[coinId] || coinId.toUpperCase();
-  }
 
   private async handleRate(msg: Api.Message): Promise<void> {
     const text = msg.text?.trim() || "";
@@ -459,208 +640,99 @@ class RatePlugin extends Plugin {
       const input2 = parsed.quote;
       const amount = parsed.amount;
 
-      // 使用API搜索所有货币
+      // 智能识别货币类型
       await msg.edit({
         text: "🔍 正在识别货币类型...",
         parseMode: "html"
       });
       
-      let currency1: {id: string, symbol: string, name: string, type: 'crypto' | 'fiat'} | null = null;
-      let currency2: {id: string, symbol: string, name: string, type: 'crypto' | 'fiat'} | null = null;
-      
-      // 搜索第一个货币
-      currency1 = await this.searchCurrency(input1!);
+      const currency1 = await this.searchCurrency(input1!);
       if (!currency1) {
         await msg.edit({
-          text: `❌ <b>货币未找到</b>\n\n无法找到货币: "${htmlEscape(input1!)}"\n\n💡 <b>建议:</b>\n• 检查拼写是否正确\n• 使用完整货币名称或标准代码\n• 输入 <code>rate help</code> 查看使用说明`,
+          text: `❌ <b>货币未找到:</b> "${htmlEscape(input1!)}"\n\n💡 请检查拼写或使用标准代码`,
           parseMode: "html"
         });
         return;
       }
       
-      // 搜索第二个货币（如果存在）
+      let currency2: {id: string, symbol: string, name: string, type: 'crypto' | 'fiat'};
       if (input2) {
-        currency2 = await this.searchCurrency(input2!);
-        if (!currency2) {
+        const searchResult = await this.searchCurrency(input2);
+        if (!searchResult) {
           await msg.edit({
-            text: `❌ <b>货币未找到</b>\n\n无法找到货币: "${htmlEscape(input2!)}"\n\n💡 <b>建议:</b>\n• 检查拼写是否正确\n• 使用完整货币名称或标准代码\n• 输入 <code>rate help</code> 查看使用说明`,
+            text: `❌ <b>货币未找到:</b> "${htmlEscape(input2)}"\n\n💡 请检查拼写或使用标准代码`,
             parseMode: "html"
           });
           return;
         }
+        currency2 = searchResult;
       } else {
         // 默认使用USD
         currency2 = { id: 'usd', symbol: 'USD', name: 'USD', type: 'fiat' };
       }
+
+      // 显示加载状态
+      await msg.edit({
+        text: "⏳ 正在获取汇率数据...",
+        parseMode: "html"
+      });
+
+      // 使用全智能价格获取
+      let price: number = 0;
+      let lastUpdated: Date = new Date();
       
-      let cryptoInput: string = '';
-      let fiatInput: string = '';
-      let isReverse = false;
-      let isCryptoCrypto = false;
-      let isFiatFiat = false;
-      let targetCrypto: string | undefined;
-      let targetFiat: string | undefined;
+      console.log(`[RatePlugin] 智能查询: ${currency1.symbol} (${currency1.type}) -> ${currency2.symbol} (${currency2.type}), 数量: ${amount}`);
       
-      // 智能判断货币类型组合
-      if (currency1.type === 'crypto' && currency2.type === 'fiat') {
-        // 加密货币 -> 法币 (正向)
-        cryptoInput = input1!;
-        fiatInput = input2!;
-        isReverse = false;
-      } else if (currency1.type === 'fiat' && currency2.type === 'crypto') {
-        // 法币 -> 加密货币 (反向)
-        cryptoInput = input2!;
-        fiatInput = input1!;
-        isReverse = true;
-      } else if (currency1.type === 'crypto' && currency2.type === 'crypto') {
-        // 加密货币间转换
-        cryptoInput = input1!;
-        targetCrypto = input2!;
-        fiatInput = 'usd';
-        isReverse = false;
-        isCryptoCrypto = true;
-      } else if (currency1.type === 'fiat' && currency2.type === 'fiat') {
-        // 法币间汇率查询 - 使用USDT作为中间货币
-        cryptoInput = 'usdt';
-        fiatInput = input1!;
-        targetFiat = input2!;
-        isReverse = false;
-        isFiatFiat = true;
-      } else if (currency1.type === 'crypto' && !input2) {
-        // 只有加密货币，默认美元
-        cryptoInput = input1!;
-        fiatInput = 'usd';
-        isReverse = false;
-      } else if (currency1.type === 'fiat' && !input2) {
-        // 只有法币，错误情况
+      // 验证货币类型识别
+      if (currency1.type === 'fiat' && currency2.type === 'crypto') {
+        console.log(`[RatePlugin] 检测到法币到加密货币转换: ${currency1.symbol} -> ${currency2.symbol}`);
+      }
+      
+      try {
+        const market = await this.getUniversalPrice(currency1.symbol, currency2.symbol, currency1.type, currency2.type);
+        price = market.price;
+        lastUpdated = market.lastUpdated;
+      } catch (error: any) {
+        console.error(`[RatePlugin] 价格获取详细错误:`, error);
         await msg.edit({
-          text: `🚫 <b>输入有误</b>\n\n请指定要查询的加密货币\n\n✨ <b>正确格式:</b> <code>rate BTC CNY</code>`,
+          text: `❌ <b>获取价格失败:</b> ${error.message}\n\n🔍 <b>调试信息:</b>\n• ${currency1.symbol} (${currency1.type})\n• ${currency2.symbol} (${currency2.type})`,
           parseMode: "html"
         });
         return;
       }
 
-      // 获取标准化名称
-      let cryptoId: string;
-      let fiatCurrency: string;
+
+      // 智能构建响应消息
+      const symbol1 = currency1.symbol.toUpperCase();
+      const symbol2 = currency2.symbol.toUpperCase();
+      const convertedAmount = amount * price;
       
-      if (isFiatFiat) {
-        cryptoId = 'tether'; // USDT作为桥梁
-        fiatCurrency = fiatInput;
-      } else {
-        // 从缓存或搜索结果获取ID
-        const cryptoCurrency = this.currencyCache[cryptoInput.toLowerCase()];
-        if (!cryptoCurrency) {
-          const searchResult = await this.searchCurrency(cryptoInput);
-          if (!searchResult) {
-            await msg.edit({
-              text: `❌ <b>无法获取货币信息:</b> ${cryptoInput}`,
-              parseMode: "html"
-            });
-            return;
-          }
-          cryptoId = searchResult.id;
-        } else {
-          cryptoId = cryptoCurrency.id;
-        }
-        
-        fiatCurrency = fiatInput;
-      }
-
-      // 显示加载状态
-      await msg.edit({
-        text: "⏳ 正在连接汇率服务器...",
-        parseMode: "html"
-      });
-      
-      console.log(`[RatePlugin] 查询: ${cryptoId} -> ${fiatCurrency}, 数量: ${amount}`);
-
-      // 获取价格（支持USD桥接回退），法币↔法币无需获取
-      let price: number = 0;
-      let lastUpdated: Date = new Date();
-      if (!isFiatFiat) {
-        let market: { price: number, lastUpdated: Date };
-        try {
-          market = await this.getCryptoPrice(cryptoId, fiatCurrency);
-        } catch (error: any) {
-          await msg.edit({
-            text: `❌ <b>获取价格失败:</b> ${error.message}`,
-            parseMode: "html"
-          });
-          return;
-        }
-        price = market.price;
-        lastUpdated = market.lastUpdated;
-      }
-
-
-      // 构建响应消息
       let responseText: string;
       
-      if (isFiatFiat) {
-        const sourceFiatSymbol = input1!.toUpperCase();
-        const targetFiatSymbol = input2!.toUpperCase();
+      // 根据货币类型组合选择合适的响应格式
+      if (currency1.type === 'fiat' && currency2.type === 'fiat') {
+        // 法币 -> 法币
+        responseText = this.buildFiatToFiatResponse(amount, convertedAmount, price, symbol1, symbol2);
+      } else if (currency1.type === 'crypto' && currency2.type === 'crypto') {
+        // 加密货币 -> 加密货币
+        let price1USD = 0, price2USD = 0;
         try {
-          const rates = await this.fetchFiatRates(input1!);
-          const rate = rates[input2!];
-          if (!rate) {
-            await msg.edit({ text: '❌ <b>无法获取目标汇率</b>', parseMode: 'html' });
-            return;
-          }
-          const convertedAmount = amount * rate;
-          responseText = this.buildFiatToFiatResponse(amount, convertedAmount, rate, sourceFiatSymbol, targetFiatSymbol);
-        } catch (error: any) {
-          await msg.edit({ text: `❌ <b>获取汇率失败:</b> ${error.message}`, parseMode: 'html' });
-          return;
-        }
-      } else if (isCryptoCrypto) {
-        const targetCryptoCurrency = this.currencyCache[targetCrypto!.toLowerCase()];
-        let targetCryptoId: string;
-        if (!targetCryptoCurrency) {
-          const searchResult = await this.searchCurrency(targetCrypto!);
-          if (!searchResult) {
-            await msg.edit({ text: `🔍 <b>未识别的目标货币:</b> "${htmlEscape(targetCrypto!)}"\n\n💡 请检查拼写或使用完整货币名称`, parseMode: "html" });
-            return;
-          }
-          targetCryptoId = searchResult.id;
+          price1USD = (await this.getUniversalPrice(symbol1, 'USD', 'crypto', 'fiat')).price;
+          price2USD = (await this.getUniversalPrice(symbol2, 'USD', 'crypto', 'fiat')).price;
+        } catch {}
+        responseText = this.buildCryptoToCryptoResponse(amount, convertedAmount, price, price1USD, price2USD, symbol1, symbol2, lastUpdated);
+      } else if (currency1.type === 'fiat' && currency2.type === 'crypto') {
+        // 法币 -> 加密货币
+        responseText = this.buildFiatToCryptoResponse(amount, convertedAmount, 1/price, symbol2, symbol1, lastUpdated);
+      } else if (currency1.type === 'crypto' && currency2.type === 'fiat') {
+        // 加密货币 -> 法币
+        if (amount !== 1) {
+          responseText = this.buildCryptoToFiatResponse(amount, convertedAmount, price, symbol1, symbol2, lastUpdated);
         } else {
-          targetCryptoId = targetCryptoCurrency.id;
+          responseText = this.buildPriceResponse(price, symbol1, symbol2, lastUpdated);
         }
-
-        let targetResponse: CoinGeckoResponse;
-        try {
-          targetResponse = await this.fetchCryptoPrice([targetCryptoId], ['usd']);
-        } catch (error: any) {
-          await msg.edit({ text: `❌ <b>获取目标货币价格失败:</b> ${error.message}`, parseMode: "html" });
-          return;
-        }
-
-        const targetPriceData = targetResponse[targetCryptoId];
-        if (!targetPriceData || !targetPriceData.usd) {
-          await msg.edit({ text: "❌ <b>API错误:</b> 无法获取目标货币价格数据，请稍后重试", parseMode: "html" });
-          return;
-        }
-
-        const targetPrice = targetPriceData.usd;
-        const conversionRate = price / targetPrice;
-        const convertedAmount = amount * conversionRate;
-        const sourceCryptoSymbol = currency1?.symbol?.toUpperCase() || cryptoInput?.toUpperCase() || 'UNKNOWN';
-        const targetCryptoSymbol = currency2?.symbol?.toUpperCase() || targetCrypto?.toUpperCase() || 'UNKNOWN';
-        responseText = this.buildCryptoToCryptoResponse(amount, convertedAmount, conversionRate, price, targetPrice, sourceCryptoSymbol, targetCryptoSymbol, lastUpdated);
-      } else if (isReverse) {
-        const cryptoAmount = amount / price;
-        const cryptoSymbol = (isReverse ? currency2?.symbol : currency1?.symbol)?.toUpperCase() || cryptoInput?.toUpperCase() || 'UNKNOWN';
-        const fiatSymbol = (isReverse ? currency1?.symbol : currency2?.symbol)?.toUpperCase() || fiatInput?.toUpperCase() || 'UNKNOWN';
-        responseText = this.buildFiatToCryptoResponse(amount, cryptoAmount, price, cryptoSymbol, fiatSymbol, lastUpdated);
-      } else if (amount !== 1) {
-        const totalValue = amount * price;
-        const cryptoSymbol = currency1?.symbol?.toUpperCase() || cryptoInput?.toUpperCase() || 'UNKNOWN';
-        const fiatSymbol = currency2?.symbol?.toUpperCase() || fiatInput?.toUpperCase() || 'UNKNOWN';
-        responseText = this.buildCryptoToFiatResponse(amount, totalValue, price, cryptoSymbol, fiatSymbol, lastUpdated);
       } else {
-        const cryptoSymbol = currency1?.symbol?.toUpperCase() || cryptoInput?.toUpperCase() || 'UNKNOWN';
-        const fiatSymbol = currency2?.symbol?.toUpperCase() || fiatInput?.toUpperCase() || 'UNKNOWN';
-        responseText = this.buildPriceResponse(price, cryptoSymbol, fiatSymbol, lastUpdated);
+        responseText = `💱 <b>汇率</b>\n\n<code>${this.formatAmount(amount)} ${symbol1} ≈ ${this.formatAmount(convertedAmount)} ${symbol2}</code>\n\n📊 <b>汇率:</b> <code>1 ${symbol1} = ${this.formatPrice(price)} ${symbol2}</code>\n⏰ <b>更新时间:</b> ${lastUpdated.toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' })}`;
       }
 
       await msg.edit({
