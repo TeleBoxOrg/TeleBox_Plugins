@@ -37,10 +37,12 @@ interface ExitMessageData {
 }
 
 interface CommandRule {
+  id?: string; // 规则唯一标识符
   command: string;
   delay: number; // 删除延迟秒数
   parameters?: string[]; // 特定参数（可选）
   deleteResponse?: boolean; // 是否同时删除响应消息
+  exactMatch?: boolean; // 是否精确匹配（只匹配无参数的命令调用）
 }
 
 interface AutoDeleteConfig {
@@ -61,6 +63,20 @@ function resolveAlias(command: string): string {
   }
 }
 
+// 计算现有规则中的最大数字ID
+function getMaxRuleId(rules: CommandRule[]): number {
+  const existingIds = rules
+    .map(r => parseInt(r.id || '0'))
+    .filter(id => !isNaN(id));
+  
+  return existingIds.length > 0 ? Math.max(...existingIds) : 0;
+}
+
+// 生成规则唯一ID - 使用简单数字
+function generateRuleId(existingRules: CommandRule[]): string {
+  return (getMaxRuleId(existingRules) + 1).toString();
+}
+
 class AutoDeleteService {
   private client: any;
   private config: AutoDeleteConfig = {};
@@ -77,14 +93,10 @@ class AutoDeleteService {
       { command: "alias", delay: 10 },
       { command: "reload", delay: 10 },
       { command: "eat", delay: 10, parameters: ["set"] }, // 只有set参数时删除
-      { command: "tpm", delay: 10 }, // 默认10秒，特殊参数会被覆盖
+      { command: "tpm", delay: 10 },
       
-      // tpm特殊参数 120秒删除
-      { command: "tpm", delay: 120, parameters: ["s"] },
-      { command: "tpm", delay: 120, parameters: ["search"] },
-      { command: "tpm", delay: 120, parameters: ["ls"] },
-      { command: "tpm", delay: 120, parameters: ["i"] },
-      { command: "tpm", delay: 120, parameters: ["install"] },
+      // tpm特殊参数 120秒删除（合并为一个规则）
+      { command: "tpm", delay: 120, parameters: ["s", "search", "ls", "i", "install"] },
       
       // 120秒删除的命令
       { command: "h", delay: 120 },
@@ -133,7 +145,7 @@ class AutoDeleteService {
 
   // 生成规则的唯一key
   private getRuleKey(rule: CommandRule): string {
-    return `${rule.command}:${rule.parameters?.join(',') || ''}`;
+    return `${rule.command}:${rule.parameters?.join(',') || ''}:${rule.exactMatch ? 'exact' : 'normal'}`;
   }
 
   public async initialize() {
@@ -146,6 +158,25 @@ class AutoDeleteService {
       await fs.access(CONFIG_FILE_PATH);
       const data = await fs.readFile(CONFIG_FILE_PATH, "utf-8");
       this.config = JSON.parse(data);
+      
+      // 为没有 ID 的规则生成简单数字 ID
+      if (this.config.customRules) {
+        let needSave = false;
+        let nextId = getMaxRuleId(this.config.customRules) + 1;
+        
+        // 为没有ID的规则分配连续的数字ID
+        this.config.customRules.forEach(rule => {
+          if (!rule.id) {
+            rule.id = nextId.toString();
+            nextId++;
+            needSave = true;
+          }
+        });
+        
+        if (needSave) {
+          await this.saveConfig();
+        }
+      }
     } catch (error) {
       console.log("[autodelcmd] 未找到配置，使用默认配置。");
     }
@@ -207,8 +238,6 @@ class AutoDeleteService {
     console.log(`[autodelcmd] 检测到 ${exitMsgs.length} 个未完成的删除任务`);
     
     // 处理每个待删除的消息
-    const processedMsgs: number[] = [];
-    
     for (const exitMsg of exitMsgs) {
       try {
         const message = await this.client.getMessages(exitMsg.cid, { ids: [exitMsg.mid] });
@@ -224,15 +253,11 @@ class AutoDeleteService {
               console.error(`[autodelcmd] 删除消息 ID ${exitMsg.mid} 失败:`, error.message);
             }
           }, 10 * 1000);
-          
-          processedMsgs.push(exitMsg.mid);
         } else {
           console.log(`[autodelcmd] 未找到消息 ID ${exitMsg.mid}，可能已被删除`);
-          processedMsgs.push(exitMsg.mid);
         }
       } catch (error) {
         console.error(`[autodelcmd] 处理消息 ${exitMsg.mid} 时出错:`, error);
-        processedMsgs.push(exitMsg.mid);
       }
     }
     
@@ -307,12 +332,27 @@ class AutoDeleteService {
     
     // 如果没有匹配带参数的规则，查找不带参数要求的规则
     if (!matchedRule) {
+      let exactMatchRule: CommandRule | null = null;
+      let normalMatchRule: CommandRule | null = null;
+      
       for (const rule of rules) {
         if (rule.command === originalCommand && (!rule.parameters || rule.parameters.length === 0)) {
-          matchedRule = rule;
-          break;
+          if (rule.exactMatch) {
+            // 精确匹配模式：只有当命令没有参数时才匹配
+            if ((!parameters || parameters.length === 0) && !exactMatchRule) {
+              exactMatchRule = rule;
+            }
+          } else {
+            // 普通模式：匹配所有该命令的调用
+            if (!normalMatchRule) {
+              normalMatchRule = rule;
+            }
+          }
         }
       }
+      
+      // 优先级：精确匹配 > 普通匹配
+      matchedRule = exactMatchRule || normalMatchRule;
     }
     
     if (matchedRule) {
@@ -325,13 +365,37 @@ class AutoDeleteService {
           const chatId = msg.chatId || msg.peerId;
           const messages = await this.client.getMessages(chatId, { limit: 100 });
 
-          // 查找最近的自己发出的消息并删除
+          // 查找最近的响应消息并删除
+          // 在 Saved Messages 中，需要特殊处理消息的归属
+          const msgChatId = this.getChatId(msg);
+          const isInSavedMessages = cachedUserId && msgChatId?.toString() === cachedUserId;
+          
           for (const message of messages) {
-            if (message.out && message.id !== msg.id) {
+            // 跳过命令消息本身
+            if (message.id === msg.id) continue;
+            
+            let shouldDelete = false;
+            
+            if (isInSavedMessages) {
+              // 在 Saved Messages 中，查找消息ID小于命令消息ID的最近消息作为响应
+              // 因为响应通常在命令之后发送，ID会更大，但获取的消息列表是按时间倒序的
+              if (message.id > msg.id) {
+                shouldDelete = true;
+              }
+            } else {
+              // 在普通聊天中，查找自己发出的消息
+              if (message.out) {
+                shouldDelete = true;
+              }
+            }
+            
+            if (shouldDelete) {
+              console.log(`[autodelcmd] 找到响应消息 ID ${message.id}，将一同删除`);
               await this.delayDelete(message, matchedRule.delay);
               break;
             }
           }
+          
           // 删除命令消息本身
           await this.delayDelete(msg, matchedRule.delay);
         } catch (error) {
@@ -386,36 +450,122 @@ class AutoDeleteService {
   }
 
   // 配置管理方法
-  public async addCustomRule(rule: CommandRule): Promise<void> {
+  public async addCustomRule(rule: CommandRule): Promise<{ success: boolean; error?: string; merged?: boolean }> {
     if (!this.config.customRules) {
       this.config.customRules = [];
     }
     
-    // 删除已存在的相同规则
-    const key = this.getRuleKey(rule);
-    this.config.customRules = this.config.customRules.filter(r => this.getRuleKey(r) !== key);
+    // 只检查自定义规则之间的冲突，不检查与默认规则的冲突
+    const existingCustomRules = this.getCustomRules();
     
-    // 添加新规则
-    this.config.customRules.push(rule);
-    await this.saveConfig();
+    // 检查参数冲突（带参数的规则）
+    if (rule.parameters && rule.parameters.length > 0) {
+      for (const param of rule.parameters) {
+        // 查找是否有其他自定义规则使用了相同的参数但条件不同
+        const conflictingRule = existingCustomRules.find(r => 
+          r.command === rule.command && 
+          r.parameters && 
+          r.parameters.includes(param) && 
+          (r.delay !== rule.delay || !!r.deleteResponse !== !!rule.deleteResponse)
+        );
+        
+        if (conflictingRule) {
+          const conflictResponse = conflictingRule.deleteResponse ? " (含响应)" : "";
+          const newResponse = rule.deleteResponse ? " (含响应)" : "";
+          return {
+            success: false,
+            error: `参数冲突: 参数 "${param}" 已存在于自定义规则 "${rule.command} → ${conflictingRule.delay}秒删除${conflictResponse}" 中，与新规则 "${rule.command} → ${rule.delay}秒删除${newResponse}" 冲突\n
+💡 提示: 使用 "<code>${mainPrefix}autodelcmd del ${conflictingRule.id}</code>" 删除冲突规则后重试`
+          };
+        }
+      }
+    }
+    
+    // 检查不带参数规则的冲突
+    if (!rule.parameters || rule.parameters.length === 0) {
+      // 查找是否存在相同命令、相同exactMatch模式的不带参数自定义规则但其他条件不同
+      const conflictingRule = existingCustomRules.find(r => 
+        r.command === rule.command && 
+        (!r.parameters || r.parameters.length === 0) &&
+        !!r.exactMatch === !!rule.exactMatch && // exactMatch模式必须相同才检查冲突
+        (r.delay !== rule.delay || !!r.deleteResponse !== !!rule.deleteResponse)
+      );
+      
+      if (conflictingRule) {
+        const conflictResponse = conflictingRule.deleteResponse ? " (含响应)" : "";
+        const conflictExact = conflictingRule.exactMatch ? " (精确匹配)" : " (普通匹配)";
+        const newResponse = rule.deleteResponse ? " (含响应)" : "";
+        const newExact = rule.exactMatch ? " (精确匹配)" : " (普通匹配)";
+        
+        return {
+          success: false,
+          error: `规则冲突: 命令 "${rule.command}" 已存在自定义规则 "→ ${conflictingRule.delay}秒删除${conflictResponse}${conflictExact}"，与新规则 "→ ${rule.delay}秒删除${newResponse}${newExact}" 冲突\n
+💡 提示: 使用 "<code>${mainPrefix}autodelcmd del ${conflictingRule.id}</code>" 删除冲突规则后重试`
+        };
+      }
+    }
+    
+    // 查找是否存在相同命令、延迟、deleteResponse和exactMatch设置的规则
+    const existingRuleIndex = this.config.customRules.findIndex(r => 
+      r.command === rule.command && 
+      r.delay === rule.delay && 
+      !!r.deleteResponse === !!rule.deleteResponse &&
+      !!r.exactMatch === !!rule.exactMatch
+    );
+    
+    if (existingRuleIndex !== -1 && rule.parameters && rule.parameters.length > 0) {
+      // 存在相同条件的规则，合并参数
+      const existingRule = this.config.customRules[existingRuleIndex];
+      
+      if (!existingRule.parameters) {
+        existingRule.parameters = [];
+      }
+      
+      // 合并参数，去重
+      const mergedParams = [...new Set([...existingRule.parameters, ...rule.parameters])];
+      existingRule.parameters = mergedParams;
+      
+      console.log(`[autodelcmd] 合并规则参数: ${rule.command} -> [${mergedParams.join(', ')}]`);
+      await this.saveConfig();
+      return { success: true, merged: true };
+    } else {
+      // 删除已存在的完全相同的规则（包括参数）
+      const key = this.getRuleKey(rule);
+      this.config.customRules = this.config.customRules.filter(r => this.getRuleKey(r) !== key);
+      
+      // 为新规则生成简单数字ID并添加
+      if (!rule.id) {
+        rule.id = generateRuleId(this.config.customRules);
+      }
+      this.config.customRules.push(rule);
+      await this.saveConfig();
+      return { success: true, merged: false };
+    }
   }
 
-  public async removeCustomRule(command: string, parameters?: string[]): Promise<boolean> {
-    if (!this.config.customRules) return false;
+  public async removeCustomRuleById(ruleId: string): Promise<{ success: boolean; removedRule?: CommandRule }> {
+    if (!this.config.customRules) return { success: false };
     
-    const key = this.getRuleKey({ command, delay: 0, parameters });
-    const initialLength = this.config.customRules.length;
-    this.config.customRules = this.config.customRules.filter(r => this.getRuleKey(r) !== key);
+    const ruleIndex = this.config.customRules.findIndex(r => r.id === ruleId);
     
-    if (this.config.customRules.length < initialLength) {
-      await this.saveConfig();
-      return true;
+    if (ruleIndex === -1) {
+      return { success: false };
     }
-    return false;
+    
+    const removedRule = this.config.customRules[ruleIndex];
+    this.config.customRules.splice(ruleIndex, 1);
+    
+    await this.saveConfig();
+    return { success: true, removedRule };
   }
 
   public getCustomRules(): CommandRule[] {
     return this.config.customRules || [];
+  }
+
+  public getCustomRulesByCommand(command?: string): CommandRule[] {
+    const rules = this.getCustomRules();
+    return command ? rules.filter(r => r.command === command) : rules;
   }
 
   public getAllRules(): CommandRule[] {
@@ -492,29 +642,33 @@ class AutoDeletePlugin extends Plugin {
 - Saved Messages（收藏夹）中的命令消息
 
 <b>默认删除规则:</b>
-• 短延迟 (10秒): lang, alias, reload, eat set, tpm (默认)
+• 短延迟 (10秒): lang, alias, reload, eat set, tpm
 • 长延迟 (120秒): h, help, dc, ip, ping, pingdc, sysinfo, whois, bf, update, trace, service
-• 特殊规则: tpm s/search/ls/i/install (120秒), s/speedtest/spt/v (120秒+删除响应)
+• 特殊规则: tpm [s,search,ls,i,install] (120秒), s/speedtest/spt/v (120秒+🔄删除响应)
 
 <b>配置管理命令:</b>
 • <code>${mainPrefix}autodelcmd on/off</code> - 启用/禁用自动删除功能
 • <code>${mainPrefix}autodelcmd status</code> - 查看功能状态和规则统计
 • <code>${mainPrefix}autodelcmd list</code> - 查看所有规则
-• <code>${mainPrefix}autodelcmd add [命令] [延迟秒数] [参数1] [参数2] [...] [-r]</code> - 添加自定义规则
-• <code>${mainPrefix}autodelcmd del [命令] [参数1] [参数2] [...]</code> - 删除自定义规则
+• <code>${mainPrefix}autodelcmd add [命令] [延迟秒数] [参数1] [参数2] [...] [-r] [-e]</code> - 添加自定义规则
+• <code>${mainPrefix}autodelcmd del [规则ID或命令名]</code> - 删除自定义规则或查看规则
 • <code>${mainPrefix}autodelcmd reset</code> - 重置为默认配置
 
-<b>删除响应功能:</b>
-• 使用 <code>-r</code> 或 <code>--response</code> 参数启用删除响应消息
+<b>特殊选项:</b>
+• 🔄 使用 <code>-r</code> 或 <code>--response</code> 参数启用删除响应消息
 • 删除响应指同时删除命令触发的最近一条回复消息
+• 🎯 使用 <code>-e</code> 或 <code>--exact</code> 参数启用精确匹配模式
+• 精确匹配只匹配无参数的命令调用，不匹配带参数的调用
 
 <b>使用示例:</b>
 • <code>${mainPrefix}autodelcmd on</code> - 启用自动删除功能
 • <code>${mainPrefix}autodelcmd status</code> - 查看功能状态
 • <code>${mainPrefix}autodelcmd add ping 30</code> - ping命令30秒后删除
-• <code>${mainPrefix}autodelcmd add speedtest 60 -r</code> - speedtest命令60秒后删除（包含响应）
+• <code>${mainPrefix}autodelcmd add speedtest 60 -r</code> - speedtest命令60秒后删除（🔄包含响应）
 • <code>${mainPrefix}autodelcmd add tpm 60 list ls search</code> - tpm list/ls/search任一命令60秒后删除
-• <code>${mainPrefix}autodelcmd del ping</code> - 删除ping命令的自定义规则
+• <code>${mainPrefix}autodelcmd add ping 30 -e</code> - 只有无参数的ping命令30秒后删除
+• <code>${mainPrefix}autodelcmd del ping</code> - 查看ping命令的所有自定义规则
+• <code>${mainPrefix}autodelcmd del 1</code> - 使用ID删除指定规则
 • <code>${mainPrefix}autodelcmd off</code> - 禁用自动删除功能
 
 <b>注意:</b> 插件默认处于禁用状态，需要手动启用才能工作。`;
@@ -574,10 +728,12 @@ class AutoDeletePlugin extends Plugin {
     
     if (customRules.length > 0) {
       text += "🔧 <b>自定义规则:</b>\n";
-      customRules.forEach(rule => {
+      customRules.forEach((rule, index) => {
         const params = rule.parameters?.length ? ` [${rule.parameters.join(', ')}]` : '';
         const response = rule.deleteResponse ? ' 🔄' : '';
-        text += `• <code>${rule.command}${params}</code> → ${rule.delay}秒${response}\n`;
+        const exact = rule.exactMatch ? ' 🎯' : '';
+        const ruleId = rule.id || 'unknown';
+        text += `${index + 1}. <code>${rule.command}${params}</code> → ${rule.delay}秒${response}${exact} <code>[ID: ${ruleId}]</code>\n`;
       });
       text += "\n";
     }
@@ -602,9 +758,15 @@ class AutoDeletePlugin extends Plugin {
         rules.forEach((rule: CommandRule) => {
           const params = rule.parameters?.length ? ` [${rule.parameters.join(', ')}]` : '';
           const response = rule.deleteResponse && !withResponse ? ' 🔄' : '';
-          text += `• ${rule.command}${params}${response}\n`;
+          const exact = rule.exactMatch ? ' 🎯' : '';
+          text += `• ${rule.command}${params}${response}${exact}\n`;
         });
       });
+
+    // 添加图标说明
+    text += `\n<b>📖 图标说明:</b>\n`;
+    text += `• 🔄 = 同时删除响应消息\n`;
+    text += `• 🎯 = 精确匹配（只匹配无参数调用）`;
 
     await msg.edit({ text, parseMode: "html" });
   }
@@ -612,19 +774,22 @@ class AutoDeletePlugin extends Plugin {
   private async handleAddRule(msg: Api.Message, args: string[]) {
     if (args.length < 2) {
       await msg.edit({ 
-        text: `❌ 参数不足\n用法: <code>${mainPrefix}autodelcmd add [命令] [延迟秒数] [参数...] [-r]</code>\n\n` +
+        text: `❌ 参数不足\n用法: <code>${mainPrefix}autodelcmd add [命令] [延迟秒数] [参数...] [-r] [-e]</code>\n\n` +
               `示例:\n` +
-              `• <code>${mainPrefix}autodelcmd add ping 30</code> - ping命令30秒删除\n` +
-              `• <code>${mainPrefix}autodelcmd add speedtest 60 -r</code> - speedtest命令60秒删除(含响应)\n` +
-              `• <code>${mainPrefix}autodelcmd add tpm 60 list ls search -r</code> - tpm list/ls/search任一命令60秒删除(含响应)`, 
+              `• <code>${mainPrefix}autodelcmd add ping 30</code> - ping命令30秒删除(包含带参数的)\n` +
+              `• <code>${mainPrefix}autodelcmd add ping 30 -e</code> - 🎯只有无参数的ping命令30秒删除\n` +
+              `• <code>${mainPrefix}autodelcmd add speedtest 60 -r</code> - speedtest命令60秒删除(🔄含响应)\n` +
+              `• <code>${mainPrefix}autodelcmd add tpm 60 list ls search -r</code> - tpm list/ls/search任一命令60秒删除(🔄含响应)`, 
         parseMode: "html" 
       });
       return;
     }
 
-    // 检查是否有删除响应的标志
+    // 检查标志参数
     const responseFlags = ['-r', '--response'];
+    const exactFlags = ['-e', '--exact'];
     let deleteResponse = false;
+    let exactMatch = false;
     let filteredArgs = [...args];
     
     // 从参数中移除响应标志
@@ -632,6 +797,15 @@ class AutoDeletePlugin extends Plugin {
       const index = filteredArgs.indexOf(flag);
       if (index !== -1) {
         deleteResponse = true;
+        filteredArgs.splice(index, 1);
+      }
+    }
+    
+    // 从参数中移除精确匹配标志
+    for (const flag of exactFlags) {
+      const index = filteredArgs.indexOf(flag);
+      if (index !== -1) {
+        exactMatch = true;
         filteredArgs.splice(index, 1);
       }
     }
@@ -650,30 +824,70 @@ class AutoDeletePlugin extends Plugin {
       return;
     }
 
+    // 检查精确匹配标志与参数的冲突
+    if (exactMatch && parameters.length > 0) {
+      await msg.edit({ 
+        text: "❌ 精确匹配模式（-e/--exact）不能与参数同时使用\n精确匹配专用于只匹配无参数的命令调用", 
+        parseMode: "html" 
+      });
+      return;
+    }
+
     const rule: CommandRule = {
       command,
       delay,
       parameters: parameters.length > 0 ? parameters : undefined,
-      deleteResponse: deleteResponse || undefined // 只有为true时才设置
+      deleteResponse: deleteResponse || undefined, // 只有为true时才设置
+      exactMatch: exactMatch || undefined // 只有为true时才设置
     };
 
-    await serviceInstance!.addCustomRule(rule);
+    const result = await serviceInstance!.addCustomRule(rule);
     
-    const responseText = deleteResponse ? " (含响应)" : "";
-    
-    if (parameters.length > 0) {
-      const params = `[${parameters.join(', ')}]`;
+    if (!result.success) {
+      // 参数冲突，显示错误信息
       await msg.edit({ 
-        text: `✅ 已添加自定义规则: <code>${command} ${params}</code> → ${delay}秒删除${responseText}\n\n` +
-              `触发条件: ${command} 命令的第一个参数为 ${parameters.map(p => `<code>${p}</code>`).join(' 或 ')} 时` +
-              (deleteResponse ? "\n🔄 同时删除响应消息" : ""), 
+        text: `❌ <b>添加规则失败</b>\n\n${result.error}`, 
         parseMode: "html" 
       });
+      return;
+    }
+    
+    const responseText = deleteResponse ? " (含响应)" : "";
+    const exactText = exactMatch ? " (精确匹配)" : "";
+    
+    if (parameters.length > 0) {
+      if (result.merged) {
+        // 获取合并后的规则
+        const updatedRule = serviceInstance!.getCustomRules().find(r => 
+          r.command === command && 
+          r.delay === delay && 
+          !!r.deleteResponse === !!deleteResponse &&
+          !!r.exactMatch === !!exactMatch
+        );
+        const mergedParams = updatedRule?.parameters || parameters;
+        
+        await msg.edit({ 
+          text: `✅ 已合并自定义规则参数: <code>${command} [${mergedParams.join(', ')}]</code> → ${delay}秒删除${responseText}\n\n` +
+                `触发条件: ${command} 命令的第一个参数为 ${mergedParams.map(p => `<code>${p}</code>`).join(' 或 ')} 时` +
+                (deleteResponse ? "\n🔄 同时删除响应消息" : ""), 
+          parseMode: "html" 
+        });
+      } else {
+        const params = `[${parameters.join(', ')}]`;
+        await msg.edit({ 
+          text: `✅ 已添加自定义规则: <code>${command} ${params}</code> → ${delay}秒删除${responseText}\n\n` +
+                `触发条件: ${command} 命令的第一个参数为 ${parameters.map(p => `<code>${p}</code>`).join(' 或 ')} 时` +
+                (deleteResponse ? "\n🔄 同时删除响应消息" : ""), 
+          parseMode: "html" 
+        });
+      }
     } else {
+      const matchType = exactMatch ? "只有无参数的" : "任何";
       await msg.edit({ 
-        text: `✅ 已添加自定义规则: <code>${command}</code> → ${delay}秒删除${responseText}\n\n` +
-              `触发条件: 任何 ${command} 命令` +
-              (deleteResponse ? "\n🔄 同时删除响应消息" : ""), 
+        text: `✅ 已添加自定义规则: <code>${command}</code> → ${delay}秒删除${responseText}${exactText}\n\n` +
+              `触发条件: ${matchType} ${command} 命令` +
+              (deleteResponse ? "\n🔄 同时删除响应消息" : "") +
+              (exactMatch ? "\n🎯 精确匹配：不匹配带参数的调用" : ""), 
         parseMode: "html" 
       });
     }
@@ -682,26 +896,60 @@ class AutoDeletePlugin extends Plugin {
   private async handleRemoveRule(msg: Api.Message, args: string[]) {
     if (args.length < 1) {
       await msg.edit({ 
-        text: "❌ 参数不足\n用法: <code>autodelcmd del [命令] [参数...]</code>", 
+        text: `❌ 参数不足\n用法: <code>${mainPrefix}autodelcmd del [规则ID或命令名]</code>\n\n` +
+              `<b>删除方式:</b>\n` +
+              `• 使用规则ID删除: <code>${mainPrefix}autodelcmd del [规则ID]</code>\n` +
+              `• 使用命令名查看规则: <code>${mainPrefix}autodelcmd del [命令名]</code>\n\n` +
+              `<b>示例:</b>\n` +
+              `• <code>${mainPrefix}autodelcmd del 1</code> - 使用ID删除规则\n` +
+              `• <code>${mainPrefix}autodelcmd del ping</code> - 查看ping命令的所有规则\n` +
+              `• 使用 <code>${mainPrefix}autodelcmd list</code> 查看所有规则和ID`, 
         parseMode: "html" 
       });
       return;
     }
 
-    const command = args[0];
-    const parameters = args.slice(1);
-
-    const success = await serviceInstance!.removeCustomRule(command, parameters.length > 0 ? parameters : undefined);
+    const input = args[0];
     
-    if (success) {
-      const params = parameters.length > 0 ? ` [${parameters.join(',')}]` : '';
+    // 首先尝试按 ID 删除
+    const result = await serviceInstance!.removeCustomRuleById(input);
+    
+    if (result.success && result.removedRule) {
+      const rule = result.removedRule;
+      const params = rule.parameters?.length ? ` [${rule.parameters.join(', ')}]` : '';
+      const exact = rule.exactMatch ? ' 🎯' : '';
+      const response = rule.deleteResponse ? ' 🔄' : '';
+      
       await msg.edit({ 
-        text: `✅ 已删除自定义规则: <code>${command}${params}</code>`, 
+        text: `✅ 已删除自定义规则:\n<code>${rule.command}${params}</code> → ${rule.delay}秒${response}${exact}\n\n<code>[ID: ${rule.id}]</code>`, 
         parseMode: "html" 
       });
-    } else {
-      await msg.edit({ text: "❌ 未找到匹配的自定义规则", parseMode: "html" });
+      return;
     }
+    
+    // 如果 ID 删除失败，尝试按命令名查找规则
+    const matchingRules = serviceInstance!.getCustomRulesByCommand(input);
+    
+    if (matchingRules.length === 0) {
+      await msg.edit({ 
+        text: `❌ 未找到匹配的规则\n\n• 规则ID "${input}" 不存在\n• 命令 "${input}" 没有自定义规则\n\n使用 <code>${mainPrefix}autodelcmd list</code> 查看所有规则`, 
+        parseMode: "html" 
+      });
+      return;
+    }
+    
+    // 显示匹配的规则供用户选择
+    let text = `📋 <b>命令 "${input}" 的自定义规则:</b>\n\n`;
+    matchingRules.forEach((rule, index) => {
+      const params = rule.parameters?.length ? ` [${rule.parameters.join(', ')}]` : '';
+      const exact = rule.exactMatch ? ' 🎯' : '';
+      const response = rule.deleteResponse ? ' 🔄' : '';
+      const ruleId = rule.id || 'unknown';
+      text += `${index + 1}. <code>${rule.command}${params}</code> → ${rule.delay}秒${response}${exact}\n`;
+      text += `   <code>删除: ${mainPrefix}autodelcmd del ${ruleId}</code>\n\n`;
+    });
+    
+    await msg.edit({ text, parseMode: "html" });
   }
 
   private async handleReset(msg: Api.Message) {
