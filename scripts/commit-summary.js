@@ -414,7 +414,7 @@ async function main() {
       .replace(/📢\s*TeleBox\s*更新\s*\|[^\n]*\n+/g, '') // 移除重复的标题行
       .replace(/🗓\s*\[[^\]]*\]\s*--[^\n]*\n+/g, '') // 移除重复的版本行
       .trim();
-    message += `🤖 AI 智能摘要\n${cleanedSummary}\n\n`;
+    message += `${cleanedSummary}\n\n`;
   } else {
     console.log('\n📝 使用基础分组摘要（Fallback 模式）');
     console.log('   原因: Gemini AI 不可用或返回空结果');
@@ -422,16 +422,7 @@ async function main() {
     message += generateBasicSummary(commitsByRepo);
   }
   
-  // 添加贡献者统计
-  const contributors = [...new Set(allCommits.map(c => c.author))];
-  if (contributors.length > 0) {
-    message += `👥 今日贡献者\n`;
-    contributors.forEach(author => {
-      const authorCommits = allCommits.filter(c => c.author === author).length;
-      message += `• ${author}: ${authorCommits} 次提交\n`;
-    });
-    message += '\n';
-  }
+  // 贡献者统计已移除（精简输出）
   
   // 检查消息长度，Telegram 限制为 4096 字符
   if (message.length > 4000) {
