@@ -306,5 +306,9 @@
   "git_PR": {
     "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/git_PR/git_PR.ts?raw=true",
     "desc": "Git PR 管理插件"
+  },
+  "soutu": {
+    "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/soutu/soutu.ts?raw=true",
+    "desc": "soutu搜图插件"
   }
 }
