@@ -69,6 +69,7 @@ npm i <插件名>
 - `search` - 频道消息搜索工具  
 - `service` - systemd服务状态查看工具  
 - `shift` - 智能消息转发系统  
+- `soutu` - soutu搜图插件  
 - `speedlink` - 对其他服务器测速  
 - `speedtest` - 网络速度测试工具  
 - `ssh` - ssh管理  
