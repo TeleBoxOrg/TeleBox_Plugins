@@ -302,5 +302,9 @@
   "service": {
     "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/service/service.ts?raw=true",
     "desc": "systemd服务状态查看工具"
+  },
+  "git_PR": {
+    "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/git_PR/git_PR.ts?raw=true",
+    "desc": "Git PR 管理插件"
   }
 }
