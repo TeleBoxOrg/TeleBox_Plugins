@@ -57,8 +57,85 @@ async function checkDockerIntegrity(): Promise<{
   }
 }
 
+// 获取Sub-Store版本
+async function getSubStoreVersion(): Promise<string> {
+  try {
+    const containerStatus = await sh(
+      "docker ps --format '{{.Names}}' | grep sub-store"
+    );
+    if (!containerStatus.trim()) {
+      return "未运行";
+    }
+    
+    let logOutput = await sh(
+      "docker logs sub-store 2>&1 | grep 'Sub-Store -- v' | head -1"
+    );
+    
+    // 如果没有找到版本信息，可能是日志不完整，重启容器生成完整日志
+    if (!logOutput.trim()) {
+      await sh("docker restart sub-store");
+      await sh("sleep 5"); // 等待容器启动
+      logOutput = await sh(
+        "docker logs sub-store 2>&1 | grep 'Sub-Store -- v' | head -1"
+      );
+    }
+    
+    const versionMatch = logOutput.match(/Sub-Store -- (v[\d.]+)/);
+    return versionMatch ? versionMatch[1] : "未知版本";
+  } catch (error: any) {
+    return "获取失败";
+  }
+}
+
+// 获取远程最新版本
+async function getRemoteVersion(): Promise<string> {
+  try {
+    const response = await sh(
+      "curl -s https://api.github.com/repos/sub-store-org/Sub-Store/releases/latest"
+    );
+    const releaseData = JSON.parse(response);
+    return releaseData.tag_name || "获取失败";
+  } catch (error: any) {
+    return "获取失败";
+  }
+}
+
+// 比较版本号
+function compareVersions(local: string, remote: string): {
+  hasUpdate: boolean;
+  localVersion: string;
+  remoteVersion: string;
+} {
+  if (local === "未运行" || local === "获取失败" || remote === "获取失败") {
+    return { hasUpdate: false, localVersion: local, remoteVersion: remote };
+  }
+  
+  const parseVersion = (v: string) => {
+    const cleaned = v.replace(/^v/, "");
+    return cleaned.split(".").map(num => parseInt(num) || 0);
+  };
+  
+  const localParts = parseVersion(local);
+  const remoteParts = parseVersion(remote);
+  
+  for (let i = 0; i < Math.max(localParts.length, remoteParts.length); i++) {
+    const localPart = localParts[i] || 0;
+    const remotePart = remoteParts[i] || 0;
+    
+    if (remotePart > localPart) {
+      return { hasUpdate: true, localVersion: local, remoteVersion: remote };
+    }
+    if (localPart > remotePart) {
+      return { hasUpdate: false, localVersion: local, remoteVersion: remote };
+    }
+  }
+  
+  return { hasUpdate: false, localVersion: local, remoteVersion: remote };
+}
+
 const help = `🧩 <b>Sub-Store 管理</b>
 • <code>${mainPrefix}sub up</code> - 安装
+• <code>${mainPrefix}sub update</code> - 更新容器
 • <code>${mainPrefix}sub info</code> - 综合信息查看
 • <code>${mainPrefix}sub fix-docker</code> - 重装Docker
 • <code>${mainPrefix}sub logs</code> - 导出今日日志文件
@@ -167,6 +244,62 @@ class SubStorePlugin extends Plugin {
             }
             break;
 
+          case "update":
+            await msg.edit({ text: "🔄 更新Sub-Store容器中..." });
+            try {
+              // 检查Docker完整性
+              const dockerCheck = await checkDockerIntegrity();
+              if (!dockerCheck.valid) {
+                await msg.edit({
+                  text: `❌ Docker检查失败: ${dockerCheck.error}`,
+                  parseMode: "html",
+                });
+                return;
+              }
+
+              // 检查是否已部署
+              if (!fs.existsSync("/root/sub-store/docker-compose.yml")) {
+                await msg.edit({
+                  text: "❌ Sub-Store未部署，请先执行安装命令",
+                });
+                return;
+              }
+
+              await msg.edit({ text: "🛑 停止容器..." });
+              await sh("docker stop sub-store");
+
+              await msg.edit({ text: "🗑️ 删除容器..." });
+              await sh("docker rm sub-store");
+
+              await msg.edit({ text: "📥 拉取最新镜像..." });
+              await sh("cd /root/sub-store && docker compose pull sub-store");
+
+              await msg.edit({ text: "🚀 启动新容器..." });
+              await sh("cd /root/sub-store && docker compose up -d sub-store");
+
+              await msg.edit({ text: "🧹 清理旧镜像..." });
+              await sh("docker image prune -f");
+
+              const ip = await sh("curl -s ifconfig.me").catch(() => "未知");
+              const secretFile = "/root/sub-store/.secret";
+              const secret = fs.existsSync(secretFile) 
+                ? fs.readFileSync(secretFile, "utf8").trim() 
+                : "";
+
+              await msg.edit({ text: "🔍 获取版本信息..." });
+              const localVersion = await getSubStoreVersion();
+              const remoteVersion = await getRemoteVersion();
+
+              await msg.edit({
+                text: `✅ 更新完成\n\n📦 本地版本: ${localVersion}\n🌍 远程版本: ${remoteVersion}\n🌐 面板: http://${ip.trim()}:3001\n🔗 后端: http://${ip.trim()}:3001/${secret}`,
+              });
+            } catch (error: any) {
+              await msg.edit({
+                text: `❌ 更新失败: ${error.message}`,
+              });
+            }
+            break;
+
           case "info":
           case "check":
           case "status":
@@ -211,9 +344,22 @@ class SubStorePlugin extends Plugin {
                 const ip = await sh("curl -s --max-time 3 ifconfig.me").catch(
                   () => "未知"
                 );
+                const localVersion = await getSubStoreVersion();
+                const remoteVersion = await getRemoteVersion();
+                const versionCompare = compareVersions(localVersion, remoteVersion);
 
                 infoResult += `\n🏠 <b>Sub-Store 状态</b>\n`;
                 infoResult += `📦 容器: ${containerStatus.trim()}\n`;
+                infoResult += `🏷️ 本地版本: ${localVersion}\n`;
+                infoResult += `🌍 远程版本: ${remoteVersion}\n`;
+                
+                if (versionCompare.hasUpdate) {
+                  infoResult += `🔄 <b>有可用更新！</b>\n`;
+                  infoResult += `💡 使用 <code>${mainPrefix}sub update</code> 更新到最新版本\n`;
+                } else if (localVersion !== "未运行" && remoteVersion !== "获取失败") {
+                  infoResult += `✅ 已是最新版本\n`;
+                }
+                
                 infoResult += `🌐 面板: http://${ip.trim()}:3001\n`;
                 infoResult += `🔗 后端: http://${ip.trim()}:3001/${key}\n`;
               } else {
