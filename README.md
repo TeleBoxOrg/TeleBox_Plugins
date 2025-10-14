@@ -42,6 +42,7 @@ npm i <插件名>
 - `fadian` - fadian语录  
 - `getstickers` - 下载整个贴纸包  
 - `gif` - GIF与视频转贴纸插件  
+- `git_PR` - Git PR 管理插件  
 - `gt` - 谷歌中英文互译  
 - `his` - 查看被回复者最近消息  
 - `httpcat` - 发送一张http状态码主题的猫猫图片  
