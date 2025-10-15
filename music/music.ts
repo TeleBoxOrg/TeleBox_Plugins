@@ -888,14 +888,17 @@ class Downloader {
       // 通用参数
       const commonArgs = `--no-warnings --no-check-certificates --geo-bypass`;
       
-      // 只使用 --get-id 获取视频ID（这个方法有效）
+      // 1. 最简单的方法：只获取视频ID（不需要格式检查）
       const getIdCmd = `${baseSearch} --get-id ${commonArgs}`;
+      
+      // 2. 获取基本信息（跳过格式验证）
+      const infoCmd = `${baseSearch} --dump-single-json --skip-download ${commonArgs}`;
       
       // 构建认证参数
       let authParams = "";
       let proxyParams = "";
       
-      // 处理代理
+      // 处理代理（分离代理和认证，提高成功率）
       if (proxy) {
         proxyParams = ` --proxy "${proxy}"`;
       }
@@ -909,16 +912,30 @@ class Downloader {
         authParams = ` --cookies "${cookieFile}"`;
       }
       
-      // 直接使用有效的命令组合
+      // 策略1：不使用代理和cookie（最可能成功）
       commands.push(`yt-dlp ${getIdCmd}`);
+      commands.push(`yt-dlp ${infoCmd}`);
       
-      // 如果有代理，添加代理版本
+      // 策略2：只使用cookie，不使用代理
+      if (authParams) {
+        commands.push(`yt-dlp ${getIdCmd}${authParams}`);
+        commands.push(`yt-dlp ${infoCmd}${authParams}`);
+      }
+      
+      // 策略3：只使用代理，不使用cookie
       if (proxyParams) {
         commands.push(`yt-dlp ${getIdCmd}${proxyParams}`);
+        commands.push(`yt-dlp ${infoCmd}${proxyParams}`);
+      }
+      
+      // 策略4：同时使用代理和cookie（最后尝试）
+      if (authParams && proxyParams) {
+        commands.push(`yt-dlp ${infoCmd}${authParams}${proxyParams}`);
       }
       
       // Python备用
       commands.push(`python3 -m yt_dlp ${getIdCmd}`);
+      commands.push(`python3 -m yt_dlp ${infoCmd}`);
 
       let stdout = "";
       let videoId = "";
@@ -1010,15 +1027,16 @@ class Downloader {
         uploader: string;
       }[];
 
-      // YouTube只提供视频，不需要检查音频格式
-      // 直接返回第一个结果
-      if (candidates.length > 0) {
-        const first = candidates[0];
-        console.log(`[Music] 选中结果: ${first.title} (${first.uploader})`);
-        return first.url;
+      // 直接返回第一个符合时长要求的结果
+      for (const candidate of candidates) {
+        // 检查时长是否符合要求（不超过15分钟）
+        if (typeof candidate.duration === "number" && candidate.duration <= 15 * 60) {
+          console.log(`[Music] 选中第一个结果: ${candidate.title} (时长: ${candidate.duration}s)`);
+          return candidate.url;
+        }
       }
-      
-      console.log(`[Music] 没有找到搜索结果`);
+
+      console.log(`[Music] 没有找到符合时长要求的结果`);
       return null;
     } catch (error) {
       console.error("[Music] Search error:", error);
