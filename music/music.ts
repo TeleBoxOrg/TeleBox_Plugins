@@ -59,7 +59,8 @@ const CONFIG = {
   DEFAULTS: {
     API_URL: "https://generativelanguage.googleapis.com",
     MODEL: "gemini-2.0-flash",
-    TIMEOUT: 30000,
+    TIMEOUT: 60000,  // Increased timeout to 60 seconds
+    MAX_RETRIES: 3,   // Add retry mechanism
   },
   KEYS: {
     API: "music_gemini_api_key",
@@ -418,7 +419,7 @@ class HttpClient {
 
   static async makeRequest(url: string, options: any = {}): Promise<any> {
     return new Promise((resolve, reject) => {
-      const { method = "GET", headers = {}, data, timeout = 30000 } = options;
+      const { method = "GET", headers = {}, data, timeout = 60000 } = options;  // Increased default timeout
       const isHttps = url.startsWith("https:");
       const client = isHttps ? https : http;
 
@@ -502,7 +503,7 @@ class GeminiClient {
     this.baseUrl = baseUrl ?? DEFAULT_CONFIG[CONFIG.KEYS.BASE_URL];
   }
 
-  async searchMusic(query: string): Promise<string> {
+  async searchMusic(query: string, retryCount: number = 0): Promise<string> {
     const model = await ConfigManager.get(CONFIG.KEYS.MODEL);
     const url = `${this.baseUrl}/v1beta/models/${model}:generateContent`;
     
@@ -555,23 +556,37 @@ class GeminiClient {
       ].map((category) => ({ category, threshold: "BLOCK_NONE" })),
     };
 
-    const response = await HttpClient.makeRequest(url, {
-      method: "POST",
-      headers,
-      data: requestData,
-    });
+    try {
+      const response = await HttpClient.makeRequest(url, {
+        method: "POST",
+        headers,
+        data: requestData,
+        timeout: CONFIG.DEFAULTS.TIMEOUT,
+      });
 
-    if (response.status !== 200 || response.data?.error) {
-      const errorMessage =
-        response.data?.error?.message ||
-        response.data?.error ||
-        `HTTP错误: ${response.status}`;
-      throw new Error(errorMessage);
+      if (response.status !== 200 || response.data?.error) {
+        const errorMessage =
+          response.data?.error?.message ||
+          response.data?.error ||
+          `HTTP错误: ${response.status}`;
+        throw new Error(errorMessage);
+      }
+
+      const rawText =
+        response.data?.candidates?.[0]?.content?.parts?.[0]?.text || "";
+      return HttpClient.cleanResponseText(rawText);
+    } catch (error: any) {
+      // Retry mechanism for timeout and network errors
+      if (retryCount < CONFIG.DEFAULTS.MAX_RETRIES && 
+          (error.message.includes('超时') || error.message.includes('timeout') || 
+           error.message.includes('网络') || error.message.includes('ECONNRESET'))) {
+        console.log(`[music] AI请求失败，重试 ${retryCount + 1}/${CONFIG.DEFAULTS.MAX_RETRIES}: ${error.message}`);
+        await new Promise(resolve => setTimeout(resolve, 2000 * (retryCount + 1))); // Exponential backoff
+        return this.searchMusic(query, retryCount + 1);
+      }
+      throw error;
     }
 
-    const rawText =
-      response.data?.candidates?.[0]?.content?.parts?.[0]?.text || "";
-    return HttpClient.cleanResponseText(rawText);
   }
 }
 
@@ -826,13 +841,24 @@ class Downloader {
     const ytdlpCommands = [
       "yt-dlp --version",
       "python3 -m yt_dlp --version",
-      "youtube-dl --version", // Fallback to youtube-dl
+      "python -m yt_dlp --version",
     ];
 
     for (const cmd of ytdlpCommands) {
       try {
-        await execAsync(cmd);
+        const { stdout } = await execAsync(cmd);
         result.ytdlp = true;
+        // 检查版本并提示更新
+        const versionMatch = stdout.match(/(\d{4}\.\d{2}\.\d{2})/);  
+        if (versionMatch) {
+          const version = versionMatch[1];
+          const versionDate = new Date(version.replace(/\./g, '-'));
+          const thirtyDaysAgo = new Date();
+          thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+          if (versionDate < thirtyDaysAgo) {
+            console.log(`[Music] yt-dlp版本较旧 (${version})，建议更新: yt-dlp -U 或 pip install -U yt-dlp`);
+          }
+        }
         console.log(`[Music] Found yt-dlp via: ${cmd.split(" ")[0]}`);
         break;
       } catch {}
@@ -876,167 +902,134 @@ class Downloader {
         console.log(`[Music] AI识别失败，使用原始搜索词: ${error}`);
       }
 
-      // Escape query for shell
-      const safeQuery = finalQuery.replace(/"/g, '\\"');
+      // The query will be passed as an argument, so no shell escaping is needed.
+      const safeQuery = finalQuery;
 
-      // 构建命令选项
-      const commands = [];
+      // 构建命令选项 - 添加更多兼容性参数和客户端选择
+      const commandConfigs: { command: string; args: string[] }[] = [];
+      const baseSearchArg = `ytsearch1:${safeQuery}`;
+      const commonArgs = [
+        '--no-warnings', 
+        '--no-check-certificates', 
+        '--geo-bypass',
+        '--ignore-errors',  // Continue on download errors
+        '--no-playlist',    // Download only single video
+      ];
       
-      // 基础命令 - 使用最简单的方式获取搜索结果
-      const baseSearch = `"ytsearch1:${safeQuery}"`;
-      
-      // 通用参数
-      const commonArgs = `--no-warnings --no-check-certificates --geo-bypass`;
-      
-      // 1. 最简单的方法：只获取视频ID（不需要格式检查）
-      const getIdCmd = `${baseSearch} --get-id ${commonArgs}`;
-      
-      // 2. 获取基本信息（跳过格式验证）
-      const infoCmd = `${baseSearch} --dump-single-json --skip-download ${commonArgs}`;
-      
-      // 构建认证参数
-      let authParams = "";
-      let proxyParams = "";
-      
-      // 处理代理（分离代理和认证，提高成功率）
-      if (proxy) {
-        proxyParams = ` --proxy "${proxy}"`;
-      }
-      
-      // 处理Cookie认证
+      // 添加Android客户端参数以避开SABR限制
+      const clientArgs = ['--extractor-args', 'youtube:player_client=android,ios'];
+
+      const getIdArgs = [baseSearchArg, '--get-id', ...commonArgs, ...clientArgs];
+      const getInfoArgs = [baseSearchArg, '--dump-single-json', '--skip-download', ...commonArgs, ...clientArgs];
+
+      const authArgs: string[] = [];
       if (cookieBrowser && cookieBrowser.trim()) {
-        authParams = ` --cookies-from-browser "${cookieBrowser}"`;
+        authArgs.push('--cookies-from-browser', cookieBrowser);
       } else if (cookie && cookie.trim()) {
         const cookieFile = path.join(this.tempDir, "cookies.txt");
         await fs.promises.writeFile(cookieFile, this.convertCookie(cookie));
-        authParams = ` --cookies "${cookieFile}"`;
+        authArgs.push('--cookies', cookieFile);
       }
-      
-      // 策略1：不使用代理和cookie（最可能成功）
-      commands.push(`yt-dlp ${getIdCmd}`);
-      commands.push(`yt-dlp ${infoCmd}`);
-      
-      // 策略2：只使用cookie，不使用代理
-      if (authParams) {
-        commands.push(`yt-dlp ${getIdCmd}${authParams}`);
-        commands.push(`yt-dlp ${infoCmd}${authParams}`);
+
+      const proxyArgs: string[] = [];
+      if (proxy) {
+        proxyArgs.push('--proxy', proxy);
       }
-      
-      // 策略3：只使用代理，不使用cookie
-      if (proxyParams) {
-        commands.push(`yt-dlp ${getIdCmd}${proxyParams}`);
-        commands.push(`yt-dlp ${infoCmd}${proxyParams}`);
+
+      // 策略1: 无认证
+      commandConfigs.push({ command: 'yt-dlp', args: getIdArgs });
+      commandConfigs.push({ command: 'yt-dlp', args: getInfoArgs });
+
+      // 策略2: 仅Cookie
+      if (authArgs.length > 0) {
+        commandConfigs.push({ command: 'yt-dlp', args: [...getIdArgs, ...authArgs] });
+        commandConfigs.push({ command: 'yt-dlp', args: [...getInfoArgs, ...authArgs] });
       }
-      
-      // 策略4：同时使用代理和cookie（最后尝试）
-      if (authParams && proxyParams) {
-        commands.push(`yt-dlp ${infoCmd}${authParams}${proxyParams}`);
+
+      // 策略3: 仅Proxy
+      if (proxyArgs.length > 0) {
+        commandConfigs.push({ command: 'yt-dlp', args: [...getIdArgs, ...proxyArgs] });
+        commandConfigs.push({ command: 'yt-dlp', args: [...getInfoArgs, ...proxyArgs] });
       }
-      
-      // Python备用
-      commands.push(`python3 -m yt_dlp ${getIdCmd}`);
-      commands.push(`python3 -m yt_dlp ${infoCmd}`);
+
+      // 策略4: Cookie + Proxy
+      if (authArgs.length > 0 && proxyArgs.length > 0) {
+        commandConfigs.push({ command: 'yt-dlp', args: [...getInfoArgs, ...authArgs, ...proxyArgs] });
+      }
+
+      // Python 备用
+      commandConfigs.push({ command: 'python3', args: ['-m', 'yt_dlp', ...getIdArgs] });
+      commandConfigs.push({ command: 'python3', args: ['-m', 'yt_dlp', ...getInfoArgs] });
 
       let stdout = "";
-      let videoId = "";
-      
-      for (const cmd of commands) {
+
+      for (const config of commandConfigs) {
         try {
-          const result = await execAsync(cmd, { maxBuffer: 10 * 1024 * 1024 });
-          stdout = result.stdout.trim();
-          
-          // 如果只获取到ID，构建完整URL
-          if (cmd.includes('--get-id') && stdout && !stdout.includes('{')) {
-            videoId = stdout.split('\n')[0].trim();
-            console.log(`[Music] Found video ID: ${videoId}`);
-            return `https://www.youtube.com/watch?v=${videoId}`;
-          }
-          
+          stdout = await new Promise((resolve, reject) => {
+            const process = spawn(config.command, config.args);
+            let data = '';
+            let errorData = '';
+
+            process.stdout.on('data', (chunk) => {
+              data += chunk.toString();
+            });
+
+            process.stderr.on('data', (chunk) => {
+              errorData += chunk.toString();
+            });
+
+            process.on('close', (code) => {
+              if (code === 0 && data) {
+                resolve(data.trim());
+              } else {
+                const idMatch = errorData.match(/\[youtube\]\s+([a-zA-Z0-9_-]{11}):/);
+                if (idMatch && idMatch[1]) {
+                  console.log(`[Music] Extracted video ID from error log: ${idMatch[1]}`);
+                  resolve(idMatch[1]);
+                } else {
+                  reject(new Error(errorData || `Process exited with code ${code}`));
+                }
+              }
+            });
+
+            process.on('error', (err) => {
+              reject(err);
+            });
+          });
+
           if (stdout) {
-            console.log(`[Music] Search successful with: ${cmd.split(" ")[0]}`);
+            console.log(`[Music] Search successful with: ${config.command}`);
             break;
           }
         } catch (error) {
-          console.log(`[Music] Search failed with: ${cmd.split(" ")[0]}`);
+          console.log(`[Music] Search failed with: ${config.command}. Error:`, error);
         }
       }
 
       if (!stdout.trim()) return null;
 
-      // 解析 JSON 行
-      type Cand = {
-        id?: string;
-        title?: string;
-        uploader?: string;
-        duration?: number;
-        webpage_url?: string;
-        url?: string;
-      };
-      const lines = stdout
-        .split(/\r?\n/)
-        .map((l) => l.trim())
-        .filter(Boolean);
-
-      const items: Cand[] = [];
-      for (const line of lines) {
-        try {
-          const obj = JSON.parse(line);
-          if (obj && typeof obj === "object") {
-            if (Array.isArray(obj.entries)) {
-              for (const e of obj.entries) {
-                items.push(e as Cand);
-              }
-            } else {
-              items.push(obj as Cand);
-            }
-          }
-        } catch {
-          // 忽略非 JSON 行
+      // 检查是否是纯ID
+      if (!stdout.includes('{')) {
+        const firstId = stdout.split('\n')[0].trim();
+        if (firstId) {
+          console.log(`[Music] 选中第一个结果 (ID): ${firstId}`);
+          return `https://www.youtube.com/watch?v=${firstId}`;
         }
       }
 
-      if (!items.length) return null;
+      // 尝试解析JSON
+      try {
+        const result = JSON.parse(stdout);
+        const firstEntry = result.entries ? result.entries[0] : result;
 
-      // 构建候选含 URL + 时长
-      let candidates = items
-        .map((it) => {
-          const id = it.id;
-          const url =
-            it.webpage_url ||
-            (it.url && /^https?:/.test(it.url)
-              ? it.url
-              : id
-              ? `https://www.youtube.com/watch?v=${id}`
-              : undefined);
-          const dur = typeof it.duration === "number" ? it.duration : undefined;
-          return url
-            ? {
-                url,
-                id,
-                duration: dur,
-                title: it.title || "",
-                uploader: it.uploader || "",
-              }
-            : null;
-        })
-        .filter(Boolean) as {
-        url: string;
-        id?: string;
-        duration?: number;
-        title: string;
-        uploader: string;
-      }[];
-
-      // 直接返回第一个符合时长要求的结果
-      for (const candidate of candidates) {
-        // 检查时长是否符合要求（不超过15分钟）
-        if (typeof candidate.duration === "number" && candidate.duration <= 15 * 60) {
-          console.log(`[Music] 选中第一个结果: ${candidate.title} (时长: ${candidate.duration}s)`);
-          return candidate.url;
+        if (firstEntry && firstEntry.id) {
+          console.log(`[Music] 选中第一个结果 (JSON): ${firstEntry.title}`);
+          return `https://www.youtube.com/watch?v=${firstEntry.id}`;
         }
+      } catch (e) {
+        console.error('[Music] Failed to parse JSON, returning null.', e);
       }
 
-      console.log(`[Music] 没有找到符合时长要求的结果`);
       return null;
     } catch (error) {
       console.error("[Music] Search error:", error);
@@ -1343,13 +1336,24 @@ class Downloader {
       // 用户显式设置音质时，使用 mp3 以确保质量参数生效；否则保持最佳可用格式
       const audioFormat = configuredQuality ? "mp3" : "best";
 
-      // Build command list with fallbacks - 优化音频格式选择
+      // Build command list with fallbacks - 优化音频格式选择和兼容性
       const commands = [
-        // 优先下载最高质量的音频
-        `yt-dlp -x --audio-format ${audioFormat}${qualityArg} --extract-audio --embed-metadata --add-metadata -o "${outputPath}" --prefer-insecure --legacy-server-connect${authParams} "${url}"`,
-        // Python 模块方式
-        `python3 -m yt_dlp -x --audio-format ${audioFormat}${qualityArg} --extract-audio --embed-metadata --add-metadata -o "${outputPath}"${authParams} "${url}"`,
-        `python -m yt_dlp -x --audio-format ${audioFormat}${qualityArg} --extract-audio --embed-metadata --add-metadata -o "${outputPath}"${authParams} "${url}"`,
+        // 策略1: 使用Android客户端（避开SABR限制）
+        `yt-dlp --extractor-args "youtube:player_client=android,ios" -x --audio-format ${audioFormat}${qualityArg} --extract-audio --embed-metadata --add-metadata -o "${outputPath}" --no-check-certificates --ignore-errors --no-playlist${authParams} "${url}"`,
+        // 策略2: 使用iOS客户端
+        `yt-dlp --extractor-args "youtube:player_client=ios" -x --audio-format ${audioFormat}${qualityArg} --extract-audio --embed-metadata --add-metadata -o "${outputPath}" --no-check-certificates --ignore-errors${authParams} "${url}"`,
+        // 策略3: 使用TV客户端
+        `yt-dlp --extractor-args "youtube:player_client=tv_embedded" -x --audio-format ${audioFormat}${qualityArg} --extract-audio --embed-metadata --add-metadata -o "${outputPath}" --no-check-certificates --ignore-errors${authParams} "${url}"`,
+        // 策略4: 使用mediaconnect客户端
+        `yt-dlp --extractor-args "youtube:player_client=mediaconnect" -x --audio-format ${audioFormat}${qualityArg} --extract-audio --embed-metadata --add-metadata -o "${outputPath}" --no-check-certificates${authParams} "${url}"`,
+        // 策略5: 强制使用特定格式ID（通用音频格式）
+        `yt-dlp -f "140/251/250/249" -x --audio-format ${audioFormat}${qualityArg} --extract-audio --embed-metadata --add-metadata -o "${outputPath}" --no-check-certificates --ignore-errors${authParams} "${url}"`,
+        // 策略6: 使用format选择器（绕过signature问题）
+        `yt-dlp -f "bestaudio[ext=m4a]/bestaudio[ext=webm]/bestaudio" -x --audio-format ${audioFormat}${qualityArg} --extract-audio --embed-metadata --add-metadata -o "${outputPath}" --no-check-certificates --ignore-errors${authParams} "${url}"`,
+        // 策略7: 标准下载（添加更多兼容性参数）
+        `yt-dlp -x --audio-format ${audioFormat}${qualityArg} --extract-audio --embed-metadata --add-metadata -o "${outputPath}" --no-check-certificates --ignore-errors --no-playlist --geo-bypass${authParams} "${url}"`,
+        // 策略8: Python 模块方式
+        `python3 -m yt_dlp --extractor-args "youtube:player_client=android" -x --audio-format ${audioFormat}${qualityArg} --extract-audio --embed-metadata --add-metadata -o "${outputPath}" --no-check-certificates --ignore-errors${authParams} "${url}"`,
       ];
 
       // 尝试多种下载策略
@@ -1764,6 +1768,19 @@ class MusicPlugin extends Plugin {
     const ytdlpAvailable = await DependencyManager.checkYtDlp();
     if (!ytdlpAvailable) {
       console.warn("[music] yt-dlp 未安装，请手动安装: sudo pip install --upgrade --force-reinstall yt-dlp --break-system-packages");
+    } else {
+      // 尝试自动更新yt-dlp到最新版本
+      try {
+        console.log("[music] 正在检查yt-dlp更新...");
+        const { stdout } = await execAsync("yt-dlp -U");
+        if (stdout.includes("up to date")) {
+          console.log("[music] yt-dlp已是最新版本");
+        } else if (stdout.includes("Updated")) {
+          console.log("[music] yt-dlp已更新到最新版本");
+        }
+      } catch (error) {
+        console.log("[music] 无法自动更新yt-dlp，请手动更新: yt-dlp -U");
+      }
     }
 
     const ffmpegInstalled = await DependencyManager.checkFfmpeg();
