@@ -71,6 +71,7 @@ const CONFIG = {
     TEMPERATURE: "music_gemini_temperature",
     TOP_P: "music_gemini_top_p",
     TOP_K: "music_gemini_top_k",
+    COOKIE_BROWSER: "music_ytdlp_cookie_browser",
   },
 };
 
@@ -85,6 +86,7 @@ const DEFAULT_CONFIG: Record<string, string> = {
   [CONFIG.KEYS.TEMPERATURE]: "0.0", // 低温度提高准确性
   [CONFIG.KEYS.TOP_P]: "0.6", // 适中的核采样
   [CONFIG.KEYS.TOP_K]: "20", // 限制候选词提高准确性
+  [CONFIG.KEYS.COOKIE_BROWSER]: "",
 };
 
 // ==================== Types ====================
@@ -373,6 +375,7 @@ class ConfigManager {
       CONFIG.KEYS.TEMPERATURE,
       CONFIG.KEYS.TOP_P,
       CONFIG.KEYS.TOP_K,
+      CONFIG.KEYS.COOKIE_BROWSER,
     ];
     const result: Record<string, any> = {};
     for (const k of keys) {
@@ -851,6 +854,7 @@ class Downloader {
     try {
       const cookie = await ConfigManager.get(CONFIG.KEYS.COOKIE);
       const proxy = await ConfigManager.get(CONFIG.KEYS.PROXY);
+      const cookieBrowser = await ConfigManager.get(CONFIG.KEYS.COOKIE_BROWSER);
 
       // 使用AI识别歌手和歌曲名，构建最终搜索词
       let finalQuery = query;
@@ -875,36 +879,67 @@ class Downloader {
       // Escape query for shell
       const safeQuery = finalQuery.replace(/"/g, '\\"');
 
-      // Try multiple search methods
+      // 构建命令选项
       const commands = [];
-      // 使用 ytsearch1 获取第一个结果，并输出 JSON 供筛选
-      const baseCmd = `"ytsearch1:${safeQuery}" --dump-json --no-warnings --skip-download`;
-
-      // Add authentication parameters
+      
+      // 基础命令 - 使用最简单的方式获取搜索结果
+      const baseSearch = `"ytsearch1:${safeQuery}"`;
+      
+      // 通用参数
+      const commonArgs = `--no-warnings --no-check-certificates --geo-bypass`;
+      
+      // 只使用 --get-id 获取视频ID（这个方法有效）
+      const getIdCmd = `${baseSearch} --get-id ${commonArgs}`;
+      
+      // 构建认证参数
       let authParams = "";
-      if (cookie && cookie.trim()) {
+      let proxyParams = "";
+      
+      // 处理代理
+      if (proxy) {
+        proxyParams = ` --proxy "${proxy}"`;
+      }
+      
+      // 处理Cookie认证
+      if (cookieBrowser && cookieBrowser.trim()) {
+        authParams = ` --cookies-from-browser "${cookieBrowser}"`;
+      } else if (cookie && cookie.trim()) {
         const cookieFile = path.join(this.tempDir, "cookies.txt");
         await fs.promises.writeFile(cookieFile, this.convertCookie(cookie));
-        authParams += ` --cookies "${cookieFile}"`;
+        authParams = ` --cookies "${cookieFile}"`;
       }
-      if (proxy) authParams += ` --proxy "${proxy}"`;
-
-      // Build command list with fallbacks
-      commands.push(
-        `yt-dlp ${baseCmd} --prefer-insecure --legacy-server-connect${authParams}`
-      );
-      commands.push(`python3 -m yt_dlp ${baseCmd}${authParams}`);
+      
+      // 直接使用有效的命令组合
+      commands.push(`yt-dlp ${getIdCmd}`);
+      
+      // 如果有代理，添加代理版本
+      if (proxyParams) {
+        commands.push(`yt-dlp ${getIdCmd}${proxyParams}`);
+      }
+      
+      // Python备用
+      commands.push(`python3 -m yt_dlp ${getIdCmd}`);
 
       let stdout = "";
+      let videoId = "";
+      
       for (const cmd of commands) {
         try {
-          // 增加maxBuffer以处理更多搜索结果的输出
-          const result = await execAsync(cmd, { maxBuffer: 10 * 1024 * 1024 }); // 10MB
-          stdout = result.stdout;
-          console.log(`[Music] Search successful with: ${cmd.split(" ")[0]}`);
-          break;
+          const result = await execAsync(cmd, { maxBuffer: 10 * 1024 * 1024 });
+          stdout = result.stdout.trim();
+          
+          // 如果只获取到ID，构建完整URL
+          if (cmd.includes('--get-id') && stdout && !stdout.includes('{')) {
+            videoId = stdout.split('\n')[0].trim();
+            console.log(`[Music] Found video ID: ${videoId}`);
+            return `https://www.youtube.com/watch?v=${videoId}`;
+          }
+          
+          if (stdout) {
+            console.log(`[Music] Search successful with: ${cmd.split(" ")[0]}`);
+            break;
+          }
         } catch (error) {
-          console.error(error);
           console.log(`[Music] Search failed with: ${cmd.split(" ")[0]}`);
         }
       }
@@ -975,16 +1010,15 @@ class Downloader {
         uploader: string;
       }[];
 
-      // 直接返回第一个符合时长要求的结果
-      for (const candidate of candidates) {
-        // 检查时长是否符合要求（不超过15分钟）
-        if (typeof candidate.duration === "number" && candidate.duration <= 15 * 60) {
-          console.log(`[Music] 选中第一个结果: ${candidate.title} (时长: ${candidate.duration}s)`);
-          return candidate.url;
-        }
+      // YouTube只提供视频，不需要检查音频格式
+      // 直接返回第一个结果
+      if (candidates.length > 0) {
+        const first = candidates[0];
+        console.log(`[Music] 选中结果: ${first.title} (${first.uploader})`);
+        return first.url;
       }
-
-      console.log(`[Music] 没有找到符合时长要求的结果`);
+      
+      console.log(`[Music] 没有找到搜索结果`);
       return null;
     } catch (error) {
       console.error("[Music] Search error:", error);
