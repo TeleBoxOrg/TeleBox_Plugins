@@ -6,17 +6,85 @@ import { JSONFilePreset } from "lowdb/node";
 import { createDirectoryInAssets } from "@utils/pathHelpers";
 import { getEntityWithHash } from "@utils/entityHelpers";
 import { Plugin } from "@utils/pluginBase";
+import { getPrefixes } from "@utils/pluginManager";
+import { sleep } from "telegram/Helpers";
+import bigInt from "big-integer";
+
+// Plugin version
+const PLUGIN_VERSION = "3.7.0";
+const PLUGIN_BUILD = "production";
+
+// Logging levels
+enum LogLevel {
+  DEBUG = 0,
+  INFO = 1,
+  WARN = 2,
+  ERROR = 3
+}
+
+// Current log level
+let currentLogLevel = LogLevel.INFO;
+
+// Performance metrics
+const performanceMetrics = {
+  messageProcessed: 0,
+  verificationPassed: 0,
+  verificationFailed: 0,
+  averageResponseTime: 0,
+  lastResetTime: Date.now()
+};
+
+// Structured logging
+function log(level: LogLevel, message: string, data?: any) {
+  if (level < currentLogLevel) return;
+  
+  const timestamp = new Date().toISOString();
+  const levelStr = LogLevel[level];
+  const prefix = `[PMCaptcha] [${timestamp}] [${levelStr}]`;
+  
+  if (data) {
+    console.log(`${prefix} ${message}`, data);
+  } else {
+    console.log(`${prefix} ${message}`);
+  }
+  
+  // Update metrics if applicable
+  if (level === LogLevel.ERROR) {
+    performanceMetrics.lastResetTime = Date.now();
+  }
+}
+
+// Get command prefixes
+const prefixes = getPrefixes();
+const mainPrefix = prefixes[0] || ".";
 
 // Initialize databases
 const pmcaptchaDir = createDirectoryInAssets("pmcaptcha");
 const dbPath = path.join(pmcaptchaDir, "pmcaptcha.db");
-let db = new Database(dbPath);
+let db: Database.Database | null = null;
+
+try {
+  db = new Database(dbPath);
+} catch (error) {
+  log(LogLevel.ERROR, "Failed to initialize database", error);
+  // Try to reinitialize on error
+  try {
+    db = new Database(dbPath);
+  } catch (retryError) {
+    log(LogLevel.ERROR, "Database initialization retry failed", retryError);
+  }
+}
 
 // Initialize lowdb for configuration
-let configDb: any = null;
+interface ConfigDatabase {
+  data: Record<string, any>;
+  write: () => Promise<void>;
+}
+let configDb: ConfigDatabase | null = null;
 let configDbReady = false;
 const CONFIG_KEYS = {
   ENABLED: "plugin_enabled",
+  BLOCK_ALL: "block_all_private",  // 完全禁止私聊
   BLOCK_BOTS: "block_bots", 
   GROUPS_COMMON: "groups_in_common",
   STICKER_TIMEOUT: "sticker_timeout",
@@ -24,6 +92,8 @@ const CONFIG_KEYS = {
   STATS_TOTAL_BLOCKED: "stats_total_blocked",
   STATS_LAST_RESET: "stats_last_reset",
   DELETE_AND_REPORT: "delete_and_report",
+  REPORT_ENABLED: "report_enabled",
+  DELETE_FAILED: "delete_failed_verification",
   PROTECTION_MODE: "protection_mode",
   PROTECTION_THRESHOLD: "protection_threshold",
   PROTECTION_WINDOW: "protection_window",
@@ -33,13 +103,16 @@ const CONFIG_KEYS = {
 
 const DEFAULT_CONFIG = {
   [CONFIG_KEYS.ENABLED]: true,
+  [CONFIG_KEYS.BLOCK_ALL]: false,  // 默认关闭完全禁止
   [CONFIG_KEYS.BLOCK_BOTS]: true,
-  [CONFIG_KEYS.GROUPS_COMMON]: null,
+  [CONFIG_KEYS.GROUPS_COMMON]: 5,
   [CONFIG_KEYS.STICKER_TIMEOUT]: 180,
   [CONFIG_KEYS.STATS_TOTAL_VERIFIED]: 0,
   [CONFIG_KEYS.STATS_TOTAL_BLOCKED]: 0,
   [CONFIG_KEYS.STATS_LAST_RESET]: new Date().toISOString(),
   [CONFIG_KEYS.DELETE_AND_REPORT]: false,
+  [CONFIG_KEYS.REPORT_ENABLED]: false,
+  [CONFIG_KEYS.DELETE_FAILED]: true,
   [CONFIG_KEYS.PROTECTION_MODE]: false,
   [CONFIG_KEYS.PROTECTION_THRESHOLD]: 20,
   [CONFIG_KEYS.PROTECTION_WINDOW]: 60000, // 60 seconds in ms
@@ -53,11 +126,11 @@ const DEFAULT_CONFIG = {
 async function initConfigDb() {
   try {
     const configPath = path.join(pmcaptchaDir, "pmcaptcha_config.json");
-    configDb = await JSONFilePreset(configPath, DEFAULT_CONFIG);
+    configDb = await JSONFilePreset(configPath, DEFAULT_CONFIG) as ConfigDatabase;
     configDbReady = true;
-    console.log("[PMCaptcha] Configuration database initialized");
+    log(LogLevel.INFO, "Configuration database initialized");
   } catch (error) {
-    console.error("[PMCaptcha] Failed to initialize config database:", error);
+    log(LogLevel.ERROR, "Failed to initialize config database", error);
     configDbReady = false;
   }
 }
@@ -74,9 +147,49 @@ async function waitForConfigDb(timeout = 5000): Promise<boolean> {
 // Call initialization
 initConfigDb();
 
+// Prepared statement cache
+const preparedStatements: Record<string, any> = {};
+
+// Initialize prepared statements
+function initPreparedStatements() {
+  if (!db) return;
+  try {
+    preparedStatements.checkWhitelist = db.prepare(
+      "SELECT 1 FROM pmcaptcha_whitelist WHERE user_id = ?"
+    );
+    preparedStatements.addWhitelist = db.prepare(
+      "INSERT OR IGNORE INTO pmcaptcha_whitelist (user_id) VALUES (?)"
+    );
+    preparedStatements.removeWhitelist = db.prepare(
+      "DELETE FROM pmcaptcha_whitelist WHERE user_id = ?"
+    );
+    preparedStatements.getChallenge = db.prepare(
+      "SELECT * FROM pmcaptcha_challenges WHERE user_id = ?"
+    );
+    preparedStatements.setChallenge = db.prepare(
+      "INSERT OR REPLACE INTO pmcaptcha_challenges (user_id, challenge_type, start_time, timeout) VALUES (?, ?, ?, ?)"
+    );
+    preparedStatements.removeChallenge = db.prepare(
+      "DELETE FROM pmcaptcha_challenges WHERE user_id = ?"
+    );
+    preparedStatements.countWhitelist = db.prepare(
+      "SELECT COUNT(*) as count FROM pmcaptcha_whitelist"
+    );
+    preparedStatements.listWhitelist = db.prepare(
+      "SELECT user_id FROM pmcaptcha_whitelist ORDER BY added_at DESC"
+    );
+    preparedStatements.listWhitelistOrdered = db.prepare(
+      "SELECT user_id FROM pmcaptcha_whitelist ORDER BY user_id"
+    );
+  } catch (error) {
+    console.error("[PMCaptcha] Failed to prepare statements:", error);
+  }
+}
+
 // Initialize database tables
 if (db) {
-  db.exec(`
+  try {
+    db.exec(`
     CREATE TABLE IF NOT EXISTS pmcaptcha_whitelist (
       user_id INTEGER PRIMARY KEY,
       added_at INTEGER DEFAULT (strftime('%s', 'now'))
@@ -98,10 +211,41 @@ if (db) {
       timeout INTEGER NOT NULL
     )
   `);
+  } catch (error) {
+    console.error("[PMCaptcha] Failed to create database tables:", error);
+  }
+  
+  // Initialize prepared statements after tables are created
+  initPreparedStatements();
 }
 
-// HTML escape helper
+// Type definitions
+interface WhitelistRow {
+  user_id: number;
+  added_at?: number;
+}
+
+interface ChallengeRow {
+  user_id: number;
+  challenge_type: string;
+  start_time: number;
+  timeout: number;
+}
+
+interface CountRow {
+  count: number;
+}
+
+// HTML escape helper with input validation
 function htmlEscape(text: string): string {
+  // Validate input
+  if (typeof text !== 'string') {
+    text = String(text || '');
+  }
+  // Limit length for safety
+  if (text.length > 10000) {
+    text = text.substring(0, 10000) + '...';
+  }
   return text
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
@@ -110,12 +254,17 @@ function htmlEscape(text: string): string {
     .replace(/'/g, "&#39;");
 }
 
-// Get user ID by index from whitelist
+// Get user ID by index from whitelist with validation
 function getUserIdByIndex(index: number): number | null {
+  // Input validation
+  if (!Number.isInteger(index) || index < 1 || index > 9999) {
+    return null;
+  }
+  if (!db) return null;
   try {
     const whitelistUsers = db
       .prepare("SELECT user_id FROM pmcaptcha_whitelist ORDER BY user_id")
-      .all() as any[];
+      .all() as WhitelistRow[];
     if (index >= 1 && index <= whitelistUsers.length) {
       return whitelistUsers[index - 1].user_id;
     }
@@ -172,11 +321,12 @@ const dbHelpers = {
   },
 
   isWhitelisted: (userId: number): boolean => {
-    if (!db || !userId || userId <= 0) return false;
+    // Validate userId to prevent injection
+    if (!db || !userId || userId <= 0 || !Number.isInteger(userId)) return false;
     try {
-      const row = db
-        .prepare("SELECT 1 FROM pmcaptcha_whitelist WHERE user_id = ?")
-        .get(userId);
+      const stmt = preparedStatements.checkWhitelist || 
+        db.prepare("SELECT 1 FROM pmcaptcha_whitelist WHERE user_id = ?");
+      const row = stmt.get(userId);
       return !!row;
     } catch (error) {
       console.error(`[PMCaptcha] Failed to check whitelist for ${userId}:`, error);
@@ -185,11 +335,11 @@ const dbHelpers = {
   },
 
   addToWhitelist: (userId: number) => {
-    if (!db || !userId || userId <= 0) return;
+    // Validate userId to prevent injection
+    if (!db || !userId || userId <= 0 || !Number.isInteger(userId)) return;
     try {
-      const stmt = db.prepare(
-        "INSERT OR IGNORE INTO pmcaptcha_whitelist (user_id) VALUES (?)"
-      );
+      const stmt = preparedStatements.addWhitelist || 
+        db.prepare("INSERT OR IGNORE INTO pmcaptcha_whitelist (user_id) VALUES (?)");
       stmt.run(userId);
     } catch (error) {
       console.error(`[PMCaptcha] Failed to add ${userId} to whitelist:`, error);
@@ -197,11 +347,11 @@ const dbHelpers = {
   },
 
   removeFromWhitelist: (userId: number) => {
-    if (!db || !userId || userId <= 0) return;
+    // Validate userId to prevent injection  
+    if (!db || !userId || userId <= 0 || !Number.isInteger(userId)) return;
     try {
-      const stmt = db.prepare(
-        "DELETE FROM pmcaptcha_whitelist WHERE user_id = ?"
-      );
+      const stmt = preparedStatements.removeWhitelist || 
+        db.prepare("DELETE FROM pmcaptcha_whitelist WHERE user_id = ?");
       stmt.run(userId);
     } catch (error) {
       console.error(`[PMCaptcha] Failed to remove ${userId} from whitelist:`, error);
@@ -209,11 +359,12 @@ const dbHelpers = {
   },
 
   getChallengeState: (userId: number) => {
-    if (!db || !userId || userId <= 0) return null;
+    // Validate userId to prevent injection
+    if (!db || !userId || userId <= 0 || !Number.isInteger(userId)) return null;
     try {
       const row = db
         .prepare("SELECT * FROM pmcaptcha_challenges WHERE user_id = ?")
-        .get(userId) as any;
+        .get(userId) as ChallengeRow | undefined;
       return row || null;
     } catch (error) {
       console.error(`[PMCaptcha] Failed to get challenge state for ${userId}:`, error);
@@ -226,7 +377,10 @@ const dbHelpers = {
     challengeType: string,
     timeout: number
   ) => {
-    if (!db || !userId || userId <= 0) return;
+    // Validate all inputs
+    if (!db || !userId || userId <= 0 || !Number.isInteger(userId)) return;
+    if (!challengeType || typeof challengeType !== 'string') return;
+    if (!Number.isInteger(timeout) || timeout < 0) return;
     try {
       const stmt = db.prepare(
         "INSERT OR REPLACE INTO pmcaptcha_challenges (user_id, challenge_type, start_time, timeout) VALUES (?, ?, ?, ?)"
@@ -258,6 +412,7 @@ const activeChallenges = new Map<
     startTime: number;
     timeout: number;
     timer?: NodeJS.Timeout;
+    retryCount: number;  // 添加重试计数器
   }
 >();
 
@@ -286,16 +441,46 @@ const challengeCleanupInterval = setInterval(() => {
   }
 }, 300000); // Run every 5 minutes
 
-// Clean up on plugin unload
-process.on('exit', () => {
-  clearInterval(challengeCleanupInterval);
-  clearInterval(trackerCleanupInterval);
-  activeChallenges.forEach(challenge => {
-    if (challenge.timer) clearTimeout(challenge.timer);
+// Store cleanup handlers
+const cleanupHandlers: (() => void)[] = [];
+
+// Register cleanup
+function registerCleanup() {
+  const exitHandler = () => {
+    try {
+      clearInterval(challengeCleanupInterval);
+      clearInterval(trackerCleanupInterval);
+      activeChallenges.forEach(challenge => {
+        if (challenge.timer) clearTimeout(challenge.timer);
+      });
+      activeChallenges.clear();
+      messageTracker.clear();
+      // Close database connections
+      if (db) {
+        try {
+          db.close();
+        } catch (e) {
+          console.error("[PMCaptcha] Error closing database:", e);
+        }
+      }
+    } catch (error) {
+      console.error("[PMCaptcha] Cleanup error:", error);
+    }
+  };
+  
+  // Register multiple handlers for different exit scenarios
+  process.on('exit', exitHandler);
+  process.on('SIGINT', exitHandler);
+  process.on('SIGTERM', exitHandler);
+  process.on('uncaughtException', (error) => {
+    console.error("[PMCaptcha] Uncaught exception:", error);
+    exitHandler();
   });
-  activeChallenges.clear();
-  messageTracker.clear();
-});
+  
+  cleanupHandlers.push(exitHandler);
+}
+
+registerCleanup();
 
 // Message frequency tracking for protection mode
 const messageTracker = new Map<number, number[]>();
@@ -358,9 +543,12 @@ function trackMessage(userId: number): boolean {
 }
 
 // Helper function to move a peer to a specific folder
-async function setFolder(client: TelegramClient, userId: number, folderId: number): Promise<boolean> {
+async function setFolder(client: TelegramClient, userId: number, folderId: number, userEntity?: any): Promise<boolean> {
   try {
-    const userEntity = await client.getInputEntity(userId);
+    if (!userEntity) {
+        console.error(`[PMCaptcha] setFolder: No entity provided for user ${userId}.`);
+        return false;
+    }
     await client.invoke(
       new Api.folders.EditPeerFolders({
         folderPeers: [new Api.InputFolderPeer({ peer: userEntity, folderId })]
@@ -374,32 +562,120 @@ async function setFolder(client: TelegramClient, userId: number, folderId: numbe
 }
 
 // Archive conversation
-async function archiveConversation(client: TelegramClient, userId: number): Promise<boolean> {
+async function archiveConversation(client: TelegramClient, userId: number, userEntity?: any): Promise<boolean> {
   console.log(`[PMCaptcha] Archiving conversation with user ${userId}`);
-  return setFolder(client, userId, 1); // 1 = Archive
+  return setFolder(client, userId, 1, userEntity); // 1 = Archive
+}
+
+// Mute conversation
+async function muteConversation(client: TelegramClient, userId: number, userEntity?: any): Promise<boolean> {
+  try {
+    if (!userEntity) {
+        console.error(`[PMCaptcha] muteConversation: No entity provided for user ${userId}.`);
+        return false;
+    }
+    await client.invoke(
+      new Api.account.UpdateNotifySettings({
+        peer: new Api.InputNotifyPeer({ peer: userEntity }),
+        settings: new Api.InputPeerNotifySettings({
+          muteUntil: 2147483647, // Max int32, effectively forever
+          showPreviews: false,
+          silent: true
+        })
+      })
+    );
+    console.log(`[PMCaptcha] Muted conversation with user ${userId}`);
+    return true;
+  } catch (error) {
+    console.error(`[PMCaptcha] Failed to mute conversation with ${userId}:`, error);
+    return false;
+  }
+}
+
+// Block all private messages (archive, mute and delete)
+async function blockAllPrivateMessage(
+  client: TelegramClient,
+  userId: number,
+  userEntity?: any
+): Promise<boolean> {
+  try {
+    const delay = (ms: number) => new Promise(res => setTimeout(res, ms));
+
+    // 1. 静音对话
+    await muteConversation(client, userId, userEntity);
+    await delay(500);
+
+    // 2. 归档对话
+    await archiveConversation(client, userId, userEntity);
+    await delay(500);
+
+    // 3. 删除双方消息（不举报）
+    try {
+      await client.invoke(
+        new Api.messages.DeleteHistory({
+          justClear: false,
+          revoke: true, // 双方删除
+          peer: await client.getInputEntity(userId),
+          maxId: 0
+        })
+      );
+      console.log(`[PMCaptcha] Deleted history for user ${userId}`);
+    } catch (delError) {
+      console.error(`[PMCaptcha] Failed to delete history for ${userId}:`, delError);
+    }
+    await delay(500);
+
+    // 4. 拉黑用户 (已根据用户要求禁用)
+    /*
+    await client.invoke(
+      new Api.contacts.Block({
+        id: await client.getInputEntity(userId)
+      })
+    );
+    */
+
+    console.log(`[PMCaptcha] Handled private message from user ${userId} in block_all mode (deleted history).`);
+    dbHelpers.updateStats(0, 1); // Still count as a block/interception for stats
+
+    return true;
+  } catch (error) {
+    console.error(`[PMCaptcha] Failed to block all private messages from ${userId}:`, error);
+    return false;
+  }
 }
 
 // Unarchive conversation and enable notifications
-async function unarchiveConversation(client: TelegramClient, userId: number): Promise<boolean> {
-  console.log(`[PMCaptcha] Unarchiving conversation for user ${userId}`);
+async function unarchiveConversation(client: TelegramClient, userId: number, userEntity?: any): Promise<boolean> {
+  console.log(`[PMCaptcha] Unarchiving conversation and restoring notifications for user ${userId}`);
   
+  if (!userEntity) {
+      console.error(`[PMCaptcha] unarchiveConversation: No entity provided for user ${userId}.`);
+      return false;
+  }
+
   // Restore notifications first
   try {
     await client.invoke(
       new Api.account.UpdateNotifySettings({
-        peer: new Api.InputNotifyPeer({ peer: await client.getInputEntity(userId) }),
+        peer: new Api.InputNotifyPeer({ peer: userEntity }),
         settings: new Api.InputPeerNotifySettings({
           muteUntil: 0, // Unmute
+          showPreviews: true, // Show message previews
           sound: new Api.NotificationSoundDefault()
         })
       })
     );
+    console.log(`[PMCaptcha] Restored notifications for user ${userId}`);
   } catch (error) {
-    console.error(`[PMCaptcha] Failed to update notify settings for ${userId}:`, error);
+    console.error(`[PMCaptcha] Failed to restore notifications for ${userId}:`, error);
   }
 
-  // Move to main folder
-  return setFolder(client, userId, 0); // 0 = Main folder (All Chats)
+  // Move to main folder (unarchive)
+  const unarchived = await setFolder(client, userId, 0, userEntity); // 0 = Main folder (All Chats)
+  if (unarchived) {
+    console.log(`[PMCaptcha] Successfully unarchived conversation with user ${userId}`);
+  }
+  return unarchived;
 }
 
 // Delete and report user (both sides)
@@ -409,24 +685,35 @@ async function deleteAndReportUser(
   reason: string = "spam"
 ): Promise<boolean> {
   try {
-    // Report user for spam
+    // Check if reporting is enabled
+    const reportEnabled = dbHelpers.getSetting(CONFIG_KEYS.REPORT_ENABLED, false);
+    
+    if (reportEnabled) {
+      // Report user for spam
+      await client.invoke(
+        new Api.account.ReportPeer({
+          peer: await client.getInputEntity(userId),
+          reason: new Api.InputReportReasonSpam(),
+          message: reason
+        })
+      );
+      console.log(`[PMCaptcha] Reported user ${userId} for ${reason}`);
+    }
+    
+    // Delete conversation from both sides using revoke flag
+    // This will delete messages for both parties
     await client.invoke(
-      new Api.account.ReportPeer({
+      new Api.messages.DeleteHistory({
+        justClear: false,  // false = delete history, not just clear
+        revoke: true,       // true = delete for both sides (双方删除)
         peer: await client.getInputEntity(userId),
-        reason: new Api.InputReportReasonSpam(),
-        message: reason
+        maxId: 0,           // 0 = delete all messages
+        minDate: 0,         // 0 = no date limit
+        maxDate: 0          // 0 = no date limit
       })
     );
     
-    // Delete conversation from both sides
-    await client.invoke(
-      new Api.messages.DeleteHistory({
-        justClear: false,
-        revoke: true, // Delete for both sides
-        peer: await client.getInputEntity(userId),
-        maxId: 0 // Delete all messages
-      })
-    );
+    console.log(`[PMCaptcha] Deleted all messages with user ${userId} (both sides)`);
     
     // Block user
     await client.invoke(
@@ -435,12 +722,12 @@ async function deleteAndReportUser(
       })
     );
     
-    console.log(`[PMCaptcha] Deleted and reported user ${userId} for ${reason}`);
+    console.log(`[PMCaptcha] Blocked user ${userId}`);
     dbHelpers.updateStats(0, 1);
     
     return true;
   } catch (error) {
-    console.error(`[PMCaptcha] Failed to delete and report user ${userId}:`, error);
+    console.error(`[PMCaptcha] Failed to delete and block user ${userId}:`, error);
     return false;
   }
 }
@@ -448,17 +735,54 @@ async function deleteAndReportUser(
 // Check if user is valid (not bot, deleted, fake, scam)
 async function isValidUser(
   client: TelegramClient,
-  userId: number
+  userId: number,
+  userEntity?: any
 ): Promise<boolean> {
   try {
-    const entity = await getEntityWithHash(client, userId);
+    // Try to use provided entity first, then fallback to getEntityWithHash
+    let entity = userEntity;
+    if (!entity) {
+      try {
+        entity = await getEntityWithHash(client, userId);
+      } catch (err) {
+        console.warn(`[PMCaptcha] Could not get entity for ${userId}, assuming valid user`);
+        return true; // Graceful degradation
+      }
+    }
+    
     const userFull = await client.invoke(
       new Api.users.GetFullUser({ id: entity })
     );
     const user = userFull.users[0] as Api.User;
     
-    // Exclude bots, deleted, fake, scam accounts
-    return !user.bot && !user.deleted && !user.fake && !user.scam;
+    // 深度检查用户状态
+    if (user.bot) {
+      console.log(`[PMCaptcha] User ${userId} is a bot`);
+      return false;
+    }
+    
+    if (user.deleted) {
+      console.log(`[PMCaptcha] User ${userId} is deleted`);
+      return false;
+    }
+    
+    if (user.fake) {
+      console.log(`[PMCaptcha] User ${userId} is fake`);
+      return false;
+    }
+    
+    if (user.scam) {
+      console.log(`[PMCaptcha] User ${userId} is scam`);
+      return false;
+    }
+    
+    // 检查用户是否被限制
+    if ((user as any).restricted) {
+      console.log(`[PMCaptcha] User ${userId} is restricted`);
+      return false;
+    }
+    
+    return true;
   } catch (error) {
     console.error(`[PMCaptcha] Failed to check user validity for ${userId}:`, error);
     // Graceful degradation: allow verification if API check fails
@@ -469,13 +793,24 @@ async function isValidUser(
 // Check common groups count for whitelist
 async function checkCommonGroups(
   client: TelegramClient,
-  userId: number
+  userId: number,
+  userEntity?: any
 ): Promise<boolean> {
   const minCommonGroups = dbHelpers.getSetting("groups_in_common");
   if (minCommonGroups === null) return false;
 
   try {
-    const entity = await getEntityWithHash(client, userId);
+    // Try to use provided entity first, then fallback to getEntityWithHash
+    let entity = userEntity;
+    if (!entity) {
+      try {
+        entity = await getEntityWithHash(client, userId);
+      } catch (err) {
+        console.warn(`[PMCaptcha] Could not get entity for ${userId} in checkCommonGroups`);
+        return false;
+      }
+    }
+    
     const userFull = await client.invoke(
       new Api.users.GetFullUser({ id: entity })
     );
@@ -497,23 +832,56 @@ async function checkCommonGroups(
   return false;
 }
 
+// Handle Flood Wait errors
+async function handleFloodWait<T>(operation: () => Promise<T>): Promise<T | null> {
+  try {
+    return await operation();
+  } catch (error: any) {
+    if (error.message?.includes("FLOOD_WAIT")) {
+      const waitTime = parseInt(error.message.match(/\d+/)?.[0] || "60");
+      console.log(`[PMCaptcha] Flood wait ${waitTime} seconds`);
+      await sleep((waitTime + 1) * 1000);
+      try {
+        return await operation();
+      } catch (retryError) {
+        console.error(`[PMCaptcha] Retry failed:`, retryError);
+        return null;
+      }
+    }
+    throw error;
+  }
+}
+
 // Start sticker challenge
 async function startStickerChallenge(
   client: TelegramClient,
-  userId: number
+  userId: number,
+  userEntity?: any
 ): Promise<boolean> {
   const timeout = dbHelpers.getSetting(CONFIG_KEYS.STICKER_TIMEOUT, 180) * 1000;
 
   try {
     // Archive the conversation first
-    await archiveConversation(client, userId);
+    await archiveConversation(client, userId, userEntity);
 
-    const challengeMsg = await client.sendMessage(userId, {
-      message: `🔒 <b>人机验证</b>\n\n👋 您好！为了确保您是真实用户，请完成以下验证：\n\n📌 <b>验证方式：</b>\n发送任意<b>表情包（Sticker）</b>即可通过验证\n\n⏰ <b>时间限制：</b> ${
-        timeout > 0 ? `${timeout / 1000}秒` : "无限制"
-      }\n\n💡 <i>提示：点击输入框旁的😊图标选择表情包</i>`,
-      parseMode: "html",
-    });
+    if (!userEntity) {
+        console.error(`[PMCaptcha] startStickerChallenge: No entity provided for user ${userId}.`);
+        return false;
+    }
+
+    const challengeMsg = await handleFloodWait(async () => 
+      await client.sendMessage(userEntity, {
+        message: `🔒 <b>人机验证</b>\n\n👋 您好！为了保护您的账号安全，请完成简单验证：\n\n📌 <b>验证要求：</b>\n发送任意一个 <b>表情包（Sticker）</b>\n\n📖 <b>操作指南：</b>\n1️⃣ 点击输入框旁的 😊 表情图标\n2️⃣ 选择任意表情包发送\n\n⏰ <b>时间限制：</b> ${
+          timeout > 0 ? `${timeout / 1000}秒` : "无限制"
+        }\n🆘 <b>重试机会：</b> 3次\n\nℹ️ <i>注意：文字、图片、视频等其他内容无效</i>`,
+        parseMode: "html",
+      })
+    );
+
+    if (!challengeMsg) {
+        console.error(`[PMCaptcha] Failed to send challenge message to user ${userId}.`);
+        return false;
+    }
 
     // Set challenge state
     dbHelpers.setChallengeState(userId, "sticker", timeout);
@@ -529,12 +897,14 @@ async function startStickerChallenge(
         startTime: Date.now(),
         timeout,
         timer,
+        retryCount: 0,  // 初始化重试次数为0
       });
     } else {
       activeChallenges.set(userId, {
         type: "sticker",
         startTime: Date.now(),
         timeout: 0,
+        retryCount: 0,  // 初始化重试次数为0
       });
     }
 
@@ -554,10 +924,28 @@ async function handleChallengeTimeout(client: TelegramClient, userId: number) {
   const challenge = activeChallenges.get(userId);
   if (!challenge) return;
 
-  console.log(`[PMCaptcha] Challenge timeout for user ${userId}, deleting and reporting`);
+  const deleteFailed = dbHelpers.getSetting(CONFIG_KEYS.DELETE_FAILED, true);
   
-  // Delete and report user for timeout
-  await deleteAndReportUser(client, userId, "verification timeout");
+  if (deleteFailed) {
+    console.log(`[PMCaptcha] Challenge timeout for user ${userId}, deleting messages for both sides`);
+    
+    // Delete and report user for timeout
+    await deleteAndReportUser(client, userId, "verification timeout");
+  } else {
+    console.log(`[PMCaptcha] Challenge timeout for user ${userId}, blocking without deletion`);
+    
+    // Just block without deleting
+    try {
+      await client.invoke(
+        new Api.contacts.Block({
+          id: await client.getInputEntity(userId)
+        })
+      );
+      dbHelpers.updateStats(0, 1);
+    } catch (error) {
+      console.error(`[PMCaptcha] Failed to block user ${userId}:`, error);
+    }
+  }
 
   // Clean up
   activeChallenges.delete(userId);
@@ -568,10 +956,16 @@ async function handleChallengeTimeout(client: TelegramClient, userId: number) {
 async function verifyStickerResponse(
   client: TelegramClient,
   userId: number,
-  hasSticker: boolean
+  hasSticker: boolean,
+  userEntity?: any
 ): Promise<boolean> {
   const challenge = activeChallenges.get(userId);
-  if (!challenge || challenge.type !== "sticker") return false;
+  if (!challenge || challenge.type !== "sticker") {
+    log(LogLevel.WARN, `No active challenge found for user ${userId}`);
+    return false;
+  }
+
+  log(LogLevel.INFO, `Verifying sticker response for user ${userId}. Has sticker: ${hasSticker}`);
 
   if (hasSticker) {
     // Success - add to whitelist
@@ -581,11 +975,11 @@ async function verifyStickerResponse(
     dbHelpers.updateStats(1, 0);
 
     // Unarchive conversation and enable notifications
-    await unarchiveConversation(client, userId);
+    await unarchiveConversation(client, userId, userEntity);
 
     try {
-      await client.sendMessage(userId, {
-        message: "✅ <b>验证成功</b>\n\n🎉 欢迎！您已成功通过验证。\n\n现在可以正常发送消息了，祝您使用愉快！",
+      await client.sendMessage(userEntity || userId, {
+        message: "✅ <b>验证成功</b>\n\n🎉 恭喜！您已成功通过人机验证。\n\n✨ <b>已为您：</b>\n• 解除对话归档\n• 恢复消息通知\n• 加入白名单\n\n现在可以正常发送消息了，祝您使用愉快！",
         parseMode: "html",
       });
     } catch (error) {
@@ -605,16 +999,49 @@ async function verifyStickerResponse(
     console.log(`[PMCaptcha] User ${userId} passed sticker verification`);
     return true;
   } else {
-    // Failed - check if user has exceeded retry attempts
-    const challenge = activeChallenges.get(userId);
-    if (challenge) {
-      // For now, we'll be strict and delete/report on any non-sticker message
-      console.log(`[PMCaptcha] User ${userId} failed verification (sent non-sticker), deleting and reporting`);
+    // Failed - check retry count
+    challenge.retryCount++;
+    const remainingRetries = 3 - challenge.retryCount;
+    log(LogLevel.WARN, `User ${userId} failed verification. Retry count: ${challenge.retryCount}/3`);
+
+    if (remainingRetries > 0) {
+      // Still have retries left, send warning message
+      try {
+        await client.sendMessage(userEntity || userId, {
+          message: `❌ <b>验证失败</b>\n\n您发送的不是表情包（Sticker）！\n\n📌 <b>正确操作步骤：</b>\n1️⃣ 点击输入框旁的 😊 图标\n2️⃣ 选择任意一个表情包发送\n\n⚠️ <b>剩余尝试机会：${remainingRetries}次</b>\n\n❗ 注意：发送文字、图片、GIF等都无效，必须是<b>表情包</b>`,
+          parseMode: "html",
+        });
+      } catch (error) {
+        log(LogLevel.ERROR, `Failed to send retry message to user ${userId}`, error);
+      }
       
-      // Delete and report user for verification failure
-      await deleteAndReportUser(client, userId, "verification failed");
+      // Update challenge with new retry count but keep timer
+      activeChallenges.set(userId, challenge);
+      return false;
+    } else {
+      // No more retries, execute final action
+      log(LogLevel.WARN, `User ${userId} failed verification after 3 retries. Initiating final action.`);
+      const deleteFailed = dbHelpers.getSetting(CONFIG_KEYS.DELETE_FAILED, true);
+      
+      if (deleteFailed) {
+        log(LogLevel.INFO, `Final action for ${userId}: Deleting messages and reporting.`);
+        await deleteAndReportUser(client, userId, "verification failed - max retries exceeded");
+      } else {
+        log(LogLevel.INFO, `Final action for ${userId}: Blocking without deletion.`);
+        try {
+          await client.invoke(
+            new Api.contacts.Block({
+              id: await client.getInputEntity(userId)
+            })
+          );
+          dbHelpers.updateStats(0, 1);
+        } catch (error) {
+          log(LogLevel.ERROR, `Failed to block user ${userId} after max retries`, error);
+        }
+      }
       
       // Clean up
+      log(LogLevel.INFO, `Cleaning up challenge state for user ${userId}`);
       if (challenge.timer) {
         clearTimeout(challenge.timer);
       }
@@ -628,15 +1055,45 @@ async function verifyStickerResponse(
 // Robust sticker detection (GramJS)
 function isStickerMessage(message: Api.Message): boolean {
   try {
+    // Log message structure for debugging
+    log(LogLevel.DEBUG, `Checking message for sticker. Message ID: ${message.id}`);
+    
     const media: any = (message as any).media;
-    const doc: any = media?.document;
-    const attrs: any[] = (doc && (doc as any).attributes) || [];
-    return attrs.some((a: any) =>
-      (a instanceof (Api as any).DocumentAttributeSticker) ||
-      a?.className === "DocumentAttributeSticker" ||
-      a?._ === "documentAttributeSticker"
-    );
-  } catch {
+    if (!media) {
+      log(LogLevel.DEBUG, `No media found in message ${message.id}`);
+      return false;
+    }
+    
+    log(LogLevel.DEBUG, `Media type: ${media.className || media.constructor?.name}`);
+    
+    // Check for MessageMediaDocument
+    if (media.className === "MessageMediaDocument" || media instanceof Api.MessageMediaDocument) {
+      const doc: any = media.document;
+      if (!doc) {
+        log(LogLevel.DEBUG, `No document in media`);
+        return false;
+      }
+      
+      const attrs: any[] = (doc.attributes) || [];
+      log(LogLevel.DEBUG, `Document has ${attrs.length} attributes`);
+      
+      for (const attr of attrs) {
+        const attrType = attr.className || attr.constructor?.name || attr._;
+        log(LogLevel.DEBUG, `Attribute type: ${attrType}`);
+        
+        if (attrType === "DocumentAttributeSticker" || 
+            attr instanceof Api.DocumentAttributeSticker ||
+            attr?._ === "documentAttributeSticker") {
+          log(LogLevel.INFO, `✅ Sticker detected in message ${message.id}`);
+          return true;
+        }
+      }
+    }
+    
+    log(LogLevel.DEBUG, `No sticker found in message ${message.id}`);
+    return false;
+  } catch (error) {
+    log(LogLevel.ERROR, `Error detecting sticker in message`, error);
     return false;
   }
 }
@@ -686,92 +1143,136 @@ async function handleBotMessage(
 async function hasChatHistory(
   client: TelegramClient,
   userId: number,
-  excludeMessageId?: number
+  excludeMessageId?: number,
+  userEntity?: any
 ): Promise<boolean> {
   try {
-    const messages = await client.getMessages(userId, {
-      limit: 10
+    // Try to use provided entity first, fallback to userId
+    const peer = userEntity || userId;
+    const messages = await client.getMessages(peer, {
+      limit: 20 // Increase limit to better find outgoing messages
     });
+
+    // If there is at least one message sent by me (out: true),
+    // it means I have talked to this user before.
+    const hasOutgoingMessage = messages.some(m => m.out);
+
+    if (hasOutgoingMessage) {
+      return true;
+    }
+
+    // Fallback for cases where only incoming messages exist.
+    // Filter out the current message to see if any *other* messages remain.
     const filtered = excludeMessageId
       ? messages.filter((m: any) => Number(m.id) !== Number(excludeMessageId))
       : messages;
-    return filtered.length > 0;
+    
+    // If more than one message exists, it implies a history.
+    return filtered.length > 1;
+
   } catch (error) {
     console.error(`[PMCaptcha] Failed to check chat history with ${userId}:`, error);
+    // If we can't check history, assume no history to be safe
     return false;
   }
 }
 
 // Scan and whitelist existing chats on enable
 async function scanExistingChats(client: TelegramClient, progressCallback?: (msg: string) => Promise<void>) {
-  console.log("[PMCaptcha] Starting automatic chat scan...");
+  console.log("[PMCaptcha] Starting optimized private chat scan...");
   let scannedCount = 0;
   let whitelistedCount = 0;
   let skipCount = 0;
-  
+
   try {
-    // Use official iterDialogs method and process private chats on-the-fly
     const maxScan = dbHelpers.getSetting("SCAN_MAX", 2000);
-    let totalDialogs = 0;
-    
     if (progressCallback) {
-      await progressCallback(`📊 正在扫描私聊对话...`);
+      await progressCallback(`📊 正在获取所有对话...`);
     }
-    
-    // Use iterDialogs and process private chats immediately
-    for await (const dialog of client.iterDialogs({
-      limit: maxScan, // Total limit across all iterations
-    })) {
-      totalDialogs++;
-      
-      // Update progress every 100 dialogs
-      if (totalDialogs % 100 === 0 && progressCallback) {
-        await progressCallback(`🔄 已扫描: ${totalDialogs} | 私聊: ${scannedCount} | 加白: ${whitelistedCount}`);
+
+    const allDialogs: (Api.messages.Dialogs | Api.messages.DialogsSlice)[] = [];
+    // Scan both main folder (undefined) and archive (1)
+    for (const folderId of [undefined, 1]) {
+      try {
+        const dialogs = await client.invoke(
+          new Api.messages.GetDialogs({
+            offsetDate: 0,
+            offsetId: 0,
+            offsetPeer: new Api.InputPeerEmpty(),
+            limit: 200, // Fetch up to 200 dialogs per folder
+            hash: bigInt(0),
+            excludePinned: false,
+            folderId: folderId,
+          })
+        );
+        if (dialogs) {
+          allDialogs.push(dialogs as any);
+        }
+      } catch (e) {
+        console.warn(`[PMCaptcha] Could not fetch dialogs for folder ${folderId}:`, e);
       }
-      
-      // Only process private chats with users (not bots, groups, channels)
-      if (dialog.isUser) {
-        const entity = dialog.entity as Api.User;
-        if (!entity?.bot && entity?.id) {
-          scannedCount++;
-          const userId = Number(entity.id);
-          
-          if (userId > 0) {
-            if (dbHelpers.isWhitelisted(userId)) {
-              skipCount++;
-            } else {
-              // Check if there's chat history
-              try {
-                const hasHistory = await hasChatHistory(client, userId);
-                if (hasHistory) {
-                  dbHelpers.addToWhitelist(userId);
-                  whitelistedCount++;
-                  console.log(`[PMCaptcha] Auto-whitelisted user ${userId} (has chat history)`);
-                }
-              } catch (error) {
-                console.error(`[PMCaptcha] Failed to check history for ${userId}:`, error);
-              }
-            }
+    }
+
+    const privateChats: Api.User[] = [];
+    const seenUserIds = new Set<string>();
+
+    for (const dialogs of allDialogs) {
+      if (dialogs instanceof Api.messages.Dialogs || dialogs instanceof Api.messages.DialogsSlice) {
+        for (const user of dialogs.users) {
+          if (user instanceof Api.User && !user.bot && !user.deleted && user.id && !seenUserIds.has(user.id.toString())) {
+            privateChats.push(user);
+            seenUserIds.add(user.id.toString());
           }
         }
       }
-      
-      // Safety check
-      if (totalDialogs >= maxScan) {
-        console.log(`[PMCaptcha] Reached ${maxScan} dialogs scan limit`);
+    }
+
+    scannedCount = privateChats.length;
+    console.log(`[PMCaptcha] Found ${scannedCount} private chats across all folders`);
+
+    if (progressCallback) {
+      await progressCallback(`🔍 发现 ${scannedCount} 个私聊对话，正在处理...`);
+    }
+
+    let processed = 0;
+    for (const user of privateChats) {
+      const userId = Number(user.id);
+      processed++;
+
+      if (processed % 20 === 0 && progressCallback) {
+        await progressCallback(`⚡ 快速处理中: ${processed}/${scannedCount} | 新增: ${whitelistedCount}`);
+      }
+
+      if (userId > 0) {
+        if (dbHelpers.isWhitelisted(userId)) {
+          skipCount++;
+        } else {
+          try {
+            const messages = await client.getMessages(userId, { limit: 1 });
+            if (messages.length > 0) {
+              dbHelpers.addToWhitelist(userId);
+              whitelistedCount++;
+              console.log(`[PMCaptcha] Auto-whitelisted user ${userId} (${user.username || user.firstName || 'User'})`);
+            }
+          } catch (error) {
+            // Ignore users where history can't be fetched
+          }
+        }
+      }
+
+      if (processed >= maxScan) {
+        console.log(`[PMCaptcha] Reached scan limit: ${maxScan}`);
         break;
       }
     }
-    
-    console.log(`[PMCaptcha] Scan completed: ${totalDialogs} total dialogs, ${scannedCount} private chats`);
-    
-    const resultMsg = `✅ 扫描完成\n· 总对话: ${totalDialogs}\n· 私聊对话: ${scannedCount}\n· 新增白名单: ${whitelistedCount}\n· 已存在: ${skipCount}`;
+
+    const resultMsg = `✅ 扫描完成\n• 私聊对话: ${scannedCount}\n• 新增白名单: ${whitelistedCount}\n• 已存在: ${skipCount}`;
     console.log(`[PMCaptcha] ${resultMsg}`);
-    
+
     if (progressCallback) {
       await progressCallback(resultMsg);
     }
-    
+
   } catch (error) {
     console.error("[PMCaptcha] Failed to scan existing chats:", error);
     if (progressCallback) {
@@ -782,6 +1283,10 @@ async function scanExistingChats(client: TelegramClient, progressCallback?: (msg
 
 // Message listener for handling all private messages
 async function pmcaptchaMessageListener(message: Api.Message) {
+  if (!(await waitForConfigDb())) {
+    console.error("[PMCaptcha] Config DB not ready, skipping message.");
+    return;
+  }
   try {
     const client = message.client as TelegramClient;
 
@@ -793,92 +1298,159 @@ async function pmcaptchaMessageListener(message: Api.Message) {
 
     const userId = Number(message.senderId);
     
-    // Handle outgoing messages (user sends to someone)
+    // Get the sender entity directly from the message object. This is more reliable.
+    const senderEntity = await message.getSender();
+
+    if (!senderEntity) {
+        log(LogLevel.ERROR, `CRITICAL: Could not get sender entity from message object for user ${userId}. Aborting operation.`);
+        return;
+    }
+    
+    // 🔴 Absolute Highest Priority: Block All Mode Check
+    if (dbHelpers.getSetting(CONFIG_KEYS.BLOCK_ALL, false)) {
+      if (!message.out) { // Only act on incoming messages
+        console.log(`[PMCaptcha] Block all mode is active. Blocking user ${userId}.`);
+        
+        // Add a delay to ensure the user entity is available in the client's cache
+        await sleep(2000);
+
+        await blockAllPrivateMessage(client, userId, senderEntity);
+      }
+      // Stop all further processing if block all mode is on.
+      return;
+    }
+
+    // Handle outgoing messages to auto-whitelist recipients
     if (message.out) {
-      // Get recipient ID (peer ID for private chats)
       const recipientId = Number((message.peerId as any)?.userId);
       if (recipientId && recipientId > 0 && !dbHelpers.isWhitelisted(recipientId)) {
         dbHelpers.addToWhitelist(recipientId);
         console.log(`[PMCaptcha] Auto-whitelisted recipient ${recipientId} (user initiated chat)`);
       }
-      return;
+      return; // Don't process outgoing messages further
     }
 
-    // Handle incoming messages
+    // From here, we only handle incoming messages
     if (!userId || userId <= 0) return;
 
-    // Skip if already whitelisted
-    if (dbHelpers.isWhitelisted(userId)) return;
+    // PRIORITY 1: Check if user is in an active challenge.
+    const activeChallenge = activeChallenges.get(userId);
+    if (activeChallenge && activeChallenge.type === "sticker") {
+      log(LogLevel.INFO, `User ${userId} is in active challenge, checking response.`);
+      const hasSticker = isStickerMessage(message);
+      await verifyStickerResponse(client, userId, hasSticker, senderEntity);
+      return; // Stop all further processing after verification attempt.
+    }
 
-    // Check if there's chat history with this user
-    const hasHistory = await hasChatHistory(client, userId, Number(message.id));
-    if (hasHistory) {
-      dbHelpers.addToWhitelist(userId);
-      console.log(`[PMCaptcha] Auto-whitelisted user ${userId} (has chat history)`);
+    // PRIORITY 2: Skip if user is already whitelisted.
+    if (dbHelpers.isWhitelisted(userId)) {
       return;
     }
 
-    // Check protection mode first
+    // PRIORITY 3: Auto-whitelist if there's a pre-existing chat history.
+    const hasHistory = await hasChatHistory(client, userId, Number(message.id), senderEntity);
+    if (hasHistory) {
+      dbHelpers.addToWhitelist(userId);
+      log(LogLevel.INFO, `Auto-whitelisted user ${userId} (has chat history).`);
+      return; // Whitelisted, no need for captcha.
+    }
+
+    // PRIORITY 4: Protection Mode Checks.
     const protectionActive = dbHelpers.getSetting(CONFIG_KEYS.PROTECTION_ACTIVE, false);
     if (protectionActive) {
-      // In protection mode, delete and report all non-whitelisted users
-      console.log(`[PMCaptcha] Protection mode active, auto-blocking user ${userId}`);
+      log(LogLevel.WARN, `Protection mode active, auto-blocking user ${userId}.`);
       await deleteAndReportUser(client, userId, "protection mode - flood");
       return;
     }
-
-    // Track message frequency for protection mode
     if (trackMessage(userId)) {
-      // Protection threshold exceeded, activate protection mode
       dbHelpers.setSetting(CONFIG_KEYS.PROTECTION_ACTIVE, true);
       dbHelpers.setSetting(CONFIG_KEYS.PROTECTION_ACTIVATED_AT, new Date().toISOString());
-      
-      console.log(`[PMCaptcha] PROTECTION MODE ACTIVATED! Blocking all new private messages`);
-      
-      // Delete and report the flooding user
+      log(LogLevel.WARN, `PROTECTION MODE ACTIVATED! Blocking all new private messages.`);
       await deleteAndReportUser(client, userId, "message flooding");
-      
-      // Auto-deactivate protection mode after 5 minutes
-      setTimeout(() => {
+      const protectionTimer = setTimeout(() => {
         dbHelpers.setSetting(CONFIG_KEYS.PROTECTION_ACTIVE, false);
-        console.log(`[PMCaptcha] Protection mode deactivated after cooldown`);
+        log(LogLevel.INFO, `Protection mode deactivated after cooldown.`);
       }, 300000);
-      
+      cleanupHandlers.push(() => clearTimeout(protectionTimer));
       return;
     }
 
-    // Check if user is valid (not bot, deleted, fake, scam)
-    const isValid = await isValidUser(client, userId);
+    // PRIORITY 5: Other pre-challenge checks (isValidUser, commonGroups).
+    const isValid = await isValidUser(client, userId, senderEntity);
     if (!isValid) {
-      // Handle bot messages if blocking is enabled
       await handleBotMessage(client, message, userId);
       return;
     }
-
-    // Check if user is in active challenge
-    const activeChallenge = activeChallenges.get(userId);
-    if (activeChallenge && activeChallenge.type === "sticker") {
-      // Verify sticker response
-      const hasSticker = isStickerMessage(message);
-      await verifyStickerResponse(client, userId, hasSticker);
-      return;
+    if (await checkCommonGroups(client, userId, senderEntity)) {
+      return; // User was whitelisted via common groups.
     }
 
-    // Check common groups for auto-whitelist
-    if (await checkCommonGroups(client, userId)) {
-      return; // User was whitelisted via common groups
-    }
-
-    // Start sticker challenge for new users
-    if (!activeChallenge) {
-      await startStickerChallenge(client, userId);
+    // PRIORITY 6: Start sticker challenge for new users.
+    log(LogLevel.INFO, `Starting sticker challenge for new user ${userId}.`);
+    const challengeStarted = await startStickerChallenge(client, userId, senderEntity);
+    if (challengeStarted) {
+      log(LogLevel.INFO, `Sticker challenge successfully started for user ${userId}.`);
+    } else {
+      log(LogLevel.ERROR, `Failed to start sticker challenge for user ${userId}.`);
     }
   } catch (error) {
     console.error("[PMCaptcha] Message listener error:", error);
   }
 }
 
+// Handle pmc shortcut command
+const pmc = async (message: Api.Message) => {
+  if (!(await waitForConfigDb())) {
+    console.error("[PMCaptcha] Config DB not ready, skipping command.");
+    return;
+  }
+  const client = message.client as TelegramClient;
+  const args = message.message.slice(1).split(" ").slice(1);
+  const action = args[0]?.toLowerCase();
+  
+  // pmc on/off 快捷命令
+  if (action === "on" || action === "off") {
+    const isEnabling = action === "on";
+    dbHelpers.setSetting(CONFIG_KEYS.BLOCK_ALL, isEnabling);
+
+    const statusText = isEnabling
+      ? "🚫 <b>完全禁止私聊已启用</b>\n\n所有私聊消息将被静音、归档并删除"
+      : "✅ <b>完全禁止私聊已关闭</b>\n\n恢复正常验证模式";
+
+    try {
+      // Send a temporary message and then delete it after a short delay
+      const tempMsg = await client.sendMessage(message.peerId, {
+        message: statusText,
+        parseMode: "html",
+      });
+
+      // Delete the original command message
+      await message.delete();
+
+      // Delete the status message after 3 seconds
+      setTimeout(async () => {
+        try {
+          await tempMsg.delete();
+        } catch (e) {
+          // Ignore if message is already deleted
+        }
+      }, 3000);
+
+    } catch (error) {
+      console.error(`[PMCaptcha] Failed to execute pmc command:`, error);
+    }
+    return;
+  }
+  
+  // 其他情况调用主命令处理
+  return pmcaptcha(message);
+};
+
 const pmcaptcha = async (message: Api.Message) => {
+  if (!(await waitForConfigDb())) {
+    console.error("[PMCaptcha] Config DB not ready, skipping command.");
+    return;
+  }
   const client = message.client as TelegramClient;
   const args = message.message.slice(1).split(" ").slice(1);
   const command = args[0] || "help";
@@ -891,7 +1463,7 @@ const pmcaptcha = async (message: Api.Message) => {
       case "":
         await client.editMessage(message.peerId, {
           message: message.id,
-          text: `🔒 <b>PMCaptcha 验证系统 v3.3</b> <i>(深度优化版)</i>\n\n<b>🛡️ 核心功能</b>\n· 🆕 智能白名单（主动私聊/历史记录自动识别）\n· 🆕 启用时自动扫描现有对话（可配置上限）\n· 🆕 友好提示与操作确认（安全防误操作）\n· 用户实体检测（排除bot/假账户）\n· 共同群数量自动白名单\n· 表情包验证挑战系统\n· 双方删除并举报功能\n· 防护模式（反消息轰炸）\n\n<b>📋 系统控制</b> <i>(简化别名支持)</i>\n· <code>.pmcaptcha enable</code> - 启用并扫描 | 别名: 无\n· <code>.pmcaptcha disable</code> - 禁用插件 | 别名: 无\n· <code>.pmcaptcha scan</code> - 手动扫描 | 别名: <code>s</code>\n· <code>.pmcaptcha scan_set [数量]</code> - 设置扫描上限(100-10000)\n· <code>.pmcaptcha block_bots [on|off]</code> - Bot拦截开关\n· <code>.pmcaptcha delete_report [on|off]</code> - 双方删除举报\n· <code>.pmcaptcha protection [on|off]</code> - 防护模式开关\n· <code>.pmcaptcha protection_set [阈值] [窗口秒]</code> - 防护参数\n\n<b>📋 验证设置</b>\n· <code>.pmcaptcha groups [数量]</code> - 共同群阈值 | 别名: <code>g</code>\n· <code>.pmcaptcha timeout [秒数]</code> - 验证超时 | 别名: <code>t</code>\n\n<b>📋 白名单管理</b> <i>(快捷操作)</i>\n· <code>.pmcaptcha add [ID/@用户]</code> - 添加白名单 | 别名: <code>+</code>\n· <code>.pmcaptcha del [ID/序号]</code> - 移除白名单 | 别名: <code>-</code>\n· <code>.pmcaptcha check [ID/序号]</code> - 检查用户状态\n· <code>.pmcaptcha clear confirm</code> - ⚠️ 清空白名单(需确认)\n· <code>.pmcaptcha list</code> - 显示白名单列表\n\n<b>📊 状态查看</b>\n· <code>.pmcaptcha status</code> - 系统状态统计 | 别名: <code>i</code>\n· <code>.pmcaptcha help</code> - 显示帮助 | 别名: <code>h</code> <code>?</code>\n\n💡 <i>智能识别 · 安全防护 · 用户友好</i>`,
+          text: help_text,
           parseMode: "html",
         });
         break;
@@ -944,7 +1516,7 @@ const pmcaptcha = async (message: Api.Message) => {
           const currentTimeout = dbHelpers.getSetting(CONFIG_KEYS.STICKER_TIMEOUT, 180);
           await client.editMessage(message.peerId, {
             message: message.id,
-            text: `⏰ <b>表情包验证超时设置</b>\n\n当前设置: <code>${currentTimeout}</code> 秒\n\n<b>使用方法:</b>\n· <code>.pmcaptcha timeout [秒数]</code> - 设置超时时间\n· <code>.pmcaptcha timeout 0</code> - 无时间限制\n· <code>.pmcaptcha timeout 180</code> - 恢复默认(180秒)\n\n<b>建议值:</b>\n· 快速验证: 60-120秒\n· 标准验证: 180秒 (默认)\n· 宽松验证: 300-600秒\n\n💡 <i>用户需要在指定时间内发送表情包完成验证 · 超时将自动失败</i>`,
+            text: `⏰ <b>表情包验证超时设置</b>\n\n当前设置: <code>${currentTimeout}</code> 秒\n\n<b>使用方法:</b>\n• <code>.pmcaptcha timeout [秒数]</code> - 设置超时时间\n• <code>.pmcaptcha timeout 0</code> - 无时间限制\n• <code>.pmcaptcha timeout 180</code> - 恢复默认(180秒)\n\n<b>建议值:</b>\n• 快速验证: 60-120秒\n• 标准验证: 180秒 (默认)\n• 宽松验证: 300-600秒\n\n💡 <i>用户需要在指定时间内发送表情包完成验证 • 超时将自动失败</i>`,
             parseMode: "html",
           });
         } else {
@@ -1216,9 +1788,17 @@ const pmcaptcha = async (message: Api.Message) => {
       case "clearall":
       case "reset":
         if (args[1] !== "confirm") {
+          if (!db) {
+            await client.editMessage(message.peerId, {
+              message: message.id,
+              text: "❌ 数据库未初始化",
+              parseMode: "html",
+            });
+            break;
+          }
           const whitelistCount = db
             .prepare("SELECT COUNT(*) as count FROM pmcaptcha_whitelist")
-            .get() as any;
+            .get() as CountRow;
           
           await client.editMessage(message.peerId, {
             message: message.id,
@@ -1227,6 +1807,14 @@ const pmcaptcha = async (message: Api.Message) => {
           });
         } else {
           // Clear all whitelist
+          if (!db) {
+            await client.editMessage(message.peerId, {
+              message: message.id,
+              text: "❌ 数据库未初始化",
+              parseMode: "html",
+            });
+            break;
+          }
           try {
             const stmt = db.prepare("DELETE FROM pmcaptcha_whitelist");
             const info = stmt.run();
@@ -1250,11 +1838,20 @@ const pmcaptcha = async (message: Api.Message) => {
 
       case "list":
       case "ls":
+        if (!db) {
+          await client.editMessage(message.peerId, {
+            message: message.id,
+            text: "❌ 数据库未初始化",
+            parseMode: "html",
+          });
+          break;
+        }
         const whitelistUsers = db
-          .prepare("SELECT user_id FROM pmcaptcha_whitelist ORDER BY user_id")
-          .all() as any[];
+          .prepare("SELECT user_id FROM pmcaptcha_whitelist ORDER BY added_at DESC")
+          .all() as WhitelistRow[];
+        const totalCount = whitelistUsers.length;
 
-        if (whitelistUsers.length === 0) {
+        if (totalCount === 0) {
           await client.editMessage(message.peerId, {
             message: message.id,
             text: `📝 <b>白名单用户列表</b>\n\n<i>暂无用户</i>\n\n使用 <code>.pmcaptcha add</code> 添加用户到白名单`,
@@ -1263,13 +1860,18 @@ const pmcaptcha = async (message: Api.Message) => {
           break;
         }
 
-        let userListText = "";
+        // 构建用户列表文本
+        let userListText = `📝 <b>白名单用户列表</b> (共 ${totalCount} 人)\n\n`;
+        
+        // 使用折叠模式显示所有用户
+        userListText += `<blockquote expandable>`;
+        
+        const maxDisplay = Math.min(whitelistUsers.length, 200); // 最多显示200个
 
-        for (let i = 0; i < Math.min(whitelistUsers.length, 15); i++) {
+        for (let i = 0; i < maxDisplay; i++) {
           const row = whitelistUsers[i];
           const userId = row.user_id;
-          const index = i + 1;
-          let displayName = "";
+          let displayLine = "";
 
           try {
             const entity = await getEntityWithHash(client, userId);
@@ -1279,42 +1881,92 @@ const pmcaptcha = async (message: Api.Message) => {
               );
               const user = userFull.users[0] as any;
 
+              // 构建显示格式：序号. 昵称 | @用户名 | [打开聊天]
               const fullName = `${user.firstName || ""} ${user.lastName || ""}`.trim();
-              if (user.username) {
-                displayName = `<a href="tg://user?id=${userId}">@${htmlEscape(user.username)}</a>`;
-              } else if (fullName) {
-                displayName = `<a href="tg://user?id=${userId}">${htmlEscape(fullName)}</a>`;
+              const username = user.username ? `@${user.username}` : "";
+              
+              // 优先显示昵称
+              if (fullName) {
+                displayLine = `${i + 1}. ${htmlEscape(fullName)}`;
+              } else {
+                displayLine = `${i + 1}. User${userId}`;
               }
+              
+              // 添加用户名（如果有）
+              if (username) {
+                displayLine += ` | ${htmlEscape(username)}`;
+              }
+              
+              // 添加跳转链接
+              displayLine += ` | <a href="tg://user?id=${userId}">打开聊天</a>`;
+            } else {
+              // 无法获取用户信息时的显示
+              displayLine = `${i + 1}. ID: ${userId} | <a href="tg://user?id=${userId}">打开聊天</a>`;
             }
           } catch (e) {
-            // Keep empty if entity fetch fails
+            // 获取失败时只显示ID和链接
+            displayLine = `${i + 1}. ID: ${userId} | <a href="tg://user?id=${userId}">打开聊天</a>`;
           }
-
-          // Format: [序号] 用户名/昵称 <code>ID</code>
-          if (displayName) {
-            userListText += `<code>[${index
-              .toString()
-              .padStart(
-                2,
-                "0"
-              )}]</code> ${displayName} <code>${userId}</code>\n`;
-          } else {
-            // 对于没有用户名和昵称的用户，使用 tg://user?id= 链接
-            userListText += `<code>[${index
-              .toString()
-              .padStart(2, "0")}]</code> <a href=\"tg://user?id=${userId}\">用户 ${userId}</a>\n`;
-          }
+          
+          userListText += displayLine + "\n";
         }
-
-        const totalCount = whitelistUsers.length;
-        const moreText =
-          totalCount > 15 ? `\n<i>... 还有 ${totalCount - 15} 个用户</i>` : "";
+        
+        // 关闭折叠标签
+        userListText += `</blockquote>`;
+        
+        // 如果超过最大显示数量，显示剩余数量
+        if (totalCount > maxDisplay) {
+          userListText += `\n<i>... 还有 ${totalCount - maxDisplay} 个用户未显示</i>\n`;
+        }
+        
+        // 添加操作说明
+        userListText += `\n<b>操作方法：</b>\n`;
+        userListText += `• <code>.pmcaptcha del [序号/用户ID]</code> - 移除用户\n`;
+        userListText += `• <code>.pmcaptcha check [序号/用户ID]</code> - 检查状态`;
 
         await client.editMessage(message.peerId, {
           message: message.id,
-          text: `📝 <b>白名单用户列表</b> (${totalCount})\n\n${userListText}${moreText}\n\n<b>操作方法:</b>\n· <code>.pmcaptcha del [序号/用户ID]</code> - 移除用户\n· <code>.pmcaptcha check [序号/用户ID]</code> - 检查状态`,
+          text: userListText,
           parseMode: "html",
         });
+        break;
+
+      case "block_all":
+      case "blockall":
+      case "ba":
+        if (!args[1]) {
+          const currentSetting = dbHelpers.getSetting(CONFIG_KEYS.BLOCK_ALL, false);
+          await client.editMessage(message.peerId, {
+            message: message.id,
+            text: `🚫 <b>完全禁止私聊设置</b>\n\n当前状态: ${
+              currentSetting ? "✅ 已启用" : "❌ 已禁用"
+            }\n\n<b>使用方法:</b>\n• <code>.pmcaptcha block_all on</code> - 启用\n• <code>.pmcaptcha block_all off</code> - 禁用\n• <code>.pmc on/off</code> - 快捷命令\n\n⚠️ <b>重要说明：</b>\n启用后将禁止所有私聊（包括白名单），新消息会被静音、归档并删除`,
+            parseMode: "html",
+          });
+        } else {
+          const action = args[1].toLowerCase();
+          if (action === "on" || action === "true" || action === "1") {
+            dbHelpers.setSetting(CONFIG_KEYS.BLOCK_ALL, true);
+            await client.editMessage(message.peerId, {
+              message: message.id,
+              text: "🚫 <b>完全禁止私聊已启用</b>\n\n所有私聊消息将被静音、归档并删除",
+              parseMode: "html",
+            });
+          } else if (action === "off" || action === "false" || action === "0") {
+            dbHelpers.setSetting(CONFIG_KEYS.BLOCK_ALL, false);
+            await client.editMessage(message.peerId, {
+              message: message.id,
+              text: "✅ <b>完全禁止私聊已关闭</b>\n\n恢复正常验证模式",
+              parseMode: "html",
+            });
+          } else {
+            await client.editMessage(message.peerId, {
+              message: message.id,
+              text: "❌ 无效参数，请使用 on 或 off",
+              parseMode: "html",
+            });
+          }
+        }
         break;
 
       case "enable":
@@ -1494,19 +2146,160 @@ const pmcaptcha = async (message: Api.Message) => {
         }
         break;
 
+      case "report":
+      case "report_enable":
+        if (!args[1]) {
+          const currentSetting = dbHelpers.getSetting(CONFIG_KEYS.REPORT_ENABLED, false);
+          await client.editMessage(message.peerId, {
+            message: message.id,
+            text: `📢 <b>举报功能设置</b>\n\n当前状态: ${
+              currentSetting ? "✅ 已启用" : "❌ 已禁用"
+            }\n\n<b>使用方法:</b>\n• <code>.pmcaptcha report on</code> - 启用举报\n• <code>.pmcaptcha report off</code> - 禁用举报\n\n💡 <i>启用后将对违规用户进行举报</i>`,
+            parseMode: "html",
+          });
+        } else {
+          const action = args[1].toLowerCase();
+          if (action === "on" || action === "true" || action === "1") {
+            dbHelpers.setSetting(CONFIG_KEYS.REPORT_ENABLED, true);
+            await client.editMessage(message.peerId, {
+              message: message.id,
+              text: "✅ 举报功能已启用\n\n违规用户将被举报为垃圾信息",
+              parseMode: "html",
+            });
+          } else if (action === "off" || action === "false" || action === "0") {
+            dbHelpers.setSetting(CONFIG_KEYS.REPORT_ENABLED, false);
+            await client.editMessage(message.peerId, {
+              message: message.id,
+              text: "❌ 举报功能已禁用\n\n违规用户将不会被举报",
+              parseMode: "html",
+            });
+          } else {
+            await client.editMessage(message.peerId, {
+              message: message.id,
+              text: "❌ 无效参数，请使用 on 或 off",
+              parseMode: "html",
+            });
+          }
+        }
+        break;
+
+      case "delete_failed":
+      case "deletefailed":
+      case "df":
+        if (!args[1]) {
+          const currentSetting = dbHelpers.getSetting(CONFIG_KEYS.DELETE_FAILED, true);
+          await client.editMessage(message.peerId, {
+            message: message.id,
+            text: `🗑️ <b>验证失败双方删除设置</b>\n\n当前状态: ${
+              currentSetting ? "✅ 已启用" : "❌ 已禁用"
+            }\n\n<b>使用方法:</b>\n• <code>.pmcaptcha delete_failed on</code> - 启用\n• <code>.pmcaptcha delete_failed off</code> - 禁用\n\n⚠️ <b>说明：</b>\n启用后，验证失败时将自动删除双方的全部对话记录`,
+            parseMode: "html",
+          });
+        } else {
+          const action = args[1].toLowerCase();
+          if (action === "on" || action === "true" || action === "1") {
+            dbHelpers.setSetting(CONFIG_KEYS.DELETE_FAILED, true);
+            await client.editMessage(message.peerId, {
+              message: message.id,
+              text: "✅ 验证失败双方删除已启用\n\n验证失败时将删除双方全部对话",
+              parseMode: "html",
+            });
+          } else if (action === "off" || action === "false" || action === "0") {
+            dbHelpers.setSetting(CONFIG_KEYS.DELETE_FAILED, false);
+            await client.editMessage(message.peerId, {
+              message: message.id,
+              text: "❌ 验证失败双方删除已禁用\n\n验证失败时仅拉黑用户",
+              parseMode: "html",
+            });
+          } else {
+            await client.editMessage(message.peerId, {
+              message: message.id,
+              text: "❌ 无效参数，请使用 on 或 off",
+              parseMode: "html",
+            });
+          }
+        }
+        break;
+
+      case "debug":
+        if (!args[1]) {
+          await client.editMessage(message.peerId, {
+            message: message.id,
+            text: `🐛 <b>调试模式设置</b>\n\n当前日志级别: <code>${LogLevel[currentLogLevel]}</code>\n\n<b>使用方法:</b>\n• <code>.pmcaptcha debug on</code> - 启用详细日志\n• <code>.pmcaptcha debug off</code> - 关闭详细日志\n\n💡 <i>启用后可在控制台查看详细的验证过程</i>`,
+            parseMode: "html",
+          });
+        } else {
+          const action = args[1].toLowerCase();
+          if (action === "on" || action === "true" || action === "1") {
+            currentLogLevel = LogLevel.DEBUG;
+            await client.editMessage(message.peerId, {
+              message: message.id,
+              text: "✅ 调试模式已启用\n\n详细日志将输出到控制台",
+              parseMode: "html",
+            });
+          } else if (action === "off" || action === "false" || action === "0") {
+            currentLogLevel = LogLevel.INFO;
+            await client.editMessage(message.peerId, {
+              message: message.id,
+              text: "❌ 调试模式已关闭\n\n恢复正常日志级别",
+              parseMode: "html",
+            });
+          } else {
+            await client.editMessage(message.peerId, {
+              message: message.id,
+              text: "❌ 无效参数，请使用 on 或 off",
+              parseMode: "html",
+            });
+          }
+        }
+        break;
+
+      case "test_challenge":
+      case "test":
+        // Test command to manually check active challenges
+        const testUserId = args[1] ? parseInt(args[1]) : Number(message.senderId);
+        const testChallenge = activeChallenges.get(testUserId);
+        const testDbChallenge = dbHelpers.getChallengeState(testUserId);
+        
+        let testInfo = `🧪 <b>验证状态测试</b>\n\n`;
+        testInfo += `用户ID: <code>${testUserId}</code>\n`;
+        testInfo += `内存中的挑战: ${testChallenge ? '✅ 存在' : '❌ 不存在'}\n`;
+        testInfo += `数据库中的挑战: ${testDbChallenge ? '✅ 存在' : '❌ 不存在'}\n`;
+        testInfo += `白名单状态: ${dbHelpers.isWhitelisted(testUserId) ? '✅ 已加入' : '❌ 未加入'}\n\n`;
+        
+        if (testChallenge) {
+          testInfo += `<b>挑战详情:</b>\n`;
+          testInfo += `• 类型: ${testChallenge.type}\n`;
+          testInfo += `• 开始时间: ${new Date(testChallenge.startTime).toLocaleString('zh-CN')}\n`;
+          testInfo += `• 超时设置: ${testChallenge.timeout}ms\n`;
+          testInfo += `• 重试次数: ${testChallenge.retryCount}/3\n`;
+          testInfo += `• 计时器: ${testChallenge.timer ? '✅ 运行中' : '❌ 未设置'}\n`;
+        }
+        
+        await client.editMessage(message.peerId, {
+          message: message.id,
+          text: testInfo,
+          parseMode: "html",
+        });
+        break;
+
       case "status":
       case "stat":
       case "info":
       case "i":
-        const whitelistCount = db
-          .prepare("SELECT COUNT(*) as count FROM pmcaptcha_whitelist")
-          .get() as any;
+        const whitelistCountResult = db
+          ? (db.prepare("SELECT COUNT(*) as count FROM pmcaptcha_whitelist")
+              .get() as CountRow)
+          : { count: 0 };
         const challengeCount = activeChallenges.size;
         const groupsSetting = dbHelpers.getSetting(CONFIG_KEYS.GROUPS_COMMON);
         const timeoutSetting = dbHelpers.getSetting(CONFIG_KEYS.STICKER_TIMEOUT, 180);
         const pluginEnabled = dbHelpers.isPluginEnabled();
+        const blockAll = dbHelpers.getSetting(CONFIG_KEYS.BLOCK_ALL, false);
         const blockBots = dbHelpers.getSetting(CONFIG_KEYS.BLOCK_BOTS, true);
         const deleteReport = dbHelpers.getSetting(CONFIG_KEYS.DELETE_AND_REPORT, false);
+        const reportEnabled = dbHelpers.getSetting(CONFIG_KEYS.REPORT_ENABLED, false);
+        const deleteFailed = dbHelpers.getSetting(CONFIG_KEYS.DELETE_FAILED, true);
         const protectionMode = dbHelpers.getSetting(CONFIG_KEYS.PROTECTION_MODE, false);
         const protectionActive = dbHelpers.getSetting(CONFIG_KEYS.PROTECTION_ACTIVE, false);
         const totalVerified = dbHelpers.getSetting(CONFIG_KEYS.STATS_TOTAL_VERIFIED, 0);
@@ -1517,9 +2310,15 @@ const pmcaptcha = async (message: Api.Message) => {
           message: message.id,
           text: `📊 <b>PMCaptcha 系统状态</b>\n\n<b>🔧 系统设置:</b>\n• 插件状态: ${
             pluginEnabled ? "✅ 已启用" : "❌ 已禁用"
+          }${
+            blockAll ? "\n• 🚫 <b>完全禁止私聊: ✅ 已启用</b>" : ""
           }\n• Bot拦截: ${
             blockBots ? "✅ 已启用" : "❌ 已禁用"
-          }\n• 双方删除: ${
+          }\n• 举报功能: ${
+            reportEnabled ? "✅ 已启用" : "❌ 已禁用"
+          }\n• 验证失败删除: ${
+            deleteFailed ? "✅ 已启用" : "❌ 已禁用"
+          }\n• 双方删除举报: ${
             deleteReport ? "✅ 已启用" : "❌ 已禁用"
           }\n• 防护模式: ${
             protectionMode ? "✅ 已启用" : "❌ 已禁用"
@@ -1532,7 +2331,7 @@ const pmcaptcha = async (message: Api.Message) => {
           }\n• 验证超时: <code>${
             timeoutSetting === 0 ? "无限制" : `${timeoutSetting}秒`
           }</code>\n\n<b>📈 运行统计:</b>\n• 白名单用户: <code>${
-            whitelistCount.count
+            whitelistCountResult.count
           }</code> 人\n• 进行中验证: <code>${challengeCount}</code> 人\n• 累计通过: <code>${totalVerified}</code> 人\n• 累计拦截: <code>${totalBlocked}</code> 个\n\n<b>📅 统计时间:</b>\n• 开始: ${lastReset ? new Date(lastReset).toLocaleString("zh-CN") : "未知"}\n• 当前: ${new Date().toLocaleString("zh-CN")}`,
           parseMode: "html",
         });
@@ -1555,12 +2354,63 @@ const pmcaptcha = async (message: Api.Message) => {
   }
 };
 
+// 定义帮助文本常量
+const help_text = `🔒 <b>PMCaptcha 验证系统 v${PLUGIN_VERSION}</b> <i>(生产版本)</i>
+
+<b>🛡️ 核心功能</b>
+• 🆕 完全禁止私聊模式（pmc on/off）
+• 🆕 智能白名单（主动私聊/历史记录自动识别）
+• 🆕 启用时自动扫描现有对话（可配置上限）
+• 🆕 验证失败自动双方删除消息
+• 🆕 举报功能独立开关控制
+• 🆕 增强的表情包检测（支持调试模式）
+• 用户实体检测（排除bot/假账户）
+• 共同群数量自动白名单
+• 表情包验证挑战系统
+• 防护模式（反消息轰炸）
+
+<b>⚡ 快捷命令</b>
+• <code>${mainPrefix}pmc on</code> - 🚫 完全禁止所有私聊
+• <code>${mainPrefix}pmc off</code> - ✅ 恢复正常验证
+
+<b>📋 系统控制</b> <i>(简化别名支持)</i>
+• <code>${mainPrefix}pmcaptcha enable</code> - 启用插件
+• <code>${mainPrefix}pmcaptcha disable</code> - 禁用插件
+• <code>${mainPrefix}pmcaptcha block_all [on|off]</code> - 完全禁止私聊 | 别名: <code>ba</code>
+• <code>${mainPrefix}pmcaptcha scan</code> - 手动扫描 | 别名: <code>s</code>
+• <code>${mainPrefix}pmcaptcha scan_set [数量]</code> - 设置扫描上限
+• <code>${mainPrefix}pmcaptcha block_bots [on|off]</code> - Bot拦截开关
+• <code>${mainPrefix}pmcaptcha report [on|off]</code> - 举报功能开关
+• <code>${mainPrefix}pmcaptcha delete_failed [on|off]</code> - 验证失败双方删除
+• <code>${mainPrefix}pmcaptcha delete_report [on|off]</code> - 双方删除举报
+• <code>${mainPrefix}pmcaptcha protection [on|off]</code> - 防护模式开关
+• <code>${mainPrefix}pmcaptcha debug [on|off]</code> - 🐛 调试模式（查看详细日志）
+
+<b>📋 验证设置</b>
+• <code>${mainPrefix}pmcaptcha groups [数量]</code> - 共同群阈值 | 别名: <code>g</code>
+• <code>${mainPrefix}pmcaptcha timeout [秒数]</code> - 验证超时 | 别名: <code>t</code>
+
+<b>📋 白名单管理</b> <i>(快捷操作)</i>
+• <code>${mainPrefix}pmcaptcha add [ID/@用户]</code> - 添加白名单 | 别名: <code>+</code>
+• <code>${mainPrefix}pmcaptcha del [ID/序号]</code> - 移除白名单 | 别名: <code>-</code>
+• <code>${mainPrefix}pmcaptcha check [ID/序号]</code> - 检查用户状态
+• <code>${mainPrefix}pmcaptcha clear confirm</code> - ⚠️ 清空白名单(需确认)
+• <code>${mainPrefix}pmcaptcha list</code> - 显示白名单列表
+
+<b>📊 状态查看</b>
+• <code>${mainPrefix}pmcaptcha status</code> - 系统状态统计 | 别名: <code>i</code>
+• <code>${mainPrefix}pmcaptcha help</code> - 显示帮助 | 别名: <code>h</code> <code>?</code>
+
+💡 <i>智能识别 • 安全防护 • 用户友好</i>`;
+
 class PmcaptchaPlugin extends Plugin {
-  description: string = `PMCaptcha - 共同群白名单和表情包验证系统`;
+  description: string = `PMCaptcha - 共同群白名单和表情包验证系统\n\n${help_text}`;
+  
   cmdHandlers: Record<string, (msg: Api.Message) => Promise<void>> = {
     pmcaptcha,
-    pmc: pmcaptcha,
+    pmc,  // 使用独立的 pmc 处理函数
   };
+  
   listenMessageHandler?: ((msg: Api.Message) => Promise<void>) | undefined =
     async (msg) => {
       // Check plugin status before processing
