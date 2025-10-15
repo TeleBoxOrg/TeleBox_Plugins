@@ -123,7 +123,7 @@ class AutoDeleteService {
   // 获取有效的规则集（合并默认规则和用户自定义规则）
   private getEffectiveRules(): CommandRule[] {
     const defaultRules = this.getDefaultRules();
-    const customRules = this.config.customRules || [];
+    const customRules = Array.isArray(this.config.customRules) ? this.config.customRules : [];
     
     // 用户自定义规则优先级更高，可以覆盖默认规则
     const ruleMap = new Map<string, CommandRule>();
