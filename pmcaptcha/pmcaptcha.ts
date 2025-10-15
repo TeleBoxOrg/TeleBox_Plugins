@@ -543,40 +543,34 @@ function trackMessage(userId: number): boolean {
 }
 
 // Helper function to move a peer to a specific folder
-async function setFolder(client: TelegramClient, userId: number, folderId: number, userEntity?: any): Promise<boolean> {
+async function setFolder(client: TelegramClient, userId: number, folderId: number): Promise<boolean> {
   try {
-    if (!userEntity) {
-        console.error(`[PMCaptcha] setFolder: No entity provided for user ${userId}.`);
-        return false;
-    }
+    const peer = await client.getInputEntity(userId);
     await client.invoke(
       new Api.folders.EditPeerFolders({
-        folderPeers: [new Api.InputFolderPeer({ peer: userEntity, folderId })]
+        folderPeers: [new Api.InputFolderPeer({ peer, folderId })]
       })
     );
     return true;
   } catch (error) {
-    console.error(`[PMCaptcha] Failed to set folder ${folderId} for user ${userId}:`, error);
+    log(LogLevel.ERROR, `Failed to set folder ${folderId} for user ${userId}`, error);
     return false;
   }
 }
 
 // Archive conversation
-async function archiveConversation(client: TelegramClient, userId: number, userEntity?: any): Promise<boolean> {
-  console.log(`[PMCaptcha] Archiving conversation with user ${userId}`);
-  return setFolder(client, userId, 1, userEntity); // 1 = Archive
+async function archiveConversation(client: TelegramClient, userId: number): Promise<boolean> {
+  log(LogLevel.INFO, `Archiving conversation with user ${userId}`);
+  return setFolder(client, userId, 1); // 1 = Archive
 }
 
 // Mute conversation
-async function muteConversation(client: TelegramClient, userId: number, userEntity?: any): Promise<boolean> {
+async function muteConversation(client: TelegramClient, userId: number): Promise<boolean> {
   try {
-    if (!userEntity) {
-        console.error(`[PMCaptcha] muteConversation: No entity provided for user ${userId}.`);
-        return false;
-    }
+    const peer = await client.getInputEntity(userId);
     await client.invoke(
       new Api.account.UpdateNotifySettings({
-        peer: new Api.InputNotifyPeer({ peer: userEntity }),
+        peer: new Api.InputNotifyPeer({ peer }),
         settings: new Api.InputPeerNotifySettings({
           muteUntil: 2147483647, // Max int32, effectively forever
           showPreviews: false,
@@ -584,10 +578,10 @@ async function muteConversation(client: TelegramClient, userId: number, userEnti
         })
       })
     );
-    console.log(`[PMCaptcha] Muted conversation with user ${userId}`);
+    log(LogLevel.INFO, `Muted conversation with user ${userId}`);
     return true;
   } catch (error) {
-    console.error(`[PMCaptcha] Failed to mute conversation with ${userId}:`, error);
+    log(LogLevel.ERROR, `Failed to mute conversation with ${userId}`, error);
     return false;
   }
 }
@@ -596,17 +590,16 @@ async function muteConversation(client: TelegramClient, userId: number, userEnti
 async function blockAllPrivateMessage(
   client: TelegramClient,
   userId: number,
-  userEntity?: any
 ): Promise<boolean> {
   try {
     const delay = (ms: number) => new Promise(res => setTimeout(res, ms));
 
     // 1. 静音对话
-    await muteConversation(client, userId, userEntity);
+    await muteConversation(client, userId);
     await delay(500);
 
     // 2. 归档对话
-    await archiveConversation(client, userId, userEntity);
+    await archiveConversation(client, userId);
     await delay(500);
 
     // 3. 删除双方消息（不举报）
@@ -619,9 +612,9 @@ async function blockAllPrivateMessage(
           maxId: 0
         })
       );
-      console.log(`[PMCaptcha] Deleted history for user ${userId}`);
+      log(LogLevel.INFO, `Deleted history for user ${userId}`);
     } catch (delError) {
-      console.error(`[PMCaptcha] Failed to delete history for ${userId}:`, delError);
+      log(LogLevel.ERROR, `Failed to delete history for ${userId}`, delError);
     }
     await delay(500);
 
@@ -634,30 +627,27 @@ async function blockAllPrivateMessage(
     );
     */
 
-    console.log(`[PMCaptcha] Handled private message from user ${userId} in block_all mode (deleted history).`);
+    log(LogLevel.INFO, `Handled private message from user ${userId} in block_all mode (deleted history).`);
     dbHelpers.updateStats(0, 1); // Still count as a block/interception for stats
 
     return true;
   } catch (error) {
-    console.error(`[PMCaptcha] Failed to block all private messages from ${userId}:`, error);
+    log(LogLevel.ERROR, `Failed to block all private messages from ${userId}`, error);
     return false;
   }
 }
 
 // Unarchive conversation and enable notifications
-async function unarchiveConversation(client: TelegramClient, userId: number, userEntity?: any): Promise<boolean> {
-  console.log(`[PMCaptcha] Unarchiving conversation and restoring notifications for user ${userId}`);
+async function unarchiveConversation(client: TelegramClient, userId: number): Promise<boolean> {
+  log(LogLevel.INFO, `Unarchiving conversation and restoring notifications for user ${userId}`);
   
-  if (!userEntity) {
-      console.error(`[PMCaptcha] unarchiveConversation: No entity provided for user ${userId}.`);
-      return false;
-  }
-
-  // Restore notifications first
   try {
+    const peer = await client.getInputEntity(userId);
+
+    // Restore notifications first
     await client.invoke(
       new Api.account.UpdateNotifySettings({
-        peer: new Api.InputNotifyPeer({ peer: userEntity }),
+        peer: new Api.InputNotifyPeer({ peer }),
         settings: new Api.InputPeerNotifySettings({
           muteUntil: 0, // Unmute
           showPreviews: true, // Show message previews
@@ -665,15 +655,17 @@ async function unarchiveConversation(client: TelegramClient, userId: number, use
         })
       })
     );
-    console.log(`[PMCaptcha] Restored notifications for user ${userId}`);
+    log(LogLevel.INFO, `Restored notifications for user ${userId}`);
   } catch (error) {
-    console.error(`[PMCaptcha] Failed to restore notifications for ${userId}:`, error);
+    log(LogLevel.ERROR, `Failed to restore notifications for ${userId}`, error);
   }
 
   // Move to main folder (unarchive)
-  const unarchived = await setFolder(client, userId, 0, userEntity); // 0 = Main folder (All Chats)
+  const unarchived = await setFolder(client, userId, 0); // 0 = Main folder (All Chats)
   if (unarchived) {
-    console.log(`[PMCaptcha] Successfully unarchived conversation with user ${userId}`);
+    log(LogLevel.INFO, `Successfully unarchived conversation with user ${userId}`);
+  } else {
+    log(LogLevel.WARN, `Failed to unarchive conversation with user ${userId}. It might already be in the main folder.`);
   }
   return unarchived;
 }
@@ -735,20 +727,10 @@ async function deleteAndReportUser(
 // Check if user is valid (not bot, deleted, fake, scam)
 async function isValidUser(
   client: TelegramClient,
-  userId: number,
-  userEntity?: any
+  userId: number
 ): Promise<boolean> {
   try {
-    // Try to use provided entity first, then fallback to getEntityWithHash
-    let entity = userEntity;
-    if (!entity) {
-      try {
-        entity = await getEntityWithHash(client, userId);
-      } catch (err) {
-        console.warn(`[PMCaptcha] Could not get entity for ${userId}, assuming valid user`);
-        return true; // Graceful degradation
-      }
-    }
+    const entity = await getEntityWithHash(client, userId);
     
     const userFull = await client.invoke(
       new Api.users.GetFullUser({ id: entity })
@@ -793,22 +775,18 @@ async function isValidUser(
 // Check common groups count for whitelist
 async function checkCommonGroups(
   client: TelegramClient,
-  userId: number,
-  userEntity?: any
+  userId: number
 ): Promise<boolean> {
   const minCommonGroups = dbHelpers.getSetting("groups_in_common");
   if (minCommonGroups === null) return false;
 
   try {
-    // Try to use provided entity first, then fallback to getEntityWithHash
-    let entity = userEntity;
-    if (!entity) {
-      try {
-        entity = await getEntityWithHash(client, userId);
-      } catch (err) {
-        console.warn(`[PMCaptcha] Could not get entity for ${userId} in checkCommonGroups`);
-        return false;
-      }
+    let entity;
+    try {
+      entity = await getEntityWithHash(client, userId);
+    } catch (err) {
+      log(LogLevel.WARN, `Could not get entity for ${userId} in checkCommonGroups`, err);
+      return false;
     }
     
     const userFull = await client.invoke(
@@ -855,22 +833,17 @@ async function handleFloodWait<T>(operation: () => Promise<T>): Promise<T | null
 // Start sticker challenge
 async function startStickerChallenge(
   client: TelegramClient,
-  userId: number,
-  userEntity?: any
+  userId: number
 ): Promise<boolean> {
   const timeout = dbHelpers.getSetting(CONFIG_KEYS.STICKER_TIMEOUT, 180) * 1000;
 
   try {
-    // Archive the conversation first
-    await archiveConversation(client, userId, userEntity);
-
-    if (!userEntity) {
-        console.error(`[PMCaptcha] startStickerChallenge: No entity provided for user ${userId}.`);
-        return false;
-    }
+    // Archive and mute the conversation first
+    await archiveConversation(client, userId);
+    await muteConversation(client, userId);
 
     const challengeMsg = await handleFloodWait(async () => 
-      await client.sendMessage(userEntity, {
+      await client.sendMessage(userId, {
         message: `🔒 <b>人机验证</b>\n\n👋 您好！为了保护您的账号安全，请完成简单验证：\n\n📌 <b>验证要求：</b>\n发送任意一个 <b>表情包（Sticker）</b>\n\n📖 <b>操作指南：</b>\n1️⃣ 点击输入框旁的 😊 表情图标\n2️⃣ 选择任意表情包发送\n\n⏰ <b>时间限制：</b> ${
           timeout > 0 ? `${timeout / 1000}秒` : "无限制"
         }\n🆘 <b>重试机会：</b> 3次\n\nℹ️ <i>注意：文字、图片、视频等其他内容无效</i>`,
@@ -956,8 +929,7 @@ async function handleChallengeTimeout(client: TelegramClient, userId: number) {
 async function verifyStickerResponse(
   client: TelegramClient,
   userId: number,
-  hasSticker: boolean,
-  userEntity?: any
+  hasSticker: boolean
 ): Promise<boolean> {
   const challenge = activeChallenges.get(userId);
   if (!challenge || challenge.type !== "sticker") {
@@ -975,10 +947,10 @@ async function verifyStickerResponse(
     dbHelpers.updateStats(1, 0);
 
     // Unarchive conversation and enable notifications
-    await unarchiveConversation(client, userId, userEntity);
+    await unarchiveConversation(client, userId);
 
     try {
-      await client.sendMessage(userEntity || userId, {
+      await client.sendMessage(userId, {
         message: "✅ <b>验证成功</b>\n\n🎉 恭喜！您已成功通过人机验证。\n\n✨ <b>已为您：</b>\n• 解除对话归档\n• 恢复消息通知\n• 加入白名单\n\n现在可以正常发送消息了，祝您使用愉快！",
         parseMode: "html",
       });
@@ -1007,7 +979,7 @@ async function verifyStickerResponse(
     if (remainingRetries > 0) {
       // Still have retries left, send warning message
       try {
-        await client.sendMessage(userEntity || userId, {
+        await client.sendMessage(userId, {
           message: `❌ <b>验证失败</b>\n\n您发送的不是表情包（Sticker）！\n\n📌 <b>正确操作步骤：</b>\n1️⃣ 点击输入框旁的 😊 图标\n2️⃣ 选择任意一个表情包发送\n\n⚠️ <b>剩余尝试机会：${remainingRetries}次</b>\n\n❗ 注意：发送文字、图片、GIF等都无效，必须是<b>表情包</b>`,
           parseMode: "html",
         });
@@ -1143,12 +1115,10 @@ async function handleBotMessage(
 async function hasChatHistory(
   client: TelegramClient,
   userId: number,
-  excludeMessageId?: number,
-  userEntity?: any
+  excludeMessageId?: number
 ): Promise<boolean> {
   try {
-    // Try to use provided entity first, fallback to userId
-    const peer = userEntity || userId;
+    const peer = userId;
     const messages = await client.getMessages(peer, {
       limit: 20 // Increase limit to better find outgoing messages
     });
@@ -1309,12 +1279,8 @@ async function pmcaptchaMessageListener(message: Api.Message) {
     // 🔴 Absolute Highest Priority: Block All Mode Check
     if (dbHelpers.getSetting(CONFIG_KEYS.BLOCK_ALL, false)) {
       if (!message.out) { // Only act on incoming messages
-        console.log(`[PMCaptcha] Block all mode is active. Blocking user ${userId}.`);
-        
-        // Add a delay to ensure the user entity is available in the client's cache
-        await sleep(2000);
-
-        await blockAllPrivateMessage(client, userId, senderEntity);
+        log(LogLevel.WARN, `Block all mode is active. Blocking user ${userId}.`);
+        await blockAllPrivateMessage(client, userId);
       }
       // Stop all further processing if block all mode is on.
       return;
@@ -1338,7 +1304,7 @@ async function pmcaptchaMessageListener(message: Api.Message) {
     if (activeChallenge && activeChallenge.type === "sticker") {
       log(LogLevel.INFO, `User ${userId} is in active challenge, checking response.`);
       const hasSticker = isStickerMessage(message);
-      await verifyStickerResponse(client, userId, hasSticker, senderEntity);
+      await verifyStickerResponse(client, userId, hasSticker);
       return; // Stop all further processing after verification attempt.
     }
 
@@ -1348,7 +1314,7 @@ async function pmcaptchaMessageListener(message: Api.Message) {
     }
 
     // PRIORITY 3: Auto-whitelist if there's a pre-existing chat history.
-    const hasHistory = await hasChatHistory(client, userId, Number(message.id), senderEntity);
+    const hasHistory = await hasChatHistory(client, userId, Number(message.id));
     if (hasHistory) {
       dbHelpers.addToWhitelist(userId);
       log(LogLevel.INFO, `Auto-whitelisted user ${userId} (has chat history).`);
@@ -1376,18 +1342,18 @@ async function pmcaptchaMessageListener(message: Api.Message) {
     }
 
     // PRIORITY 5: Other pre-challenge checks (isValidUser, commonGroups).
-    const isValid = await isValidUser(client, userId, senderEntity);
+    const isValid = await isValidUser(client, userId);
     if (!isValid) {
       await handleBotMessage(client, message, userId);
       return;
     }
-    if (await checkCommonGroups(client, userId, senderEntity)) {
+    if (await checkCommonGroups(client, userId)) {
       return; // User was whitelisted via common groups.
     }
 
     // PRIORITY 6: Start sticker challenge for new users.
     log(LogLevel.INFO, `Starting sticker challenge for new user ${userId}.`);
-    const challengeStarted = await startStickerChallenge(client, userId, senderEntity);
+    const challengeStarted = await startStickerChallenge(client, userId);
     if (challengeStarted) {
       log(LogLevel.INFO, `Sticker challenge successfully started for user ${userId}.`);
     } else {
