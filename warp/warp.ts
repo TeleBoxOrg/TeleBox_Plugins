@@ -150,28 +150,51 @@ class WireproxyManager {
       const portMatch = socks.success ? socks.output.match(/:(\d+)\b/) : null;
       const port = portMatch ? parseInt(portMatch[1], 10) : 0;
 
-      // 检查是否配置了 Telegram 代理
+      // 检查代理配置状态
       let proxyInfo = "";
       if (svcStatus === "active" && port) {
         const pwdResult = await SystemExecutor.run("pwd");
         if (pwdResult.success) {
-          const configPath = `${pwdResult.output.trim()}/config.json`;
-          const configCheck = await SystemExecutor.run(`test -f ${configPath}`);
-          if (configCheck.success) {
-            const readResult = await SystemExecutor.run(`cat ${configPath}`);
+          const programDir = pwdResult.output.trim();
+          let tgProxyStatus = "❌ 未配置";
+          let musicProxyStatus = "❌ 未配置";
+
+          // 检查 Telegram 代理
+          const tgConfigPath = `${programDir}/config.json`;
+          const tgConfigCheck = await SystemExecutor.run(`test -f ${tgConfigPath}`);
+          if (tgConfigCheck.success) {
+            const readResult = await SystemExecutor.run(`cat ${tgConfigPath}`);
             if (readResult.success) {
               try {
                 const config = JSON.parse(readResult.output);
                 if (config.proxy && config.proxy.port === port) {
-                  proxyInfo = `\n<b>代理状态</b>\n- Telegram 代理: ✅ 已配置 (端口: ${port})`;
-                } else {
-                  proxyInfo = `\n<b>代理状态</b>\n- Telegram 代理: ❌ 未配置`;
+                  tgProxyStatus = `✅ 已配置 (端口: ${port})`;
                 }
               } catch {
-                proxyInfo = `\n<b>代理状态</b>\n- Telegram 代理: ❓ 配置文件解析失败`;
+                tgProxyStatus = "❓ 配置文件解析失败";
               }
             }
           }
+
+          // 检查 Music 代理
+          const musicConfigPath = `${programDir}/assets/music/music_config.json`;
+          const musicConfigCheck = await SystemExecutor.run(`test -f ${musicConfigPath}`);
+          if (musicConfigCheck.success) {
+            const readResult = await SystemExecutor.run(`cat ${musicConfigPath}`);
+            if (readResult.success) {
+              try {
+                const musicConfig = JSON.parse(readResult.output);
+                const musicProxy = musicConfig["music_ytdlp_proxy"];
+                if (musicProxy && musicProxy.includes(`:${port}`)) {
+                  musicProxyStatus = `✅ 已配置 (端口: ${port})`;
+                }
+              } catch {
+                musicProxyStatus = "❓ 配置文件解析失败";
+              }
+            }
+          }
+          
+          proxyInfo = `\n<b>代理状态</b>\n- Telegram 代理: ${tgProxyStatus}\n- Music 代理: ${musicProxyStatus}`;
         }
       }
 
@@ -461,6 +484,8 @@ const helpText = `⚡ <b>WARP 管理面板</b>
 <code>.warp port &lt;端口&gt;</code> - 修改 WireProxy 监听端口
 <code>.warp proxy</code> - 配置 Telegram 代理设置 (需要 WireProxy 运行)
 <code>.warp unproxy</code> - 关闭 Telegram 代理设置
+<code>.warp music</code> - 配置 Music 插件代理设置
+<code>.warp unmusic</code> - 关闭 Music 插件代理设置
 
 <b>系统</b>
 <code>.warp uninstall</code> - 仅卸载 WireProxy
@@ -511,6 +536,12 @@ class WarpPlugin extends Plugin {
         break;
       case "unproxy":
         text = `📖 <b>关闭代理</b>\n\n<code>${cmd} unproxy</code> - 从 config.json 中移除 Telegram 代理配置`;
+        break;
+      case "music":
+        text = `📖 <b>Music 代理</b>\n\n<code>${cmd} music</code> - 配置 Music 插件使用 WireProxy 代理 (需要 WireProxy 运行)`;
+        break;
+      case "unmusic":
+        text = `📖 <b>关闭 Music 代理</b>\n\n<code>${cmd} unmusic</code> - 从 Music 配置中移除代理设置`;
         break;
       default:
         text = helpText;
@@ -634,6 +665,136 @@ class WarpPlugin extends Plugin {
       return `✅ Telegram 代理配置已关闭\n\n⚠️ <b>注意</b>: 需要重启 TeleBox 生效`;
     } catch (e: any) {
       return `❌ 关闭代理失败: ${htmlEscape(e?.message || e)}`;
+    }
+  }
+
+  // 配置 Music 插件代理
+  private async configureMusicProxy(): Promise<string> {
+    try {
+      // 检查 WireProxy 是否运行
+      const svcCheck = await SystemExecutor.run("systemctl is-active wireproxy");
+      if (!svcCheck.success || svcCheck.output !== "active") {
+        return "❌ WireProxy 未运行。请先使用 <code>.warp w</code> 启动 WireProxy。";
+      }
+
+      // 获取当前端口
+      const socksCheck = await SystemExecutor.run("ss -tlnp | grep -i wireproxy | head -1");
+      const portMatch = socksCheck.success ? socksCheck.output.match(/:(\d+)\b/) : null;
+      const port = portMatch ? parseInt(portMatch[1], 10) : 40000;
+
+      // 获取程序目录并构建配置文件路径
+      const pwdResult = await SystemExecutor.run("pwd");
+      if (!pwdResult.success) {
+        return "❌ 无法获取当前工作目录。";
+      }
+      
+      const programDir = pwdResult.output.trim();
+      const configPath = `${programDir}/assets/music/music_config.json`;
+      
+      // 检查 Music 配置文件是否存在
+      const configCheck = await SystemExecutor.run(`test -f ${configPath}`);
+      if (!configCheck.success) {
+        // 创建目录和配置文件
+        const createDirResult = await SystemExecutor.run(`mkdir -p ${programDir}/assets/music`);
+        if (!createDirResult.success) {
+          return "❌ 无法创建 Music 配置目录。";
+        }
+        
+        // 创建默认配置文件
+        const defaultConfig = {
+          "music_ytdlp_proxy": `socks5://127.0.0.1:${port}`
+        };
+        const configJson = JSON.stringify(defaultConfig, null, 2);
+        const writeCmd = `cat > ${configPath} << 'EOF'\n${configJson}\nEOF`;
+        const writeResult = await SystemExecutor.run(writeCmd);
+        
+        if (!writeResult.success) {
+          return "❌ 无法创建 Music 配置文件。";
+        }
+      } else {
+        // 读取现有配置文件
+        const readResult = await SystemExecutor.run(`cat ${configPath}`);
+        if (!readResult.success) {
+          return "❌ 无法读取 Music 配置文件。";
+        }
+
+        let config;
+        try {
+          config = JSON.parse(readResult.output);
+        } catch {
+          return "❌ Music 配置文件格式错误。";
+        }
+
+        // 设置代理配置
+        config["music_ytdlp_proxy"] = `socks5://127.0.0.1:${port}`;
+
+        // 写回配置文件
+        const configJson = JSON.stringify(config, null, 2);
+        const writeCmd = `cat > ${configPath} << 'EOF'\n${configJson}\nEOF`;
+        const writeResult = await SystemExecutor.run(writeCmd);
+        
+        if (!writeResult.success) {
+          return "❌ 无法更新 Music 配置文件。";
+        }
+      }
+
+      return `✅ Music 插件代理配置已更新\n\n📋 <b>配置详情</b>\n- 代理类型: SOCKS5\n- 地址: 127.0.0.1\n- 端口: ${port}\n\n💡 <b>提示</b>: Music 插件现在可以通过 WARP 访问 YouTube`;
+    } catch (e: any) {
+      return `❌ 配置 Music 代理失败: ${htmlEscape(e?.message || e)}`;
+    }
+  }
+
+  // 关闭 Music 插件代理
+  private async removeMusicProxy(): Promise<string> {
+    try {
+      // 获取程序目录并构建配置文件路径
+      const pwdResult = await SystemExecutor.run("pwd");
+      if (!pwdResult.success) {
+        return "❌ 无法获取当前工作目录。";
+      }
+      
+      const programDir = pwdResult.output.trim();
+      const configPath = `${programDir}/assets/music/music_config.json`;
+      
+      // 检查配置文件是否存在
+      const configCheck = await SystemExecutor.run(`test -f ${configPath}`);
+      if (!configCheck.success) {
+        return "ℹ️ Music 插件配置文件不存在，无需关闭代理。";
+      }
+
+      // 读取配置文件
+      const readResult = await SystemExecutor.run(`cat ${configPath}`);
+      if (!readResult.success) {
+        return "❌ 无法读取 Music 配置文件。";
+      }
+
+      let config;
+      try {
+        config = JSON.parse(readResult.output);
+      } catch {
+        return "❌ Music 配置文件格式错误。";
+      }
+
+      // 检查是否已配置代理
+      if (!config["music_ytdlp_proxy"]) {
+        return "ℹ️ Music 插件代理未配置，无需关闭。";
+      }
+
+      // 移除代理配置
+      delete config["music_ytdlp_proxy"];
+
+      // 写回配置文件
+      const configJson = JSON.stringify(config, null, 2);
+      const writeCmd = `cat > ${configPath} << 'EOF'\n${configJson}\nEOF`;
+      const writeResult = await SystemExecutor.run(writeCmd);
+      
+      if (!writeResult.success) {
+        return "❌ 无法更新 Music 配置文件。";
+      }
+
+      return `✅ Music 插件代理配置已关闭\n\n💡 <b>提示</b>: Music 插件现在将直接访问 YouTube`;
+    } catch (e: any) {
+      return `❌ 关闭 Music 代理失败: ${htmlEscape(e?.message || e)}`;
     }
   }
 
@@ -776,6 +937,20 @@ class WarpPlugin extends Plugin {
         case "unproxy": {
           await msg.edit({ text: "🔄 正在关闭代理设置...", parseMode: "html" });
           const result = await this.removeProxy();
+          await msg.edit({ text: result, parseMode: "html" });
+          return;
+        }
+
+        case "music": {
+          await msg.edit({ text: "🔄 正在配置 Music 插件代理...", parseMode: "html" });
+          const result = await this.configureMusicProxy();
+          await msg.edit({ text: result, parseMode: "html" });
+          return;
+        }
+
+        case "unmusic": {
+          await msg.edit({ text: "🔄 正在关闭 Music 插件代理...", parseMode: "html" });
+          const result = await this.removeMusicProxy();
           await msg.edit({ text: result, parseMode: "html" });
           return;
         }
