@@ -1,70 +1,108 @@
+// 插件系统
 import { Plugin } from "@utils/pluginBase";
-import { Api } from "telegram";
 import { getPrefixes } from "@utils/pluginManager";
-import { createDirectoryInAssets } from "@utils/pathHelpers";
-import { JSONFilePreset } from "lowdb/node";
+
+// Telegram API
+import { Api } from "telegram";
+
+// 内置依赖库
 import axios from "axios";
-import * as path from "path";
 import { exec } from "child_process";
 import { promisify } from "util";
 
 const execAsync = promisify(exec);
+
+// 获取命令前缀
 const prefixes = getPrefixes();
 const mainPrefix = prefixes[0] || ".";
+// 命令执行统一封装
+class SystemExecutor {
+   static async run(cmd: string): Promise<{ success: boolean; output: string; error?: string }> {
+     try {
+       const { stdout, stderr } = await execAsync(cmd);
+       return { success: true, output: String(stdout ?? "").trim(), error: String(stderr ?? "").trim() };
+     } catch (e: any) {
+       return {
+         success: false,
+         output: String(e?.stdout ?? "").trim(),
+         error: String(e?.stderr ?? e?.message ?? e ?? "").trim(),
+       };
+     }
+   }
 
-// 简单HTML转义
+   static async runSudo(cmd: string): Promise<{ success: boolean; output: string; error?: string }> {
+     return this.run(`sudo ${cmd}`);
+   }
+ }
+
+// HTML转义（每个插件必须实现）
 const htmlEscape = (text: string): string =>
-  String(text).replace(/[&<>"']/g, (m) => ({
-    "&": "&amp;",
-    "<": "&lt;",
-    ">": "&gt;",
-    '"': "&quot;",
-    "'": "&#x27;",
+  String(text).replace(/[&<>"']/g, m => ({ 
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', 
+    '"': '&quot;', "'": '&#x27;' 
   }[m] || m));
 
-// 配置项
-const CONFIG_KEYS = {
-  WIREPROXY_PORT: "warp_wireproxy_port",
-};
+// 常量配置
+const DEFAULT_PORT = 40000;
+const WARP_CONFIG_FILE = "/etc/wireguard/warp-account.conf";
+const WIREPROXY_CONFIG_FILE = "/etc/wireguard/proxy.conf";
+const WIREPROXY_SERVICE_FILE = "/lib/systemd/system/wireproxy.service";
+const WIREPROXY_BINARY = "/usr/bin/wireproxy";
 
-const DEFAULT_CONFIG: Record<string, string> = {
-  [CONFIG_KEYS.WIREPROXY_PORT]: "40000",
-};
-
-// 配置管理器（先写框架）
-class ConfigManager {
-  private static db: any = null;
-  private static initialized = false;
-  private static configPath = path.join(createDirectoryInAssets("warp"), "warp_config.json");
-
-  private static async init(): Promise<void> {
-    if (this.initialized) return;
-    this.db = await JSONFilePreset<Record<string, any>>(this.configPath, { ...DEFAULT_CONFIG });
-    this.initialized = true;
+// 账户管理
+class AccountManager {
+  static async getOrCreate(): Promise<{ privateKey: string; address6: string }> {
+    // 尝试读取本地账户
+    const localAccount = await this.readLocal();
+    if (localAccount) return localAccount;
+    
+    // 注册新账户
+    return await this.register();
   }
 
-  static async get(key: string, defaultValue?: string): Promise<string> {
-    await this.init();
-    if (!this.db) return defaultValue || DEFAULT_CONFIG[key] || "";
-    const val = this.db.data[key];
-    return (typeof val === "undefined" ? defaultValue ?? DEFAULT_CONFIG[key] ?? "" : val);
+  private static async readLocal(): Promise<{ privateKey: string; address6: string } | null> {
+    const result = await SystemExecutor.runSudo(`cat ${WARP_CONFIG_FILE}`);
+    if (!result.success || !result.output) return null;
+    
+    try {
+      const data = JSON.parse(result.output);
+      if (data.private_key && data.v6) {
+        return { privateKey: data.private_key, address6: data.v6 };
+      }
+    } catch {}
+    return null;
   }
 
-  static async set(key: string, value: string): Promise<boolean> {
-    await this.init();
-    if (!this.db) return false;
-    this.db.data[key] = value;
-    await this.db.write();
-    return true;
+  private static async register(): Promise<{ privateKey: string; address6: string }> {
+    try {
+      const response = await axios.get("https://warp.cloudflare.now.cc/?run=register", { timeout: 8000 });
+      const dataStr = typeof response.data === "string" ? response.data : JSON.stringify(response.data);
+      
+      const pkMatch = dataStr.match(/"private_key"\s*:\s*"([A-Za-z0-9+/=]{20,})"/); 
+      const v6Match = dataStr.match(/"v6"\s*:\s*"([0-9a-fA-F:]+)"/); 
+      
+      if (!pkMatch || !v6Match) {
+        throw new Error("注册响应格式错误");
+      }
+      
+      const privateKey = pkMatch[1];
+      const address6 = v6Match[1];
+      const accountData = JSON.stringify({ type: "free", private_key: privateKey, v6: address6 }, null, 2);
+      
+      await SystemExecutor.runSudo(`mkdir -p /etc/wireguard`);
+      await execAsync(`sudo bash -lc 'cat > ${WARP_CONFIG_FILE} <<"EOF"\n${accountData}\nEOF'`);
+      
+      return { privateKey, address6 };
+    } catch (error: any) {
+      throw new Error(`账户注册失败: ${error.message}`);
+    }
   }
 }
 
- 
 
-// wireproxy 管理（先写框架，再补全最小实现）
+// wireproxy 管理
 class WireproxyManager {
-  // 获取或注册免费账户
-  static async getOrCreateAccount(): Promise<{ privateKey: string; address6: string }> {
+  private static async _getOrCreateAccount(): Promise<{ privateKey: string; address6: string }> {
     // 优先读取本地账户文件
     try {
       const { stdout } = await execAsync("sudo bash -lc 'cat /etc/wireguard/warp-account.conf 2>/dev/null' ");
@@ -76,7 +114,7 @@ class WireproxyManager {
       }
     } catch {}
 
-    // 远程注册免费账户（warp.sh: warp_api register）
+    // 远程注册免费账户
     try {
       const url = "https://warp.cloudflare.now.cc/?run=register";
       const res = await axios.get(url, { timeout: 8000 });
@@ -86,97 +124,203 @@ class WireproxyManager {
       if (!pkMatch || !v6Match) throw new Error("注册返回缺少必要字段");
       const privateKey = pkMatch[1];
       const address6 = v6Match[1];
-      // 保存到本地（here-doc，保留换行与缩进）
-      const payload = JSON.stringify({ private_key: privateKey, v6: address6 }, null, 2);
+      const payload = JSON.stringify({ type: "free", private_key: privateKey, v6: address6 }, null, 2);
       await execAsync(`sudo bash -lc 'mkdir -p /etc/wireguard && cat > /etc/wireguard/warp-account.conf <<"EOF"\n${payload}\nEOF'`);
       return { privateKey, address6 };
     } catch (e: any) {
       throw new Error(`注册免费账户失败: ${e?.message || e}`);
     }
   }
-  static async isRunning(): Promise<{ running: boolean; port?: number }> {
+
+  static async getStatus(): Promise<string> {
     try {
-      const [svc, socks] = await Promise.all([
-        execAsync("systemctl is-active wireproxy 2>/dev/null || true"),
-        execAsync("ss -tlnp | grep -i wireproxy | head -1 || true"),
+      const [svc, socks, cfg, bin, acc, dns, ipt, ips, kmod] = await Promise.all([
+        SystemExecutor.run("systemctl is-active wireproxy"),
+        SystemExecutor.run("ss -tlnp | grep -i wireproxy | head -1"),
+        SystemExecutor.run(`test -f ${WIREPROXY_CONFIG_FILE}`),
+        SystemExecutor.run(`test -f ${WIREPROXY_BINARY}`),
+        SystemExecutor.run(`test -f ${WARP_CONFIG_FILE}`),
+        SystemExecutor.run("systemctl is-active dnsmasq"),
+        SystemExecutor.run("command -v iptables"),
+        SystemExecutor.run("command -v ipset"),
+        SystemExecutor.run("lsmod | grep -w wireguard"),
       ]);
-      const active = svc.stdout.trim() === "active";
-      const line = socks.stdout.trim();
-      const portMatch = line.match(/:(\d+)/);
-      const orphan = !active && !!line; // 孤儿进程（非 systemd）
-      return { running: active || orphan, port: portMatch ? parseInt(portMatch[1], 10) : undefined };
-    } catch {
-      return { running: false };
+
+      const svcStatus = svc.success ? svc.output : "inactive";
+      const portMatch = socks.success ? socks.output.match(/:(\d+)\b/) : null;
+      const port = portMatch ? parseInt(portMatch[1], 10) : 0;
+
+      // 检查是否配置了 Telegram 代理
+      let proxyInfo = "";
+      if (svcStatus === "active" && port) {
+        const pwdResult = await SystemExecutor.run("pwd");
+        if (pwdResult.success) {
+          const configPath = `${pwdResult.output.trim()}/config.json`;
+          const configCheck = await SystemExecutor.run(`test -f ${configPath}`);
+          if (configCheck.success) {
+            const readResult = await SystemExecutor.run(`cat ${configPath}`);
+            if (readResult.success) {
+              try {
+                const config = JSON.parse(readResult.output);
+                if (config.proxy && config.proxy.port === port) {
+                  proxyInfo = `\n<b>代理状态</b>\n- Telegram 代理: ✅ 已配置 (端口: ${port})`;
+                } else {
+                  proxyInfo = `\n<b>代理状态</b>\n- Telegram 代理: ❌ 未配置`;
+                }
+              } catch {
+                proxyInfo = `\n<b>代理状态</b>\n- Telegram 代理: ❓ 配置文件解析失败`;
+              }
+            }
+          }
+        }
+      }
+
+      let wireproxyStatusLine = "";
+      if (svcStatus === "active") {
+        wireproxyStatusLine = `WireProxy: ✅ 运行中${port ? ` (端口: ${port})` : ""}`;
+      } else if (bin.success) {
+        wireproxyStatusLine = "WireProxy: ⚠️ 已安装但未运行";
+      } else {
+        wireproxyStatusLine = "WireProxy: ❌ 未安装";
+      }
+
+      const text = `📊 <b>WARP 综合状态</b>\n\n<b>WireProxy</b>\n- ${wireproxyStatusLine}\n- 配置文件: ${cfg.success ? "存在" : "不存在"}\n- 可执行文件: ${bin.success ? "存在" : "不存在"}\n- 账户文件: ${acc.success ? "存在" : "不存在"}${proxyInfo}\n\n<b>Iptables 方案</b>\n- dnsmasq: ${dns.success && dns.output === "active" ? "✅ 运行中" : "❌ 未运行"}\n- iptables: ${ipt.success ? "✅ 已安装" : "❌ 未安装"}\n- ipset: ${ips.success ? "✅ 已安装" : "❌ 未安装"}\n\n<b>内核</b>\n- WireGuard 模块: ${kmod.success ? "✅ 已加载" : "⚠️ 未加载"}`;
+
+      return text;
+    } catch (e: any) {
+      return `❌ 查询状态失败: ${htmlEscape(e?.message || e)}`;
     }
   }
 
-  static async findAvailablePort(start = 40000, end = 50000): Promise<number> {
-    for (let p = start; p <= end; p++) {
-      try {
-        const { stdout } = await execAsync(`ss -tln | grep :${p} || true`);
-        if (!stdout.trim()) return p;
-      } catch {
-        return p;
+  private static async _getCurrentIpInfo(port: number): Promise<{ ipv4: string; ipv6: string }> {
+    const fetchIp = async (version: 4 | 6): Promise<string> => {
+      const maxRetries = 5;
+      const retryDelay = 2000; // 2 seconds
+      for (let i = 0; i < maxRetries; i++) {
+        const cmd = `curl -${version} --socks5-hostname 127.0.0.1:${port} -s -m 8 ip.gs/json`;
+        const result = await SystemExecutor.run(cmd);
+        if (result.success && result.output.includes('"ip"')) {
+          try {
+            const data = JSON.parse(result.output);
+            return `${data.ip} ${data.country} ${data.organisation}`.trim();
+          } catch {
+            // JSON parsing failed, continue to retry
+          }
+        }
+        if (i < maxRetries - 1) {
+          await new Promise(resolve => setTimeout(resolve, retryDelay));
+        }
       }
+      return "查询失败 (多次尝试后)";
+    };
+
+    const [ipv4, ipv6] = await Promise.all([fetchIp(4), fetchIp(6)]);
+    return { ipv4, ipv6 };
+  }
+
+  private static async findAvailablePort(start = DEFAULT_PORT, end = 50000): Promise<number> {
+    for (let port = start; port <= end; port++) {
+      const result = await SystemExecutor.run(`ss -tln | grep :${port}`);
+      if (!result.success || !result.output) return port;
     }
-    return 40000;
+    return DEFAULT_PORT;
+  }
+
+  private static async installBinary(): Promise<void> {
+    const archResult = await SystemExecutor.run("uname -m");
+    const arch = archResult.output;
+    
+    let archName = "amd64";
+    if (arch === "aarch64" || arch === "arm64") archName = "arm64";
+    else if (arch === "x86_64") archName = "amd64";
+    else if (arch === "armv7l" || arch === "armhf") archName = "arm";
+    else if (arch === "i386" || arch === "i686") archName = "386";
+    else throw new Error(`不支持的架构: ${arch}`);
+
+    const version = "1.0.9";
+    const url = `https://github.com/pufferffish/wireproxy/releases/download/v${version}/wireproxy_linux_${archName}.tar.gz`;
+    
+    const downloadCmd = `wget -T 30 -q -O /tmp/wireproxy.tar.gz ${url} || curl -L --connect-timeout 30 -s -o /tmp/wireproxy.tar.gz ${url}`;
+    const installCmd = `rm -f /tmp/wireproxy.tar.gz && ${downloadCmd} && tar xzf /tmp/wireproxy.tar.gz -C /tmp/ && mv /tmp/wireproxy ${WIREPROXY_BINARY} && chmod +x ${WIREPROXY_BINARY}`;
+    
+    const result = await SystemExecutor.runSudo(installCmd);
+    if (!result.success) {
+      throw new Error(`安装失败: ${result.error}`);
+    }
   }
 
   static async setupAndStart(port?: number): Promise<string> {
     try {
-      const usePort = port || parseInt(await ConfigManager.get(CONFIG_KEYS.WIREPROXY_PORT, "40000"), 10) || 40000;
-      const chosen = usePort || (await this.findAvailablePort());
-
-      // 端口合法性检查
-      if (chosen < 1 || chosen > 65535 || isNaN(chosen)) {
-        return `❌ 无效端口: ${chosen}`;
+      const targetPort = port || (await this.findAvailablePort());
+      
+      if (targetPort < 1 || targetPort > 65535 || isNaN(targetPort)) {
+        return `❌ 无效端口: ${targetPort}`;
       }
 
-      await ConfigManager.set(CONFIG_KEYS.WIREPROXY_PORT, String(chosen));
-
-      // 检查是否已安装
-      try {
-        await execAsync("wireproxy --version 2>/dev/null");
-        console.log("[warp] wireproxy 已存在，跳过下载");
-      } catch {
-        // 下载 wireproxy（支持更多架构）
-        const { stdout: arch } = await execAsync("uname -m");
-        const raw = arch.trim();
-        let archName = "amd64";
-        if (raw === "aarch64" || raw === "arm64") archName = "arm64";
-        else if (raw === "x86_64") archName = "amd64";
-        else if (raw === "armv7l" || raw === "armhf") archName = "arm";
-        else if (raw === "i386" || raw === "i686") archName = "386";
-        else throw new Error(`不支持的架构: ${raw}`);
-
-        const version = "1.0.9";
-        const url = `https://github.com/pufferffish/wireproxy/releases/download/v${version}/wireproxy_linux_${archName}.tar.gz`;
-        
-        // 添加超时和重试
-        const downloadCmd = `wget -T 30 -q -O /tmp/wireproxy.tar.gz ${url} || curl -L --connect-timeout 30 -s -o /tmp/wireproxy.tar.gz ${url}`;
-        await execAsync(`sudo bash -lc 'rm -f /tmp/wireproxy.tar.gz && ${downloadCmd} && tar xzf /tmp/wireproxy.tar.gz -C /tmp/ && mv /tmp/wireproxy /usr/bin/wireproxy && chmod +x /usr/bin/wireproxy'`);
+      // 检查并安装二进制文件
+      const binCheck = await SystemExecutor.run(`test -f ${WIREPROXY_BINARY} && echo exists || echo missing`);
+      if (binCheck.output.trim() !== "exists") {
+        await this.installBinary();
       }
 
-      // 注册/读取免费账户
-      const account = await this.getOrCreateAccount();
-      const address4 = "172.16.0.2/32"; // 与脚本保持一致的本地 v4 地址
-      const address6 = `${account.address6}/128`;
-      const dnsList = "1.1.1.1,8.8.8.8,8.8.4.4,2606:4700:4700::1111,2001:4860:4860::8888,2001:4860:4860::8844";
+      // 获取账户信息
+      const account = await AccountManager.getOrCreate();
+      
+      // 生成配置文件
+      const config = this.generateConfig(account, targetPort);
+      await execAsync(`sudo bash -lc 'cat > ${WIREPROXY_CONFIG_FILE} <<"EOF"\n${config}\nEOF'`);
 
-      // 写配置
-      const cfg = `\n[Interface]\nPrivateKey = ${account.privateKey}\nAddress = ${address4}\nAddress = ${address6}\nDNS = ${dnsList}\nMTU = 1280\n\n[Peer]\nPublicKey = bmXOC+F1FxEMF9dyiK2H5/1SUtzH0JuVo51h2wPfgyo=\nAllowedIPs = 0.0.0.0/0, ::/0\nEndpoint = engage.cloudflareclient.com:2408\n\n[Socks5]\nBindAddress = 127.0.0.1:${chosen}\n`;
-      await execAsync("sudo mkdir -p /etc/wireguard");
-      await execAsync(`sudo bash -lc 'cat > /etc/wireguard/proxy.conf <<"EOF"\n${cfg.trim()}\nEOF'`);
+      // 创建系统服务
+      const service = this.generateService();
+      await execAsync(`sudo bash -lc 'cat > ${WIREPROXY_SERVICE_FILE} <<"EOF"\n${service}\nEOF'`);
 
-      // systemd
-      const svc = `\n[Unit]\nDescription=WireProxy for WARP\nAfter=network.target\nDocumentation=https://github.com/fscarmen/warp-sh\nDocumentation=https://github.com/pufferffish/wireproxy\n\n[Service]\nExecStart=/usr/bin/wireproxy -c /etc/wireguard/proxy.conf\nRemainAfterExit=yes\nRestart=always\n\n[Install]\nWantedBy=multi-user.target\n`;
-      await execAsync(`sudo bash -lc 'cat > /lib/systemd/system/wireproxy.service <<"EOF"\n${svc.trim()}\nEOF'`);
-      await execAsync("sudo systemctl daemon-reload && sudo systemctl enable wireproxy && sudo systemctl restart wireproxy");
+      // 启动服务
+      const startResult = await SystemExecutor.runSudo("systemctl daemon-reload && systemctl enable wireproxy && systemctl restart wireproxy");
+      if (!startResult.success) {
+        throw new Error(`服务启动失败: ${startResult.error}`);
+      }
 
-      return `✅ wireproxy 已启动，Socks5: 127.0.0.1:${chosen}`;
-    } catch (e: any) {
-      return `❌ wireproxy 启动失败: ${htmlEscape(e?.message || e)}`;
+      return `✅ WireProxy 已启动，SOCKS5 代理: 127.0.0.1:${targetPort}`;
+    } catch (error: any) {
+      return `❌ 启动失败: ${htmlEscape(error.message)}`;
     }
+  }
+
+  private static generateConfig(account: { privateKey: string; address6: string }, port: number): string {
+    const address4 = "172.16.0.2/32";
+    const address6 = `${account.address6}/128`;
+    const dns = "1.1.1.1,8.8.8.8,8.8.4.4,2606:4700:4700::1111,2001:4860:4860::8888,2001:4860:4860::8844";
+    
+    return `[Interface]
+PrivateKey = ${account.privateKey}
+Address = ${address4}
+Address = ${address6}
+DNS = ${dns}
+MTU = 1280
+
+[Peer]
+PublicKey = bmXOC+F1FxEMF9dyiK2H5/1SUtzH0JuVo51h2wPfgyo=
+AllowedIPs = 0.0.0.0/0, ::/0
+Endpoint = engage.cloudflareclient.com:2408
+
+[Socks5]
+BindAddress = 127.0.0.1:${port}`;
+  }
+
+  private static generateService(): string {
+    return `[Unit]
+Description=WireProxy for WARP
+After=network.target
+Documentation=https://github.com/fscarmen/warp-sh
+Documentation=https://github.com/pufferffish/wireproxy
+
+[Service]
+ExecStart=${WIREPROXY_BINARY} -c ${WIREPROXY_CONFIG_FILE}
+RemainAfterExit=yes
+Restart=always
+
+[Install]
+WantedBy=multi-user.target`;
   }
 
   static async stop(): Promise<string> {
@@ -190,68 +334,137 @@ class WireproxyManager {
   }
 
   static async restart(): Promise<string> {
+    const binCheck = await SystemExecutor.run(`test -f ${WIREPROXY_BINARY}`);
+    if (!binCheck.success) {
+      return `❌ WireProxy 未安装，无法重启。请先使用 <code>${mainPrefix}warp w</code> 安装。`;
+    }
+
     try {
-      await execAsync("sudo systemctl restart wireproxy");
-      return "✅ wireproxy 已重启";
+      const restartResult = await SystemExecutor.runSudo("systemctl restart wireproxy");
+      if (!restartResult.success) {
+        if (restartResult.error?.includes("not found")) {
+          return `❌ WireProxy 服务未找到。可能安装不完整，请尝试重新安装: <code>${mainPrefix}warp w</code>`;
+        }
+        throw new Error(restartResult.error);
+      }
+
+
+      return "✅ WireProxy 已重启，IP 已更换";
     } catch (e: any) {
       return `❌ 重启失败: ${htmlEscape(e?.message || e)}`;
     }
   }
 
   static async setPort(port: number): Promise<string> {
-    if (!Number.isFinite(port) || port < 1 || port > 65535) return "❌ 端口无效";
+    if (!Number.isFinite(port) || port < 1 || port > 65535) {
+      return "❌ 端口无效";
+    }
+    
     try {
-      await execAsync(`sudo bash -lc "sed -i 's/BindAddress.*/BindAddress = 127.0.0.1:${port}/g' /etc/wireguard/proxy.conf"`);
-      await ConfigManager.set(CONFIG_KEYS.WIREPROXY_PORT, String(port));
-      await execAsync("sudo systemctl restart wireproxy");
-      return `✅ 端口已更新并重启: ${port}`;
-    } catch (e: any) {
-      return `❌ 更新端口失败: ${htmlEscape(e?.message || e)}`;
+      const updateResult = await SystemExecutor.runSudo(`sed -i 's/BindAddress.*/BindAddress = 127.0.0.1:${port}/g' ${WIREPROXY_CONFIG_FILE}`);
+      if (!updateResult.success) {
+        throw new Error(`配置更新失败: ${updateResult.error}`);
+      }
+      
+      const restartResult = await SystemExecutor.runSudo("systemctl restart wireproxy");
+      if (!restartResult.success) {
+        throw new Error(`服务重启失败: ${restartResult.error}`);
+      }
+      
+      return `✅ 端口已更新为 ${port} 并重启服务`;
+    } catch (error: any) {
+      return `❌ 端口更新失败: ${htmlEscape(error.message)}`;
     }
   }
 
   static async uninstall(): Promise<string> {
     try {
-      // 停止并禁用服务
-      try { await execAsync("sudo systemctl disable --now wireproxy"); } catch {}
+      // 第一步：停止所有服务（忽略错误）
+      await SystemExecutor.runSudo("systemctl stop wireproxy 2>/dev/null || true");
+      await SystemExecutor.runSudo("systemctl stop dnsmasq 2>/dev/null || true");
+      await SystemExecutor.runSudo("wg-quick down warp 2>/dev/null || true");
+      
+      // 第二步：禁用服务（忽略错误）
+      await SystemExecutor.runSudo("systemctl disable wireproxy 2>/dev/null || true");
+      await SystemExecutor.runSudo("systemctl disable dnsmasq 2>/dev/null || true");
+      await SystemExecutor.runSudo("systemctl disable wg-quick@warp 2>/dev/null || true");
 
-      // 强制杀死遗留进程（分步执行避免复杂逻辑报错）
-      try { await execAsync("sudo pkill -9 wireproxy"); } catch {}
-      try { await execAsync("sudo pkill -9 -f '/usr/bin/wireproxy'"); } catch {}
-      try { await execAsync("sudo pkill -9 -f 'wireproxy -c'"); } catch {}
+      // 第三步：强制终止进程（等待一秒让进程完全退出）
+      await SystemExecutor.runSudo("pkill -9 wireproxy 2>/dev/null || true");
+      await SystemExecutor.runSudo("pkill -9 dnsmasq 2>/dev/null || true");
+      await SystemExecutor.runSudo("pkill -9 -f 'wg-quick' 2>/dev/null || true");
+      await new Promise(resolve => setTimeout(resolve, 1000));
 
-      // 清理 service 与二进制、配置
-      try { await execAsync("sudo rm -f /etc/systemd/system/wireproxy.service /lib/systemd/system/wireproxy.service"); } catch {}
-      try { await execAsync("sudo rm -f /etc/wireguard/proxy.conf"); } catch {}
-      try { await execAsync("sudo rm -f /usr/bin/wireproxy"); } catch {}
-      try { await execAsync("sudo systemctl daemon-reload"); } catch {}
+      // 第四步：清理网络配置
+      await SystemExecutor.runSudo("chattr -i /etc/resolv.conf 2>/dev/null || true");
+      await SystemExecutor.runSudo("[ -f /etc/resolv.conf.bak ] && mv /etc/resolv.conf.bak /etc/resolv.conf 2>/dev/null || true");
+      await SystemExecutor.runSudo("iptables -F 2>/dev/null || true");
+      await SystemExecutor.runSudo("iptables -X 2>/dev/null || true");
+      await SystemExecutor.runSudo("ipset flush warp 2>/dev/null || true");
+      await SystemExecutor.runSudo("ipset destroy warp 2>/dev/null || true");
 
-      // 校验
-      const [svc, procs] = await Promise.all([
-        execAsync("systemctl is-active wireproxy 2>/dev/null || echo inactive"),
-        execAsync("pgrep -fa wireproxy 2>/dev/null || echo '(无进程)'"),
+      // 第五步：删除服务文件
+      await SystemExecutor.runSudo("rm -f /etc/systemd/system/wireproxy.service 2>/dev/null || true");
+      await SystemExecutor.runSudo("rm -f /lib/systemd/system/wireproxy.service 2>/dev/null || true");
+      await SystemExecutor.runSudo("rm -f /etc/systemd/system/dnsmasq.service 2>/dev/null || true");
+      await SystemExecutor.runSudo("systemctl daemon-reload 2>/dev/null || true");
+
+      // 第六步：删除二进制文件和配置目录
+      await SystemExecutor.runSudo("rm -f /usr/bin/wireproxy 2>/dev/null || true");
+      await SystemExecutor.runSudo("rm -rf /etc/wireguard 2>/dev/null || true");
+      
+      // 第七步：尝试卸载软件包（忽略所有错误）
+      await SystemExecutor.runSudo("apt-get remove -y --purge dnsmasq ipset wireguard-tools 2>/dev/null || yum remove -y dnsmasq ipset wireguard-tools 2>/dev/null || true");
+      await SystemExecutor.runSudo("apt-get autoremove -y 2>/dev/null || true");
+
+      // 等待文件系统同步
+      await new Promise(resolve => setTimeout(resolve, 500));
+
+      // 最终校验（更宽松的检查）
+      const [wpSvc, dnsSvc, wgDir, wpBin] = await Promise.all([
+        SystemExecutor.run("systemctl is-active wireproxy 2>/dev/null"),
+        SystemExecutor.run("systemctl is-active dnsmasq 2>/dev/null"),
+        SystemExecutor.run("[ -d /etc/wireguard ] && echo 'exists' || echo 'deleted'"),
+        SystemExecutor.run("[ -f /usr/bin/wireproxy ] && echo 'exists' || echo 'deleted'"),
       ]);
-      const stillActive = svc.stdout.trim() === "active" || (procs.stdout.trim() && !procs.stdout.includes("(无进程)"));
-      return stillActive ? "⚠️ 尝试卸载完成，但仍检测到进程，请重试或手动清理" : "✅ wireproxy 已卸载";
+      
+      // 只有在关键组件仍然存在时才报告残留
+      const criticalRemains = wpSvc.output === "active" || wgDir.output === 'exists' || wpBin.output === 'exists';
+      
+      if (criticalRemains) {
+        return "⚠️ 卸载完成，但检测到部分关键文件残留。建议重启系统后重试，或手动删除 /etc/wireguard 目录。";
+      } else {
+        return "✅ 所有 WARP 相关组件已彻底卸载。";
+      }
     } catch (e: any) {
-      return `❌ 卸载失败: ${htmlEscape(e?.message || e)}`;
+      return `❌ 卸载过程中出现错误: ${htmlEscape(e?.message || e)}。建议重启后重试。`;
     }
   }
 }
 
 // 帮助文本
-const helpText = `⚡ <b>WARP WireProxy 管理</b>
+const helpText = `⚡ <b>WARP 管理面板</b>
 
-<code>${mainPrefix}warp help</code> - 显示帮助
-<code>${mainPrefix}warp status</code> - 查看 wireproxy 状态
+<code>.warp help</code> - 显示此帮助菜单
 
-<b>wireproxy（Socks5 代理）</b>
-<code>${mainPrefix}warp start [端口]</code> - 安装并启动（默认端口 40000，默认免费账户）
-<code>${mainPrefix}warp stop</code> - 停止并禁用 wireproxy
-<code>${mainPrefix}warp restart</code> - 重启 wireproxy（用于换 IP）
-<code>${mainPrefix}warp port &lt;端口&gt;</code> - 修改监听端口并重启
-<code>${mainPrefix}warp uninstall</code> - 卸载 wireproxy 与配置文件
-<code>${mainPrefix}warp ip</code> - 换 IP（等价于 restart）`;
+<b>主要方案 (二选一)</b>
+  <b>1. WireProxy (Socks5 代理)</b>
+    <code>.warp w [端口]</code> - 安装并启动 (与 Iptables 方案互斥)
+
+  <b>2. Iptables (透明代理)</b>
+    <code>.warp e</code> - 安装 Iptables + dnsmasq + ipset (与 WireProxy 方案互斥)
+
+<b>辅助命令</b>
+<code>.warp status</code> - 查看 WARP 综合状态
+<code>.warp y</code> - 切换 WireProxy 开/关
+<code>.warp ip</code> - 重启 WireProxy (更换 WARP IP)
+<code>.warp port &lt;端口&gt;</code> - 修改 WireProxy 监听端口
+<code>.warp proxy</code> - 配置 Telegram 代理设置 (需要 WireProxy 运行)
+<code>.warp unproxy</code> - 关闭 Telegram 代理设置
+
+<b>系统</b>
+<code>.warp uninstall</code> - 仅卸载 WireProxy
+<code>.warp uninstall_all</code> - 卸载所有组件 (WireProxy 和 Iptables 方案)`;
 
 // 插件实现
 class WarpPlugin extends Plugin {
@@ -269,25 +482,35 @@ class WarpPlugin extends Plugin {
     let text = "";
     switch (subCmd) {
       case "status":
-        text = `📖 <b>状态查询</b>\n\n<code>${cmd} status</code> - 查看 wireproxy 运行状态`;
+        text = `📖 <b>状态查询</b>\n\n<code>${cmd} status</code> - 查看 WARP 综合状态 (WireProxy、账户文件、iptables 方案、WireGuard 模块)`;
         break;
-      case "start":
-        text = `📖 <b>启动</b>\n\n<code>${cmd} start [端口]</code> - 安装/更新 wireproxy，生成配置并启动（默认端口 40000）`;
+      case "w":
+        text = `📖 <b>启动</b>\n\n<code>${cmd} w [端口]</code> - 安装/更新 wireproxy 并启动`;
         break;
       case "stop":
         text = `📖 <b>停止</b>\n\n<code>${cmd} stop</code> - 停止并禁用 wireproxy`;
         break;
-      case "restart":
-        text = `📖 <b>重启</b>\n\n<code>${cmd} restart</code> - 重启 wireproxy（用于换 IP）`;
+      case "ip":
+        text = `📖 <b>重启/换IP</b>\n\n<code>${cmd} ip</code> - 重启 wireproxy 以更换 IP`;
         break;
       case "port":
         text = `📖 <b>端口</b>\n\n<code>${cmd} port &lt;端口&gt;</code> - 修改监听端口并重启`;
         break;
       case "uninstall":
-        text = `📖 <b>卸载</b>\n\n<code>${cmd} uninstall</code> - 卸载 wireproxy 与配置文件`;
+      case "uninstall_all":
+        text = `📖 <b>卸载</b>\n\n<code>${cmd} uninstall</code> - 仅卸载 WireProxy 方案\n<code>${cmd} uninstall_all</code> - 彻底卸载所有 WARP 相关组件`;
         break;
-      case "ip":
-        text = `📖 <b>换 IP</b>\n\n<code>${cmd} ip</code> - 重启 wireproxy 以更换 IP`;
+      case "y":
+        text = `📖 <b>WireProxy 开关</b>\n\n<code>${cmd} y</code> - 连接或断开 WireProxy socks5`;
+        break;
+      case "e":
+        text = `📖 <b>Iptables 方案</b>\n\n<code>${cmd} e</code> - 安装 Iptables 透明代理方案 (与 WireProxy 互斥)`;
+        break;
+      case "proxy":
+        text = `📖 <b>代理设置</b>\n\n<code>${cmd} proxy</code> - 配置 Telegram 使用 WireProxy 代理 (默认端口 40000)`;
+        break;
+      case "unproxy":
+        text = `📖 <b>关闭代理</b>\n\n<code>${cmd} unproxy</code> - 从 config.json 中移除 Telegram 代理配置`;
         break;
       default:
         text = helpText;
@@ -296,39 +519,153 @@ class WarpPlugin extends Plugin {
     await msg.edit({ text, parseMode: "html" });
   }
 
-  // 解析参数（遵循规范）
-  private parseArgs(text?: string): string[] {
-    const line = (text || "").trim().split(/\r?\n/g)[0] || "";
-    const parts = line.split(/\s+/g);
-    return parts.slice(1).map((s) => s.trim()).filter(Boolean);
+  // 配置代理设置
+  private async configureProxy(): Promise<string> {
+    try {
+      // 检查 WireProxy 是否运行
+      const svcCheck = await SystemExecutor.run("systemctl is-active wireproxy");
+      if (!svcCheck.success || svcCheck.output !== "active") {
+        return "❌ WireProxy 未运行。请先使用 <code>.warp w</code> 启动 WireProxy。";
+      }
+
+      // 获取当前端口
+      const socksCheck = await SystemExecutor.run("ss -tlnp | grep -i wireproxy | head -1");
+      const portMatch = socksCheck.success ? socksCheck.output.match(/:(\d+)\b/) : null;
+      const port = portMatch ? parseInt(portMatch[1], 10) : 40000;
+
+      // 获取程序目录并构建配置文件路径
+      const pwdResult = await SystemExecutor.run("pwd");
+      if (!pwdResult.success) {
+        return "❌ 无法获取当前工作目录。";
+      }
+      
+      const programDir = pwdResult.output.trim();
+      const configPath = `${programDir}/config.json`;
+      
+      // 检查配置文件是否存在
+      const configCheck = await SystemExecutor.run(`test -f ${configPath}`);
+      if (!configCheck.success) {
+        return `❌ 找不到配置文件: ${configPath}`;
+      }
+
+      // 读取配置文件
+      const readResult = await SystemExecutor.run(`cat ${configPath}`);
+      if (!readResult.success) {
+        return "❌ 无法读取 config.json 文件。";
+      }
+
+      let config;
+      try {
+        config = JSON.parse(readResult.output);
+      } catch {
+        return "❌ config.json 文件格式错误。";
+      }
+
+      // 设置代理配置
+      config.proxy = {
+        ip: "127.0.0.1",
+        port: port,
+        socksType: 5
+      };
+
+      // 写回配置文件
+      const configJson = JSON.stringify(config, null, 2);
+      const writeCmd = `cat > ${configPath} << 'EOF'\n${configJson}\nEOF`;
+      const writeResult = await SystemExecutor.runSudo(writeCmd);
+      
+      if (!writeResult.success) {
+        return "❌ 无法写入配置文件。";
+      }
+
+      return `✅ 代理配置已更新\n\n📋 <b>配置详情</b>\n- 代理类型: SOCKS5\n- 地址: 127.0.0.1\n- 端口: ${port}\n\n⚠️ <b>注意</b>: 需要重启 TeleBox 生效`;
+    } catch (e: any) {
+      return `❌ 配置代理失败: ${htmlEscape(e?.message || e)}`;
+    }
+  }
+
+  // 关闭代理设置
+  private async removeProxy(): Promise<string> {
+    try {
+      // 获取程序目录并构建配置文件路径
+      const pwdResult = await SystemExecutor.run("pwd");
+      if (!pwdResult.success) {
+        return "❌ 无法获取当前工作目录。";
+      }
+      
+      const programDir = pwdResult.output.trim();
+      const configPath = `${programDir}/config.json`;
+      
+      // 检查配置文件是否存在
+      const configCheck = await SystemExecutor.run(`test -f ${configPath}`);
+      if (!configCheck.success) {
+        return `❌ 找不到配置文件: ${configPath}`;
+      }
+
+      // 读取配置文件
+      const readResult = await SystemExecutor.run(`cat ${configPath}`);
+      if (!readResult.success) {
+        return "❌ 无法读取 config.json 文件。";
+      }
+
+      let config;
+      try {
+        config = JSON.parse(readResult.output);
+      } catch {
+        return "❌ config.json 文件格式错误。";
+      }
+
+      // 检查是否已配置代理
+      if (!config.proxy) {
+        return "ℹ️ Telegram 代理未配置，无需关闭。";
+      }
+
+      // 移除代理配置
+      delete config.proxy;
+
+      // 写回配置文件
+      const configJson = JSON.stringify(config, null, 2);
+      const writeCmd = `cat > ${configPath} << 'EOF'\n${configJson}\nEOF`;
+      const writeResult = await SystemExecutor.runSudo(writeCmd);
+      
+      if (!writeResult.success) {
+        return "❌ 无法写入配置文件。";
+      }
+
+      return `✅ Telegram 代理配置已关闭\n\n⚠️ <b>注意</b>: 需要重启 TeleBox 生效`;
+    } catch (e: any) {
+      return `❌ 关闭代理失败: ${htmlEscape(e?.message || e)}`;
+    }
   }
 
   // 主处理
   private async handleWarp(msg: Api.Message): Promise<void> {
-    // 标准参数解析
+    // 标准参数解析模式（参考规范）
     const lines = msg.text?.trim()?.split(/\r?\n/g) || [];
-    const parts = lines?.[0]?.split(/\s+/g) || [];
-    const [, ...args] = parts;
+    const parts = lines?.[0]?.split(/\s+/) || [];
+    const [, ...args] = parts; // 跳过命令本身
     const sub = (args[0] || "").toLowerCase();
 
     try {
-      // 无参数：显示帮助
+      // 无参数时显示帮助
       if (!sub) {
         await msg.edit({ text: helpText, parseMode: "html" });
         return;
       }
 
-      // help 在前：.warp help [sub]
+      // 处理 help 在前的情况：.warp help [subcommand]
       if (sub === "help" || sub === "h") {
         if (args[1]) {
-          await this.showSubCommandHelp(args[1].toLowerCase(), msg);
+          // 显示特定子命令的帮助
+          const subCmd = args[1].toLowerCase();
+          await this.showSubCommandHelp(subCmd, msg);
         } else {
+          // 显示总帮助
           await msg.edit({ text: helpText, parseMode: "html" });
         }
         return;
       }
 
-      // help 在后：.warp [sub] help
+      // 处理 help 在后的情况：.warp [subcommand] help
       if (args[1] && (args[1].toLowerCase() === "help" || args[1].toLowerCase() === "h")) {
         await this.showSubCommandHelp(sub, msg);
         return;
@@ -337,38 +674,51 @@ class WarpPlugin extends Plugin {
       switch (sub) {
         case "help":
         case "h":
+          await msg.edit({ text: helpText, parseMode: "html" });
+          return;
+
         case "status": {
           await msg.edit({ text: "🔄 正在获取状态...", parseMode: "html" });
-          const wpStatus = await WireproxyManager.isRunning();
-          const text = wpStatus.running
-            ? `📊 <b>wireproxy 状态</b>\n\n✅ 运行中${wpStatus.port ? `，端口: ${wpStatus.port}` : ""}`
-            : "📊 <b>wireproxy 状态</b>\n\n❌ 未运行";
-          await msg.edit({ text, parseMode: "html" });
+          const statusText = await WireproxyManager.getStatus();
+          await msg.edit({ text: statusText, parseMode: "html" });
           return;
         }
-        case "start": {
+
+        case "w": {
+          await msg.edit({ text: "🔄 正在检查环境...", parseMode: "html" });
+          try {
+            const { stdout } = await execAsync("systemctl is-active dnsmasq 2>/dev/null || echo 'inactive'");
+            if (stdout.trim() === 'active') {
+              await msg.edit({ text: "❌ Iptables/dnsmasq 方案似乎正在运行。请先禁用它，然后再启动 WireProxy。", parseMode: "html" });
+              return;
+            }
+          } catch {}
+
           const port = args[1] ? parseInt(args[1], 10) : undefined;
           await msg.edit({ text: "🔄 正在启动 wireproxy...", parseMode: "html" });
           const ret = await WireproxyManager.setupAndStart(port);
           await msg.edit({ text: ret, parseMode: "html" });
           return;
         }
+
         case "stop": {
           await msg.edit({ text: "🔄 正在停止 wireproxy...", parseMode: "html" });
           const ret = await WireproxyManager.stop();
           await msg.edit({ text: ret, parseMode: "html" });
           return;
         }
-        case "restart": {
-          await msg.edit({ text: "🔄 正在重启 wireproxy...", parseMode: "html" });
+
+        case "ip": {
+          await msg.edit({ text: "🔄 正在重启 wireproxy (更换IP)...", parseMode: "html" });
           const ret = await WireproxyManager.restart();
           await msg.edit({ text: ret, parseMode: "html" });
           return;
         }
+
         case "port": {
           const p = parseInt(args[1] || "", 10);
           if (!p) {
-            await msg.edit({ text: `❌ 请提供端口号\n\n用法：<code>${mainPrefix}warp port 40000</code>`, parseMode: "html" });
+            await msg.edit({ text: `❌ 请提供端口号\n\n用法: <code>${mainPrefix}warp port 40000</code>`, parseMode: "html" });
             return;
           }
           await msg.edit({ text: `🔄 正在修改端口为 ${p}...`, parseMode: "html" });
@@ -376,24 +726,93 @@ class WarpPlugin extends Plugin {
           await msg.edit({ text: ret, parseMode: "html" });
           return;
         }
-        case "uninstall": {
+
+        case "uninstall":
+        case "uninstall_all": {
           await msg.edit({ text: "⚠️ 正在卸载 wireproxy...", parseMode: "html" });
           const ret = await WireproxyManager.uninstall();
           await msg.edit({ text: ret, parseMode: "html" });
           return;
         }
-        case "ip": {
-          await msg.edit({ text: "🔄 正在更换 IP（重启 wireproxy）...", parseMode: "html" });
-          const ret = await WireproxyManager.restart();
-          await msg.edit({ text: ret, parseMode: "html" });
+
+        case "y": {
+          await msg.edit({ text: "🔄 正在切换 WireProxy 状态...", parseMode: "html" });
+          const status = await WireproxyManager.getStatus();
+          let result;
+          if (status.includes("✅ 运行中")) {
+            result = await WireproxyManager.stop();
+          } else {
+            result = await WireproxyManager.setupAndStart();
+          }
+          await msg.edit({ text: result, parseMode: "html" });
+          return;
+        }
+
+        case "e": {
+          await msg.edit({ text: "🔄 正在检查环境...", parseMode: "html" });
+          const wpStatus = await WireproxyManager.getStatus();
+          if (wpStatus.includes("✅ 运行中")) {
+            await msg.edit({ text: "❌ WireProxy 正在运行。请先使用 `.warp stop` 停止它，然后再安装 Iptables 方案。", parseMode: "html" });
+            return;
+          }
+
+          await msg.edit({ text: "🔄 正在安装 Iptables + dnsmasq + ipset 方案...", parseMode: "html" });
+          try {
+            await execAsync("sudo apt-get update && sudo apt-get install -y iptables dnsmasq ipset || sudo yum install -y iptables dnsmasq ipset");
+            await msg.edit({ text: "✅ Iptables + dnsmasq + ipset 方案已安装", parseMode: "html" });
+          } catch (e: any) {
+            await msg.edit({ text: `❌ 安装失败: ${e.message}`, parseMode: "html" });
+          }
+          return;
+        }
+
+        case "proxy": {
+          await msg.edit({ text: "🔄 正在配置代理设置...", parseMode: "html" });
+          const result = await this.configureProxy();
+          await msg.edit({ text: result, parseMode: "html" });
+          return;
+        }
+
+        case "unproxy": {
+          await msg.edit({ text: "🔄 正在关闭代理设置...", parseMode: "html" });
+          const result = await this.removeProxy();
+          await msg.edit({ text: result, parseMode: "html" });
           return;
         }
 
         default:
-          await msg.edit({ text: helpText, parseMode: "html" });
+          // 未知命令
+          await msg.edit({
+            text: `❌ <b>未知命令:</b> <code>${htmlEscape(sub)}</code>\n\n💡 使用 <code>${mainPrefix}warp help</code> 查看帮助`,
+            parseMode: "html"
+          });
       }
-    } catch (err: any) {
-      await msg.edit({ text: `❌ 执行失败: ${htmlEscape(err?.message || err)}` , parseMode: "html"});
+    } catch (error: any) {
+      console.error("[warp] 插件执行失败:", error);
+      
+      // 处理特定错误类型
+      if (error.message?.includes("FLOOD_WAIT")) {
+        const waitTime = parseInt(error.message.match(/\d+/)?.[0] || "60");
+        await msg.edit({
+          text: `⏳ <b>请求过于频繁</b>\n\n需要等待 ${waitTime} 秒后重试`,
+          parseMode: "html"
+        });
+        return;
+      }
+      
+      if (error.message?.includes("MESSAGE_TOO_LONG")) {
+        await msg.edit({
+          text: "❌ <b>消息过长</b>\n\n请减少内容长度或使用文件发送",
+          parseMode: "html"
+        });
+        return;
+      }
+      
+      // 通用错误处理
+      await msg.edit({
+        text: `❌ <b>操作失败:</b> ${htmlEscape(error.message || "未知错误")}`,
+        parseMode: "html"
+      });
     }
   }
 }
