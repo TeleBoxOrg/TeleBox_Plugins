@@ -15,31 +15,38 @@ const htmlEscape = (text: string): string =>
 // A whitelist of standard emojis that are valid for reactions.
 const AVAILABLE_REACTIONS = "👍👎❤️🔥🥰👏😁🤔🤯😱🤬😢🎉🤩🤮💩🙏👌🕊🤡🥱🥴😍🐳❤️‍🔥🌚🌭💯🤣⚡️🍌🏆💔🤨😐🍓🍾💋🖕😈😎😇😤🏻‍💻";
 
-// Help text constant.
-const help_text = `📝 <b>自动回应插件 (Trace)</b>
+// Help text constant with enhanced formatting.
+const help_text = `🎯 <b>自动回应插件 (Trace)</b>
+━━━━━━━━━━━━━━━━
+<i>通过自动发送 Reactions 来追踪特定用户或关键字消息</i>
 
-通过对来自特定用户或包含特定关键字的消息自动发送回应 (Reactions) 来追踪消息。
+📌 <b>用户追踪</b>
+├ 💬 回复消息 + <code>.trace 👍👎🥰</code>
+│  └ 使用指定表情追踪该用户
+└ 🚫 回复消息 + <code>.trace</code>
+   └ 取消追踪该用户
 
-<b>-› 用户追踪</b>
-• 回复一条消息: <code>.trace 👍👎🥰</code> - 使用指定表情追踪该用户
-• 回复一条消息: <code>.trace</code> - 取消追踪该用户
+🔍 <b>关键字追踪</b>
+├ ➕ <code>.trace kw add &lt;词&gt; 👍👎🥰</code>
+│  └ 添加关键字自动回应
+└ ➖ <code>.trace kw del &lt;词&gt;</code>
+   └ 删除关键字追踪
 
-<b>-› 关键字追踪</b>
-• <code>.trace kw add &lt;关键字&gt; 👍👎🥰</code> - 添加关键字追踪
-• <code>.trace kw del &lt;关键字&gt;</code> - 删除关键字追踪
+📊 <b>管理命令</b>
+├ 📈 <code>.trace status</code> - 查看追踪统计
+├ 🗑️ <code>.trace clean</code> - 清除所有追踪
+└ ⚠️ <code>.trace reset</code> - 重置全部数据
 
-<b>-› 管理</b>
-• <code>.trace status</code> - 列出所有追踪中的用户和关键字
-• <code>.trace clean</code> - 清除所有用户和关键字追踪
-• <code>.trace reset</code> - ⚠️ 重置插件所有数据
+⚙️ <b>配置选项</b>
+├ 📝 <code>.trace log [true|false]</code>
+│  └ 操作回执保留 (默认: true)
+└ 🎭 <code>.trace big [true|false]</code>
+   └ 大号表情动画 (默认: true)
 
-<b>-› 设置</b>
-• <code>.trace log [true|false]</code> - 设置是否保留操作回执 (默认: true)
-• <code>.trace big [true|false]</code> - 设置是否使用大号表情动画 (默认: true)
-
-<b>💡 提示:</b>
-• 仅支持部分标准表情和自定义表情 (自定义表情需要 Premium)。
-• 可用标准表情: ${AVAILABLE_REACTIONS}`;
+💡 <b>使用提示</b>
+• 标准表情无需 Premium
+• 自定义表情需要 Premium 订阅
+• 可用表情: <code>${AVAILABLE_REACTIONS}</code>`;
 
 // DB structure definition.
 interface TraceDB {
@@ -68,10 +75,55 @@ class TracePlugin extends Plugin {
 
   private db: any;
   private isPremium: boolean | null = null;
+  // [MODIFIED] Added a property to store our own user ID.
+  private meId: BigInteger | null = null;
+  private MessageBuilder: any;
 
   constructor() {
     super();
     this.initializeDB();
+    this.initMessageBuilder();
+  }
+  
+  private initMessageBuilder() {
+    // Initialize MessageBuilder as inner class
+    const self = this;
+    this.MessageBuilder = class {
+      private text = '';
+      private entities: Api.TypeMessageEntity[] = [];
+      
+      add(str: string): void {
+          this.text += str;
+      }
+      
+      addLine(str: string): void {
+          this.text += str + '\n';
+      }
+      
+      addCustomEmoji(placeholder: string, documentId: BigInteger): void {
+          const offset = this.calculateOffset(this.text);
+          const length = placeholder.length; // Simple length calculation
+          this.text += placeholder;
+          
+          this.entities.push(
+              new Api.MessageEntityCustomEmoji({
+                  offset,
+                  length,
+                  documentId
+              })
+          );
+      }
+      
+      private calculateOffset(text: string): number {
+          // Telegram uses UTF-16 code units for offset calculation
+          return text.length;
+      }
+      
+      
+      build(): { text: string, entities: Api.TypeMessageEntity[] } {
+          return { text: this.text.trim(), entities: this.entities };
+      }
+    };
   }
 
   private async initializeDB() {
@@ -79,17 +131,20 @@ class TracePlugin extends Plugin {
     this.db = await JSONFilePreset<TraceDB>(dbPath, defaultState);
   }
   
-  private async checkPremiumStatus(): Promise<boolean> {
-      if (this.isPremium === null) {
-          const client = await getGlobalClient();
-          if (client) {
-              const me = await client.getMe();
-              this.isPremium = (me as Api.User)?.premium || false;
-          } else {
-              this.isPremium = false;
-          }
-      }
-      return this.isPremium;
+  /**
+   * [MODIFIED] Renamed and enhanced to get our own user ID and premium status.
+   */
+  private async initializeSelf() {
+    if (this.meId === null) {
+        const client = await getGlobalClient();
+        if (client) {
+            const me = await client.getMe() as Api.User;
+            this.isPremium = me?.premium || false;
+            this.meId = me?.id || null;
+        } else {
+            this.isPremium = false;
+        }
+    }
   }
 
   private async handleTrace(msg: Api.Message) {
@@ -134,24 +189,42 @@ class TracePlugin extends Plugin {
 
     } catch (error: any) {
       console.error("[trace] Error handling command:", error);
+      const errorMsg = `❌ <b>操作失败</b>\n` +
+                      `├ 💔 错误类型: ${error.name || 'Unknown'}\n` +
+                      `├ 📝 错误信息: ${htmlEscape(error.message)}\n` +
+                      `└ 💡 请检查命令格式或稍后重试`;
       await msg.edit({
-        text: `❌ <b>操作失败:</b> ${htmlEscape(error.message)}`,
+        text: errorMsg,
         parseMode: "html",
       });
     }
   }
 
+  /**
+   * [MODIFIED] Now ignores messages sent by the bot itself to prevent feedback loops.
+   */
   private async handleMessage(msg: Api.Message) {
-    if (!this.db?.data) return;
+    // Ensure we know who "I" am.
+    await this.initializeSelf();
+    if (!this.db?.data || !msg.senderId || !this.meId) return;
+
+    // If the message is from me, ignore it completely.
+    const senderId = msg.senderId.toString();
+    const isSelf = senderId === this.meId.toString();
+    if (isSelf) {
+        return;
+    }
+
     const { users, keywords, config } = this.db.data;
 
     try {
-      const senderId = msg.senderId?.toString();
-      if (senderId && users[senderId]) {
+      // User trace logic for incoming messages
+      if (users[senderId]) {
         await this.sendReaction(msg.peerId, msg.id, users[senderId], config.big);
         return;
       }
 
+      // Keyword trace logic for incoming messages
       if (msg.message) {
         for (const keyword in keywords) {
           if (msg.message.includes(keyword)) {
@@ -168,111 +241,236 @@ class TracePlugin extends Plugin {
   private async traceUser(msg: Api.Message, repliedMsg: Api.Message, emojiText: string) {
     const userId = repliedMsg.senderId?.toString();
     if (!userId) {
-      await this.editAndDelete(msg, "❌ 无法获取用户信息。");
+      await this.editAndDelete(msg, "❌ <b>操作失败</b>\n└ 无法获取用户信息");
       return;
     }
     const reactions = await this.parseReactions(msg, emojiText);
     if (reactions.length === 0) {
-      await this.editAndDelete(msg, "❌ 未找到有效的表情符号。请检查帮助中的可用列表。");
+      await this.editAndDelete(msg, "❌ <b>操作失败</b>\n├ 未找到有效的表情符号\n└ 请检查帮助中的可用列表");
       return;
     }
     this.db.data.users[userId] = reactions;
     await this.db.write();
     await this.sendReaction(repliedMsg.peerId, repliedMsg.id, reactions, this.db.data.config.big);
     const userEntity = await this.formatEntity(userId);
-    await this.editAndDelete(msg, `✅ <b>成功追踪用户:</b> ${userEntity.display}`, 10);
+    // Extract actual emojis from the original message for display
+    // Get reaction display with entities for custom emojis
+    const reactionCount = reactions.length;
+    const customCount = reactions.filter(r => typeof r !== 'string').length;
+    
+    if (customCount > 0) {
+        // Build message with custom emoji entities
+        const msgBuilder = new this.MessageBuilder();
+        msgBuilder.addLine('✅ 追踪成功');
+        msgBuilder.addLine(`├ 👤 用户: ${userEntity.display.replace(/<[^>]*>/g, '')}`);
+        msgBuilder.add(`├ 🎯 表情: `);
+        
+        // Add reactions with proper entities
+        for (const reaction of reactions) {
+            if (typeof reaction === 'string') {
+                msgBuilder.add(reaction + ' ');
+            } else {
+                // Use a simple emoji as placeholder that will be replaced by custom emoji
+                msgBuilder.addCustomEmoji('😊', reaction);
+                msgBuilder.add(' ');
+            }
+        }
+        msgBuilder.addLine('');
+        
+        msgBuilder.addLine(`├ 📊 表情数: ${reactionCount} 个 (含 ${customCount} 个会员表情)`);
+        msgBuilder.addLine(`└ 📊 当前追踪: ${Object.keys(this.db.data.users).length} 个用户`);
+        
+        const { text: fullMessage, entities: messageEntities } = msgBuilder.build();
+        await this.editAndDeleteWithEntities(msg, fullMessage, messageEntities, 10);
+    } else {
+        // Use HTML formatting for messages without custom emojis
+        const htmlMsg = `✅ <b>追踪成功</b>\n` +
+                      `├ 👤 用户: ${userEntity.display}\n` +
+                      `├ 🎯 表情: ${reactions.join(' ')}\n` +
+                      `├ 📊 表情数: ${reactionCount} 个\n` +
+                      `└ 📊 当前追踪: ${Object.keys(this.db.data.users).length} 个用户`;
+        await this.editAndDelete(msg, htmlMsg, 10);
+    }
   }
 
   private async untraceUser(msg: Api.Message, repliedMsg: Api.Message) {
     const userId = repliedMsg.senderId?.toString();
     if (userId && this.db.data.users[userId]) {
+      const standardCount = this.db.data.users[userId].filter((r: string | BigInteger) => typeof r === 'string').length;
+      const customCount = this.db.data.users[userId].filter((r: string | BigInteger) => typeof r !== 'string').length;
+      const previousReactions = `${standardCount}个标准 + ${customCount}个会员表情`;
       delete this.db.data.users[userId];
       await this.db.write();
       const userEntity = await this.formatEntity(userId);
-      await this.editAndDelete(msg, `🗑️ <b>已取消追踪用户:</b> ${userEntity.display}`, 10);
+      const untrackMsg = `🗑️ <b>取消追踪</b>\n` +
+                        `├ 👤 用户: ${userEntity.display}\n` +
+                        `├ 🎯 原表情: ${previousReactions}\n` +
+                        `└ 📊 剩余追踪: ${Object.keys(this.db.data.users).length} 个用户`;
+      await this.editAndDelete(msg, untrackMsg, 10);
     } else {
-      await this.editAndDelete(msg, "ℹ️ 该用户未被追踪。");
+      await this.editAndDelete(msg, "ℹ️ <b>提示</b>\n└ 该用户未被追踪");
     }
   }
 
   private async traceKeyword(msg: Api.Message, keyword: string, emojiText: string) {
     const reactions = await this.parseReactions(msg, emojiText);
     if (reactions.length === 0) {
-      await this.editAndDelete(msg, "❌ 未找到有效的表情符号。请检查帮助中的可用列表。");
+      await this.editAndDelete(msg, "❌ <b>操作失败</b>\n├ 未找到有效的表情符号\n└ 请检查帮助中的可用列表");
       return;
     }
+    const isUpdate = keyword in this.db.data.keywords;
     this.db.data.keywords[keyword] = reactions;
     await this.db.write();
-    await this.editAndDelete(msg, `✅ <b>成功追踪关键字:</b> <code>${htmlEscape(keyword)}</code>`, 10);
+    // Extract actual emojis from the original message for display
+    const reactionDisplay = await this.getReactionDisplay(msg, emojiText, reactions);
+    const reactionCount = reactions.length;
+    const customCount = reactions.filter(r => typeof r !== 'string').length;
+    const successMsg = `✅ <b>${isUpdate ? '更新' : '添加'}关键字追踪</b>\n` +
+                      `├ 🔑 关键字: <code>${htmlEscape(keyword)}</code>\n` +
+                      `├ 🎯 表情: ${reactionDisplay}\n` +
+                      `├ 📊 表情数: ${reactionCount} 个${customCount > 0 ? ` (${customCount} 个会员表情)` : ''}\n` +
+                      `└ 📊 当前追踪: ${Object.keys(this.db.data.keywords).length} 个关键字`;
+    await this.editAndDelete(msg, successMsg, 10);
   }
 
   private async untraceKeyword(msg: Api.Message, keyword: string) {
     if (this.db.data.keywords[keyword]) {
+      const standardCount = this.db.data.keywords[keyword].filter((r: string | BigInteger) => typeof r === 'string').length;
+      const customCount = this.db.data.keywords[keyword].filter((r: string | BigInteger) => typeof r !== 'string').length;
+      const previousReactions = `${standardCount}个标准 + ${customCount}个会员表情`;
       delete this.db.data.keywords[keyword];
       await this.db.write();
-      await this.editAndDelete(msg, `🗑️ <b>已取消追踪关键字:</b> <code>${htmlEscape(keyword)}</code>`, 10);
+      const untrackMsg = `🗑️ <b>删除关键字追踪</b>\n` +
+                        `├ 🔑 关键字: <code>${htmlEscape(keyword)}</code>\n` +
+                        `├ 🎯 原表情: ${previousReactions}\n` +
+                        `└ 📊 剩余追踪: ${Object.keys(this.db.data.keywords).length} 个关键字`;
+      await this.editAndDelete(msg, untrackMsg, 10);
     } else {
-      await this.editAndDelete(msg, `ℹ️ 关键字 "<code>${htmlEscape(keyword)}</code>" 未被追踪。`);
+      await this.editAndDelete(msg, `ℹ️ <b>提示</b>\n└ 关键字 "<code>${htmlEscape(keyword)}</code>" 未被追踪`);
     }
   }
   
   private async showStatus(msg: Api.Message) {
-    let response = "📄 <b>Trace 状态</b>\n\n";
-    response += "<b>👤 追踪的用户:</b>\n";
     const users = this.db.data.users || {};
-    if (Object.keys(users).length > 0) {
+    const keywords = this.db.data.keywords || {};
+    const userCount = Object.keys(users).length;
+    const keywordCount = Object.keys(keywords).length;
+    const currentTime = new Date().toLocaleString('zh-CN', { 
+      timeZone: 'Asia/Shanghai',
+      hour12: false 
+    });
+    
+    let response = `📊 <b>Trace 追踪状态面板</b>\n`;
+    response += `━━━━━━━━━━━━━━━━\n`;
+    response += `🕐 <i>${currentTime}</i>\n\n`;
+    
+    // Statistics section
+    response += `📈 <b>统计信息</b>\n`;
+    response += `├ 👥 追踪用户: <b>${userCount}</b> 个\n`;
+    response += `├ 🔑 追踪关键字: <b>${keywordCount}</b> 个\n`;
+    response += `└ 📊 总计: <b>${userCount + keywordCount}</b> 项\n\n`;
+    
+    // Users section
+    response += `👤 <b>追踪的用户</b> (${userCount})\n`;
+    if (userCount > 0) {
+        response += `┌──────────\n`;
+        let index = 0;
         for (const userId in users) {
             const userEntity = await this.formatEntity(userId);
-            response += `• ${userEntity.display}\n`;
+            const standardEmojis = users[userId].filter((r: string | BigInteger) => typeof r === 'string');
+            const customEmojis = users[userId].filter((r: string | BigInteger) => typeof r !== 'string');
+            const reactions = standardEmojis.join('') + 
+                             (customEmojis.length > 0 ? ` +${customEmojis.length}会员表情` : '');
+            const prefix = index === userCount - 1 ? '└' : '├';
+            response += `${prefix} ${userEntity.display}\n`;
+            response += `${prefix === '└' ? ' ' : '│'} └ ${reactions}\n`;
+            index++;
         }
     } else {
-        response += "• <i>无</i>\n";
+        response += `└ <i>暂无追踪用户</i>\n`;
     }
-    response += "\n<b>🔑 追踪的关键字:</b>\n";
-    const keywords = this.db.data.keywords || {};
-    if (Object.keys(keywords).length > 0) {
+    
+    // Keywords section
+    response += `\n🔑 <b>追踪的关键字</b> (${keywordCount})\n`;
+    if (keywordCount > 0) {
+        response += `┌──────────\n`;
+        let index = 0;
         for (const keyword in keywords) {
-            response += `• <code>${htmlEscape(keyword)}</code>\n`;
+            const standardEmojis = keywords[keyword].filter((r: string | BigInteger) => typeof r === 'string');
+            const customEmojis = keywords[keyword].filter((r: string | BigInteger) => typeof r !== 'string');
+            const reactions = standardEmojis.join('') + 
+                             (customEmojis.length > 0 ? ` +${customEmojis.length}会员表情` : '');
+            const prefix = index === keywordCount - 1 ? '└' : '├';
+            response += `${prefix} <code>${htmlEscape(keyword)}</code>\n`;
+            response += `${prefix === '└' ? ' ' : '│'} └ ${reactions}\n`;
+            index++;
         }
     } else {
-        response += "• <i>无</i>\n";
+        response += `└ <i>暂无追踪关键字</i>\n`;
     }
-    response += `\n<b>⚙️ 设置:</b>\n`;
-    response += `• 保留日志: <code>${this.db.data.config.keepLog}</code>\n`;
-    response += `• 大号动画: <code>${this.db.data.config.big}</code>\n`;
+    
+    // Settings section
+    response += `\n⚙️ <b>当前配置</b>\n`;
+    response += `├ 📝 保留日志: ${this.db.data.config.keepLog ? '✅ 启用' : '❌ 禁用'}\n`;
+    response += `└ 🎭 大号动画: ${this.db.data.config.big ? '✅ 启用' : '❌ 禁用'}\n`;
+    
+    response += `\n━━━━━━━━━━━━━━━━\n`;
+    response += `💡 <i>使用 .trace help 查看帮助</i>`;
+    
     await msg.edit({ text: response, parseMode: "html" });
   }
 
   private async cleanTraces(msg: Api.Message) {
+    const prevUserCount = Object.keys(this.db.data.users).length;
+    const prevKeywordCount = Object.keys(this.db.data.keywords).length;
     this.db.data.users = {};
     this.db.data.keywords = {};
     await this.db.write();
-    await this.editAndDelete(msg, "🗑️ <b>已清除所有用户和关键字追踪。</b>", 10);
+    const cleanMsg = `🗑️ <b>清理完成</b>\n` +
+                    `├ 👥 清除用户: ${prevUserCount} 个\n` +
+                    `├ 🔑 清除关键字: ${prevKeywordCount} 个\n` +
+                    `└ ✅ 所有追踪已清空`;
+    await this.editAndDelete(msg, cleanMsg, 10);
   }
 
   private async resetDatabase(msg: Api.Message) {
-    this.db.data = defaultState;
+    const prevUserCount = Object.keys(this.db.data.users || {}).length;
+    const prevKeywordCount = Object.keys(this.db.data.keywords || {}).length;
+    this.db.data = { ...defaultState };
     await this.db.write();
-    await this.editAndDelete(msg, "⚠️ <b>Trace 插件数据库已重置。</b>", 10);
+    const resetMsg = `⚠️ <b>数据库重置</b>\n` +
+                    `├ 📊 已清除数据\n` +
+                    `│ ├ 用户: ${prevUserCount} 个\n` +
+                    `│ └ 关键字: ${prevKeywordCount} 个\n` +
+                    `└ ✅ 恢复默认设置`;
+    await this.editAndDelete(msg, resetMsg, 10);
   }
 
   private async setConfig(msg: Api.Message, key: "keepLog" | "big", value: string) {
     const boolValue = value?.toLowerCase() === "true";
     if (value === undefined || (value.toLowerCase() !== "true" && value.toLowerCase() !== "false")) {
-        await this.editAndDelete(msg, `❌ 无效值。请使用 'true' 或 'false'。`);
+        await this.editAndDelete(msg, `❌ <b>参数错误</b>\n└ 请使用 <code>true</code> 或 <code>false</code>`);
         return;
     }
+    const previousValue = this.db.data.config[key];
     this.db.data.config[key] = boolValue;
     await this.db.write();
-    await this.editAndDelete(msg, `✅ <b>设置已更新:</b> <code>${key}</code> = <code>${boolValue}</code>`, 10);
+    const configName = key === 'keepLog' ? '保留日志' : '大号动画';
+    const icon = key === 'keepLog' ? '📝' : '🎭';
+    const configMsg = `⚙️ <b>配置更新</b>\n` +
+                     `├ ${icon} 项目: ${configName}\n` +
+                     `├ 🔄 旧值: ${previousValue ? '✅ 启用' : '❌ 禁用'}\n` +
+                     `├ ✨ 新值: ${boolValue ? '✅ 启用' : '❌ 禁用'}\n` +
+                     `└ 💾 配置已保存`;
+    await this.editAndDelete(msg, configMsg, 10);
   }
 
-  private async formatEntity(target: any, mention?: boolean, throwErrorIfFailed?: boolean) {
+  private async formatEntity(target: string | Api.TypePeer, mention?: boolean, throwErrorIfFailed?: boolean) {
     const client = await getGlobalClient();
     if (!client) throw new Error("客户端未初始化");
     let id: any, entity: any;
     try {
-      entity = target?.className ? target : await client?.getEntity(target);
+      entity = (typeof target !== 'string' && target?.className) ? target : await client?.getEntity(target);
       if (!entity) throw new Error("无法获取entity");
       id = entity.id;
     } catch (e: any) {
@@ -296,11 +494,11 @@ class TracePlugin extends Plugin {
   }
 
   private async parseReactions(msg: Api.Message, text: string): Promise<(string | BigInteger)[]> {
+    await this.initializeSelf(); // Ensures isPremium is set
     const validReactions: (string | BigInteger)[] = [];
-    const isPremium = await this.checkPremiumStatus();
     const customEmojiMap = new Map<number, BigInteger>();
     const customEmojiIndices = new Set<number>();
-    if (isPremium) {
+    if (this.isPremium) {
         const customEmojiEntities = (msg.entities || []).filter(
             (e): e is Api.MessageEntityCustomEmoji => e instanceof Api.MessageEntityCustomEmoji
         );
@@ -327,7 +525,7 @@ class TracePlugin extends Plugin {
     return [...new Set(validReactions)];
   }
 
-  private async sendReaction(peer: Api.TypePeer, msgId: number, reactions: (string | any)[], big: boolean) {
+  private async sendReaction(peer: Api.TypePeer, msgId: number, reactions: (string | BigInteger)[], big: boolean) {
     const client = await getGlobalClient();
     if (!client || reactions.length === 0) return;
     
@@ -349,18 +547,76 @@ class TracePlugin extends Plugin {
     );
   }
 
+  // Remove duplicate MessageBuilder definition
+  
   /**
-   * [MODIFIED] Unreferences the timer to allow the Node.js process to exit gracefully during restarts.
+   * Helper method to get display text for reactions (fallback without entities)
    */
+  private async getReactionDisplay(msg: Api.Message, emojiText: string, reactions: (string | BigInteger)[]): Promise<string> {
+    const displayParts: string[] = [];
+    let customEmojiCount = 0;
+    
+    for (const reaction of reactions) {
+      if (typeof reaction === 'string') {
+        // Standard emoji - can be displayed directly
+        displayParts.push(reaction);
+      } else {
+        // Custom emoji - use a special indicator
+        customEmojiCount++;
+        // Show custom emoji with its ID prefix for identification
+        const idPrefix = reaction.toString().slice(0, 4);
+        displayParts.push(`[Premium:${idPrefix}]`);
+      }
+    }
+    
+    // If there are custom emojis, add a note
+    if (customEmojiCount > 0) {
+      return displayParts.join(' ') + ` (含 ${customEmojiCount} 个会员表情)`;
+    }
+    
+    return displayParts.join(' ');
+  }
+
   private async editAndDelete(msg: Api.Message, text: string, seconds: number = 5) {
       await msg.edit({ text, parseMode: "html" });
       if (!this.db.data.config.keepLog) {
-          // Create the timer.
           const timer = setTimeout(() => {
-              msg.delete().catch(() => {}); // Add a catch for safety.
+              msg.delete().catch(() => {});
           }, seconds * 1000);
-          
-          // Unreference it so it doesn't block the process from exiting.
+          timer.unref();
+      }
+  }
+  
+  private async editAndDeleteWithEntities(msg: Api.Message, text: string, entities: Api.TypeMessageEntity[], seconds: number = 5) {
+      const client = await getGlobalClient();
+      if (!client) {
+          // Fallback to regular edit if client unavailable
+          await msg.edit({ text, parseMode: "html" });
+          return;
+      }
+      
+      try {
+          // Use bottom-level API call to edit message with entities
+          await client.invoke(
+              new Api.messages.EditMessage({
+                  peer: msg.peerId,
+                  id: msg.id,
+                  message: text,
+                  entities: entities,
+                  // Don't use parseMode when using entities
+                  noWebpage: true
+              })
+          );
+      } catch (error) {
+          console.error("[trace] Failed to edit with entities:", error);
+          // Fallback to regular edit without custom emoji entities
+          await msg.edit({ text, parseMode: "html" });
+      }
+      
+      if (!this.db.data.config.keepLog) {
+          const timer = setTimeout(() => {
+              msg.delete().catch(() => {});
+          }, seconds * 1000);
           timer.unref();
       }
   }
