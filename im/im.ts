@@ -493,6 +493,7 @@ class ImageMonitorPlugin extends Plugin {
                     }
                     return;
                 }
+                return; // 是贴纸但不在封禁列表，直接返回，不作为普通图片处理
             }
             if (docRaw.mimeType?.startsWith("image/")) {
                 fileSize = docRaw.size ? Number(docRaw.size) : undefined;
