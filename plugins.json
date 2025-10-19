@@ -310,5 +310,9 @@
   "soutu": {
     "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/soutu/soutu.ts?raw=true",
     "desc": "soutu搜图插件"
+  },
+  "im": {
+    "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/im/im.ts?raw=true",
+    "desc": "群组媒体消息监控封禁"
   }
 }
