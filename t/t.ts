@@ -49,12 +49,12 @@ async function saveUserData(userData: AllUserData) {
 
 function getInitialRoles(): Record<string, string> {
   return {
-    "薯薯": "cc1c9874effe4526883662166456513c", "宣传片": "dd43b30d04d9446a94ebe41f301229b5",
+    "薯薯": "cc1c9874effe4526883662166456513c", "麦当劳": "4066d617322e41abb30ed70eaeaf273f",
     "影视飓风": "91648d8a8d9841c5a1c54fb18e54ab04", "丁真": "54a5170264694bfc8e9ad98df7bd89c3",
     "雷军": "aebaa2305aa2452fbdc8f41eec852a79", "蔡徐坤": "e4642e5edccd4d9ab61a69e82d4f8a14",
     "邓紫棋": "3b55b3d84d2f453a98d8ca9bb24182d6", "周杰伦": "1512d05841734931bf905d0520c272b1",
     "周星驰": "faa3273e5013411199abc13d8f3d6445", "孙笑川": "e80ea225770f42f79d50aa98be3cedfc",
-    "张顺飞": "c88b80d38d0f4ed0aed1a92a5c19f00f", "阿诺": "daeda14f742f47b8ac243ccf21c62df8",
+    "央视配音": "59cb5986671546eaa6ca8ae6f29f6d22", "阿诺": "daeda14f742f47b8ac243ccf21c62df8",
     "卢本伟": "24d524b57c5948f598e9b74c4dacc7ab", "电棍": "25d496c425d14109ba4958b6e47ea037",
     "炫狗": "b48533d37bed4ef4b9ad5b11d8b0b694", "阿梓": "c2a6125240f343498e26a9cf38db87b7",
     "七海": "a7725771e0974eb5a9b044ba357f6e13", "嘉然": "1d11381f42b54487b895486f69fb14fb",
@@ -72,7 +72,10 @@ function getInitialRoles(): Record<string, string> {
     "蜡笔小新": "60b9a847ba6e485fa8abbde1b9470bc4", "奶龙": "3d1cb00d75184099992ddbaf0fdd7387",
     "懒羊羊": "131c6b3a889543139680d8b3aa26b98d", "剑魔": "ffb55be33cbb4af19b07e9a0ef64dab1",
     "小明剑魔": "a9372068ed0740b48326cf9a74d7496a", "唐僧": "0fb04af381e845e49450762bc941508c",
-    "孙悟空": "8d96d5525334476aa67677fb43059dc5"
+    "孙悟空": "8d96d5525334476aa67677fb43059dc5", "王琨": "4f201abba2574feeae11e5ebf737859e",
+    "麦辣鸡腿堡": "c293697468924f3089cd9b90520dbc16", "猪八戒": "4313e3ec56f14eb3946630dbdad01059",
+    "夏(中配) 蔚蓝档案": "c5fca4f670214e3cb7fbb9d595552e6e", "蔚蓝档案阿洛娜": "6ec8168d8392467c82358a780b35c5ca",
+    "蔚蓝档案星野": "057265ac020c41a9a91d57c747d3b4c0"
   };
 }
 
@@ -113,7 +116,7 @@ async function generateMusic(
   const finalFile = path.join(cacheDir, `tts-${unique}-meta.mp3`);
 
   try {
-    // 先请求 TTS API，生成裸 MP3
+    // TTS API MP3 处理
     const res = await axios.post(
       api_url,
       { text, reference_id: referenceId },
@@ -176,8 +179,6 @@ async function generateMusic(
   }
 }
 
-
-// === 简单语音 ===
 async function generateSpeechSimple(
   text: string, referenceId: string, apiKey: string
 ): Promise<{ oggFile: string; mp3File: string } | null> {
@@ -198,7 +199,21 @@ async function generateSpeechSimple(
   }
 }
 
-// === 主入口 ===
+/** 私聊删除命令：为双方删除；群/频道：仅自己删除 */
+async function deleteCommandMessage(msg: Api.Message) {
+  try {
+    // GramJS 提供了 isPrivate，可稳妥判断是否为私聊
+    const isPrivate = (msg as any).isPrivate === true
+      || (msg.peerId instanceof (Api as any).PeerUser);
+
+    if (isPrivate) {
+      await (msg as any).delete({ revoke: true });   // 双向删除
+    } else {
+      await msg.delete();                             // 普通删除
+    }
+  } catch {}
+}
+
 async function tts(msg: Api.Message) {
   const userId = msg.senderId?.toString();
   if (!userId) return;
@@ -235,9 +250,14 @@ async function tts(msg: Api.Message) {
     await msg.edit({ text: "🎶 正在生成音乐..." });
     const file = await generateMusic(cleanTextForTTS(text), cfg.defaultRoleId, cfg.apiKey, { title, artist, album, cover });
     if (file) {
+      // 计算回复目标：优先被你回复的那条消息
+      const rep = msg.replyTo?.replyToMsgId ? await msg.getReplyMessage() : null;
+      const replyToId = rep?.id ?? msg.id;
+
       await msg.client?.sendFile(msg.peerId, {
         file,
         caption: `${title} - ${artist}`,
+        replyTo: replyToId,
         attributes: [
           new (Api as any).DocumentAttributeAudio({
             duration: 0,
@@ -247,7 +267,7 @@ async function tts(msg: Api.Message) {
         ],
       });
       try { await fs.unlink(file); } catch {}
-      await msg.delete();
+      await deleteCommandMessage(msg);   // ← 按会话类型选择删除方式
     } else {
       await msg.edit({ text: "❌ 生成失败" });
     }
@@ -256,9 +276,11 @@ async function tts(msg: Api.Message) {
 
   // 普通语音
   let text = parts.join(" ");
-  if (!text && msg.replyTo?.replyToMsgId) {
+  let replyToId = msg.id;
+  if (msg.replyTo?.replyToMsgId) {
     const rep = await msg.getReplyMessage();
-    if (rep?.text) text = rep.text;
+    if (rep?.text) text = text || rep.text;
+    if (rep?.id) replyToId = rep.id;
   }
   if (!text) {
     await msg.edit({ text: "❌ 用法: .t 文本 或 .t 歌曲名 歌手 [专辑名] 文本" });
@@ -269,11 +291,11 @@ async function tts(msg: Api.Message) {
   if (r) {
     await msg.client?.sendFile(msg.peerId, {
       file: r.oggFile,
-      replyTo: msg.id,
+      replyTo: replyToId,
       attributes: [new (Api as any).DocumentAttributeAudio({ duration: 0, voice: true })],
     });
     try { await fs.unlink(r.oggFile); await fs.unlink(r.mp3File); } catch {}
-    await msg.delete();
+    await deleteCommandMessage(msg);     // ← 按会话类型选择删除方式
   } else {
     await msg.edit({ text: "❌ 生成失败" });
   }
@@ -285,7 +307,21 @@ async function ttsSet(msg: Api.Message) {
   if (!userId) return;
   const [, roleName] = msg.text?.split(/\s+/).filter(Boolean) || [];
   const userData = await loadUserData();
-  if (roleName && userData.roles[roleName]) {
+
+  // 不带角色名：列出所有
+  if (!roleName) {
+    const names = Object.keys(userData.roles);
+    const list = names.map((n, i) => `${i + 1}. ${n}`).join("\n");
+    await msg.edit({
+      text:
+        `🎭 可用角色（${names.length}）\n` +
+        `当前：${userData.users[userId]?.defaultRole || "未设置"}\n\n` +
+        list + `\n\n用法：.ts 角色名`,
+    });
+    return;
+  }
+
+  if (userData.roles[roleName]) {
     if (!userData.users[userId]) {
       userData.users[userId] = { apiKey: "", defaultRole: "雷军", defaultRoleId: userData.roles["雷军"] };
     }
@@ -322,7 +358,7 @@ class TTSPlugin extends Plugin {
 • <code>.t 歌曲名 歌手 文本</code> - 音乐模式
 • <code>.t 歌曲名 歌手 专辑名 文本</code> - 音乐模式(指定专辑)
 • <code>.t fm 封面链接</code> - 设置当前角色封面
-• <code>.ts 角色名</code> - 切换角色
+• <code>.ts [角色名]</code> - 切换角色；不带参数显示角色列表
 • <code>.tk APIKey</code> - 设置 API Key
 `;
 
