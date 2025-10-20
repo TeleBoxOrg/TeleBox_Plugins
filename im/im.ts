@@ -1,4 +1,4 @@
-import { Plugin } from "@utils/pluginBase";
+import { getPrefixes } from "@utils/pluginManager";
 import { getGlobalClient } from "@utils/globalClient";
 import { createDirectoryInAssets } from "@utils/pathHelpers";
 import { banUser } from "@utils/banUtils";
@@ -183,13 +183,17 @@ class ImageMonitorPlugin extends Plugin {
     const client = await getGlobalClient();
     if (!client) return;
 
-    // 检查是否为回复图片并添加MD5的命令
+    // 获取有效的命令前缀
+    const prefixes = getPrefixes();
     const text = msg.text || "";
     const commandParts = text.split(" ");
     const command = commandParts[0].toLowerCase();
     const subCommand = commandParts[1]?.toLowerCase();
 
-    if (msg.isReply && (command === ".im" || command === "im")) {
+    // 检查是否为有效的.im命令（必须以正确前缀开头）
+    const isValidImCommand = prefixes.some(prefix => command === `${prefix}im`);
+    
+    if (msg.isReply && isValidImCommand) {
         const repliedMsg = await msg.getReplyMessage();
         if (!repliedMsg) {
             await MessageManager.edit(msg, "❌ 未找到被回复的消息。");
@@ -258,11 +262,17 @@ class ImageMonitorPlugin extends Plugin {
         return;
     }
 
-    // 如果不是回复命令，则执行常规的消息处理
-    if (options?.isEdited) {
-      await this.handleEditedMessage({ message: msg } as EditedMessageEvent);
-    } else {
-      await this.handleNewMessage({ message: msg } as NewMessageEvent);
+    // 如果不是回复命令，则执行常规的消息处理（自动监听图片）
+    const config = await ConfigManager.getConfig();
+    if (!config.enabled) return;
+    
+    const chatId = await getPeerId(client, msg);
+    if (chatId && config.monitoredChats.some(c => c.id === chatId)) {
+      if (options?.isEdited) {
+        await this.handleEditedMessage({ message: msg } as EditedMessageEvent);
+      } else {
+        await this.handleNewMessage({ message: msg } as NewMessageEvent);
+      }
     }
   };
 
