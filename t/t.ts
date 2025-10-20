@@ -25,12 +25,25 @@ interface AllUserData {
 const dataFilePath = path.join(createDirectoryInAssets("tts-plugin"), DATA_FILE_NAME);
 const cacheDir = createDirectoryInAssets("tts-plugin/cache");
 
+/** 读取 + 同步角色（把代码里的新角色并入到 json，不覆盖已有同名条目） */
 async function loadUserData(): Promise<AllUserData> {
   try {
     const data = await fs.readFile(dataFilePath, "utf8");
-    const parsed = JSON.parse(data);
-    if (!parsed.roles) parsed.roles = getInitialRoles();
+    const parsed: AllUserData = JSON.parse(data);
+
+    if (!parsed.roles) parsed.roles = {};
     if (!parsed.covers) parsed.covers = { "薯薯": "https://raw.githubusercontent.com/Yu9191/-/main/image.png" };
+
+    // 合并新增的内置角色
+    const initial = getInitialRoles();
+    let changed = false;
+    for (const [name, id] of Object.entries(initial)) {
+      if (!(name in parsed.roles)) {
+        parsed.roles[name] = id;
+        changed = true;
+      }
+    }
+    if (changed) await saveUserData(parsed);
     return parsed;
   } catch {
     const initial: AllUserData = {
@@ -79,21 +92,20 @@ function getInitialRoles(): Record<string, string> {
   };
 }
 
-
-// === 清理文本 ===
+/** 清理文本（emoji/不在白名单的符号；合并连续标点） */
 function cleanTextForTTS(text: string): string {
   if (!text) return "";
   let cleanedText = text;
   const broadSymbolRegex = new RegExp(
     "[" +
-    "\u{1F600}-\u{1F64F}" +
-    "\u{1F300}-\u{1F5FF}" +
-    "\u{1F680}-\u{1F6FF}" +
-    "\u{2600}-\u{26FF}" +
-    "\u{2700}-\u{27BF}" +
-    "\u{FE0F}" +
-    "\u{200D}" +
-    "]",
+      "\u{1F600}-\u{1F64F}" +
+      "\u{1F300}-\u{1F5FF}" +
+      "\u{1F680}-\u{1F6FF}" +
+      "\u{2600}-\u{26FF}" +
+      "\u{2700}-\u{27BF}" +
+      "\u{FE0F}" +
+      "\u{200D}" +
+      "]",
     "gu"
   );
   cleanedText = cleanedText.replace(broadSymbolRegex, "");
@@ -103,7 +115,7 @@ function cleanTextForTTS(text: string): string {
   return cleanedText.trim();
 }
 
-// === 生成带封面的音乐 ===
+// 生成带封面的音乐
 async function generateMusic(
   text: string,
   referenceId: string,
@@ -116,30 +128,22 @@ async function generateMusic(
   const finalFile = path.join(cacheDir, `tts-${unique}-meta.mp3`);
 
   try {
-    // TTS API MP3 处理
     const res = await axios.post(
       api_url,
       { text, reference_id: referenceId },
       {
-        headers: {
-          Authorization: `Bearer ${apiKey}`,
-          "Content-Type": "application/json",
-        },
+        headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
         responseType: "arraybuffer",
       }
     );
     await fs.writeFile(rawFile, res.data);
 
-    // ffmpeg 命令
     const cmd: string[] = [`ffmpeg -y -i "${rawFile}"`];
 
     if (meta.cover) {
       const coverPath = path.join(cacheDir, `${meta.album}.jpg`);
-
-      // 如果本地没有封面文件，再下载
-      try {
-        await fs.access(coverPath);
-      } catch {
+      try { await fs.access(coverPath); }
+      catch {
         const coverRes = await axios.get(meta.cover, { responseType: "arraybuffer" });
         await fs.writeFile(coverPath, coverRes.data);
       }
@@ -165,20 +169,17 @@ async function generateMusic(
       `"${finalFile}"`
     );
 
-    const finalCmd = cmd.join(" ");
-    await execPromise(finalCmd);
-
+    await execPromise(cmd.join(" "));
     return finalFile;
   } catch (e: any) {
     console.error("生成音乐失败:", e.message || e);
     return null;
   } finally {
-    try {
-      await fs.unlink(rawFile);
-    } catch {}
+    try { await fs.unlink(rawFile); } catch {}
   }
 }
 
+// 语音
 async function generateSpeechSimple(
   text: string, referenceId: string, apiKey: string
 ): Promise<{ oggFile: string; mp3File: string } | null> {
@@ -202,18 +203,19 @@ async function generateSpeechSimple(
 /** 私聊删除命令：为双方删除；群/频道：仅自己删除 */
 async function deleteCommandMessage(msg: Api.Message) {
   try {
-    // GramJS 提供了 isPrivate，可稳妥判断是否为私聊
-    const isPrivate = (msg as any).isPrivate === true
-      || (msg.peerId instanceof (Api as any).PeerUser);
+    const isPrivate =
+      (msg as any).isPrivate === true ||
+      (msg.peerId instanceof (Api as any).PeerUser);
 
     if (isPrivate) {
-      await (msg as any).delete({ revoke: true });   // 双向删除
+      await (msg as any).delete({ revoke: true }); // 双向删除
     } else {
-      await msg.delete();                             // 普通删除
+      await msg.delete(); // 普通删除
     }
   } catch {}
 }
 
+// 文字转语音主处理
 async function tts(msg: Api.Message) {
   const userId = msg.senderId?.toString();
   if (!userId) return;
@@ -234,26 +236,23 @@ async function tts(msg: Api.Message) {
     return;
   }
 
-  // 音乐模式
+  // 音乐模式：歌曲名 歌手 [专辑名] 文本
   if (parts.length >= 3) {
     const title = parts[0];
     const artist = parts[1];
     let album = cfg.defaultRole;
     let text = "";
-    if (parts.length >= 4) {
-      album = parts[2];
-      text = parts.slice(3).join(" ");
-    } else {
-      text = parts.slice(2).join(" ");
-    }
+    if (parts.length >= 4) { album = parts[2]; text = parts.slice(3).join(" "); }
+    else { text = parts.slice(2).join(" "); }
+
     const cover = userData.covers?.[cfg.defaultRole];
-    await msg.edit({ text: "🎶 正在生成音乐..." });
+
+    // 优先被你回复的那条消息
+    const rep = msg.replyTo?.replyToMsgId ? await msg.getReplyMessage() : null;
+    const replyToId = rep?.id ?? msg.id;
+
     const file = await generateMusic(cleanTextForTTS(text), cfg.defaultRoleId, cfg.apiKey, { title, artist, album, cover });
     if (file) {
-      // 计算回复目标：优先被你回复的那条消息
-      const rep = msg.replyTo?.replyToMsgId ? await msg.getReplyMessage() : null;
-      const replyToId = rep?.id ?? msg.id;
-
       await msg.client?.sendFile(msg.peerId, {
         file,
         caption: `${title} - ${artist}`,
@@ -261,20 +260,20 @@ async function tts(msg: Api.Message) {
         attributes: [
           new (Api as any).DocumentAttributeAudio({
             duration: 0,
-            title: title,
+            title,
             performer: artist,
           }),
         ],
       });
       try { await fs.unlink(file); } catch {}
-      await deleteCommandMessage(msg);   // ← 按会话类型选择删除方式
+      await deleteCommandMessage(msg); // 发送后删命令
     } else {
       await msg.edit({ text: "❌ 生成失败" });
     }
     return;
   }
 
-  // 普通语音
+  // 普通语音：.t 文本 或 仅 .t（取被回复消息的文本）
   let text = parts.join(" ");
   let replyToId = msg.id;
   if (msg.replyTo?.replyToMsgId) {
@@ -286,7 +285,7 @@ async function tts(msg: Api.Message) {
     await msg.edit({ text: "❌ 用法: .t 文本 或 .t 歌曲名 歌手 [专辑名] 文本" });
     return;
   }
-  await msg.edit({ text: "🎤 正在生成语音..." });
+
   const r = await generateSpeechSimple(cleanTextForTTS(text), cfg.defaultRoleId, cfg.apiKey);
   if (r) {
     await msg.client?.sendFile(msg.peerId, {
@@ -295,32 +294,74 @@ async function tts(msg: Api.Message) {
       attributes: [new (Api as any).DocumentAttributeAudio({ duration: 0, voice: true })],
     });
     try { await fs.unlink(r.oggFile); await fs.unlink(r.mp3File); } catch {}
-    await deleteCommandMessage(msg);     // ← 按会话类型选择删除方式
+    await deleteCommandMessage(msg); // 发送后删命令
   } else {
     await msg.edit({ text: "❌ 生成失败" });
   }
 }
 
-// === 角色/Key 设置 ===
+// 角色/Key 设置 
 async function ttsSet(msg: Api.Message) {
   const userId = msg.senderId?.toString();
   if (!userId) return;
-  const [, roleName] = msg.text?.split(/\s+/).filter(Boolean) || [];
+
+  const args = msg.text?.trim().split(/\s+/).slice(1) || []; // 去掉命令名后的参数
   const userData = await loadUserData();
 
-  // 不带角色名：列出所有
-  if (!roleName) {
+  // 分页参数识别：.ts 或 .ts <页码> ——
+  const PAGE_SIZE = 20;
+  const maybePage = args.length === 1 && /^\d+$/.test(args[0]) ? parseInt(args[0], 10) : null;
+
+  //或者只有页码：分页展示角色列表
+  if (args.length === 0 || (maybePage !== null && args.length === 1)) {
     const names = Object.keys(userData.roles);
-    const list = names.map((n, i) => `${i + 1}. ${n}`).join("\n");
-    await msg.edit({
-      text:
-        `🎭 可用角色（${names.length}）\n` +
-        `当前：${userData.users[userId]?.defaultRole || "未设置"}\n\n` +
-        list + `\n\n用法：.ts 角色名`,
-    });
+    const total = names.length;
+    const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
+    const page = Math.min(Math.max(maybePage ?? 1, 1), totalPages);
+
+    const start = (page - 1) * PAGE_SIZE;
+    const slice = names.slice(start, start + PAGE_SIZE);
+    const list = slice.map((n, i) => `${start + i + 1}. ${n}`).join("\n");
+
+    const text =
+      `🎭 可用角色（${total}） | 第 ${page}/${totalPages} 页\n` +
+      `当前：${userData.users[userId]?.defaultRole || "未设置"}\n\n` +
+      list +
+      `\n\n用法：\n` +
+      `• .ts 角色名 （切换）\n` +
+      `• .ts 角色名 角色ID （新增/更新并切换）\n` +
+      `• .ts 2 （查看第 2 页）`;
+
+    await msg.edit({ text });
     return;
   }
 
+  // 新增/更新角色并切换为默认
+  if (args.length >= 2) {
+    const roleName = args[0];
+    const roleId   = args[1];
+
+    if (!roleName || !roleId) {
+      await msg.edit({ text: "❌ 参数不完整。用法：.ts 角色名 角色ID" });
+      return;
+    }
+
+    userData.roles[roleName] = roleId; // 新增或更新
+
+    if (!userData.users[userId]) {
+      userData.users[userId] = { apiKey: "", defaultRole: roleName, defaultRoleId: roleId };
+    } else {
+      userData.users[userId].defaultRole = roleName;
+      userData.users[userId].defaultRoleId = roleId;
+    }
+
+    await saveUserData(userData);
+    await msg.edit({ text: `✅ 已新增/更新角色：${roleName}\n并切换为默认（ID: ${roleId}）` });
+    return;
+  }
+
+  // 切换角色
+  const roleName = args[0];
   if (userData.roles[roleName]) {
     if (!userData.users[userId]) {
       userData.users[userId] = { apiKey: "", defaultRole: "雷军", defaultRoleId: userData.roles["雷军"] };
@@ -330,7 +371,7 @@ async function ttsSet(msg: Api.Message) {
     await saveUserData(userData);
     await msg.edit({ text: `✅ 默认角色已切换为: ${roleName}` });
   } else {
-    await msg.edit({ text: "❌ 无效的角色名" });
+    await msg.edit({ text: `❌ 无效的角色名：${roleName}\n提示：可以用 ".ts 角色名 角色ID" 直接新增。` });
   }
 }
 
@@ -354,14 +395,16 @@ async function setApiKey(msg: Api.Message) {
 class TTSPlugin extends Plugin {
   description = `
 🚀 <b>文字转语音/音乐插件</b>
-• <code>.t 文本</code> - 普通语音
-• <code>.t 歌曲名 歌手 文本</code> - 音乐模式
-• <code>.t 歌曲名 歌手 专辑名 文本</code> - 音乐模式(指定专辑)
+• <code>.t 文本</code> - 普通语音（发送后自动删命令）
+• <code>.t 歌曲名 歌手 [专辑名] 文本</code> - 音乐模式（发送后自动删命令）
 • <code>.t fm 封面链接</code> - 设置当前角色封面
-• <code>.ts [角色名]</code> - 切换角色；不带参数显示角色列表
+• <code>.ts [页码]</code> - 分页查看角色列表（默认每页 20）
+• <code>.ts 角色名</code> - 切换角色
+• <code>.ts 角色名 角色ID</code> - 新增/更新并切换为默认
 • <code>.tk APIKey</code> - 设置 API Key
+• 第一次需要申请 Fish API Key: https://fish.audio/
+• 更多角色选择请查看: https://fish.audio/zh-CN/app/discovery/
 `;
-
   cmdHandlers = { t: tts, ts: ttsSet, tk: setApiKey };
 }
 
