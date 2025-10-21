@@ -57,6 +57,7 @@ const help_text = `⚙️ <b>Git PR 管理插件</b>
 • <code>${mainPrefix}${pluginName} repos</code> - 列出有编辑权限的仓库
 • <code>${mainPrefix}${pluginName} prs &lt;仓库名&gt;</code> - 列出仓库的PR
 • <code>${mainPrefix}${pluginName} merge &lt;仓库名&gt; &lt;PR编号&gt;</code> - 合并PR
+• <code>${mainPrefix}${pluginName} mergeall &lt;仓库名&gt;</code> - 按序号合并所有可合并的PR
 • <code>${mainPrefix}${pluginName} help</code> - 显示此帮助消息`;
 
 // 配置键
@@ -175,6 +176,9 @@ class GitManagerPlugin extends Plugin {
           case "merge":
             await this.handleMerge(msg, args.slice(1));
             break;
+          case "mergeall":
+            await this.handleMergeAll(msg, args.slice(1));
+            break;
           default:
             await msg.edit({ text: `❌ <b>未知子命令:</b> <code>${htmlEscape(sub)}</code>\n\n${help_text}`, parseMode: "html" });
         }
@@ -291,6 +295,76 @@ class GitManagerPlugin extends Plugin {
       const errorMsg = error.response?.data?.message || error.message;
       throw new Error(`合并失败: ${errorMsg}`);
     }
+  }
+
+  private async handleMergeAll(msg: Api.Message, args: string[]) {
+    if (args.length < 1) {
+      throw new Error("参数不足，需要提供仓库名");
+    }
+    const repoName = args[0];
+    await msg.edit({ text: `🔄 正在准备批量合并 <code>${htmlEscape(repoName)}</code> 的PR...`, parseMode: "html" });
+
+    const parts = repoName.split("/");
+    if (parts.length !== 2) {
+      throw new Error("仓库名格式应为 owner/repo，例如 octocat/Hello-World");
+    }
+    const [owner, repo] = parts;
+
+    const api = await getApi();
+
+    // 1. 获取所有PR的详细信息
+    const prsResponse = await api.get(`/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/pulls`, {
+      params: { state: "open", per_page: 100 }
+    });
+
+    const prsList: any[] = prsResponse.data || [];
+    if (!prsList.length) {
+      await msg.edit({ text: `ℹ️ 仓库 <code>${htmlEscape(repoName)}</code> 中没有待处理的PR。`, parseMode: "html" });
+      return;
+    }
+
+    // 2. 筛选可合并的PR
+    const mergeablePRs = [];
+    for (const item of prsList) {
+        try {
+            const pr = await api.get(`/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/pulls/${item.number}`);
+            if (pr.data?.mergeable) {
+                mergeablePRs.push(item);
+            }
+        } catch (e) {
+            // 忽略获取详情失败的PR
+        }
+    }
+
+    if (mergeablePRs.length === 0) {
+      await msg.edit({ text: `ℹ️ 仓库 <code>${htmlEscape(repoName)}</code> 中没有可自动合并的PR。`, parseMode: "html" });
+      return;
+    }
+
+    // 按PR编号升序排序
+    mergeablePRs.sort((a, b) => a.number - b.number);
+
+    // 3. 依次合并
+    let report = `🔀 <b>批量合并报告 for <code>${htmlEscape(repoName)}</code>:</b>\n\n`;
+    let successCount = 0;
+    let failCount = 0;
+
+    for (const pr of mergeablePRs) {
+      try {
+        await api.put(`/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/pulls/${pr.number}/merge`);
+        report += `✅ <b>#${pr.number}</b>: ${htmlEscape(pr.title)} - <b>成功</b>\n`;
+        successCount++;
+      } catch (error: any) {
+        const errorMsg = error.response?.data?.message || error.message;
+        report += `❌ <b>#${pr.number}</b>: ${htmlEscape(pr.title)} - <b>失败:</b> ${htmlEscape(errorMsg)}\n`;
+        failCount++;
+      }
+      // 编辑消息以显示进度
+      await sendLongMessage(msg, report + `\n🔄 进度: ${successCount + failCount}/${mergeablePRs.length}...`);
+    }
+
+    report += `\n🎉 <b>操作完成:</b> ${successCount}个成功, ${failCount}个失败。`;
+    await sendLongMessage(msg, report);
   }
 }
 
