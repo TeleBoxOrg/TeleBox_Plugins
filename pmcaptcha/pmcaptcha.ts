@@ -724,6 +724,74 @@ async function deleteAndReportUser(
   }
 }
 
+// Check if user is an official verified bot
+async function isOfficialVerifiedBot(
+  client: TelegramClient,
+  userId: number
+): Promise<boolean> {
+  try {
+    const entity = await getEntityWithHash(client, userId);
+    
+    const userFull = await client.invoke(
+      new Api.users.GetFullUser({ id: entity })
+    );
+    const user = userFull.users[0] as Api.User;
+    
+    // 检查是否为官方认证的机器人
+    if (user.bot && user.verified) {
+      log(LogLevel.INFO, `User ${userId} is an official verified bot`);
+      return true;
+    }
+    
+    return false;
+  } catch (error) {
+    log(LogLevel.ERROR, `Failed to check if user ${userId} is official verified bot`, error);
+    return false;
+  }
+}
+
+// Check if conversation is in saved messages folder
+async function isInSavedMessagesFolder(
+  client: TelegramClient,
+  userId: number
+): Promise<boolean> {
+  try {
+    // 获取用户的文件夹信息
+    const dialogs = await client.invoke(
+      new Api.messages.GetDialogs({
+        offsetDate: 0,
+        offsetId: 0,
+        offsetPeer: new Api.InputPeerEmpty(),
+        limit: 200,
+        hash: bigInt(0),
+        excludePinned: false,
+        folderId: undefined, // 主文件夹
+      })
+    );
+
+    if (dialogs instanceof Api.messages.Dialogs || dialogs instanceof Api.messages.DialogsSlice) {
+      for (const dialog of dialogs.dialogs) {
+        if (dialog instanceof Api.Dialog) {
+          // 检查是否为目标用户的对话
+          const peer = dialog.peer;
+          if (peer instanceof Api.PeerUser && Number(peer.userId) === userId) {
+            // 检查是否在收藏夹（文件夹ID为1通常是收藏夹）
+            if (dialog.folderId === 1) {
+              log(LogLevel.INFO, `User ${userId} conversation is in saved messages folder`);
+              return true;
+            }
+          }
+        }
+      }
+    }
+    
+    return false;
+  } catch (error) {
+    log(LogLevel.ERROR, `Failed to check if user ${userId} is in saved messages folder`, error);
+    return false;
+  }
+}
+
 // Check if user is valid (not bot, deleted, fake, scam)
 async function isValidUser(
   client: TelegramClient,
@@ -1298,6 +1366,19 @@ async function pmcaptchaMessageListener(message: Api.Message) {
 
     // From here, we only handle incoming messages
     if (!userId || userId <= 0) return;
+
+    // 🔵 HIGHEST PRIORITY: Check if user is official verified bot or in saved messages folder
+    const isOfficialBot = await isOfficialVerifiedBot(client, userId);
+    if (isOfficialBot) {
+      log(LogLevel.INFO, `Ignoring message from official verified bot ${userId}`);
+      return; // 禁止任何反应
+    }
+
+    const isInSavedFolder = await isInSavedMessagesFolder(client, userId);
+    if (isInSavedFolder) {
+      log(LogLevel.INFO, `Ignoring message from saved messages folder user ${userId}`);
+      return; // 禁止任何反应
+    }
 
     // PRIORITY 1: Check if user is in an active challenge.
     const activeChallenge = activeChallenges.get(userId);
