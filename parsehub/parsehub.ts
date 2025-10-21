@@ -2,6 +2,9 @@ import { Plugin } from "@utils/pluginBase";
 import { Api } from "telegram";
 import { getPrefixes } from "@utils/pluginManager";
 import { sleep } from "telegram/Helpers";
+import { createDirectoryInAssets } from "@utils/pathHelpers";
+import * as path from "path";
+import * as fs from "fs";
 
 const BOT_USERNAME = "ParseHubot";
 const POLL_INTERVAL_MS = 2000;
@@ -24,7 +27,8 @@ const commandName = `${mainPrefix}${pluginName}`;
 const helpText = `
 依赖 @ParseHubot
 
-<code>${commandName} 链接</code> 解析社交媒体链接
+1) 直接命令：<code>${commandName} 链接</code>
+2) 回复消息后使用：在含链接的消息上回复 <code>${commandName}</code>
 
 示例：
 <code>${commandName} https://twitter.com/user/status/123</code>
@@ -45,6 +49,40 @@ const htmlEscape = (text: string): string =>
   );
 
 let hasStartedBot = false;
+let firstRunPreStartLastId = 0;
+let shouldIgnoreNextBotMessage = false;
+
+type InitState = {
+  initialized: boolean;
+  ignoredUpToId?: number;
+};
+
+const STATE_DIR = createDirectoryInAssets(pluginName);
+const STATE_PATH = path.join(STATE_DIR, "state.json");
+
+function readState(): InitState {
+  try {
+    const raw = fs.readFileSync(STATE_PATH, "utf-8");
+    const parsed = JSON.parse(raw);
+    return {
+      initialized: Boolean(parsed?.initialized),
+      ignoredUpToId: Number.isFinite(parsed?.ignoredUpToId)
+        ? Number(parsed.ignoredUpToId)
+        : undefined,
+    };
+  } catch {
+    return { initialized: false };
+  }
+}
+
+function writeState(state: InitState) {
+  try {
+    fs.writeFileSync(STATE_PATH, JSON.stringify(state), "utf-8");
+  } catch {}
+}
+
+let initState: InitState = readState();
+let ignoredUpToId = Number(initState.ignoredUpToId || 0) || 0;
 
 const isProgressText = (text?: string | null): boolean => {
   if (!text) return false;
@@ -101,6 +139,10 @@ async function ensureBotReady(msg: Api.Message) {
   } catch {}
 
   try {
+    if (!initState.initialized) {
+      firstRunPreStartLastId = await getLatestBotMessageId(client);
+      shouldIgnoreNextBotMessage = true;
+    }
     await client.invoke(
       new Api.messages.StartBot({
         bot: BOT_USERNAME,
@@ -111,9 +153,32 @@ async function ensureBotReady(msg: Api.Message) {
     hasStartedBot = true;
   } catch {
     try {
+      if (!initState.initialized) {
+        firstRunPreStartLastId = await getLatestBotMessageId(client);
+        shouldIgnoreNextBotMessage = true;
+      }
       await client.sendMessage(BOT_USERNAME, { message: "/start" });
       hasStartedBot = true;
     } catch {}
+  }
+
+  // Best-effort: capture welcome message id to avoid mis-forwarding
+  if (!initState.initialized && client) {
+    const deadline = Date.now() + 10000; // up to 10s to observe welcome
+    while (Date.now() < deadline) {
+      await sleep(500);
+      try {
+        const latestId = await getLatestBotMessageId(client);
+        if (latestId > firstRunPreStartLastId && latestId > ignoredUpToId) {
+          ignoredUpToId = latestId;
+          initState.initialized = true;
+          initState.ignoredUpToId = latestId;
+          writeState(initState);
+          shouldIgnoreNextBotMessage = false;
+          break;
+        }
+      } catch {}
+    }
   }
 }
 
@@ -186,6 +251,7 @@ async function relayParseResult(
   const deadline = Date.now() + MAX_WAIT_MS;
   let lastId = baselineId;
   let lastFinalActivity = 0;
+  let firstRunIgnore = shouldIgnoreNextBotMessage;
 
   while (Date.now() < deadline) {
     await sleep(POLL_INTERVAL_MS);
@@ -215,6 +281,18 @@ async function relayParseResult(
 
       const text = botMsg.message?.trim();
       if (isProgressText(text)) {
+        continue;
+      }
+
+      if (firstRunIgnore) {
+        // Ignore the first non-progress incoming message after initial /start
+        firstRunIgnore = false;
+        shouldIgnoreNextBotMessage = false;
+        ignoredUpToId = botMsg.id;
+        initState.initialized = true;
+        initState.ignoredUpToId = botMsg.id;
+        writeState(initState);
+        lastId = Math.max(lastId, botMsg.id);
         continue;
       }
 
@@ -287,7 +365,33 @@ class ParseHubPlugin extends Plugin {
         new RegExp(`^${commandName}\\s*`, "i"),
         "",
       );
-      const links = extractLinks(cleaned);
+      let links = extractLinks(cleaned);
+
+      // 若命令未包含链接且为回复消息，从被回复消息中提取链接
+      if (!links.length && msg.replyTo?.replyToMsgId) {
+        try {
+          const replied = await msg.getReplyMessage();
+          const replyText = replied?.message || "";
+          const replyLinks = extractLinks(replyText);
+          if (replyLinks.length) {
+            links = replyLinks;
+          }
+        } catch {}
+      }
+
+      // 若命令和被回复消息都包含链接，合并去重，命令里的在前
+      if (msg.replyTo?.replyToMsgId) {
+        try {
+          const replied = await msg.getReplyMessage();
+          const replyText = replied?.message || "";
+          const replyLinks = extractLinks(replyText);
+          if (replyLinks.length) {
+            const set = new Set<string>(links);
+            for (const l of replyLinks) set.add(l);
+            links = Array.from(set);
+          }
+        } catch {}
+      }
 
       if (!links.length) {
         await msg.edit({ text: helpText, parseMode: "html" });
@@ -309,6 +413,22 @@ class ParseHubPlugin extends Plugin {
       }
 
       let baselineId = await getLatestBotMessageId(client);
+      // If we have recorded a welcome message id to ignore, advance baseline
+      if (ignoredUpToId > baselineId) {
+        baselineId = ignoredUpToId;
+      }
+      // If first-run flag is set but latest already moved beyond pre-start,
+      // treat initialization as complete to avoid skipping valid results.
+      if (
+        shouldIgnoreNextBotMessage &&
+        firstRunPreStartLastId > 0 &&
+        baselineId > firstRunPreStartLastId
+      ) {
+        shouldIgnoreNextBotMessage = false;
+        initState.initialized = true;
+        initState.ignoredUpToId = baselineId;
+        writeState(initState);
+      }
 
       for (const link of links) {
         const outcome = await relayParseResult(msg, link, baselineId);
