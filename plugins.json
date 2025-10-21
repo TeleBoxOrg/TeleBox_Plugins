@@ -267,6 +267,10 @@
     "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/zpr/zpr.ts?raw=true",
     "desc": "二次元图片"
   },
+  "parsehub": {
+    "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/parsehub/parsehub.ts?raw=true",
+    "desc": "社交媒体链接解析助手"
+  },
   "pmcaptcha": {
     "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/pmcaptcha/pmcaptcha.ts?raw=true",
     "desc": "pmcaptcha私聊验证"
