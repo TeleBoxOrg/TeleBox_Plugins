@@ -105,7 +105,7 @@ const DEFAULT_CONFIG = {
   [CONFIG_KEYS.ENABLED]: true,
   [CONFIG_KEYS.BLOCK_ALL]: false,  // 默认关闭完全禁止
   [CONFIG_KEYS.BLOCK_BOTS]: true,
-  [CONFIG_KEYS.GROUPS_COMMON]: 5,
+  [CONFIG_KEYS.GROUPS_COMMON]: 1,
   [CONFIG_KEYS.STICKER_TIMEOUT]: 180,
   [CONFIG_KEYS.STATS_TOTAL_VERIFIED]: 0,
   [CONFIG_KEYS.STATS_TOTAL_BLOCKED]: 0,
@@ -146,6 +146,36 @@ async function waitForConfigDb(timeout = 5000): Promise<boolean> {
 
 // Call initialization
 initConfigDb();
+
+// Auto-scan existing chats on plugin startup
+let autoScanCompleted = false;
+async function performAutoScan(client: TelegramClient) {
+  // Wait for config DB to be ready
+  if (!(await waitForConfigDb(10000))) {
+    console.error("[PMCaptcha] Config DB not ready for auto-scan");
+    return;
+  }
+  
+  // Only scan if plugin is enabled
+  if (!dbHelpers.isPluginEnabled()) {
+    return;
+  }
+  
+  // Prevent multiple scans
+  if (autoScanCompleted) {
+    return;
+  }
+  
+  autoScanCompleted = true;
+  console.log("[PMCaptcha] Starting background auto-scan...");
+  
+  try {
+    await scanExistingChats(client, undefined, true); // Silent scan
+    console.log("[PMCaptcha] Background auto-scan completed");
+  } catch (error) {
+    console.error("[PMCaptcha] Auto-scan failed:", error);
+  }
+}
 
 // Prepared statement cache
 const preparedStatements: Record<string, any> = {};
@@ -1216,8 +1246,10 @@ async function hasChatHistory(
 }
 
 // Scan and whitelist existing chats on enable
-async function scanExistingChats(client: TelegramClient, progressCallback?: (msg: string) => Promise<void>) {
-  console.log("[PMCaptcha] Starting optimized private chat scan...");
+async function scanExistingChats(client: TelegramClient, progressCallback?: (msg: string) => Promise<void>, silent: boolean = false) {
+  if (!silent) {
+    console.log("[PMCaptcha] Starting optimized private chat scan...");
+  }
   let scannedCount = 0;
   let whitelistedCount = 0;
   let skipCount = 0;
@@ -1229,8 +1261,9 @@ async function scanExistingChats(client: TelegramClient, progressCallback?: (msg
     }
 
     const allDialogs: (Api.messages.Dialogs | Api.messages.DialogsSlice)[] = [];
-    // Scan both main folder (undefined) and archive (1)
-    for (const folderId of [undefined, 1]) {
+    // Scan main folder (undefined), archive (1), and other custom folders (0-10)
+    const folderIds = [undefined, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
+    for (const folderId of folderIds) {
       try {
         const dialogs = await client.invoke(
           new Api.messages.GetDialogs({
@@ -1247,7 +1280,10 @@ async function scanExistingChats(client: TelegramClient, progressCallback?: (msg
           allDialogs.push(dialogs as any);
         }
       } catch (e) {
-        console.warn(`[PMCaptcha] Could not fetch dialogs for folder ${folderId}:`, e);
+        // 静默处理不存在的文件夹
+        if (!silent && folderId !== undefined && folderId <= 1) {
+          console.warn(`[PMCaptcha] Could not fetch dialogs for folder ${folderId}:`, e);
+        }
       }
     }
 
@@ -1266,7 +1302,9 @@ async function scanExistingChats(client: TelegramClient, progressCallback?: (msg
     }
 
     scannedCount = privateChats.length;
-    console.log(`[PMCaptcha] Found ${scannedCount} private chats across all folders`);
+    if (!silent) {
+      console.log(`[PMCaptcha] Found ${scannedCount} private chats across all folders`);
+    }
 
     if (progressCallback) {
       await progressCallback(`🔍 发现 ${scannedCount} 个私聊对话，正在处理...`);
@@ -1290,7 +1328,9 @@ async function scanExistingChats(client: TelegramClient, progressCallback?: (msg
             if (messages.length > 0) {
               dbHelpers.addToWhitelist(userId);
               whitelistedCount++;
-              console.log(`[PMCaptcha] Auto-whitelisted user ${userId} (${user.username || user.firstName || 'User'})`);
+              if (!silent) {
+                console.log(`[PMCaptcha] Auto-whitelisted user ${userId} (${user.username || user.firstName || 'User'})`);
+              }
             }
           } catch (error) {
             // Ignore users where history can't be fetched
@@ -1299,13 +1339,17 @@ async function scanExistingChats(client: TelegramClient, progressCallback?: (msg
       }
 
       if (processed >= maxScan) {
-        console.log(`[PMCaptcha] Reached scan limit: ${maxScan}`);
+        if (!silent) {
+          console.log(`[PMCaptcha] Reached scan limit: ${maxScan}`);
+        }
         break;
       }
     }
 
     const resultMsg = `✅ 扫描完成\n• 私聊对话: ${scannedCount}\n• 新增白名单: ${whitelistedCount}\n• 已存在: ${skipCount}`;
-    console.log(`[PMCaptcha] ${resultMsg}`);
+    if (!silent) {
+      console.log(`[PMCaptcha] ${resultMsg}`);
+    }
 
     if (progressCallback) {
       await progressCallback(resultMsg);
@@ -1327,6 +1371,11 @@ async function pmcaptchaMessageListener(message: Api.Message) {
   }
   try {
     const client = message.client as TelegramClient;
+
+    // Trigger auto-scan on first message (background)
+    if (!autoScanCompleted) {
+      setTimeout(() => performAutoScan(client), 1000);
+    }
 
     // Only handle private messages
     if (!message.isPrivate) return;
