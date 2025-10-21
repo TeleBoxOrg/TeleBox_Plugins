@@ -24,7 +24,7 @@ const commandName = `${mainPrefix}${pluginName}`;
 const helpText = `
 依赖 @ParseHubot
 
-<code>${commandName} 链接</code> 解析社交媒体链接（支持多条，空格或换行分隔）
+<code>${commandName} 链接</code> 解析社交媒体链接
 
 示例：
 <code>${commandName} https://twitter.com/user/status/123</code>
@@ -295,7 +295,7 @@ class ParseHubPlugin extends Plugin {
       }
 
       await msg.edit({
-        text: `🚀 已提交 ${links.length} 条链接至 @${BOT_USERNAME}，仅保留最终解析结果。`,
+        text: `✅ 已提交链接至 @${BOT_USERNAME}，正在解析中，请等待。`,
         parseMode: "html",
       });
 
