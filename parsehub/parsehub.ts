@@ -27,7 +27,8 @@ const commandName = `${mainPrefix}${pluginName}`;
 const helpText = `
 依赖 @ParseHubot
 
-<code>${commandName} 链接</code> 解析社交媒体链接
+1) 直接命令：<code>${commandName} 链接</code>
+2) 回复消息后使用：在含链接的消息上回复 <code>${commandName}</code>
 
 示例：
 <code>${commandName} https://twitter.com/user/status/123</code>
@@ -364,7 +365,33 @@ class ParseHubPlugin extends Plugin {
         new RegExp(`^${commandName}\\s*`, "i"),
         "",
       );
-      const links = extractLinks(cleaned);
+      let links = extractLinks(cleaned);
+
+      // 若命令未包含链接且为回复消息，从被回复消息中提取链接
+      if (!links.length && msg.replyTo?.replyToMsgId) {
+        try {
+          const replied = await msg.getReplyMessage();
+          const replyText = replied?.message || "";
+          const replyLinks = extractLinks(replyText);
+          if (replyLinks.length) {
+            links = replyLinks;
+          }
+        } catch {}
+      }
+
+      // 若命令和被回复消息都包含链接，合并去重，命令里的在前
+      if (msg.replyTo?.replyToMsgId) {
+        try {
+          const replied = await msg.getReplyMessage();
+          const replyText = replied?.message || "";
+          const replyLinks = extractLinks(replyText);
+          if (replyLinks.length) {
+            const set = new Set<string>(links);
+            for (const l of replyLinks) set.add(l);
+            links = Array.from(set);
+          }
+        } catch {}
+      }
 
       if (!links.length) {
         await msg.edit({ text: helpText, parseMode: "html" });
