@@ -62,6 +62,7 @@ npm i <插件名>
 - `news` - 每日新闻插件  
 - `ntp` - NTP 时间同步插件  
 - `oxost` - 回复聊天中的文件与媒体 得到一个临时的下载链接  
+- `parsehub` - 社交媒体链接解析助手  
 - `pic_to_sticker` - 图片转表情  
 - `pmcaptcha` - pmcaptcha私聊验证  
 - `q` - 消息引用生成贴纸  
