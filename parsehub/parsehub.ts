@@ -36,6 +36,8 @@ const htmlEscape = (text: string): string =>
       })[ch] || ch,
   );
 
+let hasStartedBot = false;
+
 function extractLinks(text: string): string[] {
   if (!text) return [];
   const matches = text.match(/(?:https?:\/\/|www\.)\S+/gi) || [];
@@ -71,6 +73,18 @@ async function ensureBotReady(msg: Api.Message) {
     );
   } catch {}
 
+  if (hasStartedBot) {
+    return;
+  }
+
+  try {
+    const history = await client.getMessages(BOT_USERNAME, { limit: 1 });
+    if (history.length > 0) {
+      hasStartedBot = true;
+      return;
+    }
+  } catch {}
+
   try {
     await client.invoke(
       new Api.messages.StartBot({
@@ -79,9 +93,11 @@ async function ensureBotReady(msg: Api.Message) {
         startParam: "",
       }),
     );
+    hasStartedBot = true;
   } catch {
     try {
       await client.sendMessage(BOT_USERNAME, { message: "/start" });
+      hasStartedBot = true;
     } catch {}
   }
 }
