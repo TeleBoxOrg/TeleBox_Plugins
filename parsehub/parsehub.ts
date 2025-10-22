@@ -30,6 +30,19 @@ const helpText = `
 1) 直接命令：<code>${commandName} 链接</code>
 2) 回复消息后使用：在含链接的消息上回复 <code>${commandName}</code>
 
+目前支持的平台:
+抖音视频|图文
+哔哩哔哩视频|动态
+YouTube
+YouTube Music
+TikTok视频|图文
+小红书视频|图文
+Twitter视频|图文
+百度贴吧视频|图文
+Facebook视频
+微博视频|图文
+Instagram视频|图文
+
 示例：
 <code>${commandName} https://twitter.com/user/status/123</code>
 <code>${commandName} https://www.instagram.com/p/xxxx/</code>
@@ -221,6 +234,7 @@ async function forwardChunk(client: any, peer: any, ids: number[]) {
   await client.forwardMessages(peer, {
     fromPeer: BOT_USERNAME,
     messages: ids,
+    dropAuthor: true,
   });
 }
 
@@ -396,6 +410,10 @@ class ParseHubPlugin extends Plugin {
       if (!links.length) {
         await msg.edit({ text: helpText, parseMode: "html" });
         return;
+      }
+
+      if (links.length > 1) {
+        links = [links[0]];
       }
 
       await msg.edit({
