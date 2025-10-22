@@ -234,6 +234,7 @@ async function forwardChunk(client: any, peer: any, ids: number[]) {
   await client.forwardMessages(peer, {
     fromPeer: BOT_USERNAME,
     messages: ids,
+    dropAuthor: true,
   });
 }
 
