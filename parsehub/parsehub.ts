@@ -412,6 +412,10 @@ class ParseHubPlugin extends Plugin {
         return;
       }
 
+      if (links.length > 1) {
+        links = [links[0]];
+      }
+
       await msg.edit({
         text: `✅ 已提交链接至 @${BOT_USERNAME}，正在解析中，请等待。`,
         parseMode: "html",
