@@ -147,7 +147,7 @@ async function waitForConfigDb(timeout = 5000): Promise<boolean> {
 // Call initialization
 initConfigDb();
 
-// Auto-scan existing chats on plugin startup
+// Auto-scan contacts on plugin startup
 let autoScanCompleted = false;
 async function performAutoScan(client: TelegramClient) {
   // Wait for config DB to be ready
@@ -155,23 +155,25 @@ async function performAutoScan(client: TelegramClient) {
     console.error("[PMCaptcha] Config DB not ready for auto-scan");
     return;
   }
-  
+
   // Only scan if plugin is enabled
   if (!dbHelpers.isPluginEnabled()) {
     return;
   }
-  
+
   // Prevent multiple scans
   if (autoScanCompleted) {
     return;
   }
-  
+
   autoScanCompleted = true;
-  console.log("[PMCaptcha] Starting background auto-scan...");
-  
+  console.log("[PMCaptcha] Starting background contact auto-scan...");
+
   try {
-    await scanExistingChats(client, undefined, true); // Silent scan
-    console.log("[PMCaptcha] Background auto-scan completed");
+    const count = await scanContactsAndWhitelist(client, true); // Silent scan
+    if (count > 0) {
+      console.log(`[PMCaptcha] Background contact auto-scan completed. Whitelisted ${count} new contacts.`);
+    }
   } catch (error) {
     console.error("[PMCaptcha] Auto-scan failed:", error);
   }
@@ -1245,6 +1247,40 @@ async function hasChatHistory(
   }
 }
 
+// Scan contacts and add them to the whitelist
+async function scanContactsAndWhitelist(client: TelegramClient, silent: boolean = false): Promise<number> {
+  if (!silent) {
+    console.log("[PMCaptcha] Starting contact scan...");
+  }
+  let whitelistedCount = 0;
+
+  try {
+    const contactsResult = await client.invoke(
+      new Api.contacts.GetContacts({ hash: bigInt(0) })
+    );
+
+    if (contactsResult instanceof Api.contacts.Contacts) {
+      for (const user of contactsResult.users) {
+        if (user instanceof Api.User && !user.bot) {
+          const userId = Number(user.id);
+          if (!dbHelpers.isWhitelisted(userId)) {
+            dbHelpers.addToWhitelist(userId);
+            whitelistedCount++;
+          }
+        }
+      }
+    }
+
+    if (!silent && whitelistedCount > 0) {
+      console.log(`[PMCaptcha] Added ${whitelistedCount} new users from contacts to whitelist.`);
+    }
+    return whitelistedCount;
+  } catch (error) {
+    console.error("[PMCaptcha] Failed to scan contacts:", error);
+    return 0;
+  }
+}
+
 // Scan and whitelist existing chats on enable
 async function scanExistingChats(client: TelegramClient, progressCallback?: (msg: string) => Promise<void>, silent: boolean = false) {
   if (!silent) {
@@ -1842,6 +1878,38 @@ const pmcaptcha = async (message: Api.Message) => {
           break;
         }
 
+        // 🔒 安全检查1：检查是否为收藏夹用户
+        try {
+          const inSavedFolder = await isInSavedMessagesFolder(client, delUserId);
+          if (inSavedFolder) {
+            await client.editMessage(message.peerId, {
+              message: message.id,
+              text: `⚠️ <b>安全保护</b>\n\n拒绝移除用户 <code>${delUserId}</code>\n\n<b>原因：</b> 该用户在收藏夹中\n\n💡 <i>收藏夹用户受保护，无法从白名单移除</i>`,
+              parseMode: "html",
+            });
+            log(LogLevel.WARN, `Prevented removal of saved folder user ${delUserId}`);
+            break;
+          }
+        } catch (e) {
+          log(LogLevel.WARN, `Could not check saved folder status for user ${delUserId}: ${e}`);
+        }
+
+        // 🔒 安全检查2：检查是否为官方认证机器人
+        try {
+          const isOfficialBot = await isOfficialVerifiedBot(client, delUserId);
+          if (isOfficialBot) {
+            await client.editMessage(message.peerId, {
+              message: message.id,
+              text: `⚠️ <b>安全保护</b>\n\n拒绝移除用户 <code>${delUserId}</code>\n\n<b>原因：</b> 该用户为官方认证Bot\n\n💡 <i>官方Bot受保护，无法从白名单移除</i>`,
+              parseMode: "html",
+            });
+            log(LogLevel.WARN, `Prevented removal of official verified bot ${delUserId}`);
+            break;
+          }
+        } catch (e) {
+          log(LogLevel.WARN, `Could not check official bot status for user ${delUserId}: ${e}`);
+        }
+
         dbHelpers.removeFromWhitelist(delUserId);
         await client.editMessage(message.peerId, {
           message: message.id,
@@ -1853,20 +1921,45 @@ const pmcaptcha = async (message: Api.Message) => {
       case "scan":
       case "rescan":
       case "s":
-        await client.editMessage(message.peerId, {
-          message: message.id,
-          text: "🔄 <b>开始扫描对话</b>\n\n正在获取对话列表...",
-          parseMode: "html",
-        });
-        
-        // Manual scan with progress callback
-        await scanExistingChats(client, async (progressMsg: string) => {
+        const scanType = args[1] || 'chats'; // Default to 'chats'
+
+        if (scanType === 'contacts') {
           await client.editMessage(message.peerId, {
             message: message.id,
-            text: `🔄 <b>扫描对话中</b>\n\n${progressMsg}`,
+            text: "🔄 <b>开始扫描联系人...</b>",
             parseMode: "html",
           });
-        });
+          const count = await scanContactsAndWhitelist(client, false);
+          await client.editMessage(message.peerId, {
+            message: message.id,
+            text: `✅ <b>联系人扫描完成</b>\n\n• 新增白名单: ${count} 人`,
+            parseMode: "html",
+          });
+
+        } else if (scanType === 'chats') {
+          await client.editMessage(message.peerId, {
+            message: message.id,
+            text: "🔄 <b>开始扫描对话</b>\n\n正在获取对话列表...",
+            parseMode: "html",
+          });
+          
+          // Manual scan with progress callback
+          await scanExistingChats(client, async (progressMsg: string) => {
+            try {
+              await client.editMessage(message.peerId, {
+                message: message.id,
+                text: `🔄 <b>扫描对话中</b>\n\n${progressMsg}`,
+                parseMode: "html",
+              });
+            } catch (e) { /* Ignore non-modified errors */ }
+          });
+        } else {
+            await client.editMessage(message.peerId, {
+                message: message.id,
+                text: `❌ <b>无效的扫描类型</b>\n\n请使用 <code>.pmcaptcha scan contacts</code> 或 <code>.pmcaptcha scan chats</code>`,
+                parseMode: "html",
+            });
+        }
         break;
 
       case "scan_set": {
@@ -1898,11 +1991,11 @@ const pmcaptcha = async (message: Api.Message) => {
           
           await client.editMessage(message.peerId, {
             message: message.id,
-            text: `⚠️ <b>危险操作确认</b>\n\n🗑️ 即将清空所有白名单用户 (<code>${whitelistCount.count}</code> 个)\n\n<b>⚠️ 重要提醒：</b>\n• 所有用户将需要重新验证\n• 此操作无法撤销\n• 建议先备份重要用户ID\n\n<b>确认清空：</b>\n<code>.pmcaptcha clear confirm</code>\n\n<b>取消操作：</b>\n发送其他任意命令`,
+            text: `⚠️ <b>危险操作确认</b>\n\n🗑️ 即将清空所有白名单用户 (<code>${whitelistCount.count}</code> 个)\n\n<b>🔒 安全保护：</b>\n• 收藏夹用户将保留\n• 官方认证Bot将保留\n\n<b>⚠️ 重要提醒：</b>\n• 其他用户将需要重新验证\n• 此操作无法撤销\n• 建议先备份重要用户ID\n\n<b>确认清空：</b>\n<code>.pmcaptcha clear confirm</code>\n\n<b>取消操作：</b>\n发送其他任意命令`,
             parseMode: "html",
           });
         } else {
-          // Clear all whitelist
+          // Clear all whitelist with protection
           if (!db) {
             await client.editMessage(message.peerId, {
               message: message.id,
@@ -1912,16 +2005,66 @@ const pmcaptcha = async (message: Api.Message) => {
             break;
           }
           try {
-            const stmt = db.prepare("DELETE FROM pmcaptcha_whitelist");
-            const info = stmt.run();
+            // 获取所有白名单用户
+            const allUsers = db
+              .prepare("SELECT user_id FROM pmcaptcha_whitelist")
+              .all() as WhitelistRow[];
+            
+            const protectedUsers: number[] = [];
+            let deletedCount = 0;
+            
+            // 检查每个用户，保留收藏夹用户和官方Bot
+            for (const row of allUsers) {
+              const userId = row.user_id;
+              let shouldProtect = false;
+              
+              try {
+                // 检查1：收藏夹用户
+                const inSavedFolder = await isInSavedMessagesFolder(client, userId);
+                if (inSavedFolder) {
+                  shouldProtect = true;
+                  protectedUsers.push(userId);
+                  continue;
+                }
+                
+                // 检查2：官方认证Bot
+                const isOfficialBot = await isOfficialVerifiedBot(client, userId);
+                if (isOfficialBot) {
+                  shouldProtect = true;
+                  protectedUsers.push(userId);
+                  continue;
+                }
+              } catch (e) {
+                log(LogLevel.WARN, `Could not check protection status for user ${userId}: ${e}`);
+              }
+              
+              // 不受保护的用户，从白名单移除
+              if (!shouldProtect) {
+                dbHelpers.removeFromWhitelist(userId);
+                deletedCount++;
+              }
+            }
+            
+            let resultMsg = `✅ <b>白名单清理完成</b>\n\n`;
+            resultMsg += `🗑️ 已删除 <code>${deletedCount}</code> 个用户\n`;
+            
+            if (protectedUsers.length > 0) {
+              resultMsg += `🔒 保留 <code>${protectedUsers.length}</code> 个受保护用户\n`;
+            }
+            
+            resultMsg += `\n<b>后续操作建议：</b>\n`;
+            resultMsg += `• 使用 <code>.pmcaptcha scan [type]</code> - 扫描用户 (type: contacts, chats)\n`;
+            resultMsg += `• <code>.pmcaptcha enable</code> 重新启用并扫描\n`;
+            resultMsg += `• 手动添加重要用户到白名单\n`;
+            resultMsg += `\n💡 <i>所有新的私聊用户将需要重新验证</i>`;
             
             await client.editMessage(message.peerId, {
               message: message.id,
-              text: `✅ <b>白名单清理完成</b>\n\n🗑️ 已删除 <code>${info.changes}</code> 个用户\n\n<b>后续操作建议：</b>\n• 使用 <code>.pmcaptcha scan</code> 重新扫描对话\n• 使用 <code>.pmcaptcha enable</code> 重新启用并扫描\n• 手动添加重要用户到白名单\n\n💡 <i>所有新的私聊用户将需要重新验证</i>`,
+              text: resultMsg,
               parseMode: "html",
             });
             
-            console.log(`[PMCaptcha] Cleared ${info.changes} users from whitelist`);
+            log(LogLevel.INFO, `Cleared ${deletedCount} users from whitelist, protected ${protectedUsers.length} users`);
           } catch (error) {
             await client.editMessage(message.peerId, {
               message: message.id,
@@ -1964,12 +2107,30 @@ const pmcaptcha = async (message: Api.Message) => {
         
         const maxDisplay = Math.min(whitelistUsers.length, 200); // 最多显示200个
 
+        let displayIndex = 0;
+        let skippedCount = 0;
         for (let i = 0; i < maxDisplay; i++) {
           const row = whitelistUsers[i];
           const userId = row.user_id;
+          
+          // 跳过自己
+          if (userId === Number(message.senderId)) {
+            skippedCount++;
+            continue;
+          }
+          
           let displayLine = "";
 
           try {
+            // 先检查是否在收藏夹中（保护收藏夹用户）
+            const inSavedFolder = await isInSavedMessagesFolder(client, userId);
+            if (inSavedFolder) {
+              displayIndex++;
+              displayLine = `${displayIndex}. <i>收藏夹用户 (ID: ${userId})</i> | <a href="tg://user?id=${userId}">打开聊天</a>`;
+              userListText += displayLine + "\n";
+              continue;
+            }
+
             const entity = await getEntityWithHash(client, userId);
             if (entity) {
               const userFull = await client.invoke(
@@ -1977,31 +2138,49 @@ const pmcaptcha = async (message: Api.Message) => {
               );
               const user = userFull.users[0] as any;
 
-              // 构建显示格式：序号. 昵称 | @用户名 | [打开聊天]
+              // 跳过官方机器人（但保留在白名单中）
+              if (user.bot && user.verified) {
+                displayIndex++;
+                const botName = user.username ? `@${user.username}` : (user.firstName || "Bot");
+                displayLine = `${displayIndex}. 🤖 <i>${htmlEscape(botName)} (官方Bot)</i> | <a href="tg://user?id=${userId}">打开聊天</a>`;
+                userListText += displayLine + "\n";
+                continue;
+              }
+
+              displayIndex++;
+
+              // 构建显示格式：序号. @用户名 | 昵称 | [打开聊天]
               const fullName = `${user.firstName || ""} ${user.lastName || ""}`.trim();
               const username = user.username ? `@${user.username}` : "";
               
-              // 优先显示昵称
-              if (fullName) {
-                displayLine = `${i + 1}. ${htmlEscape(fullName)}`;
-              } else {
-                displayLine = `${i + 1}. User${userId}`;
-              }
-              
-              // 添加用户名（如果有）
+              // 优先显示用户名
               if (username) {
-                displayLine += ` | ${htmlEscape(username)}`;
+                displayLine = `${displayIndex}. ${htmlEscape(username)}`;
+                // 添加昵称（如果有且与用户名不同）
+                if (fullName) {
+                  displayLine += ` | ${htmlEscape(fullName)}`;
+                }
+              } else if (fullName) {
+                // 没有用户名时显示昵称
+                displayLine = `${displayIndex}. ${htmlEscape(fullName)}`;
+              } else {
+                // 都没有时显示默认格式
+                displayLine = `${displayIndex}. User${userId}`;
               }
               
               // 添加跳转链接
               displayLine += ` | <a href="tg://user?id=${userId}">打开聊天</a>`;
             } else {
-              // 无法获取用户信息时的显示
-              displayLine = `${i + 1}. ID: ${userId} | <a href="tg://user?id=${userId}">打开聊天</a>`;
+              // 无法获取用户信息时，仅标记而不删除
+              displayIndex++;
+              displayLine = `${displayIndex}. <i>⚠️ 未找到 (ID: ${userId})</i>`;
+              log(LogLevel.WARN, `Could not fetch entity for user ${userId} in whitelist`);
             }
           } catch (e) {
-            // 获取失败时只显示ID和链接
-            displayLine = `${i + 1}. ID: ${userId} | <a href="tg://user?id=${userId}">打开聊天</a>`;
+            // 获取失败时，仅标记而不删除（安全防护）
+            displayIndex++;
+            displayLine = `${displayIndex}. <i>⚠️ 获取失败 (ID: ${userId})</i>`;
+            log(LogLevel.WARN, `Failed to fetch user ${userId} in whitelist: ${e}`);
           }
           
           userListText += displayLine + "\n";
