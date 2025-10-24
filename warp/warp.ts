@@ -325,6 +325,7 @@ MTU = 1280
 PublicKey = bmXOC+F1FxEMF9dyiK2H5/1SUtzH0JuVo51h2wPfgyo=
 AllowedIPs = 0.0.0.0/0, ::/0
 Endpoint = engage.cloudflareclient.com:2408
+PersistentKeepalive = 25
 
 [Socks5]
 BindAddress = 127.0.0.1:${port}`;
@@ -333,7 +334,8 @@ BindAddress = 127.0.0.1:${port}`;
   private static generateService(): string {
     return `[Unit]
 Description=WireProxy for WARP
-After=network.target
+Wants=network-online.target
+After=network-online.target
 Documentation=https://github.com/fscarmen/warp-sh
 Documentation=https://github.com/pufferffish/wireproxy
 
@@ -341,6 +343,7 @@ Documentation=https://github.com/pufferffish/wireproxy
 ExecStart=${WIREPROXY_BINARY} -c ${WIREPROXY_CONFIG_FILE}
 RemainAfterExit=yes
 Restart=always
+RestartSec=3
 
 [Install]
 WantedBy=multi-user.target`;
