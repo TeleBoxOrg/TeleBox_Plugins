@@ -134,7 +134,7 @@ class KeywordTask {
 
     if (message.fromId && "userId" in message.fromId) {
       const userId = Number(message.fromId.userId);
-      const firstName = "User"; // 简化处理，实际中可以通过API获取用户信息
+      const firstName = "User";
       text = text.replace(
         "$mention",
         `<a href="tg://user?id=${userId}">${firstName}</a>`
@@ -161,7 +161,6 @@ class KeywordTask {
       const text = this.replaceReply(message);
       const client = await getGlobalClient();
 
-      // 发送回复消息
       let sentMsg: Api.Message | null = null;
       try {
         const sendOptions: any = {
@@ -183,7 +182,6 @@ class KeywordTask {
         console.error("Reply message error:", error);
       }
 
-      // 删除原消息
       if (this.delete) {
         try {
           if (this.source_delay_delete > 0) {
@@ -206,7 +204,6 @@ class KeywordTask {
         }
       }
 
-      // 延迟删除回复消息
       if (this.delay_delete > 0 && sentMsg) {
         setTimeout(async () => {
           try {
@@ -218,9 +215,6 @@ class KeywordTask {
           }
         }, this.delay_delete * 1000);
       }
-
-      // 封禁和限制功能在TeleBox中需要管理员权限，暂时跳过实现
-      // TODO: 实现ban和restrict功能
     } catch (error) {
       console.error("Process keyword error:", error);
     }
@@ -229,12 +223,12 @@ class KeywordTask {
   parseTask(text: string): void {
     const data = text.split("\n+++\n");
     if (data.length < 2) {
-      throw new Error("Invalid task format");
+      throw new Error("任务格式无效");
     }
 
     for (const part of data) {
       if (part === "") {
-        throw new Error("Invalid task format");
+        throw new Error("任务格式无效");
       }
     }
 
@@ -256,11 +250,10 @@ class KeywordTask {
         } else if (option.startsWith("ignore_forward")) {
           this.ignore_forward = true;
         } else if (option.trim() !== "") {
-          throw new Error("Invalid task format");
+          throw new Error("任务格式无效");
         }
       }
 
-      // 匹配选项验证：不能同时设置include和exact
       if (this.include && this.exact) {
         throw new Error("不能同时设置include和exact选项");
       }
@@ -278,7 +271,7 @@ class KeywordTask {
         } else if (action.startsWith("restrict")) {
           this.restrict = parseInt(action.replace("restrict", "")) || 0;
         } else if (action.trim() !== "") {
-          throw new Error("Invalid task format");
+          throw new Error("任务格式无效");
         }
       }
     }
@@ -302,12 +295,9 @@ class KeywordTask {
   }
 }
 
-// Initialize database
 let db = new Database(
   path.join(createDirectoryInAssets("keyword"), "keyword.db")
 );
-
-// Initialize database tables
 if (db) {
   db.exec(`
     CREATE TABLE IF NOT EXISTS keyword_tasks (
@@ -337,7 +327,6 @@ if (db) {
   `);
 }
 
-// HTML escape function
 function htmlEscape(text: string): string {
   return text
     .replace(/&/g, "&amp;")
@@ -429,8 +418,8 @@ class KeywordTasks {
 
     if (tasksToShow.length === 0) {
       return showAll
-        ? "当前没有任何关键词任务。"
-        : "当前聊天没有任何关键词任务。";
+        ? "ℹ️ 当前没有任何关键词任务"
+        : "ℹ️ 当前聊天没有任何关键词任务";
     }
 
     return tasksToShow.map((task) => task.exportStr(showAll)).join("\n");
@@ -513,7 +502,6 @@ class KeywordTasks {
       const chatId = getChatId(message);
       if (!chatId || chatId === 0) return;
 
-      // 检查别名继承
       const aliasId = keywordAlias.get(chatId);
       if (aliasId) {
         const aliasTasks = this.getTasksForChat(aliasId);
@@ -524,7 +512,6 @@ class KeywordTasks {
         }
       }
 
-      // 检查当前聊天的任务
       const tasks = this.getTasksForChat(chatId);
       for (const task of tasks) {
         if (task.checkNeedReply(message)) {
@@ -537,7 +524,6 @@ class KeywordTasks {
   }
 }
 
-// 类型安全的ID转换函数
 function toNumber(value: any): number {
   if (typeof value === "number") return value;
   if (typeof value === "bigint") return Number(value);
@@ -545,7 +531,6 @@ function toNumber(value: any): number {
   return 0;
 }
 
-// 获取聊天ID - 简化版本参考send_cron.ts
 function getChatId(msg: Api.Message): number {
   try {
     if (msg.chat?.id) {
@@ -563,11 +548,9 @@ function getChatId(msg: Api.Message): number {
   }
 }
 
-// 全局实例
 const keywordAlias = new KeywordAlias();
 const keywordTasks = new KeywordTasks();
 
-// 解析任务ID列表
 function parseTaskIds(idsStr: string): number[] {
   const idList = idsStr.split(",");
   const result: number[] = [];
@@ -592,7 +575,7 @@ const keyword = async (msg: Api.Message) => {
       spaceIndex !== -1 ? messageText.substring(spaceIndex + 1) : "";
 
     if (args.length === 0 || args[0] === "h" || args[0] === "help") {
-      const helpText = `<b>🔧 关键词回复插件 - 完整使用指南</b>
+      const helpText = `🔧 <b>关键词回复插件 - 完整使用指南</b>
 
 <b>📋 基础命令：</b>
 <code>keyword list</code> - 查看当前群组的关键词任务
@@ -709,11 +692,12 @@ reply delete ban3600</code>
         const aliasId = keywordAlias.get(chatId);
         if (aliasId) {
           await msg.edit({
-            text: `当前群组的关键字将继承：${aliasId}`,
+            text: `🔗 当前群组继承自：<code>${aliasId}</code>`,
+            parseMode: "html",
           });
         } else {
           await msg.edit({
-            text: "当前群组没有继承。",
+            text: "ℹ️ 当前群组没有继承设置",
           });
         }
         return;
@@ -749,13 +733,13 @@ reply delete ban3600</code>
         if (args[1] === "rm") {
           if (!keywordAlias.get(chatId)) {
             await msg.edit({
-              text: "当前群组没有继承。",
+              text: "ℹ️ 当前群组没有继承设置",
             });
             return;
           }
           keywordAlias.remove(chatId);
           await msg.edit({
-            text: "已删除继承。",
+            text: "✅ 已删除继承设置",
           });
         } else {
           try {
@@ -778,7 +762,6 @@ reply delete ban3600</code>
       }
     }
 
-    // 添加任务 - 参考send_cron.ts的聊天ID获取方式
     let chatId: number;
     try {
       if (msg.chat?.id) {
@@ -847,7 +830,6 @@ class KeywordPlugin extends Plugin {
   listenMessageHandler?: ((msg: Api.Message) => Promise<void>) | undefined =
     async (message) => {
       try {
-        // 只处理文本消息和带文本的媒体消息
         const text =
           message.message ||
           (message.media && "caption" in message.media
@@ -857,7 +839,6 @@ class KeywordPlugin extends Plugin {
           return;
         }
 
-        // 跳过机器人自己的消息
         if (message.out) {
           return;
         }
@@ -871,13 +852,10 @@ class KeywordPlugin extends Plugin {
 
 export default new KeywordPlugin();
 
-// 导出用于消息监听的函数
-// 全局消息监听器 - 需要在TeleBox主程序中集成
 export async function processKeywordMessage(
   message: Api.Message
 ): Promise<void> {
   try {
-    // 只处理文本消息和带文本的媒体消息
     const text =
       message.message ||
       (message.media && "caption" in message.media
@@ -887,7 +865,6 @@ export async function processKeywordMessage(
       return;
     }
 
-    // 跳过机器人自己的消息
     if (message.out) {
       return;
     }
