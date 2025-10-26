@@ -1,6 +1,7 @@
 // 灵感来源:https://github.com/wu-mx/xmsl-bot
 // Coding by Gemini-2.5-Pro
 // plugins/xm.ts
+// plugins/xm.ts
 import { Plugin } from "@utils/pluginBase";
 import { Api } from "telegram";
 import { JSONFilePreset } from "lowdb/node";
@@ -8,10 +9,11 @@ import { createDirectoryInAssets } from "@utils/pathHelpers";
 import * as path from "path";
 import axios from "axios";
 
-// 存储配置类型
+// 存储配置类型 - 添加模型字段
 type XMConfig = {
   openaiApiKey: string;
   openaiBaseUrl: string;
+  model: string; // 新增：模型配置
   enabled: boolean;
 };
 
@@ -28,6 +30,7 @@ class XMPlugin extends Plugin {
   private config: XMConfig = {
     openaiApiKey: "",
     openaiBaseUrl: "https://api.openai.com/v1",
+    model: "gpt-3.5-turbo", // 新增：默认模型
     enabled: true
   };
   private db: any = null;
@@ -46,7 +49,8 @@ class XMPlugin extends Plugin {
 
 ⚙️ 配置项
 • openai_api_key - OpenAI API密钥
-• openai_base_url - OpenAI API地址`;
+• openai_base_url - OpenAI API地址
+• model - 模型名称（默认: gpt-3.5-turbo）`; // 新增：模型配置说明
 
   constructor() {
     super();
@@ -59,15 +63,21 @@ class XMPlugin extends Plugin {
     this.db = await JSONFilePreset<XMConfig>(configPath, this.config);
     this.config = this.db.data;
     
+    // 从环境变量读取默认配置
     if (!this.config.openaiApiKey && process.env.OPENAI_API_KEY) {
       this.config.openaiApiKey = process.env.OPENAI_API_KEY;
-      await this.saveConfig();
     }
     
     if (!this.config.openaiBaseUrl && process.env.OPENAI_API_BASE_URL) {
       this.config.openaiBaseUrl = process.env.OPENAI_API_BASE_URL;
-      await this.saveConfig();
     }
+
+    // 新增：从环境变量读取默认模型
+    if (!this.config.model && process.env.OPENAI_MODEL) {
+      this.config.model = process.env.OPENAI_MODEL;
+    }
+
+    await this.saveConfig();
   }
 
   private async saveConfig() {
@@ -132,7 +142,7 @@ iphone:xm苹果,xm副歌
 用户输入: ${question}`;
 
       const response = await client.post('/chat/completions', {
-        model: 'gpt-3.5-turbo',
+        model: this.config.model, // 修改：使用配置的模型
         messages: [
           { role: 'system', content: prompt },
           { role: 'user', content: question }
@@ -269,6 +279,7 @@ iphone:xm苹果,xm副歌
 📊 运行状态: ${this.config.enabled ? '✅ 已启用' : '❌ 已禁用'}
 🔑 API密钥: ${this.config.openaiApiKey ? '✅ 已设置' : '❌ 未设置'}
 🌐 API地址: ${this.htmlEscape(this.config.openaiBaseUrl)}
+🤖 模型: ${this.config.model}
 
 💡 使用 .xmsl help 查看完整帮助`;
 
@@ -282,6 +293,7 @@ iphone:xm苹果,xm副歌
 • enabled: ${this.config.enabled ? '✅' : '❌'}
 • openai_api_key: ${this.config.openaiApiKey ? '✅ 已设置' : '❌ 未设置'}
 • openai_base_url: ${this.htmlEscape(this.config.openaiBaseUrl)}
+• model: ${this.config.model}
 
 💡 使用 .xmsl config set [key] [value] 设置配置`;
 
@@ -309,9 +321,18 @@ iphone:xm苹果,xm副歌
           });
           break;
           
+        case 'model': // 新增：模型配置设置
+          this.config.model = value;
+          await this.saveConfig();
+          await msg.edit({ 
+            text: `✅ 模型已更新为: ${this.htmlEscape(value)}`, 
+            parseMode: "html" 
+          });
+          break;
+          
         default:
           await msg.edit({ 
-            text: "❌ 未知配置项，支持: openai_api_key, openai_base_url", 
+            text: "❌ 未知配置项，支持: openai_api_key, openai_base_url, model", 
             parseMode: "html" 
           });
       }
