@@ -7,11 +7,12 @@ import { sleep } from "telegram/Helpers";
 
 const prefixes = getPrefixes();
 const mainPrefix = prefixes[0];
+const botReady = new Map<string, boolean>();
 
 const bots = {
   default: "@music_v1bot",
   vk: "@vkmusic_bot",
-  ym: "@LyBot",
+  ym: "@ttaudiobot",
 };
 
 const pluginName = "music_bot";
@@ -41,7 +42,8 @@ async function searchAndSendMusic(
   msg: Api.Message,
   action: string,
   keyword: string,
-  bot: string
+  bot: string,
+  displayKeyword?: string
 ) {
   if (
     !["search", "kugou", "kuwo", "qq", "netease", "vk", "ym"].includes(
@@ -59,7 +61,7 @@ async function searchAndSendMusic(
   // Give quick feedback
   try {
     await msg.edit({
-      text: `🔎 搜索中：<code>${keyword}</code>`,
+      text: `🔎 搜索中：<code>${displayKeyword ?? keyword}</code>`,
       parseMode: "html",
     });
   } catch {}
@@ -82,20 +84,7 @@ async function searchAndSendMusic(
     );
   } catch {}
 
-  // Try to start the bot (if never used before)
-  try {
-    await client.invoke(
-      new Api.messages.StartBot({
-        bot,
-        peer: bot,
-        startParam: "",
-      })
-    );
-  } catch {
-    try {
-      await client.sendMessage(bot, { message: "/start" });
-    } catch {}
-  }
+  
 
   // Send search command
   const startTs = Math.floor(Date.now() / 1000);
@@ -106,10 +95,27 @@ async function searchAndSendMusic(
         : `/${action} ${keyword}`,
     });
   } catch {
-    // fallback: in case the bot only accepts plain text
-    try {
-      await client.sendMessage(bot, { message: keyword });
-    } catch {}
+    // Only on first failure, try to initialize the bot once per process
+    if (!botReady.get(bot)) {
+      try {
+        await client.sendMessage(bot, { message: "/start" });
+        botReady.set(bot, true);
+        await sleep(500);
+        await client.sendMessage(bot, {
+          message: ["vk", "ym"].includes(action)
+            ? keyword
+            : `/${action} ${keyword}`,
+        });
+      } catch {
+        try {
+          await client.sendMessage(bot, { message: keyword });
+        } catch {}
+      }
+    } else {
+      try {
+        await client.sendMessage(bot, { message: keyword });
+      } catch {}
+    }
   }
 
   // Wait for bot's reply that contains buttons, then click first
@@ -127,18 +133,32 @@ async function searchAndSendMusic(
   }
 
   if (!replyWithButtons) {
-    await msg.edit({ text: `❌ 未找到可点击的结果按钮。` });
+    await msg.edit({ text: `⚠️ 机器人未启用或未响应，请先打开 ${bot} 并点击 Start，然后重试。` });
     return;
   }
 
+  let clicked = false;
   try {
-    // 默认点击第一个按钮
-    await replyWithButtons.click({});
-  } catch (e) {
-    await msg.edit({
-      text: `❌ 点击按钮失败：${(e as any)?.message || e}`,
-    });
-    return;
+    await replyWithButtons.click({ i: 0 });
+    clicked = true;
+  } catch {}
+  if (!clicked) {
+    try {
+      await replyWithButtons.click({ row: 0, col: 0 });
+      clicked = true;
+    } catch {}
+  }
+  if (!clicked) {
+    try {
+      await replyWithButtons.click({ text: "1" });
+      clicked = true;
+    } catch {}
+  }
+  if (!clicked) {
+    try {
+      await client.sendMessage(bot, { message: "1" });
+      clicked = true;
+    } catch {}
   }
 
   // After clicking, wait for the next incoming message with media
@@ -164,12 +184,19 @@ async function searchAndSendMusic(
     return;
   }
 
-  // Send the media back to the user without forwarding
-  await client.sendFile(msg.peerId, {
-    file: mediaMsg.media,
-    caption: `🎵 ${keyword}`,
-    replyTo: msg.replyTo?.replyToTopId || msg.replyTo?.replyToMsgId,
-  });
+  // Send the media back to the user
+  if (action === "ym") {
+    await client.sendFile(msg.peerId, {
+      file: mediaMsg.media,
+      replyTo: msg.replyTo?.replyToTopId || msg.replyTo?.replyToMsgId,
+    });
+  } else {
+    await client.sendFile(msg.peerId, {
+      file: mediaMsg.media,
+      caption: `🎵 ${displayKeyword ?? keyword}`,
+      replyTo: msg.replyTo?.replyToTopId || msg.replyTo?.replyToMsgId,
+    });
+  }
 
   try {
     await msg.delete();
@@ -227,8 +254,9 @@ class MusicBotPlugin extends Plugin {
     },
     mbym: async (msg: Api.Message, trigger?: Api.Message) => {
       const action = "ym";
-      const keyword = getRemarkFromMsg(msg, 0);
-      await searchAndSendMusic(msg, action, keyword, bots.ym);
+      const keywordBase = getRemarkFromMsg(msg, 0);
+      const keyword = keywordBase ? `${keywordBase} music lyric】` : "";
+      await searchAndSendMusic(msg, action, keyword, bots.ym, keywordBase);
     },
   };
 }
