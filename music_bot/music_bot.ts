@@ -255,7 +255,7 @@ class MusicBotPlugin extends Plugin {
     mbym: async (msg: Api.Message, trigger?: Api.Message) => {
       const action = "ym";
       const keywordBase = getRemarkFromMsg(msg, 0);
-      const keyword = keywordBase ? `${keywordBase} music lyric】` : "";
+      const keyword = keywordBase ? `${keywordBase} lyric】` : "";
       await searchAndSendMusic(msg, action, keyword, bots.ym, keywordBase);
     },
   };
