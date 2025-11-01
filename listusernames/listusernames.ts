@@ -21,6 +21,38 @@ const help_text = `📋 <b>listusernames - 列出公开群组/频道</b>
 <b>使用示例：</b>
 <code>.listusernames</code>`;
 
+// 缓存 sudo 用户 ID，减少频繁 IO
+let sudoCache = { ids: [] as number[], ts: 0 };
+const SUDO_CACHE_TTL = 10_000; // 10s
+
+function withSudoDB<T>(fn: (db: SudoDB) => T): T {
+  const db = new SudoDB();
+  try {
+    return fn(db);
+  } finally {
+    db.close();
+  }
+}
+
+function refreshSudoCache() {
+  sudoCache.ids = withSudoDB((db) => db.ls().map((u) => u.uid));
+  sudoCache.ts = Date.now();
+}
+
+function getSudoIds(): number[] {
+  if (Date.now() - sudoCache.ts > SUDO_CACHE_TTL) {
+    refreshSudoCache();
+  }
+  return sudoCache.ids;
+}
+
+function extractId(from: any): number | null {
+  const raw = from?.chatId || from?.channelId || from?.userId;
+  if (!raw) return null;
+  const n = Number(raw);
+  return Number.isFinite(n) ? n : null;
+}
+
 class ListUsernamesPlugin extends Plugin {
   description = help_text;
   
@@ -30,6 +62,27 @@ class ListUsernamesPlugin extends Plugin {
         const client = await getGlobalClient();
         if (!client) {
           await msg.edit({ text: "❌ 客户端未就绪", parseMode: "html" });
+          return;
+        }
+
+        // 检查管理员权限 - 使用正确的 SudoDB 处理方式
+        const userId = extractId(msg.fromId as any);
+        
+        if (!userId) {
+          await msg.edit({ 
+            text: "❌ <b>无法获取用户ID</b>",
+            parseMode: "html" 
+          });
+          return;
+        }
+
+        // 获取 sudo 用户列表并检查权限
+        const sudoIds = getSudoIds();
+        if (!sudoIds.includes(userId)) {
+          await msg.edit({ 
+            text: "❌ <b>权限不足</b>\n\n该命令仅限管理员使用",
+            parseMode: "html" 
+          });
           return;
         }
 
@@ -107,6 +160,8 @@ class ListUsernamesPlugin extends Plugin {
           errorMessage += `请求过于频繁，请等待 ${waitTime} 秒后重试`;
         } else if (error.message?.includes("CHANNEL_PRIVATE")) {
           errorMessage += "无法访问私有频道，请确保机器人有相应权限";
+        } else if (error.message?.includes("SudoDB")) {
+          errorMessage += "权限系统暂时不可用，请稍后重试";
         } else {
           errorMessage += `错误信息: ${htmlEscape(error.message || "未知错误")}`;
         }
