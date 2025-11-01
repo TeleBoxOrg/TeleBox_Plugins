@@ -1,7 +1,4 @@
 // 灵感来源:https://github.com/wu-mx/xmsl-bot
-// Coding by Gemini-2.5-Pro
-// plugins/xm.ts
-// plugins/xm.ts
 import { Plugin } from "@utils/pluginBase";
 import { Api } from "telegram";
 import { JSONFilePreset } from "lowdb/node";
@@ -9,15 +6,13 @@ import { createDirectoryInAssets } from "@utils/pathHelpers";
 import * as path from "path";
 import axios from "axios";
 
-// 存储配置类型 - 添加模型字段
 type XMConfig = {
   openaiApiKey: string;
   openaiBaseUrl: string;
-  model: string; // 新增：模型配置
+  model: string;
   enabled: boolean;
 };
 
-// 特殊响应模板
 const RESPONSES = {
   SIMPLE_ENVY: "羡慕死了",
   SELL_VEGETABLES: "我菜",
@@ -30,27 +25,27 @@ class XMPlugin extends Plugin {
   private config: XMConfig = {
     openaiApiKey: "",
     openaiBaseUrl: "https://api.openai.com/v1",
-    model: "gpt-3.5-turbo", // 新增：默认模型
+    model: "gpt-3.5-turbo",
     enabled: true
   };
   private db: any = null;
   private baseDir: string = "";
 
-  description = `🤢 羡慕死了插件 - 快速赛博乞讨
+  description = `🤢 <b>羡慕死了插件 - 快速赛博乞讨</b>
 
-📋 命令列表
-• .xm [内容] - 生成羡慕语句
-• .xmsl - 显示插件信息
-• .xmsl config - 查看配置
-• .xmsl config set [key] [value] - 设置配置
-• .xmsl enable - 启用插件
-• .xmsl disable - 禁用插件
-• .xmsl help - 显示帮助
+<b>📋 命令列表</b>
+• <code>.xm [内容]</code> - 生成羡慕语句
+• <code>.xmsl</code> - 显示插件信息
+• <code>.xmsl config</code> - 查看配置
+• <code>.xmsl config set [key] [value]</code> - 设置配置
+• <code>.xmsl enable</code> - 启用插件
+• <code>.xmsl disable</code> - 禁用插件
+• <code>.xmsl help</code> - 显示帮助
 
-⚙️ 配置项
-• openai_api_key - OpenAI API密钥
-• openai_base_url - OpenAI API地址
-• model - 模型名称（默认: gpt-3.5-turbo）`; // 新增：模型配置说明
+<b>⚙️ 配置项</b>
+• <code>openai_api_key</code> - OpenAI API密钥
+• <code>openai_base_url</code> - OpenAI API地址
+• <code>model</code> - 模型名称（默认: gpt-3.5-turbo）`;
 
   constructor() {
     super();
@@ -63,7 +58,6 @@ class XMPlugin extends Plugin {
     this.db = await JSONFilePreset<XMConfig>(configPath, this.config);
     this.config = this.db.data;
     
-    // 从环境变量读取默认配置
     if (!this.config.openaiApiKey && process.env.OPENAI_API_KEY) {
       this.config.openaiApiKey = process.env.OPENAI_API_KEY;
     }
@@ -72,7 +66,6 @@ class XMPlugin extends Plugin {
       this.config.openaiBaseUrl = process.env.OPENAI_API_BASE_URL;
     }
 
-    // 新增：从环境变量读取默认模型
     if (!this.config.model && process.env.OPENAI_MODEL) {
       this.config.model = process.env.OPENAI_MODEL;
     }
@@ -111,11 +104,11 @@ class XMPlugin extends Plugin {
     }
 
     if (!this.config.openaiApiKey) {
-      return "❌ 请先配置 OpenAI API Key：.xmsl config set openai_api_key YOUR_API_KEY";
+      return "❌ 请先配置 OpenAI API Key：<code>.xmsl config set openai_api_key YOUR_API_KEY</code>";
     }
 
     if (!this.config.enabled) {
-      return "❌ 插件当前已禁用，使用 .xmsl enable 启用";
+      return "❌ 插件当前已禁用，使用 <code>.xmsl enable</code> 启用";
     }
 
     try {
@@ -142,7 +135,7 @@ iphone:xm苹果,xm副歌
 用户输入: ${question}`;
 
       const response = await client.post('/chat/completions', {
-        model: this.config.model, // 修改：使用配置的模型
+        model: this.config.model,
         messages: [
           { role: 'system', content: prompt },
           { role: 'user', content: question }
@@ -178,9 +171,7 @@ iphone:xm苹果,xm副歌
     }
   }
 
-  // 多命令处理器
   cmdHandlers = {
-    // 主命令：生成羡慕
     xm: async (msg: Api.Message) => {
       if (!this.db) await this.init();
       
@@ -199,7 +190,7 @@ iphone:xm苹果,xm副歌
 
         if (!question) {
           await msg.edit({
-            text: "❌ 请提供内容或回复一条消息\n💡 使用: .xm [内容] 或回复消息 .xm",
+            text: "❌ 请提供内容或回复一条消息\n💡 使用: <code>.xm [内容]</code> 或回复消息 <code>.xm</code>",
             parseMode: "html"
           });
           return;
@@ -217,7 +208,6 @@ iphone:xm苹果,xm副歌
       }
     },
 
-    // 配置管理命令
     xmsl: async (msg: Api.Message) => {
       if (!this.db) await this.init();
       
@@ -258,7 +248,7 @@ iphone:xm苹果,xm副歌
               await this.showStatus(msg);
             } else {
               await msg.edit({ 
-                text: "❌ 未知命令，使用 .xmsl help 查看帮助", 
+                text: "❌ 未知命令，使用 <code>.xmsl help</code> 查看帮助", 
                 parseMode: "html" 
               });
             }
@@ -274,28 +264,28 @@ iphone:xm苹果,xm副歌
   };
 
   private async showStatus(msg: Api.Message) {
-    const statusText = `🤢 XMSL 插件状态
+    const statusText = `🤢 <b>XMSL 插件状态</b>
 
 📊 运行状态: ${this.config.enabled ? '✅ 已启用' : '❌ 已禁用'}
 🔑 API密钥: ${this.config.openaiApiKey ? '✅ 已设置' : '❌ 未设置'}
 🌐 API地址: ${this.htmlEscape(this.config.openaiBaseUrl)}
 🤖 模型: ${this.config.model}
 
-💡 使用 .xmsl help 查看完整帮助`;
+💡 使用 <code>.xmsl help</code> 查看完整帮助`;
 
     await msg.edit({ text: statusText, parseMode: "html" });
   }
 
   private async handleConfig(msg: Api.Message, args: string[]) {
     if (args.length === 0) {
-      const configText = `⚙️ 当前配置
+      const configText = `<b>⚙️ 当前配置</b>
 
 • enabled: ${this.config.enabled ? '✅' : '❌'}
 • openai_api_key: ${this.config.openaiApiKey ? '✅ 已设置' : '❌ 未设置'}
 • openai_base_url: ${this.htmlEscape(this.config.openaiBaseUrl)}
 • model: ${this.config.model}
 
-💡 使用 .xmsl config set [key] [value] 设置配置`;
+💡 使用 <code>.xmsl config set [key] [value]</code> 设置配置`;
 
       await msg.edit({ text: configText, parseMode: "html" });
       return;
@@ -321,7 +311,7 @@ iphone:xm苹果,xm副歌
           });
           break;
           
-        case 'model': // 新增：模型配置设置
+        case 'model':
           this.config.model = value;
           await this.saveConfig();
           await msg.edit({ 
@@ -332,19 +322,18 @@ iphone:xm苹果,xm副歌
           
         default:
           await msg.edit({ 
-            text: "❌ 未知配置项，支持: openai_api_key, openai_base_url, model", 
+            text: "❌ 未知配置项，支持: <code>openai_api_key</code>, <code>openai_base_url</code>, <code>model</code>", 
             parseMode: "html" 
           });
       }
     } else {
       await msg.edit({ 
-        text: "❌ 参数错误，使用: .xmsl config set [key] [value]", 
+        text: "❌ 参数错误，使用: <code>.xmsl config set [key] [value]</code>", 
         parseMode: "html" 
       });
     }
   }
 }
 
-// 插件实例
 const xmPlugin = new XMPlugin();
 export default xmPlugin;
