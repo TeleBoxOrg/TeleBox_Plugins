@@ -22,6 +22,38 @@ const help_text = `📋 <b>listusernames - 列出公开群组/频道</b>
 <b>使用示例：</b>
 <code>.listusernames</code>`;
 
+// 缓存 sudo 用户 ID，减少频繁 IO
+let sudoCache = { ids: [] as number[], ts: 0 };
+const SUDO_CACHE_TTL = 10_000; // 10s
+
+function withSudoDB<T>(fn: (db: SudoDB) => T): T {
+  const db = new SudoDB();
+  try {
+    return fn(db);
+  } finally {
+    db.close();
+  }
+}
+
+function refreshSudoCache() {
+  sudoCache.ids = withSudoDB((db) => db.ls().map((u) => u.uid));
+  sudoCache.ts = Date.now();
+}
+
+function getSudoIds(): number[] {
+  if (Date.now() - sudoCache.ts > SUDO_CACHE_TTL) {
+    refreshSudoCache();
+  }
+  return sudoCache.ids;
+}
+
+function extractId(from: any): number | null {
+  const raw = from?.chatId || from?.channelId || from?.userId;
+  if (!raw) return null;
+  const n = Number(raw);
+  return Number.isFinite(n) ? n : null;
+}
+
 class ListUsernamesPlugin extends Plugin {
   description = help_text;
   
@@ -34,11 +66,20 @@ class ListUsernamesPlugin extends Plugin {
           return;
         }
 
-        // 检查管理员权限
-        const sudoDB = new SudoDB();
-        const userId = msg.senderId?.toString();
+        // 检查管理员权限 - 使用正确的 SudoDB 处理方式
+        const userId = extractId(msg.fromId as any);
         
-        if (!userId || !sudoDB.has(userId)) {
+        if (!userId) {
+          await msg.edit({ 
+            text: "❌ <b>无法获取用户ID</b>",
+            parseMode: "html" 
+          });
+          return;
+        }
+
+        // 获取 sudo 用户列表并检查权限
+        const sudoIds = getSudoIds();
+        if (!sudoIds.includes(userId)) {
           await msg.edit({ 
             text: "❌ <b>权限不足</b>\n\n该命令仅限管理员使用",
             parseMode: "html" 
@@ -72,16 +113,38 @@ class ListUsernamesPlugin extends Plugin {
         result.chats.forEach((chat: any, index: number) => {
           const title = chat.title ? htmlEscape(chat.title) : "未知标题";
           const username = chat.username ? `@${chat.username}` : "无用户名";
+          const chatType = chat.broadcast ? "📢 频道" : "👥 群组";
+          const chatId = chat.id ? chat.id.toString() : "未知ID";
           
-          output += `<b>${index + 1}.</b> ${title}\n`;
-          output += `   <code>${username}</code>\n\n`;
+          output += `<b>${index + 1}.</b> ${title} (${chatType})\n`;
+          output += `   👤 用户名: <code>${username}</code>\n`;
+          output += `   🆔 ID: <code>${chatId}</code>\n\n`;
         });
+
+        // 添加统计信息
+        const channelCount = result.chats.filter((chat: any) => chat.broadcast).length;
+        const groupCount = result.chats.length - channelCount;
+        
+        output += `📊 <b>统计信息：</b>\n`;
+        output += `• 频道数量: ${channelCount}\n`;
+        output += `• 群组数量: ${groupCount}\n`;
+        output += `• 总计: ${result.chats.length}`;
 
         // 检查消息长度（Telegram限制4096字符）
         if (output.length > 4096) {
-          // 如果消息过长，分割发送
+          // 如果消息过长，分割发送第一部分
           const part1 = output.substring(0, 4000) + "\n\n... (消息过长，已截断)";
           await msg.edit({ text: part1, parseMode: "html" });
+          
+          // 发送剩余部分作为新消息
+          const part2 = output.substring(4000);
+          if (part2.length > 0) {
+            await client.sendMessage(msg.peerId, {
+              message: part2,
+              parseMode: "html",
+              replyTo: msg.id
+            });
+          }
         } else {
           await msg.edit({ text: output, parseMode: "html" });
         }
@@ -96,6 +159,10 @@ class ListUsernamesPlugin extends Plugin {
         } else if (error.message?.includes("FLOOD_WAIT")) {
           const waitTime = parseInt(error.message.match(/\d+/)?.[0] || "60");
           errorMessage += `请求过于频繁，请等待 ${waitTime} 秒后重试`;
+        } else if (error.message?.includes("CHANNEL_PRIVATE")) {
+          errorMessage += "无法访问私有频道，请确保机器人有相应权限";
+        } else if (error.message?.includes("SudoDB")) {
+          errorMessage += "权限系统暂时不可用，请稍后重试";
         } else {
           errorMessage += `错误信息: ${htmlEscape(error.message || "未知错误")}`;
         }
