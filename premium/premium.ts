@@ -20,12 +20,34 @@ class PremiumPlugin extends Plugin {
 
 <b>功能：</b>
 • 统计群组中的Telegram Premium会员情况
-• 显示管理员和普通用户的大会员比例
+• 显示大会员比例
 • 自动过滤机器人和死号`;
 
   cmdHandlers = {
     premium: this.handlePremium.bind(this)
   };
+
+  private async getChatParticipantsCount(chat: Api.Chat | Api.Channel): Promise<number> {
+    const client = await getGlobalClient();
+    
+    if (chat instanceof Api.Chat) {
+      // 对于普通群组
+      return (chat as any).participantsCount || 0;
+    } else {
+      // 对于频道/超级群
+      try {
+        const fullChat = await client.invoke(
+          new Api.channels.GetFullChannel({
+            channel: chat
+          })
+        );
+        return (fullChat.fullChat as any).participantsCount || 0;
+      } catch (error) {
+        console.error("获取频道成员数量失败:", error);
+        return 0;
+      }
+    }
+  }
 
   private async handlePremium(msg: Api.Message): Promise<void> {
     const client = await getGlobalClient();
@@ -50,7 +72,7 @@ class PremiumPlugin extends Plugin {
       await msg.edit({ text: "⏳ 请稍等，正在统计中..." });
 
       // 获取群组成员数量
-      const participantCount = await client.getParticipantsCount(chat);
+      const participantCount = await this.getChatParticipantsCount(chat);
       
       // 检查人数限制
       if (participantCount >= 10000 && !forceMode) {
@@ -64,61 +86,71 @@ class PremiumPlugin extends Plugin {
       // 统计变量
       let premiumUsers = 0;
       let totalUsers = 0;
-      let admins = 0;
-      let premiumAdmins = 0;
       let bots = 0;
       let deleted = 0;
 
       // 遍历所有成员
-      for await (const participant of client.iterParticipants(chat)) {
+      let processedCount = 0;
+      const limit = 10000; // 限制最大处理数量
+      
+      for await (const participant of client.iterParticipants(chat, { limit })) {
+        processedCount++;
+        
+        // 更新进度（每处理100人更新一次）
+        if (processedCount % 100 === 0) {
+          await msg.edit({
+            text: `⏳ 正在统计中... 已处理 ${processedCount} 个成员`,
+            parseMode: "html"
+          });
+        }
+
+        let user: Api.User | null = null;
+
+        // 处理不同类型的participant
         if (participant instanceof Api.ChannelParticipant) {
-          const user = participant.user;
-          
-          if (user && !user.bot && !user.deleted) {
-            totalUsers++;
-            
-            // 检查是否是管理员
-            const isAdmin = participant instanceof Api.ChannelParticipantAdmin || 
-                           participant instanceof Api.ChannelParticipantCreator;
-            
-            // 检查是否是Premium会员
-            const isPremium = user.premium || false;
-            
-            if (isPremium) {
-              premiumUsers++;
-              if (isAdmin) {
-                premiumAdmins++;
-              }
-            }
-            
-            if (isAdmin) {
-              admins++;
-            }
-          } else if (user?.bot) {
-            bots++;
-          } else if (user?.deleted) {
-            deleted++;
-          }
+          user = participant.user as Api.User;
+        } else if (participant instanceof Api.ChatParticipant) {
+          user = participant.userId as unknown as Api.User;
+        } else if (participant instanceof Api.User) {
+          user = participant;
+        }
+
+        if (!user) continue;
+
+        if (user.bot) {
+          bots++;
+          continue;
+        }
+        
+        if (user.deleted) {
+          deleted++;
+          continue;
+        }
+
+        // 统计有效用户
+        totalUsers++;
+        
+        // 检查是否是Premium会员
+        const isPremium = user.premium || false;
+        
+        if (isPremium) {
+          premiumUsers++;
         }
       }
 
       // 计算百分比
-      const adminPremiumPercent = admins > 0 ? 
-        ((premiumAdmins / admins) * 100).toFixed(2) : "0.00";
-      
-      const userPremiumPercent = totalUsers > 0 ? 
+      const premiumPercent = totalUsers > 0 ? 
         ((premiumUsers / totalUsers) * 100).toFixed(2) : "0.00";
 
       // 生成报告
       let report = `🎁 <b>分遗产咯</b>\n\n`;
 
-      report += `<b>管理员:</b>\n`;
-      report += `> 大会员: <b>${premiumAdmins}</b> / 总管理数: <b>${admins}</b> 分遗产占比: <b>${adminPremiumPercent}%</b>\n\n`;
+      report += `<b>统计结果:</b>\n`;
+      report += `> 大会员: <b>${premiumUsers}</b> / 总用户数: <b>${totalUsers}</b>\n`;
+      report += `> 大会员占比: <b>${premiumPercent}%</b>\n\n`;
 
-      report += `<b>用户:</b>\n`;
-      report += `> 大会员: <b>${premiumUsers}</b> / 总用户数: <b>${totalUsers}</b> 分遗产占比: <b>${userPremiumPercent}%</b>\n\n`;
-
-      report += `> 已自动过滤掉 <b>${bots}</b> 个 Bot, <b>${deleted}</b> 个 死号\n\n`;
+      report += `> 已自动过滤掉 <b>${bots}</b> 个 Bot, <b>${deleted}</b> 个 死号\n`;
+      report += `> 本次统计处理了 <b>${processedCount}</b> 个成员\n\n`;
 
       if (participantCount >= 10000) {
         report += `⚠️ <i>请注意: 由于Telegram限制，我们只能遍历前1万人，此次获得的数据可能不完整</i>`;
@@ -138,6 +170,11 @@ class PremiumPlugin extends Plugin {
         errorMessage += "需要管理员权限才能查看群组成员列表";
       } else if (error.message?.includes("CHANNEL_PRIVATE")) {
         errorMessage += "无法访问该群组，请确保机器人是群组成员";
+      } else if (error.message?.includes("AUTH_KEY_UNREGISTERED")) {
+        errorMessage += "会话未注册，请重新登录";
+      } else if (error.message?.includes("FLOOD_WAIT")) {
+        const waitTime = error.message.match(/\d+/)?.[0] || "60";
+        errorMessage += `请求过于频繁，请等待 ${waitTime} 秒后重试`;
       } else {
         errorMessage += `错误信息: ${htmlEscape(error.message || "未知错误")}`;
       }

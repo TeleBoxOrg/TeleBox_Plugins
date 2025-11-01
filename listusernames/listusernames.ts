@@ -1,7 +1,6 @@
 import { Plugin } from "@utils/pluginBase";
 import { Api } from "telegram";
 import { getGlobalClient } from "@utils/globalClient";
-import { SudoDB } from "@utils/sudoDB";
 
 // HTML转义函数（必需）
 const htmlEscape = (text: string): string => 
@@ -17,7 +16,7 @@ const help_text = `📋 <b>listusernames - 列出公开群组/频道</b>
 
 <b>功能说明：</b>
 • 列出所有属于自己的公开群组/频道
-• 仅管理员可用
+• 所有用户均可使用
 
 <b>使用示例：</b>
 <code>.listusernames</code>`;

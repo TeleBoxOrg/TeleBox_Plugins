@@ -1,7 +1,13 @@
 import { Plugin } from "@utils/pluginBase";
 import { Api } from "telegram";
 import { getGlobalClient } from "@utils/globalClient";
-import { htmlEscape } from "@utils/entityHelpers";
+
+// HTML转义函数
+const htmlEscape = (text: string): string => 
+  text.replace(/[&<>"']/g, m => ({ 
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', 
+    '"': '&quot;', "'": '&#x27;' 
+  }[m] || m));
 
 class PortballPlugin extends Plugin {
   name = "portball";
@@ -128,25 +134,27 @@ class PortballPlugin extends Plugin {
       const untilDate = Math.floor(Date.now() / 1000) + seconds;
 
       try {
-        // 执行禁言
-        await client.editBanned(
-          msg.chat.id,
-          sender,
-          {
+        // 使用正确的 API 方法禁言用户
+        // 在 Telegram API 中，应该使用 editBanned 方法
+        await client.invoke(new Api.channels.EditBanned({
+          channel: msg.chat.id,
+          participant: sender.id,
+          bannedRights: new Api.ChatBannedRights({
             untilDate: untilDate,
-            viewMessages: false,
-            sendMessages: false,
-            sendMedia: false,
-            sendStickers: false,
-            sendGifs: false,
-            sendGames: false,
-            sendInline: false,
-            sendPolls: false,
-            changeInfo: false,
-            inviteUsers: false,
-            pinMessages: false
-          }
-        );
+            viewMessages: true, // 允许查看消息
+            sendMessages: false, // 禁止发送消息
+            sendMedia: false, // 禁止发送媒体
+            sendStickers: false, // 禁止发送贴纸
+            sendGifs: false, // 禁止发送GIF
+            sendGames: false, // 禁止发送游戏
+            sendInline: false, // 禁止发送内联
+            embedLinks: false, // 禁止嵌入链接
+            sendPolls: false, // 禁止发送投票
+            changeInfo: false, // 禁止更改信息
+            inviteUsers: false, // 禁止邀请用户
+            pinMessages: false // 禁止置顶消息
+          })
+        }));
 
         // 构建成功消息
         let resultText = `🔇 <b>禁言成功</b>\n\n`;
@@ -172,7 +180,7 @@ class PortballPlugin extends Plugin {
           resultText += `• <b>理由：</b>${htmlEscape(reason)}\n`;
         }
         
-        resultText += `\n⏰ 到期自动解除，无后遗症`;
+        resultText += `\n⏰ 到期自动解除`;
 
         // 发送成功消息
         await client.sendMessage(msg.chat.id, {
@@ -194,6 +202,10 @@ class PortballPlugin extends Plugin {
           errorMsg += "无法禁言管理员";
         } else if (error.message?.includes("CHAT_ADMIN_REQUIRED")) {
           errorMsg += "需要群组管理员权限";
+        } else if (error.message?.includes("CHANNEL_PRIVATE")) {
+          errorMsg += "无法在私有频道操作";
+        } else if (error.message?.includes("USER_NOT_PARTICIPANT")) {
+          errorMsg += "用户不在群组中";
         } else {
           errorMsg += htmlEscape(error.message || "未知错误");
         }
