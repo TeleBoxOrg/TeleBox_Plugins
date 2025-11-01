@@ -124,7 +124,7 @@ class TeletypePlugin extends Plugin {
     
     // 最终确认消息
     await currentMsg.edit({
-      text: `⌨️ <b>打字完成:</b>\n<code>${htmlEscape(text)}</code>`,
+      text: `${htmlEscape(text)}`,
       parseMode: "html"
     });
   }
