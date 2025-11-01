@@ -1,19 +1,3 @@
-/**
- * SpeedLink Multi-Server Management Plugin for TeleBox
- *
- * Version: 5.9.5 (Fixed & Modified)
- * Features:
- * - Command message is now deleted immediately after the status message appears.
- * - All status and result messages are sent as standalone messages.
- * - Removed the initial "Preparing to start..." message for multi-server tests.
- * - Completed all help text URLs.
- * - Fixed local speed test execution path.
- * - Real-time feedback during first-run dependency installation.
- * - Smart, sequential, and privacy-respecting server listing.
- * - Backup and restore functionality.
- * - Automatic & unique encryption key generation.
- */
-
 import { Plugin } from "../src/utils/pluginBase";
 import { Api } from "telegram";
 import { exec, execSync } from "child_process";
@@ -276,6 +260,37 @@ function htmlEscape(text: string): string {
     text?.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;") ||
     ""
   );
+}
+
+function sanitizeErrorMessage(errorMsg: string, serverName?: string): string {
+  let sanitized = errorMsg;
+  sanitized = sanitized.replace(/Command failed:.*?sshpass[^\n]*\n?/gi, '');
+  sanitized = sanitized.replace(/^.*sshpass.*$/gim, '');
+  sanitized = sanitized.replace(
+    /\b(?:\d{1,3}\.){3}\d{1,3}\b/g,
+    '[IP已隐藏]'
+  );
+  sanitized = sanitized.replace(
+    /\b(?:[0-9a-fA-F]{1,4}:){7}[0-9a-fA-F]{1,4}\b/g,
+    '[IP已隐藏]'
+  );
+  
+  sanitized = sanitized.replace(
+    /sshpass\s+-p\s+(['"]).*?\1/gi,
+    "sshpass -p '[已隐藏]'"
+  );
+  sanitized = sanitized.replace(
+    /sshpass\s+-p\s+\S+/gi,
+    "sshpass -p '[已隐藏]'"
+  );
+  
+  sanitized = sanitized.replace(/\n\s*\n/g, '\n').trim();
+  
+  if (!sanitized || sanitized.length < 5) {
+    return '连接或执行失败，请检查服务器配置和网络连接';
+  }
+  
+  return sanitized;
 }
 
 async function unitConvert(
@@ -717,6 +732,7 @@ const speedtest = async (msg: Api.Message): Promise<void> => {
           }
         } catch (error: any) {
           let errorMsg = String(error.stderr || error.message || error);
+          errorMsg = sanitizeErrorMessage(errorMsg, server.name);
           if (statusMsg) {
             await statusMsg.edit({
               text: `❌ <b>${htmlEscape(
@@ -864,6 +880,7 @@ const speedtest = async (msg: Api.Message): Promise<void> => {
       if (statusMsg) await statusMsg.delete();
     } catch (error: any) {
       let errorMsg = String(error.stderr || error.message || error);
+      errorMsg = sanitizeErrorMessage(errorMsg, serverConfig?.name);
       const errorText = `❌ <b>速度测试失败</b>\n\n<code>${htmlEscape(
         errorMsg
       )}</code>`;
