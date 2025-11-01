@@ -323,4 +323,12 @@
     "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/xm/xm.ts?raw=true",
     "desc": "全自动羡慕插件"
   }
+    "gfw": {
+    "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/gfw/gfw.ts?raw=true",
+    "desc": "快速检查域名/IP是否被墙"
+  }
+    "tel": {
+    "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/tel/tel.ts?raw=true",
+    "desc": "手机号码相关信息查询"
+  }
 }
