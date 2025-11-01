@@ -41,6 +41,7 @@ npm i <插件名>
 - `encode` - 简单的编码解码插件  
 - `fadian` - fadian语录  
 - `getstickers` - 下载整个贴纸包  
+- `gfw` - 快速检查域名/IP是否被墙  
 - `gif` - GIF与视频转贴纸插件  
 - `git_PR` - Git PR 管理插件  
 - `gt` - 谷歌中英文互译  
@@ -80,6 +81,7 @@ npm i <插件名>
 - `sub` - substore简单管理  
 - `sunremove` - 定向批量解除封禁用户  
 - `t` - 文字转语音  
+- `tel` - 手机号码相关信息查询  
 - `trace` - 全局追踪点赞插件  
 - `warp` - warp管理  
 - `weather` - 天气查询  
