@@ -319,16 +319,68 @@
     "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/im/im.ts?raw=true",
     "desc": "群组媒体消息监控封禁"
   },
-    "xm": {
+  "xm": {
     "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/xm/xm.ts?raw=true",
     "desc": "全自动羡慕插件"
   },
-    "gfw": {
-    "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/gfw/gfw.ts?raw=true",
-    "desc": "快速检查域名/IP是否被墙"
+  "yiyan": {
+    "url": "https://github.com/TeleBoxOrg/TeleBox_Plugins/blob/main/yiyan/yiyan.ts?raw=true",
+    "desc": "获取随机一言"
   },
-    "tel": {
-    "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/tel/tel.ts?raw=true",
-    "desc": "手机号码相关信息查询"
+  "teletype": {
+    "url": "https://github.com/TeleBoxOrg/TeleBox_Plugins/blob/main/teletype/teletype.ts?raw=true",
+    "desc": "打字机效果插件"
+  },
+  "subinfo": {
+    "url": "https://github.com/TeleBoxOrg/TeleBox_Plugins/blob/main/subinfo/subinfo.ts?raw=true",
+    "desc": "订阅链接信息查询工具"
+  },
+  "sendat": {
+    "url": "https://github.com/TeleBoxOrg/TeleBox_Plugins/blob/main/sendat/sendat.ts?raw=true",
+    "desc": "定时发送消息插件"
+  },
+  "restore_pin": {
+    "url": "https://github.com/TeleBoxOrg/TeleBox_Plugins/blob/main/restore_pin/restore_pin.ts?raw=true",
+    "desc": "恢复群组被取消的置顶消息"
+  },
+  "premium": {
+    "url": "https://github.com/TeleBoxOrg/TeleBox_Plugins/blob/main/premium/premium.ts?raw=true",
+    "desc": "群组大会员统计插件"
+  },
+  "portball": {
+    "url": "https://github.com/TeleBoxOrg/TeleBox_Plugins/blob/main/portball/portball.ts?raw=true",
+    "desc": "临时禁言工具"
+  },
+  "lu_bs": {
+    "url": "https://github.com/TeleBoxOrg/TeleBox_Plugins/blob/main/lu_bs/lu_bs.ts?raw=true",
+    "desc": "鲁小迅整点报时插件"
+  },
+  "listusernames": {
+    "url": "https://github.com/TeleBoxOrg/TeleBox_Plugins/blob/main/listusernames/listusernames.ts?raw=true",
+    "desc": "列出属于自己的公开群组/频道"
+  },
+  "getdel": {
+    "url": "https://github.com/TeleBoxOrg/TeleBox_Plugins/blob/main/getdel/getdel.ts?raw=true",
+    "desc": "死号检测清理工具"
+  },
+  "annualreport": {
+    "url": "https://github.com/TeleBoxOrg/TeleBox_Plugins/blob/main/annualreport/annualreport.ts?raw=true",
+    "desc": "年度报告插件"
+  },
+  "aff": {
+    "url": "https://github.com/TeleBoxOrg/TeleBox_Plugins/blob/main/aff/aff.ts?raw=true",
+    "desc": "机场Aff信息管理"
+  },
+  "paolu": {
+    "url": "https://github.com/TeleBoxOrg/TeleBox_Plugins/blob/main/paolu/paolu.ts?raw=true",
+    "desc": "群组一键跑路插件"
+  },
+  "cleanda": {
+    "url": "https://github.com/TeleBoxOrg/TeleBox_Plugins/blob/main/cleanda/cleanda.ts?raw=true",
+    "desc": "已注销账号清理工具"
+  },
+  "diss": {
+    "url": "https://github.com/TeleBoxOrg/TeleBox_Plugins/blob/main/diss/diss.ts?raw=true",
+    "desc": "儒雅随和版祖安语录"
   }
 }
