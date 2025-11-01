@@ -1,7 +1,6 @@
 import { Plugin } from "@utils/pluginBase";
 import { Api } from "telegram";
 import { getGlobalClient } from "@utils/globalClient";
-import { conversation } from "@utils/conversation";
 
 // HTML转义函数（必需）
 const htmlEscape = (text: string): string => 
@@ -13,16 +12,15 @@ const htmlEscape = (text: string): string =>
 // 帮助文本
 const helpText = `📌 <b>恢复置顶插件</b>
 
-<b>功能：</b>恢复管理员误取消的置顶消息
+<b>功能：</b>自动恢复管理员误取消的置顶消息
 
 <b>命令：</b>
-• <code>.restore_pin</code> - 开始恢复置顶流程
+• <code>.restore_pin</code> - 自动恢复所有可恢复的置顶消息
 
 <b>使用说明：</b>
 1. 仅在群组中可用
 2. 需要管理员权限
-3. 会列出最近取消置顶的管理员
-4. 选择管理员后自动恢复其取消的置顶`;
+3. 自动扫描并恢复最近取消的置顶消息`;
 
 class RestorePinPlugin extends Plugin {
   name = "restore_pin";
@@ -58,82 +56,21 @@ class RestorePinPlugin extends Plugin {
   /**
    * 从管理员日志中提取取消置顶事件
    */
-  private getUnpinMap(events: Api.channels.AdminLogResults): Map<string, number[]> {
-    const unpinMap = new Map<string, number[]>();
+  private getUnpinMessages(events: Api.channels.AdminLogResults): number[] {
+    const messageIds: number[] = [];
     
     for (const event of events.events) {
       // 检查是否为取消置顶事件
       if (event.action instanceof Api.ChannelAdminLogEventActionUpdatePinned) {
         if (!event.action.message.pinned) { // 取消置顶
-          const userId = event.userId?.toString();
-          if (userId) {
-            const messageId = event.action.message.id;
-            const existing = unpinMap.get(userId) || [];
-            existing.push(messageId);
-            unpinMap.set(userId, existing);
-          }
+          const messageId = event.action.message.id;
+          messageIds.push(messageId);
         }
       }
     }
     
-    return unpinMap;
-  }
-
-  /**
-   * 让用户选择要恢复的管理员
-   */
-  private async askForAdmin(msg: Api.Message, unpinMap: Map<string, number[]>): Promise<string | null> {
-    // 按取消数量排序
-    const sortedAdmins = Array.from(unpinMap.entries())
-      .sort((a, b) => b[1].length - a[1].length);
-
-    if (sortedAdmins.length === 0) {
-      await msg.edit({ text: "❌ 未找到取消置顶的记录", parseMode: "html" });
-      return null;
-    }
-
-    // 构建选择列表
-    let text = "👥 <b>请选择要恢复的管理员：</b>\n\n";
-    sortedAdmins.forEach(([userId, messages], index) => {
-      text += `<code>${index + 1}</code> - 用户 <code>${userId}</code> 取消了 ${messages.length} 条置顶\n`;
-    });
-    
-    text += "\n💡 请回复管理员编号 (1, 2, 3...)";
-
-    await msg.edit({ text, parseMode: "html" });
-
-    try {
-      // 等待用户回复
-      const response = await conversation.waitForMessage(
-        msg.senderId?.toString() || "unknown",
-        msg.chatId.toString(),
-        30000 // 30秒超时
-      );
-
-      if (!response || !response.text) {
-        await msg.edit({ text: "❌ 未收到回复，操作已取消", parseMode: "html" });
-        return null;
-      }
-
-      const choice = parseInt(response.text.trim());
-      if (isNaN(choice) || choice < 1 || choice > sortedAdmins.length) {
-        await msg.edit({ text: "❌ 选择无效，操作已取消", parseMode: "html" });
-        return null;
-      }
-
-      // 删除用户回复
-      try {
-        await response.delete({ revoke: true });
-      } catch (error) {
-        // 忽略删除失败
-      }
-
-      return sortedAdmins[choice - 1][0];
-
-    } catch (error) {
-      await msg.edit({ text: "❌ 等待回复超时，操作已取消", parseMode: "html" });
-      return null;
-    }
+    // 去重并返回
+    return [...new Set(messageIds)];
   }
 
   /**
@@ -180,8 +117,8 @@ class RestorePinPlugin extends Plugin {
     for (let i = 0; i < messageIds.length; i++) {
       const messageId = messageIds[i];
       
-      // 每5条更新一次进度
-      if ((i + 1) % 5 === 0) {
+      // 每3条更新一次进度
+      if ((i + 1) % 3 === 0) {
         await msg.edit({ 
           text: `🔄 正在恢复第 ${i + 1}/${messageIds.length} 条置顶消息...\n✅ 成功: ${successCount} ❌ 失败: ${errorCount}`, 
           parseMode: "html" 
@@ -196,8 +133,8 @@ class RestorePinPlugin extends Plugin {
         errors.push(`消息 ${messageId} 恢复失败`);
       }
 
-      // 延迟避免触发限制
-      await new Promise(resolve => setTimeout(resolve, 2000));
+      // 延迟避免触发限制（减少到1秒）
+      await new Promise(resolve => setTimeout(resolve, 1000));
     }
 
     let resultText = `📊 <b>恢复完成</b>\n\n`;
@@ -206,11 +143,11 @@ class RestorePinPlugin extends Plugin {
 
     if (errors.length > 0) {
       resultText += `\n\n<b>失败详情：</b>\n`;
-      errors.slice(0, 5).forEach(error => {
+      errors.slice(0, 3).forEach(error => {
         resultText += `• ${htmlEscape(error)}\n`;
       });
-      if (errors.length > 5) {
-        resultText += `• ... 还有 ${errors.length - 5} 个错误`;
+      if (errors.length > 3) {
+        resultText += `• ... 还有 ${errors.length - 3} 个错误`;
       }
     }
 
@@ -256,20 +193,20 @@ class RestorePinPlugin extends Plugin {
       // 获取管理员日志
       const adminLog = await this.getAdminLog(chat.id);
       
-      // 提取取消置顶记录
-      const unpinMap = this.getUnpinMap(adminLog);
+      // 提取取消置顶的消息ID
+      const messageIds = this.getUnpinMessages(adminLog);
 
-      if (unpinMap.size === 0) {
-        await msg.edit({ text: "❌ 未找到取消置顶的记录", parseMode: "html" });
+      if (messageIds.length === 0) {
+        await msg.edit({ text: "✅ 未找到可恢复的置顶消息", parseMode: "html" });
         return;
       }
 
-      // 让用户选择管理员
-      const selectedAdmin = await this.askForAdmin(msg, unpinMap);
-      if (!selectedAdmin) return;
+      await msg.edit({ 
+        text: `🔍 找到 ${messageIds.length} 条可恢复的置顶消息，开始自动恢复...`, 
+        parseMode: "html" 
+      });
 
-      // 恢复置顶
-      const messageIds = unpinMap.get(selectedAdmin) || [];
+      // 直接恢复所有置顶消息
       await this.restorePins(msg, chat.id, messageIds);
 
     } catch (error: any) {
@@ -280,6 +217,8 @@ class RestorePinPlugin extends Plugin {
         errorMessage = "❌ 需要管理员权限";
       } else if (error.message?.includes("USER_NOT_PARTICIPANT")) {
         errorMessage = "❌ 用户不是群组成员";
+      } else if (error.message?.includes("AUTH_KEY_UNREGISTERED")) {
+        errorMessage = "❌ 会话已失效，请重新登录";
       } else if (error.message) {
         errorMessage += `: ${htmlEscape(error.message)}`;
       }
