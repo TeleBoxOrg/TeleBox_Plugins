@@ -249,6 +249,40 @@ class SubQueryPlugin extends Plugin {
     }
   }
 
+  // 分割长消息（处理Telegram 4096字符限制）
+  private splitLongMessage(text: string, maxLength: number = 4000): string[] {
+    if (text.length <= maxLength) {
+      return [text];
+    }
+
+    const parts: string[] = [];
+    let currentPart = '';
+    const lines = text.split('\n');
+
+    for (const line of lines) {
+      if (currentPart.length + line.length + 1 > maxLength) {
+        if (currentPart) {
+          parts.push(currentPart);
+          currentPart = line;
+        } else {
+          // 单行就超过限制，强制分割
+          const chunkSize = maxLength - 100; // 留一些余量
+          for (let i = 0; i < line.length; i += chunkSize) {
+            parts.push(line.substring(i, i + chunkSize));
+          }
+        }
+      } else {
+        currentPart += (currentPart ? '\n' : '') + line;
+      }
+    }
+
+    if (currentPart) {
+      parts.push(currentPart);
+    }
+
+    return parts;
+  }
+
   // 主命令处理器
   private async handleSubQuery(msg: Api.Message): Promise<void> {
     const client = await getGlobalClient();
@@ -349,9 +383,8 @@ class SubQueryPlugin extends Plugin {
           // 配置名称
           outputText.push(`📄 <b>配置名称:</b> <code>${htmlEscape(result.config_name || "未提供或无法获取")}</code>`);
           
-          // 订阅链接（缩短显示）
-          const shortUrl = result.url.length > 50 ? result.url.substring(0, 47) + "..." : result.url;
-          outputText.push(`🔗 <b>订阅链接:</b> <code>${htmlEscape(shortUrl)}</code>`);
+          // 订阅链接（完整显示，不缩短）
+          outputText.push(`🔗 <b>订阅链接:</b> <code>${htmlEscape(result.url)}</code>`);
 
           const quoteContent: string[] = [];
           const data = result.data;
@@ -415,10 +448,30 @@ class SubQueryPlugin extends Plugin {
           resultText += statsText;
         }
         
-        await msg.edit({
-          text: resultText,
-          parseMode: "html"
-        });
+        // 检查消息长度，如果超过Telegram限制则分割
+        const messageParts = this.splitLongMessage(resultText);
+        
+        if (messageParts.length === 1) {
+          await msg.edit({
+            text: resultText,
+            parseMode: "html"
+          });
+        } else {
+          // 发送第一部分
+          await msg.edit({
+            text: messageParts[0],
+            parseMode: "html"
+          });
+          
+          // 发送剩余部分
+          for (let i = 1; i < messageParts.length; i++) {
+            await client.sendMessage(msg.chatId, {
+              message: messageParts[i],
+              parseMode: "html",
+              replyTo: msg.id
+            });
+          }
+        }
       } else {
         if (uniqueUrls.length > 1) {
           const statsText = `📈 <b>统计结果:</b> ✅有效:${stats.有效} | ⚠️耗尽:${stats.耗尽} | ⏰过期:${stats.过期} | ❌失败:${stats.失败}`;
