@@ -45,14 +45,18 @@ const help_txt = `<b>使用方法:</b>
 在任何测试命令中添加 <code>--system</code> 或 <code>-s</code> 标志使用系统已安装的speedtest
 例: <code>${commandName} --system</code> 或 <code>${commandName} -s 12345</code>`;
 // HTML escape function
-function htmlEscape(text: string): string {
+function htmlEscape(text: unknown): string {
+  if (typeof text !== "string") {
+    text = String(text ?? "");
+  }
   return text
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#x27;");
+    .replace(/\'/g, "&#x27;");
 }
+
 
 const execAsync = promisify(exec);
 const ASSETS_DIR = createDirectoryInAssets("speedtest");
@@ -253,7 +257,7 @@ async function downloadCli(): Promise<void> {
     console.log(`Downloading speedtest CLI for platform: ${platform}, arch: ${arch}`);
 
     let filename: string;
-    
+
     if (platform === "linux") {
       const archMap: { [key: string]: string } = {
         x64: "x86_64",
@@ -273,10 +277,10 @@ async function downloadCli(): Promise<void> {
 
     const url = `https://install.speedtest.net/app/cli/${filename}`;
     console.log(`Downloading from: ${url}`);
-    
+
     const response = await axios.get(url, { responseType: "arraybuffer" });
     const tempFile = path.join(ASSETS_DIR, filename);
-    
+
     console.log(`Saving to temp file: ${tempFile}`);
     fs.writeFileSync(tempFile, response.data);
 
@@ -289,12 +293,12 @@ async function downloadCli(): Promise<void> {
     if (platform === "linux" || platform === "darwin") {
       console.log(`Extracting tar.gz file: ${tempFile}`);
       await execAsync(`tar -xzf "${tempFile}" -C "${ASSETS_DIR}"`);
-      
+
       // 验证可执行文件是否存在
       if (!fs.existsSync(SPEEDTEST_PATH)) {
         throw new Error(`Speedtest executable not found after extraction: ${SPEEDTEST_PATH}`);
       }
-      
+
       await execAsync(`chmod +x "${SPEEDTEST_PATH}"`);
       console.log(`Set executable permissions for: ${SPEEDTEST_PATH}`);
     } else if (platform === "win32") {
@@ -303,7 +307,7 @@ async function downloadCli(): Promise<void> {
       const AdmZip = require("adm-zip");
       const zip = new AdmZip(tempFile);
       zip.extractAllTo(ASSETS_DIR, true);
-      
+
       // 验证可执行文件是否存在
       if (!fs.existsSync(SPEEDTEST_PATH)) {
         throw new Error(`Speedtest executable not found after extraction: ${SPEEDTEST_PATH}`);
@@ -335,7 +339,7 @@ async function downloadCli(): Promise<void> {
     console.log(`Speedtest CLI successfully installed at: ${SPEEDTEST_PATH}`);
   } catch (error: any) {
     console.error("Failed to download speedtest CLI:", error);
-    
+
     // 清理可能存在的损坏文件
     try {
       if (fs.existsSync(SPEEDTEST_PATH)) {
@@ -344,7 +348,7 @@ async function downloadCli(): Promise<void> {
     } catch (cleanupError) {
       console.warn("Failed to cleanup damaged speedtest file:", cleanupError);
     }
-    
+
     throw error;
   }
 }
@@ -392,11 +396,11 @@ async function getIpApi(ip: string): Promise<{
     const ccCode = data.countryCode || "";
     const ccFlag = ccCode
       ? String.fromCodePoint(
-          ...ccCode
-            .toUpperCase()
-            .split("")
-            .map((c: string) => 127397 + c.charCodeAt(0))
-        )
+        ...ccCode
+          .toUpperCase()
+          .split("")
+          .map((c: string) => 127397 + c.charCodeAt(0))
+      )
       : "";
 
     let ccLink = "https://www.submarinecablemap.com/country/";
@@ -497,14 +501,14 @@ async function diagnoseSpeedtestExecutable(): Promise<{ canRun: boolean; error?:
  */
 async function autoFixSpeedtest(): Promise<void> {
   console.log("Starting auto-fix for speedtest...");
-  
+
   // 清理可能损坏的文件
   const filesToClean = [
     SPEEDTEST_PATH,
     path.join(ASSETS_DIR, "speedtest.exe"),
     path.join(ASSETS_DIR, "speedtest"),
   ];
-  
+
   for (const file of filesToClean) {
     if (fs.existsSync(file)) {
       try {
@@ -518,7 +522,7 @@ async function autoFixSpeedtest(): Promise<void> {
 
   // 清理临时文件
   try {
-    const tempFiles = fs.readdirSync(ASSETS_DIR).filter(file => 
+    const tempFiles = fs.readdirSync(ASSETS_DIR).filter(file =>
       file.endsWith('.tgz') || file.endsWith('.zip')
     );
     for (const tempFile of tempFiles) {
@@ -535,13 +539,13 @@ async function autoFixSpeedtest(): Promise<void> {
 
   // 重新下载
   await downloadCli();
-  
+
   // 验证修复结果
   const diagnosis = await diagnoseSpeedtestExecutable();
   if (!diagnosis.canRun) {
     throw new Error(`自动修复失败: ${diagnosis.error}`);
   }
-  
+
   console.log("Auto-fix completed successfully");
 }
 
@@ -555,7 +559,7 @@ async function runSystemSpeedtest(serverId?: number, retryCount: number = 0): Pr
     // 查找系统可执行文件
     const candidates = process.platform === 'win32' ? ['speedtest.exe', 'speedtest-cli.exe'] : ['speedtest', 'speedtest-cli'];
     let exe: string | null = null;
-    
+
     for (const name of candidates) {
       try {
         // which 返回路径或者抛错
@@ -579,7 +583,7 @@ async function runSystemSpeedtest(serverId?: number, retryCount: number = 0): Pr
               exe = stdout.split(/\r?\n/)[0].trim();
               break;
             }
-          } catch {}
+          } catch { }
         }
       }
     }
@@ -600,7 +604,7 @@ async function runSystemSpeedtest(serverId?: number, retryCount: number = 0): Pr
     let result: any;
     try {
       result = JSON.parse(stdout);
-      
+
       // 检查JSON中是否包含错误信息
       if (result.error) {
         if (result.error.includes("Cannot read")) {
@@ -634,7 +638,7 @@ async function runSystemSpeedtest(serverId?: number, retryCount: number = 0): Pr
 
 async function runSpeedtest(serverId?: number, retryCount: number = 0, useSystem: boolean = false): Promise<SpeedtestResult> {
   const MAX_RETRIES = 1; // 最多重试1次，避免无限循环
-  
+
   try {
     // 如果要求使用系统 speedtest，则尝试系统可执行文件
     if (useSystem) {
@@ -662,7 +666,7 @@ async function runSpeedtest(serverId?: number, retryCount: number = 0, useSystem
     const serverArg = serverId ? ` -s ${serverId}` : "";
     const command = `"${SPEEDTEST_PATH}" --accept-license --accept-gdpr -f json${serverArg}`;
 
-    const { stdout, stderr } = await execAsync(command, { 
+    const { stdout, stderr } = await execAsync(command, {
       timeout: 120000 // 120秒超时
     });
 
@@ -688,7 +692,7 @@ async function runSpeedtest(serverId?: number, retryCount: number = 0, useSystem
     let result: any;
     try {
       result = JSON.parse(stdout);
-      
+
       // 检查JSON中是否包含错误信息
       if (result.error) {
         if (result.error.includes("Cannot read")) {
@@ -698,20 +702,20 @@ async function runSpeedtest(serverId?: number, retryCount: number = 0, useSystem
       }
     } catch (parseError) {
       console.log("JSON parse failed, checking for partial results...");
-      
+
       // 如果JSON解析失败，检查是否有部分文本结果
       if (stdout.includes("Download:") && stdout.includes("Upload: FAILED")) {
         throw new Error("上传测试失败，网络环境可能不支持上传测试。下载测试正常完成，但无法获取完整结果。\n\n建议：\n1. 尝试其他测试服务器\n2. 检查网络防火墙设置\n3. 稍后重试");
       }
-      
+
       // 检查是否是JSON格式的错误
       if (stdout.includes('"error":"Cannot read')) {
         throw new Error('网络连接错误: Cannot read\n\n这是网络环境问题，不是程序问题。建议：\n1. 检查网络连接稳定性\n2. 尝试其他测试服务器\n3. 稍后重试');
       }
-      
+
       throw parseError;
     }
-    
+
     // 处理上传测试失败的情况
     if (!result.upload || result.upload.bandwidth === undefined) {
       console.log("Upload test failed, but download succeeded");
@@ -727,18 +731,18 @@ async function runSpeedtest(serverId?: number, retryCount: number = 0, useSystem
     return result;
   } catch (error: any) {
     console.error("Speedtest failed:", error);
-    
+
     // 检查是否是真正的可执行文件问题（排除网络问题）
     const isNetworkError = error.message?.includes('Cannot read') ||
-                           error.message?.includes('Upload: FAILED') ||
-                           error.message?.includes('网络连接错误') ||
-                           error.message?.includes('网络环境问题');
-                           
-    const isExecutableIssue = error.message?.includes('Command failed') && 
-                              error.message?.includes(SPEEDTEST_PATH) &&
-                              !isNetworkError &&
-                              retryCount < MAX_RETRIES;
-    
+      error.message?.includes('Upload: FAILED') ||
+      error.message?.includes('网络连接错误') ||
+      error.message?.includes('网络环境问题');
+
+    const isExecutableIssue = error.message?.includes('Command failed') &&
+      error.message?.includes(SPEEDTEST_PATH) &&
+      !isNetworkError &&
+      retryCount < MAX_RETRIES;
+
     if (isExecutableIssue) {
       console.log(`Detected executable issue, attempting auto-fix... (retry ${retryCount + 1}/${MAX_RETRIES})`);
       try {
@@ -749,16 +753,16 @@ async function runSpeedtest(serverId?: number, retryCount: number = 0, useSystem
         throw new Error(`speedtest可执行文件问题，自动修复失败: ${fixError.message || String(fixError)}\n\n请尝试手动执行 'speedtest update' 命令`);
       }
     }
-    
+
     // 如果已达到最大重试次数，不再尝试修复
     if (retryCount >= MAX_RETRIES && error.message?.includes('Command failed')) {
       throw new Error(`speedtest执行失败，已达到最大重试次数 (${MAX_RETRIES})。\n\n错误信息: ${error.message}\n\n建议:\n1. 检查网络连接\n2. 手动执行 'speedtest update' 重新安装\n3. 检查系统权限和防火墙设置`);
     }
-    
+
     // 如果是指定服务器失败，尝试自动选择
-    if (serverId && (error.message?.includes('NoServersException') || 
-                     error.message?.includes('Server not found') ||
-                     error.message?.includes('不可用'))) {
+    if (serverId && (error.message?.includes('NoServersException') ||
+      error.message?.includes('Server not found') ||
+      error.message?.includes('不可用'))) {
       console.log(`Server ${serverId} failed, trying auto selection...`);
       try {
         return await runSpeedtest(undefined, retryCount, useSystem); // 递归调用，不指定服务器ID，保持重试计数
@@ -767,22 +771,22 @@ async function runSpeedtest(serverId?: number, retryCount: number = 0, useSystem
         throw error;
       }
     }
-    
+
     // 处理超时错误
     if (error.code === 'ETIMEDOUT' || error.message?.includes('timeout')) {
       throw new Error("测试超时，可能网络较慢或服务器繁忙，建议：\n1. 检查网络连接\n2. 尝试其他测试服务器\n3. 稍后重试");
     }
-    
+
     // 处理命令执行错误
     if (error.code === 'ENOENT') {
       throw new Error("speedtest 程序未找到，请使用 'speedtest update' 重新下载");
     }
-    
+
     // 处理JSON解析错误
     if (error instanceof SyntaxError) {
       throw new Error("测试结果格式错误，可能服务器返回了异常数据");
     }
-    
+
     throw error;
   }
 }
@@ -815,7 +819,7 @@ async function quickPingTest(serverId: number): Promise<{ available: boolean; pi
 
     // 只进行ping测试，不执行完整的速度测试
     const command = `"${SPEEDTEST_PATH}" --accept-license --accept-gdpr -f json -s ${serverId} --progress=no --selection-details`;
-    const { stdout, stderr } = await execAsync(command, { 
+    const { stdout, stderr } = await execAsync(command, {
       timeout: 8000 // 8秒超时，只需要ping测试
     });
 
@@ -846,18 +850,18 @@ async function quickPingTest(serverId: number): Promise<{ available: boolean; pi
         return { available: true };
       }
     }
-    
+
     return { available: true };
   } catch (error: any) {
     console.error(`Server ${serverId} ping test failed:`, error);
-    
+
     if (error.code === 'ETIMEDOUT') {
       return { available: false, error: "连接超时" };
     }
     if (error.message?.includes('NoServersException')) {
       return { available: false, error: "服务器不可用" };
     }
-    
+
     return { available: false, error: error.message || "未知错误" };
   }
 }
@@ -870,7 +874,7 @@ async function testServerAvailability(serverId: number): Promise<{ available: bo
     // 只检查服务器是否在可用列表中，不进行实际ping测试
     const allServers = await getAllServers();
     const serverExists = allServers.find(s => s.id === serverId);
-    
+
     if (!serverExists) {
       return { available: false, error: "服务器不在可用列表中" };
     }
@@ -965,7 +969,7 @@ async function selectBestServerWithFallback(): Promise<number | null> {
   }
 }
 
-async function checkNetworkConnectivity(): Promise<{connected: boolean; message: string}> {
+async function checkNetworkConnectivity(): Promise<{ connected: boolean; message: string }> {
   try {
     // 测试基本网络连接
     await axios.get('https://www.speedtest.net', { timeout: 10000 });
@@ -1041,7 +1045,7 @@ async function convertImageToStickerWebp(
           .webp({ quality: 65, effort: 6 })
           .toFile(stickerPath);
       }
-    } catch {}
+    } catch { }
 
     return stickerPath;
   } catch (e) {
@@ -1140,7 +1144,7 @@ const speedtest = async (msg: Api.Message) => {
       try {
         const networkStatus = await checkNetworkConnectivity();
         const statusIcon = networkStatus.connected ? "✅" : "❌";
-        
+
         await msg.edit({
           text: `<blockquote><b>⚡️SPEEDTEST by OOKLA</b></blockquote>\n${statusIcon} <b>网络状态:</b> <code>${networkStatus.message}</code>\n\n<b>建议:</b>\n• 如果连接异常，请检查网络设置\n• 尝试更换网络环境或DNS服务器\n• 确认防火墙允许网络测试`,
           parseMode: "html",
@@ -1195,11 +1199,11 @@ const speedtest = async (msg: Api.Message) => {
           // 推荐前3个服务器（通常按距离排序）
           const topServers = servers.slice(0, 3);
           const serverList = topServers
-            .map((server, index) => 
+            .map((server, index) =>
               `${index + 1}. <code>${server.id}</code> - <code>${htmlEscape(server.name)}</code> - <code>${htmlEscape(server.location)}</code>`
             )
             .join('\n');
-          
+
           await msg.edit({
             text: `<blockquote><b>⚡️SPEEDTEST by OOKLA</b></blockquote>\n🎯 <b>推荐服务器 (按距离排序):</b>\n\n${serverList}\n\n💡 使用 <code>${commandName} set [ID]</code> 设为默认服务器\n💡 使用 <code>${commandName} [ID]</code> 直接测试`,
             parseMode: "html",
@@ -1270,7 +1274,7 @@ const speedtest = async (msg: Api.Message) => {
           path.join(ASSETS_DIR, "speedtest.exe"),
           path.join(ASSETS_DIR, "speedtest"),
         ];
-        
+
         for (const file of filesToClean) {
           if (fs.existsSync(file)) {
             try {
@@ -1283,7 +1287,7 @@ const speedtest = async (msg: Api.Message) => {
         }
 
         // 清理可能存在的临时文件
-        const tempFiles = fs.readdirSync(ASSETS_DIR).filter(file => 
+        const tempFiles = fs.readdirSync(ASSETS_DIR).filter(file =>
           file.endsWith('.tgz') || file.endsWith('.zip')
         );
         for (const tempFile of tempFiles) {
@@ -1296,7 +1300,7 @@ const speedtest = async (msg: Api.Message) => {
         }
 
         await downloadCli();
-        
+
         // 验证安装是否成功
         if (fs.existsSync(SPEEDTEST_PATH)) {
           await msg.edit({
@@ -1345,23 +1349,21 @@ const speedtest = async (msg: Api.Message) => {
         );
 
         // 处理上传失败的情况
-        const uploadRate = (result as any).uploadFailed 
-          ? "FAILED" 
+        const uploadRate = (result as any).uploadFailed
+          ? "FAILED"
           : await unitConvert(result.upload.bandwidth);
-        const uploadData = (result as any).uploadFailed 
-          ? "FAILED" 
+        const uploadData = (result as any).uploadFailed
+          ? "FAILED"
           : await unitConvert(result.upload.bytes, true);
-        
+
         const description = [
           `<blockquote><b>⚡️SPEEDTEST by OOKLA @${ccCode}${ccFlag}</b></blockquote>`,
           `<code>Name</code>  <code>${htmlEscape(result.isp)}</code> ${asInfo}`,
-          `<code>Node</code>  <code>${
-            result.server.id
+          `<code>Node</code>  <code>${result.server.id
           }</code> - <code>${htmlEscape(
             result.server.name
           )}</code> - <code>${htmlEscape(result.server.location)}</code>`,
-          `<code>Conn</code>  <code>${
-            result.interface.externalIp.includes(":") ? "IPv6" : "IPv4"
+          `<code>Conn</code>  <code>${result.interface.externalIp.includes(":") ? "IPv6" : "IPv4"
           }</code> - <code>${htmlEscape(
             result.interface.name
           )}</code> - <code>MTU</code> <code>${mtu}</code>`,
@@ -1412,10 +1414,10 @@ const speedtest = async (msg: Api.Message) => {
               });
               try {
                 await msg.delete();
-              } catch {}
+              } catch { }
               try {
                 fs.unlinkSync(imagePath);
-              } catch {}
+              } catch { }
               return true;
             } else if (type === "file") {
               await msg.client?.sendFile(msg.peerId, {
@@ -1426,10 +1428,10 @@ const speedtest = async (msg: Api.Message) => {
               });
               try {
                 await msg.delete();
-              } catch {}
+              } catch { }
               try {
                 fs.unlinkSync(imagePath);
-              } catch {}
+              } catch { }
               return true;
             } else if (type === "sticker") {
               // 转为贴纸发送
@@ -1449,10 +1451,10 @@ const speedtest = async (msg: Api.Message) => {
                 // 清理临时文件
                 try {
                   fs.unlinkSync(imagePath);
-                } catch {}
+                } catch { }
                 try {
                   fs.unlinkSync(stickerPath);
-                } catch {}
+                } catch { }
                 // 同时展示文字说明
                 await msg.edit({ text: finalDescription, parseMode: "html" });
                 return true;
@@ -1473,19 +1475,19 @@ const speedtest = async (msg: Api.Message) => {
         await msg.edit({ text: finalDescription, parseMode: "html" });
       } catch (error) {
         const errorMsg = error instanceof Error ? error.message : String(error);
-        const isKnownNetworkError = errorMsg.includes('超时') || 
-                                   errorMsg.includes('连接') || 
-                                   errorMsg.includes('socket') ||
-                                   errorMsg.includes('Timeout') ||
-                                   errorMsg.includes('Cannot read');
-        
+        const isKnownNetworkError = errorMsg。includes('超时') ||
+          errorMsg。includes('连接') ||
+          errorMsg。includes('socket') ||
+          errorMsg。includes('Timeout') ||
+          errorMsg。includes('Cannot read');
+
         let helpText = "";
         if (isKnownNetworkError) {
           helpText = `\n\n💡 <b>解决建议:</b>\n• 检查网络连接是否正常\n• 尝试使用 <code>${commandName} list</code> 查看可用服务器\n• 使用 <code>${commandName} set [ID]</code> 选择其他服务器\n• 如问题持续，请联系网络管理员`;
         }
-        
+
         await msg.edit({
-          text: `❌ <b>速度测试失败</b>\n\n<code>${htmlEscape(errorMsg)}</code>${helpText}`,
+          text: `❌ <b>速度测试失败</b>\n\n<code>${htmlEscape(errorMsg)}</code>${helpText}`，
           parseMode: "html",
         });
       }
