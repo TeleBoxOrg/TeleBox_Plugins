@@ -35,7 +35,7 @@ class DissPlugin extends Plugin {
             if (dissText && dissText.length > 0) {
               // 成功获取到语录，发送结果
               await msg.edit({ 
-                text: `🗣️ <b>儒雅随和语录：</b>\n\n${this.htmlEscape(dissText)}`,
+                text: `${this.htmlEscape(dissText)}`,
                 parseMode: "html"
               });
               return;
