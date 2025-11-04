@@ -52,7 +52,6 @@ npm i <插件名>
 - `his` - 查看被回复者最近消息  
 - `httpcat` - 发送一张http状态码主题的猫猫图片  
 - `ids` - 用户信息显示以及跳转链接  
-- `im` - 群组媒体消息监控封禁  
 - `ip` - IP 地址查询  
 - `javdb` - 寻找番号封面  
 - `keyword` - 关键词自动回复  
@@ -72,7 +71,6 @@ npm i <插件名>
 - `paolu` - 群组一键跑路插件  
 - `parsehub` - 社交媒体链接解析助手  
 - `pic_to_sticker` - 图片转表情  
-- `pmcaptcha` - pmcaptcha私聊验证  
 - `portball` - 临时禁言工具  
 - `premium` - 群组大会员统计插件  
 - `q` - 消息引用生成贴纸  
