@@ -46,10 +46,8 @@ const help_txt = `<b>使用方法:</b>
 例: <code>${commandName} --system</code> 或 <code>${commandName} -s 12345</code>`;
 // HTML escape function
 function htmlEscape(text: unknown): string {
-  if (typeof text !== "string") {
-    text = String(text ?? "");
-  }
-  return text
+  const textStr = typeof text === "string" ? text : String(text ?? "");
+  return textStr
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;")
@@ -1475,11 +1473,11 @@ const speedtest = async (msg: Api.Message) => {
         await msg.edit({ text: finalDescription, parseMode: "html" });
       } catch (error) {
         const errorMsg = error instanceof Error ? error.message : String(error);
-        const isKnownNetworkError = errorMsg。includes('超时') ||
-          errorMsg。includes('连接') ||
-          errorMsg。includes('socket') ||
-          errorMsg。includes('Timeout') ||
-          errorMsg。includes('Cannot read');
+        const isKnownNetworkError = errorMsg.includes('超时') ||
+          errorMsg.includes('连接') ||
+          errorMsg.includes('socket') ||
+          errorMsg.includes('Timeout') ||
+          errorMsg.includes('Cannot read');
 
         let helpText = "";
         if (isKnownNetworkError) {
@@ -1487,7 +1485,7 @@ const speedtest = async (msg: Api.Message) => {
         }
 
         await msg.edit({
-          text: `❌ <b>速度测试失败</b>\n\n<code>${htmlEscape(errorMsg)}</code>${helpText}`，
+          text: `❌ <b>速度测试失败</b>\n\n<code>${htmlEscape(errorMsg)}</code>${helpText}`,
           parseMode: "html",
         });
       }
