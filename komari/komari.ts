@@ -8,7 +8,6 @@ import * as path from "path";
 // 配置存储键名
 const CONFIG_KEYS = {
   KOMARI_URL: "komari_url",
-  KOMARI_TOKEN: "komari_token",
 };
 
 // 数据库路径
@@ -333,6 +332,7 @@ async function getNodesOverview(baseUrl: string): Promise<string> {
       totalNodes > 0 ? ((onlineCount / totalNodes) * 100).toFixed(2) : "0.00";
 
     // 计算平均值
+    let totalCores = 0;
     let avgCpu = 0;
     let avgLoad1 = 0;
     let avgLoad5 = 0;
@@ -353,6 +353,12 @@ async function getNodesOverview(baseUrl: string): Promise<string> {
     onlineNodes.forEach((uuid) => {
       const data = realtimeData[uuid];
       if (data) {
+        // 找到对应的节点信息以获取核心数
+        const node = nodes.find((n: any) => n.uuid === uuid);
+        if (node) {
+          totalCores += node.cpu_cores || 0;
+        }
+
         avgCpu += data.cpu?.usage || 0;
         avgLoad1 += data.load?.load1 || 0;
         avgLoad5 += data.load?.load5 || 0;
@@ -396,6 +402,7 @@ async function getNodesOverview(baseUrl: string): Promise<string> {
 
 **📡 节点状态**
 • **在线状态**: \`${onlineCount} / ${totalNodes}\` (\`${onlinePercent}%\`)
+• **总核心数**: \`${totalCores}\`
 • **平均 CPU**: \`${avgCpu.toFixed(2)}%\`
 • **负载**: \`${avgLoad1.toFixed(2)} / ${avgLoad5.toFixed(
       2
@@ -563,25 +570,13 @@ async function handleKomariRequest(msg: Api.Message): Promise<void> {
       let actualKey: string;
       let displayName: string;
 
-      switch (configKey) {
-        case "_set_url":
-          actualKey = CONFIG_KEYS.KOMARI_URL;
-          displayName = "Komari URL";
-          break;
-        case "_set_token":
-          actualKey = CONFIG_KEYS.KOMARI_TOKEN;
-          displayName = "API Token";
-          break;
-        default:
-          await msg.edit({ text: "❌ 未知的配置项" });
-          return;
+      if (configKey !== "_set_url") {
+        await msg.edit({ text: "❌ 未知的配置项" });
+        return;
       }
 
-      ConfigManager.set(actualKey, configValue);
-      const displayValue =
-        actualKey === CONFIG_KEYS.KOMARI_TOKEN
-          ? configValue.substring(0, 8) + "..."
-          : configValue;
+      ConfigManager.set(CONFIG_KEYS.KOMARI_URL, configValue);
+      const displayValue = configValue;
 
       await msg.edit({
         text: `✅ 已设置 ${displayName}: \`${displayValue}\``,
@@ -630,14 +625,13 @@ async function handleKomariRequest(msg: Api.Message): Promise<void> {
     } else {
       await msg.edit({
         text: `❌ 未知命令。支持的命令：
-• \`komari status\` - 获取服务器基本信息
-• \`komari total\` - 获取节点总览
-• \`komari show <节点名>\` - 查看指定节点详情
+• <code>komari status</code> - 获取服务器基本信息
+• <code>komari total</code> - 获取节点总览
+• <code>komari show &lt;节点名&gt;</code> - 查看指定节点详情
 
 配置命令：
-• \`komari _set_url <URL>\` - 设置 Komari 服务器 URL
-• \`komari _set_token <token>\` - 设置 API Token（暂未使用）`,
-        parseMode: "markdown",
+• <code>komari _set_url &lt;URL&gt;</code> - 设置 Komari 服务器 URL`,
+        parseMode: "html",
       });
     }
   } catch (error: any) {
@@ -658,13 +652,12 @@ Komari 服务器监控插件：
 基于 Komari API 获取服务器和节点状态信息
 
 命令：
-• \`komari status\` - 获取服务器基本信息
-• \`komari total\` - 获取所有节点总览
-• \`komari show <节点名>\` - 查看指定节点详细状态
+• <code>komari status</code> - 获取服务器基本信息
+• <code>komari total</code> - 获取所有节点总览
+• <code>komari show &lt;节点名&gt;</code> - 查看指定节点详细状态
 
 配置命令：
-• \`komari _set_url <URL>\` - 设置 Komari 服务器地址
-• \`komari _set_token <token>\` - 设置 API Token（可选）
+• <code>komari _set_url &lt;URL&gt;</code> - 设置 Komari 服务器地址
   `;
   cmdHandlers: Record<string, (msg: Api.Message) => Promise<void>> = {
     komari: handleKomariRequest,
