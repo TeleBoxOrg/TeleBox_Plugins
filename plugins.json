@@ -327,10 +327,6 @@
     "url": "https://github.com/TeleBoxOrg/TeleBox_Plugins/blob/main/subinfo/subinfo.ts?raw=true",
     "desc": "订阅链接信息查询工具"
   },
-  "sendat": {
-    "url": "https://github.com/TeleBoxOrg/TeleBox_Plugins/blob/main/sendat/sendat.ts?raw=true",
-    "desc": "定时发送消息插件"
-  },
   "restore_pin": {
     "url": "https://github.com/TeleBoxOrg/TeleBox_Plugins/blob/main/restore_pin/restore_pin.ts?raw=true",
     "desc": "恢复群组被取消的置顶消息"
