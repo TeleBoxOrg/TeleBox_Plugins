@@ -78,7 +78,6 @@ npm i <插件名>
 - `rate` - 货币实时汇率查询与计算  
 - `restore_pin` - 恢复群组被取消的置顶消息  
 - `search` - 频道消息搜索工具  
-- `sendat` - 定时发送消息插件  
 - `service` - systemd服务状态查看工具  
 - `shift` - 智能消息转发系统  
 - `soutu` - soutu搜图插件  
