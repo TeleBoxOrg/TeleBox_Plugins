@@ -154,6 +154,15 @@
         "mask": "eat/maskpl.png"
       }
     },
+    "qy": {
+      "name": "揭竿而起！",
+      "url": "eat/eatqy.png",
+      "me": {
+        "x": 237,
+        "y": 63,
+        "mask": "eat/maskqy.png"
+      }
+    },    
     "ri": {
       "name": "日一下",
       "url": "https://github.com/FoKit/PagerMaid_Plugins/raw/modify/eat/eatri.png",
