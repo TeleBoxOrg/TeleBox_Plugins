@@ -1,25 +1,25 @@
 # TeleBox_Plugins
 
 ## 简介
-TeleBox_Plugins 是 TeleBox 项目的官方插件仓库，提供丰富的功能插件扩展。
+TeleBox_Plugins 是 TeleBox 项目的官方仓库，提供丰富的功能扩展。
 
-## 插件安装方式
+## 安装方式
 ```bash
-npm i <插件名>
+npm i <名>
 ```
 
 ## 可用插件列表
 - `aban` - 高级封禁管理工具  
 - `acron` - 定时发送/转发/复制/置顶/取消置顶/删除消息/执行命令  
 - `aff` - 机场Aff信息管理  
-- `ai` - ai聚合插件  
+- `ai` - ai聚合  
 - `aitc` - AI Prompt 转写  
-- `annualreport` - 年度报告插件  
+- `annualreport` - 年度报告  
 - `atadmins` - 一键艾特全部管理员  
 - `audio_to_voice` - 音乐转音频  
-- `autochangename` - 自动定时修改用户名插  
+- `autochangename` - 自动定时修改用户名  
 - `autodel` - 定时删除消息  
-- `autodelcmd` - 自动删除命令消息插件  
+- `autodelcmd` - 自动删除命令消息  
 - `banana` - Nano-Banana 图像编辑  
 - `bin` - 卡头检测  
 - `bizhi` - 发送一张壁纸  
@@ -30,7 +30,7 @@ npm i <插件名>
 - `cleanda` - 已注销账号清理工具  
 - `clear_sticker` - 批量删除群组内贴纸  
 - `clearblocked` - 批量清理已拉黑用户  
-- `convert` - 视频转音频插件  
+- `convert` - 视频转音频  
 - `copy_sticker_set` - 复制贴纸包  
 - `cosplay` - 获取随机cos写真  
 - `crazy4` - 疯狂星期四文案  
@@ -42,12 +42,12 @@ npm i <插件名>
 - `dme` - 删除指定数量的自己发送的消息  
 - `eat` - 生成带头像表情包  
 - `eatgif` - 生成"吃掉"动图表情包  
-- `encode` - 简单的编码解码插件  
+- `encode` - 简单的编码解码  
 - `fadian` - fadian语录  
 - `getdel` - 死号检测清理工具  
 - `getstickers` - 下载整个贴纸包  
-- `gif` - GIF与视频转贴纸插件  
-- `git_PR` - Git PR 管理插件  
+- `gif` - GIF与视频转贴纸  
+- `git_PR` - Git PR 管理  
 - `gt` - 谷歌中英文互译  
 - `his` - 查看被回复者最近消息  
 - `httpcat` - 发送一张http状态码主题的猫猫图片  
@@ -56,31 +56,31 @@ npm i <插件名>
 - `javdb` - 寻找番号封面  
 - `keyword` - 关键词自动回复  
 - `kitt` - 高级触发器: 匹配 -> 执行, 高度自定义, 逻辑自由  
-- `komari` - Komari 服务器监控插件  
+- `komari` - Komari 服务器监控  
 - `listusernames` - 列出属于自己的公开群组/频道  
 - `lottery` - 抽奖工具  
-- `lu_bs` - 鲁小迅整点报时插件  
+- `lu_bs` - 鲁小迅整点报时  
 - `manage_admin` - 管理管理员  
 - `moyu` - 摸鱼日报  
 - `music` - YouTube音乐  
 - `music_bot` - 多音源音乐搜索  
 - `netease` - 网易云音乐  
-- `news` - 每日新闻插件  
-- `ntp` - NTP 时间同步插件  
+- `news` - 每日新闻  
+- `ntp` - NTP 时间同步  
 - `oxost` - 回复聊天中的文件与媒体 得到一个临时的下载链接  
-- `paolu` - 群组一键跑路插件  
+- `paolu` - 群组一键跑路  
 - `parsehub` - 社交媒体链接解析助手  
 - `pic_to_sticker` - 图片转表情  
 - `portball` - 临时禁言工具  
-- `premium` - 群组大会员统计插件  
+- `premium` - 群组大会员统计  
 - `q` - 消息引用生成贴纸  
-- `qr` - QR 二维码插件  
+- `qr` - QR 二维码  
 - `rate` - 货币实时汇率查询与计算  
 - `restore_pin` - 恢复群组被取消的置顶消息  
 - `search` - 频道消息搜索工具  
 - `service` - systemd服务状态查看工具  
 - `shift` - 智能消息转发系统  
-- `soutu` - soutu搜图插件  
+- `soutu` - soutu搜图  
 - `speedlink` - 对其他服务器测速  
 - `speedtest` - 网络速度测试工具  
 - `ssh` - ssh管理  
@@ -90,12 +90,12 @@ npm i <插件名>
 - `subinfo` - 订阅链接信息查询工具  
 - `sunremove` - 定向批量解除封禁用户  
 - `t` - 文字转语音  
-- `teletype` - 打字机效果插件  
-- `trace` - 全局追踪点赞插件  
+- `teletype` - 打字机效果  
+- `trace` - 全局追踪点赞  
 - `warp` - warp管理  
 - `weather` - 天气查询  
-- `whois` - 域名查询插件  
-- `xm` - 全自动羡慕插件  
+- `whois` - 域名查询  
+- `xm` - 全自动羡慕  
 - `yinglish` - 淫语翻译  
 - `yiyan` - 获取随机一言  
 - `yt-dlp` - YouTube 视频下载工具  
@@ -106,7 +106,7 @@ npm i <插件名>
 ## 技术栈
 
 - **开发语言**: TypeScript
-- **数据库**: SQLite (better-sqlite3)
+- **数据库**: Lowdb
 - **任务调度**: node-schedule
 - **Telegram API**: telegram (GramJS)
 - **图像处理**: Sharp
@@ -115,7 +115,7 @@ npm i <插件名>
 
 ## 贡献指南
 
-欢迎提交新插件或改进现有插件。请确保：
+欢迎提交新或改进现有。请确保：
 1. 遵循 TypeScript 编码规范
 2. 包含完整的功能说明
 3. 添加适当的错误处理
@@ -127,4 +127,4 @@ npm i <插件名>
 
 ## 许可证
 
-本项目采用开源许可证，具体请查看各插件的许可证声明。
+本项目采用开源许可证，具体请查看各的许可证声明。
