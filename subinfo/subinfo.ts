@@ -2,49 +2,260 @@ import { Plugin } from "@utils/pluginBase";
 import { Api } from "telegram";
 import { getGlobalClient } from "@utils/globalClient";
 import axios from "axios";
-import * as querystring from "querystring";
+import * as yaml from "js-yaml";
+import dayjs from "dayjs";
 
-// HTML转义函数（必需）
-const htmlEscape = (text: string): string => 
-  text.replace(/[&<>"']/g, m => ({ 
-    '&': '&amp;', '<': '&lt;', '>': '&gt;', 
-    '"': '&quot;', "'": '&#x27;' 
-  }[m] || m));
-
-// 远程配置映射
 const REMOTE_MAPPINGS_URL = "https://raw.githubusercontent.com/Hyy800/Quantumult-X/refs/heads/Nana/ymys.txt";
 let REMOTE_CONFIG_MAPPINGS: Record<string, string> = {};
 
-class SubQueryPlugin extends Plugin {
-  description = `📊 订阅链接信息查询工具
-  
-<b>命令：</b>
-• <code>.subinfo [订阅链接]</code> - 查询单个订阅链接信息
-• <code>.subinfo</code> - 回复包含链接的消息进行查询
-• <code>.subinfo 多个链接</code> - 批量查询多个链接
+// 地区规则全量
+const REGION_RULES: Array<[string, string[]]> = [
+  // 亚洲
+  ['香港', ['香港', 'hong kong', 'hongkong', 'hk', '🇭🇰', 'hkg']],
+  ['台湾', ['台湾', 'taiwan', 'tw', '🇹🇼', 'taipei', 'tpe']],
+  ['日本', ['日本', 'japan', 'jp', '🇯🇵', 'tokyo', 'osaka', 'jap']],
+  ['新加坡', ['新加坡', 'singapore', 'sg', '🇸🇬', 'sgp']],
+  ['韩国', ['韩国', 'korea', 'kr', '🇰🇷', 'seoul', 'kor']],
+  ['印度', ['印度', 'india', 'in', '🇮🇳', 'mumbai', 'delhi', 'ind']],
+  ['马来西亚', ['马来西亚', 'malaysia', 'my', '🇲🇾', 'kuala lumpur', 'mys']],
+  ['泰国', ['泰国', 'thailand', 'th', '🇹🇭', 'bangkok', 'tha']],
+  ['越南', ['越南', 'vietnam', 'vn', '🇻🇳', 'hanoi', 'vnm']],
+  ['印尼', ['印尼', '印度尼西亚', 'indonesia', 'id', '🇮🇩', 'jakarta', 'idn']],
+  ['菲律宾', ['菲律宾', 'philippines', 'ph', '🇵🇭', 'manila', 'phl']],
+  ['土耳其', ['土耳其', 'turkey', 'tr', '🇹🇷', 'istanbul', 'ankara', 'tur']],
+  // 北美
+  ['美国', ['美国', 'united states', 'us', 'usa', '🇺🇸', 'los angeles', 'san jose', 'silicon valley']],
+  ['加拿大', ['加拿大', 'canada', 'ca', '🇨🇦', 'toronto', 'vancouver']],
+  // 欧洲主要
+  ['英国', ['英国', 'united kingdom', 'uk', '🇬🇧', 'london', 'manchester', 'gbr']],
+  ['德国', ['德国', 'germany', 'de', '🇩🇪', 'frankfurt', 'berlin', 'deu']],
+  ['法国', ['法国', 'france', 'fr', '🇫🇷', 'paris', 'fra']],
+  ['荷兰', ['荷兰', 'netherlands', 'nl', '🇳🇱', 'amsterdam', 'nld']],
+  ['瑞士', ['瑞士', 'switzerland', 'ch', '🇨🇭', 'zurich', 'che']],
+  // 其他欧洲
+  ['意大利', ['意大利', 'italy', 'it', '🇮🇹', 'milan', 'rome', 'ita']],
+  ['西班牙', ['西班牙', 'spain', 'es', '🇪🇸', 'madrid', 'barcelona', 'esp']],
+  ['瑞典', ['瑞典', 'sweden', 'se', '🇸🇪', 'stockholm', 'swe']],
+  ['挪威', ['挪威', 'norway', 'no', '🇳🇴', 'oslo', 'nor']],
+  ['芬兰', ['芬兰', 'finland', 'fi', '🇫🇮', 'helsinki', 'fin']],
+  ['丹麦', ['丹麦', 'denmark', 'dk', '🇩🇰', 'copenhagen', 'dnk']],
+  ['波兰', ['波兰', 'poland', 'pl', '🇵🇱', 'warsaw', 'pol']],
+  ['奥地利', ['奥地利', 'austria', 'at', '🇦🇹', 'vienna', 'aut']],
+  ['比利时', ['比利时', 'belgium', 'be', '🇧🇪', 'brussels', 'bel']],
+  ['爱尔兰', ['爱尔兰', 'ireland', 'ie', '🇮🇪', 'dublin', 'irl']],
+  ['葡萄牙', ['葡萄牙', 'portugal', 'pt', '🇵🇹', 'lisbon', 'prt']],
+  ['希腊', ['希腊', 'greece', 'gr', '🇬🇷', 'athens', 'grc']],
+  ['卢森堡', ['卢森堡', 'luxembourg', 'lu', '🇱🇺', 'lux']],
+  ['乌克兰', ['乌克兰', 'ukraine', 'ua', '🇺🇦', 'kiev', 'ukr']],
+  // 大洋洲
+  ['澳大利亚', ['澳大利亚', 'australia', 'au', '🇦🇺', 'sydney', 'melbourne', 'aus']],
+  ['新西兰', ['新西兰', 'new zealand', 'nz', '🇳🇿', 'auckland', 'nzl']],
+  // 南美
+  ['巴西', ['巴西', 'brazil', 'br', '🇧🇷', 'sao paulo', 'rio', 'bra']],
+  ['阿根廷', ['阿根廷', 'argentina', 'ar', '🇦🇷', 'buenos aires', 'arg']],
+  ['智利', ['智利', 'chile', 'cl', '🇨🇱', 'santiago', 'chl']],
+  ['哥伦比亚', ['哥伦比亚', 'colombia', 'co', '🇨🇴', 'bogota', 'col']],
+  ['墨西哥', ['墨西哥', 'mexico', 'mx', '🇲🇽', 'mexico city', 'mex']],
+  // 中东
+  ['阿联酋', ['阿联酋', 'uae', 'united arab emirates', 'ae', '🇦🇪', 'dubai', 'abu dhabi', 'are']],
+  ['以色列', ['以色列', 'israel', 'il', '🇮🇱', 'tel aviv', 'jerusalem', 'isr']],
+  ['沙特', ['沙特', '沙特阿拉伯', 'saudi arabia', 'sa', '🇸🇦', 'riyadh', 'sau']],
+  // 非洲
+  ['南非', ['南非', 'south africa', 'za', '🇿🇦', 'johannesburg', 'cape town', 'zaf']],
+  ['埃及', ['埃及', 'egypt', 'eg', '🇪🇬', 'cairo', 'egy']],
+  // 俄罗斯
+  ['俄罗斯', ['俄罗斯', 'russia', 'ru', '🇷🇺', 'moscow', 'st.petersburg', 'rus']],
+];
 
-<b>功能：</b>
-- 查询订阅链接的流量使用情况
-- 显示配置名称、使用进度、剩余流量
-- 支持批量查询和统计
-- 自动从远程映射获取配置名称`;
+// HTML转义
+function htmlEscape(text: string): string {
+  return text.replace(/[&<>"']/g, m => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;',
+    '"': '&quot;', "'": '&#x27;'
+  }[m] || m));
+}
+
+// 字节单位转换
+function formatSize(size: number): string {
+  const UNITS = ['B', 'KB', 'MB', 'GB', 'TB', 'PB'];
+  if (size < 0) size = 0;
+  let level = 0;
+  let integer = Math.floor(size);
+  let remainder = 0;
+  while (integer >= 1024 && level < UNITS.length - 1) {
+    remainder = integer % 1024;
+    integer = Math.floor(integer / 1024);
+    level++;
+  }
+  return `${integer}.${remainder.toString().padStart(3, '0')} ${UNITS[level]}`;
+}
+
+// xx天xx小时
+function formatTimeRemaining(seconds: number): string {
+  seconds = Math.max(0, Math.floor(seconds));
+  const days = Math.floor(seconds / 86400);
+  const hours = Math.floor((seconds % 86400) / 3600);
+  return `${days.toString().padStart(2, '0')}天${hours.toString().padStart(2, '0')}小时`;
+}
+
+// 日均
+function calculateDailyUsage(totalUsed: number, startTime: number, currentTime: number): string {
+  const days = Math.max(1, (currentTime - startTime) / 86400);
+  return formatSize(totalUsed / days);
+}
+
+// 建议日均
+function calculateRemainingDailyAllowance(remain: number, days: number): string {
+  if (days <= 0) return "无法计算";
+  return formatSize(remain / days);
+}
+
+// 使用百分比表情
+function getSpeedEmoji(percent: number): string {
+  if (percent < 30) return "🟢 良好";
+  if (percent < 70) return "🟡 正常";
+  if (percent < 90) return "🟠 偏高";
+  return "🔴 警告";
+}
+
+// 预计耗尽日期
+function estimateDepletionDate(remain: number, dailyUsage: number): string {
+  if (dailyUsage <= 0) return "无法估计";
+  const days = Math.floor(remain / dailyUsage);
+  return dayjs().add(days, 'day').format("YYYY-MM-DD");
+}
+
+// 节点统计
+async function getNodeInfo(url: string): Promise<{ node_count: number | string, type_count: Record<string, number>, regions: Record<string, number> } | null> {
+  try {
+    const res = await axios.get(url, { timeout: 10000 });
+    // 尝试 parse yaml
+    try {
+      const config = yaml.load(res.data);
+      if (config && (config as any).proxies) {
+        const proxies = (config as any).proxies;
+        const typeCount: Record<string, number> = {};
+        const regions: Record<string, number> = {};
+        let totalNodes = proxies.length;
+        let identified = 0;
+        for (const proxy of proxies) {
+          const type = proxy.type?.toLowerCase();
+          typeCount[type] = typeCount[type] ? typeCount[type] + 1 : 1;
+          const nameLow = proxy.name?.toLowerCase() || '';
+          for (const [region, keys] of REGION_RULES) {
+            if (keys.some(k => nameLow.includes(k.toLowerCase()))) {
+              regions[region] = (regions[region] || 0) + 1;
+              identified++;
+              break;
+            }
+          }
+        }
+        if (totalNodes - identified > 0) regions['其他'] = totalNodes - identified;
+        return {
+          node_count: totalNodes,
+          type_count: Object.fromEntries(Object.entries(typeCount).filter(([_, v]) => v > 0)),
+          regions: Object.fromEntries(Object.entries(regions).filter(([_, v]) => v > 0))
+        };
+      }
+    } catch { }
+    // 尝试 base64
+    try {
+      const decoded = Buffer.from(res.data, 'base64').toString();
+      const typeCount: Record<string, number> = {};
+      const regions: Record<string, number> = {};
+      let nodeCount = 0;
+      let identified = 0;
+      decoded.split('\n').forEach(line => {
+        if (!line.trim()) return;
+        for (const pattern of ['vmess://', 'trojan://', 'ss://', 'ssr://', 'vless://', 'hy2://', 'hysteria://', 'hy://', 'tuic://', 'wireguard://', 'socks5://', 'http://', 'https://', 'shadowtls://', 'naive://']) {
+          if (line.startsWith(pattern)) {
+            let t = pattern.replace('://', '');
+            typeCount[t] = typeCount[t] ? typeCount[t] + 1 : 1;
+            nodeCount++;
+            let lLow = line.toLowerCase();
+            for (const [region, keys] of REGION_RULES) {
+              if (keys.some(k => lLow.includes(k.toLowerCase()))) {
+                regions[region] = (regions[region] || 0) + 1;
+                identified++;
+                break;
+              }
+            }
+            break;
+          }
+        }
+      });
+      if (nodeCount - identified > 0) regions['其他'] = nodeCount - identified;
+      return {
+        node_count: nodeCount,
+        type_count: Object.fromEntries(Object.entries(typeCount).filter(([_, v]) => v > 0)),
+        regions: Object.fromEntries(Object.entries(regions).filter(([_, v]) => v > 0)),
+      };
+    } catch { }
+    return null;
+  } catch { return null; }
+}
+
+// 订阅周期类型智能区分
+function getSubType(expireTs: number): { isLongTerm: boolean; isSingle: boolean; resetInfo: string; daysToReset: number } {
+  const now = Math.floor(Date.now() / 1000);
+  const expireTime = new Date(expireTs * 1000);
+  const daysToExpire = Math.max(0, Math.floor((expireTs - now) / 86400));
+  const isLongTerm = (expireTs - now) > 3 * 365 * 86400;
+  let resetInfo = "单次订阅，无重置";
+  let daysToReset = daysToExpire;
+
+  // 月度重置日
+  const resetDay = expireTime.getDate();
+  const current = new Date();
+  let nextReset = new Date(current.getFullYear(), current.getMonth(), resetDay, 0, 0, 0);
+  if (current.getDate() >= resetDay) {
+    nextReset = new Date(current.getFullYear(), current.getMonth() + 1, resetDay, 0, 0, 0);
+  }
+  daysToReset = Math.max(1, Math.floor((nextReset.getTime() / 1000 - now) / 86400));
+  if (daysToExpire < 45 && !isLongTerm) {
+    resetInfo = "单次订阅，无重置";
+    daysToReset = daysToExpire;
+    return { isSingle: true, isLongTerm, resetInfo, daysToReset };
+  } else {
+    resetInfo = `每月${resetDay}日`;
+    return { isSingle: false, isLongTerm, resetInfo, daysToReset };
+  }
+}
+
+// 订阅开始时间推断
+function getSubscriptionStartTime(infoNum: number[]): number {
+  if (infoNum.length >= 5) return infoNum[4];
+  else if (infoNum.length >= 4) return infoNum[3] - 30 * 86400; 
+  else return 0;
+}
+
+// 电报长消息分割
+function splitLongMessage(text: string, maxLength = 4000): string[] {
+  if (text.length <= maxLength) return [text];
+  const ret: string[] = [];
+  let current = '';
+  for (const line of text.split('\n')) {
+    if (current.length + line.length + 1 > maxLength) {
+      if (current) ret.push(current);
+      current = line;
+    } else {
+      current += (current ? '\n' : '') + line;
+    }
+  }
+  if (current) ret.push(current);
+  return ret;
+}
+
+class SubinfoPlugin extends Plugin {
+  description =
+    `📈 订阅链接多维度查询工具
+<code>.subinfo [订阅链接]</code> 查询订阅(回复消息可自动提取)
+支持流量/月重置/长期订阅/节点数量/类型/地区分布/到期/建议/耗尽预测/上下行比例/自动识别机场名`;
 
   cmdHandlers = {
-    subinfo: this.handleSubQuery.bind(this)
+    subinfo: this.handleSubinfo.bind(this)
   };
-
-  // 格式化字节大小
-  private formatBytes(size: number): string {
-    if (!size || size < 0) return "0 B";
-    const units = ['B', 'KB', 'MB', 'GB', 'TB'];
-    let power = 0;
-    while (size >= 1024 && power < units.length - 1) {
-      size /= 1024;
-      power++;
-    }
-    return `${size.toFixed(2)} ${units[power]}`;
-  }
-
+  
   // 加载远程映射配置
   private async loadRemoteMappings(): Promise<number> {
     try {
@@ -69,7 +280,7 @@ class SubQueryPlugin extends Plugin {
       REMOTE_CONFIG_MAPPINGS = mappings;
       return Object.keys(REMOTE_CONFIG_MAPPINGS).length;
     } catch (error) {
-      console.error(`[SubQuery] 加载远程映射失败:`, error);
+      console.error(`[Subinfo] 加载远程映射失败:`, error);
       return 0;
     }
   }
@@ -84,14 +295,14 @@ class SubQueryPlugin extends Plugin {
     return null;
   }
 
-  // 从Content-Disposition头中获取配置名称
+  // 从 Content-Disposition 头中获取配置名称
   private getConfigNameFromHeader(contentDisposition: string | null): string | null {
     if (!contentDisposition) return null;
 
     try {
       const parts = contentDisposition.split(';');
       
-      // 处理 filename* 格式
+      // filename* 格式
       for (const part of parts) {
         const trimmed = part.trim();
         if (trimmed.startsWith('filename*=')) {
@@ -100,13 +311,13 @@ class SubQueryPlugin extends Plugin {
             try {
               return decodeURIComponent(namePart);
             } catch {
-              // 忽略解码错误
+              // Ignore
             }
           }
         }
       }
       
-      // 处理 filename 格式
+      // filename 格式
       for (const part of parts) {
         const trimmed = part.trim();
         if (trimmed.startsWith('filename=')) {
@@ -115,7 +326,6 @@ class SubQueryPlugin extends Plugin {
           
           if (namePart) {
             try {
-              // 尝试ISO-8859-1到UTF-8的转换
               const repairedName = Buffer.from(namePart, 'binary').toString('utf-8');
               const unquotedName = decodeURIComponent(repairedName);
               return unquotedName !== repairedName ? unquotedName : repairedName;
@@ -130,371 +340,218 @@ class SubQueryPlugin extends Plugin {
         }
       }
     } catch (error) {
-      console.error(`[SubQuery] 解析Content-Disposition失败:`, error);
+      console.error(`[Subinfo] 解析Content-Disposition失败:`, error);
     }
     
     return null;
   }
-
-  // 处理单个URL
-  private async processSingleUrl(url: string): Promise<any> {
-    try {
-      const configName = this.getConfigNameFromMappings(url);
-      
-      const response = await axios.get(url, {
-        headers: {
-          'User-Agent': 'FlClash/v0.8.76 clash-verge Platform/android'
-        },
-        timeout: 15000,
-        maxRedirects: 5,
-        validateStatus: () => true // 不抛出HTTP错误状态
-      });
-
-      if (response.status !== 200) {
-        return {
-          status: "失败",
-          url,
-          config_name: configName,
-          data: null,
-          error: `HTTP ${response.status}`
-        };
-      }
-
-      // 获取配置名称
-      let finalConfigName = configName;
-      if (!finalConfigName) {
-        const contentDisposition = response.headers['content-disposition'];
-        finalConfigName = this.getConfigNameFromHeader(contentDisposition);
-      }
-
-      // 解析用户信息头
-      const userInfoHeader = response.headers['subscription-userinfo'];
-      if (!userInfoHeader) {
-        return {
-          status: "失败",
-          url,
-          config_name: finalConfigName,
-          data: null,
-          error: "未找到订阅用户信息"
-        };
-      }
-
-      // 解析用户信息
-      const parts: Record<string, string> = {};
-      const headerParts = userInfoHeader.split(';');
-      
-      for (const part of headerParts) {
-        const equalsIndex = part.indexOf('=');
-        if (equalsIndex > 0) {
-          const key = part.substring(0, equalsIndex).trim().toLowerCase();
-          const value = part.substring(equalsIndex + 1).trim();
-          parts[key] = value;
-        }
-      }
-
-      const upload = parseInt(parts.upload || '0');
-      const download = parseInt(parts.download || '0');
-      const total = parseInt(parts.total || '0');
-      const used = upload + download;
-      const remain = total > used ? total - used : 0;
-
-      // 检查状态
-      let status = "有效";
-      let isExpired = false;
-      let isExhausted = false;
-
-      // 检查过期时间
-      const expireTsStr = parts.expire;
-      if (expireTsStr && /^\d+$/.test(expireTsStr)) {
-        const expireTs = parseInt(expireTsStr);
-        if (Date.now() > expireTs * 1000) {
-          isExpired = true;
-        }
-      }
-
-      // 检查流量耗尽
-      if (total > 0 && remain <= 0) {
-        isExhausted = true;
-      }
-
-      if (isExpired) {
-        status = "过期";
-      } else if (isExhausted) {
-        status = "耗尽";
-      }
-
-      const data = {
-        used,
-        total,
-        remain,
-        expire_ts_str: expireTsStr,
-        percentage: total > 0 ? (used / total * 100) : 0
-      };
-
-      return {
-        status,
-        url,
-        config_name: finalConfigName,
-        data
-      };
-
-    } catch (error: any) {
-      return {
-        status: "失败",
-        url,
-        config_name: null,
-        data: null,
-        error: error.message
-      };
-    }
-  }
-
-  // 分割长消息（处理Telegram 4096字符限制）
-  private splitLongMessage(text: string, maxLength: number = 4000): string[] {
-    if (text.length <= maxLength) {
-      return [text];
-    }
-
-    const parts: string[] = [];
-    let currentPart = '';
-    const lines = text.split('\n');
-
-    for (const line of lines) {
-      if (currentPart.length + line.length + 1 > maxLength) {
-        if (currentPart) {
-          parts.push(currentPart);
-          currentPart = line;
-        } else {
-          // 单行就超过限制，强制分割
-          const chunkSize = maxLength - 100; // 留一些余量
-          for (let i = 0; i < line.length; i += chunkSize) {
-            parts.push(line.substring(i, i + chunkSize));
-          }
-        }
-      } else {
-        currentPart += (currentPart ? '\n' : '') + line;
-      }
-    }
-
-    if (currentPart) {
-      parts.push(currentPart);
-    }
-
-    return parts;
-  }
-
-  // 主命令处理器
-  private async handleSubQuery(msg: Api.Message): Promise<void> {
+  
+  async handleSubinfo(msg: Api.Message): Promise<void> {
     const client = await getGlobalClient();
-    if (!client) return;
-
-    try {
-      let sourceText = "";
-
-      // 检查是否回复消息
-      if (msg.replyToMsgId) {
-        try {
-          const replyMsg = await msg.getReplyMessage();
-          if (replyMsg) {
-            sourceText = replyMsg.text || "";
-          }
-        } catch (error) {
-          console.error(`[SubQuery] 获取回复消息失败:`, error);
-        }
-      }
-
-      // 处理命令参数
-      const text = msg.text || "";
-      const parts = text.trim().split(/\s+/);
-      
-      if (parts.length > 1) {
-        // 有参数时，将参数添加到源文本
-        sourceText += " " + parts.slice(1).join(" ");
-      }
-
-      sourceText = sourceText.trim();
-
-      if (!sourceText) {
-        await msg.edit({
-          text: "❌ <b>使用方法：</b>\n\n" +
-                "• <code>.subinfo [订阅链接]</code> - 查询单个订阅\n" +
-                "• 回复包含链接的消息 <code>.subinfo</code> - 查询回复中的链接\n" +
-                "• <code>.subinfo 链接1 链接2 ...</code> - 批量查询多个链接",
-          parseMode: "html"
-        });
-        return;
-      }
-
-      // 提取URL
-      const urlRegex = /https?:\/\/[^\s]+/g;
-      const urls = sourceText.match(urlRegex) || [];
-      
-      if (urls.length === 0) {
-        await msg.edit({
-          text: "❌ 未找到有效的链接",
-          parseMode: "html"
-        });
-        return;
-      }
-
-      // 去重
-      const uniqueUrls = Array.from(new Set(urls));
-      
+    await msg.edit({ text: "⏳ 正在准备解析订阅，请稍候..." });
+    
+    // 提取文本和链接
+    let sourceText = '';
+    if (msg.replyToMsgId) {
+      try {
+        const replyMsg = await msg.getReplyMessage();
+        sourceText = (replyMsg.text ?? '') + ' ' + (replyMsg.caption ?? '');
+      } catch { sourceText = ''; }
+    }
+    const myText = (msg.text ?? '').trim();
+    const parts = myText.split(/\s+/);
+    if (parts.length > 1) sourceText += ' ' + parts.slice(1).join(' ');
+    sourceText = sourceText.trim();
+    if (!sourceText) {
       await msg.edit({
-        text: `🔍 找到 ${uniqueUrls.length} 个链接，正在加载配置映射...`,
+        text: "❌ <b>用法:</b>\n<code>.subinfo [订阅链接]</code> 或回复消息查询\n支持批量多链接查询",
         parseMode: "html"
       });
+      return;
+    }
+    const urlRegex = /https?:\/\/[^\s]+/g;
+    const urls = Array.from(new Set((sourceText.match(urlRegex) ?? [])));
+    if (!urls.length) {
+      await msg.edit({ text: "❌ 未找到有效的订阅链接" });
+      return;
+    }
+    
+    // 加载远程映射
+    const mappingsCount = await this.loadRemoteMappings();
+    await msg.edit({ text: `📚 已加载 ${mappingsCount} 条配置映射，正在查询 ${urls.length} 个链接...` });
 
-      // 加载远程映射
-      const mappingsCount = await this.loadRemoteMappings();
-      
-      if (uniqueUrls.length > 1) {
-        await msg.edit({
-          text: `📚 已加载 ${mappingsCount} 条配置映射，正在并发查询 ${uniqueUrls.length} 个链接...`,
-          parseMode: "html"
-        });
-      } else {
-        await msg.edit({
-          text: `📚 已加载 ${mappingsCount} 条配置映射，正在查询...`,
-          parseMode: "html"
-        });
-      }
-
-      // 并发处理所有URL
-      const promises = uniqueUrls.map(url => this.processSingleUrl(url));
-      const results = await Promise.all(promises);
-
-      // 统计结果
-      const stats = {
-        "有效": 0,
-        "耗尽": 0,
-        "过期": 0,
-        "失败": 0
-      };
-
-      const validResults: string[] = [];
-
-      for (const result of results) {
-        stats[result.status as keyof typeof stats]++;
+    let reports: string[] = [];
+    let stats = { 有效: 0, 耗尽: 0, 过期: 0, 失败: 0 };
+    for (const url of urls) {
+      try {
+        // 1. 尝试从映射中获取配置名
+        let configName: string | null = this.getConfigNameFromMappings(url);
         
-        if (result.status === "有效") {
-          const outputText: string[] = [];
-          
-          // 配置名称
-          outputText.push(`📄 <b>配置名称:</b> <code>${htmlEscape(result.config_name || "未提供或无法获取")}</code>`);
-          
-          // 订阅链接（完整显示，不缩短）
-          outputText.push(`🔗 <b>订阅链接:</b> <code>${htmlEscape(result.url)}</code>`);
+        const response = await axios.get(url, { 
+            headers: { 
+                'User-Agent': 'FlClash/v0.8.76 clash-verge Platform/android' 
+            }, 
+            timeout: 15000, 
+            maxRedirects: 5, 
+            validateStatus: () => true 
+        });
 
-          const quoteContent: string[] = [];
-          const data = result.data;
+        if (response.status !== 200) {
+          reports.push(`订阅链接: <code>${htmlEscape(url)}</code>\n状态: <b>无法访问(${response.status})</b>`);
+          stats.失败++; continue;
+        }
+        
+        // 2. 尝试从 Content-Disposition 头获取配置名
+        if (!configName) {
+            const contentDisposition = response.headers['content-disposition'];
+            configName = this.getConfigNameFromHeader(contentDisposition);
+        }
+        const finalConfigName = configName || '未知';
 
-          // 流量详情
-          quoteContent.push(`🌈 <b>流量详情:</b> ${this.formatBytes(data.used)} / ${this.formatBytes(data.total)}`);
-          
-          // 进度条
-          const filledBlocks = Math.round(Math.min(100, Math.max(0, data.percentage)) / 10);
-          const progressBar = `[${'■'.repeat(filledBlocks)}${'□'.repeat(10 - filledBlocks)}] ${data.percentage.toFixed(1)}%`;
-          quoteContent.push(`💾 <b>使用进度:</b> ${progressBar}`);
-          
-          // 剩余流量
-          quoteContent.push(`🗃️ <b>剩余可用:</b> ${this.formatBytes(data.remain)}`);
-
-          // 过期时间
-          if (data.expire_ts_str && /^\d+$/.test(data.expire_ts_str)) {
-            const expireTs = parseInt(data.expire_ts_str);
-            const expireDate = new Date(expireTs * 1000);
-            const formattedDate = expireDate.toLocaleString('zh-CN', {
-              year: 'numeric',
-              month: '2-digit',
-              day: '2-digit',
-              hour: '2-digit',
-              minute: '2-digit',
-              second: '2-digit'
-            });
-            
-            quoteContent.push(`📅 <b>过期时间:</b> ${formattedDate}`);
-            
-            // 剩余时间
-            const now = Date.now();
-            const delta = expireTs * 1000 - now;
-            if (delta > 0) {
-              const days = Math.floor(delta / (1000 * 60 * 60 * 24));
-              const hours = Math.floor((delta % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60));
-              const minutes = Math.floor((delta % (1000 * 60 * 60)) / (1000 * 60));
-              
-              quoteContent.push(`⏳ <b>剩余时间:</b> ${days}天${hours}小时${minutes}分钟`);
-            } else {
-              quoteContent.push(`⏳ <b>剩余时间:</b> 已过期`);
+        // 解析用户信息头
+        const userInfoHeader = response.headers['subscription-userinfo'];
+        if (!userInfoHeader) {
+          reports.push(`订阅链接: <code>${htmlEscape(url)}</code>\n机场名称: <code>${htmlEscape(finalConfigName)}</code>\n<b>无流量统计信息</b>`);
+          stats.失败++; continue;
+        }
+        
+        // 解析用户信息
+        const userInfoParts: Record<string, string> = {};
+        const headerParts = userInfoHeader.split(';');
+        
+        for (const part of headerParts) {
+            const equalsIndex = part.indexOf('=');
+            if (equalsIndex > 0) {
+                const key = part.substring(0, equalsIndex).trim().toLowerCase();
+                const value = part.substring(equalsIndex + 1).trim();
+                userInfoParts[key] = value;
             }
-          } else {
-            quoteContent.push("📅 <b>过期时间:</b> 长期有效");
-          }
-          
-          const quotedContent = `<blockquote>${quoteContent.join('\n')}</blockquote>`;
-          outputText.push(quotedContent);
-          
-          validResults.push(outputText.join('\n'));
         }
-      }
+        
+        const upload = parseInt(userInfoParts.upload || '0');
+        const download = parseInt(userInfoParts.download || '0');
+        const total = parseInt(userInfoParts.total || '0');
+        const expireTs = parseInt(userInfoParts.expire || '0');
+        
+        const used = upload + download;
+        const remain = total > used ? total - used : 0;
+        const percent = total > 0 ? Math.round((used / total) * 10000) / 100 : 0;
+        
+        let status = "有效";
+        if (total > 0 && remain <= 0) { status = "耗尽"; stats.耗尽++; }
+        if (expireTs && Date.now() > expireTs * 1000) { status = "过期"; stats.过期++; }
+        if (status === "有效") stats.有效++;
 
-      // 生成最终结果
-      if (validResults.length > 0) {
-        let resultText = validResults.join("\n\n" + "=".repeat(30) + "\n\n");
-        
-        // 添加统计信息（多个链接时）
-        if (uniqueUrls.length > 1) {
-          const statsText = `\n\n📈 <b>统计结果:</b> ✅有效:${stats.有效} | ⚠️耗尽:${stats.耗尽} | ⏰过期:${stats.过期} | ❌失败:${stats.失败}`;
-          resultText += statsText;
-        }
-        
-        // 检查消息长度，如果超过Telegram限制则分割
-        const messageParts = this.splitLongMessage(resultText);
-        
-        if (messageParts.length === 1) {
-          await msg.edit({
-            text: resultText,
-            parseMode: "html"
-          });
-        } else {
-          // 发送第一部分
-          await msg.edit({
-            text: messageParts[0],
-            parseMode: "html"
-          });
-          
-          // 发送剩余部分
-          for (let i = 1; i < messageParts.length; i++) {
-            await client.sendMessage(msg.chatId, {
-              message: messageParts[i],
-              parseMode: "html",
-              replyTo: msg.id
-            });
-          }
-        }
-      } else {
-        if (uniqueUrls.length > 1) {
-          const statsText = `📈 <b>统计结果:</b> ✅有效:${stats.有效} | ⚠️耗尽:${stats.耗尽} | ⏰过期:${stats.过期} | ❌失败:${stats.失败}`;
-          await msg.edit({
-            text: `❌ 未找到有效的订阅信息\n\n${statsText}`,
-            parseMode: "html"
-          });
-        } else {
-          await msg.edit({
-            text: "❌ 未找到有效的订阅信息",
-            parseMode: "html"
-          });
-        }
-      }
+        // 节点信息
+        let nodeInfo: { node_count: number | string, type_count: Record<string, number>, regions: Record<string, number> } | null = null;
+        try { nodeInfo = await getNodeInfo(url); } catch { nodeInfo = null; }
 
-    } catch (error: any) {
-      console.error(`[SubQuery] 命令处理错误:`, error);
-      await msg.edit({
-        text: `❌ <b>发生错误:</b> ${htmlEscape(error.message || "未知错误")}`,
-        parseMode: "html"
-      });
+        // 订阅开始时间
+        const infoNum = [upload, download, total, expireTs, parseInt(userInfoParts.starttime || '0')].filter(n => n > 0);
+        const startTs = getSubscriptionStartTime(infoNum);
+
+        // 订阅类型区分
+        const { isLongTerm, isSingle, resetInfo, daysToReset } = getSubType(expireTs ?? 0);
+
+        // --- 输出生成逻辑 ---
+        let seg: string[] = [];
+
+        // 1. 基本信息
+        seg.push(`📄 <b>机场名称</b>: <code>${htmlEscape(finalConfigName)}</code>`);
+        seg.push(`🔗 <b>订阅链接</b>: <code>${htmlEscape(url)}</code>`); 
+        
+        // 2. 流量信息
+        seg.push(`📊 <b>流量信息</b>`);
+        let trafficInfo = `总计: ${formatSize(total)}\n` +
+                          `已用: ${formatSize(used)} (↑${formatSize(upload)} ↓${formatSize(download)})\n` +
+                          `剩余: ${formatSize(remain)}\n` +
+                          `进度: ${percent}% ${getSpeedEmoji(percent)}\n` +
+                          `进度栏: ${'█'.repeat(Math.round(percent / 5))}${'░'.repeat(20 - Math.round(percent / 5))}`;
+        seg.push(`<pre>${trafficInfo}</pre>`);
+        
+        // 3. 时间信息
+        if (expireTs) {
+          seg.push(`⏱️ <b>时间信息</b>`);
+          let timeInfo = '';
+          const leftTime = expireTs * 1000 - Date.now();
+          timeInfo += `到期: ${dayjs(expireTs * 1000).format('YYYY-MM-DD HH:mm:ss')}\n`;
+          if (leftTime > 0) timeInfo += `剩余: ${formatTimeRemaining(Math.floor(leftTime / 1000))}\n`;
+          else timeInfo += `状态: 已过期\n`;
+
+          if (isLongTerm) timeInfo += `类型: 长期有效订阅\n`;
+          else if (isSingle) timeInfo += `周期: 单次订阅，无重置\n`;
+          else timeInfo += `周期: ${resetInfo}\n`;
+          
+          timeInfo += `下次重置/到期: ${formatTimeRemaining(daysToReset * 86400)}\n`;
+          if (daysToReset) timeInfo += `建议用量: ${calculateRemainingDailyAllowance(remain, daysToReset)}/天\n`;
+          
+          if (startTs && Math.floor(Date.now() / 1000) > startTs)
+            timeInfo += `历史日均: ${calculateDailyUsage(used, startTs, Math.floor(Date.now() / 1000))}/天\n`;
+          
+          if (used > 0) {
+            const dayUsageBytes = Math.floor(used / ((Math.floor(Date.now() / 1000) - startTs) / 86400));
+            timeInfo += `预计耗尽日期: ${estimateDepletionDate(remain, dayUsageBytes)}\n`;
+            timeInfo += `上下行比例: ↑${Math.round((upload / used) * 10000) / 100}% ↓${Math.round((download / used) * 10000) / 100}%`;
+          }
+          seg.push(`<pre>${timeInfo.trim()}</pre>`);
+        }
+        
+        // 4. 节点统计
+        seg.push(`🌐 <b>节点信息</b>`);
+        if (nodeInfo) {
+          let nodeStats = `数量: ${nodeInfo.node_count}\n`;
+          if (nodeInfo.type_count && Object.keys(nodeInfo.type_count).length)
+            nodeStats +=
+              `类型: ${Object.entries(nodeInfo.type_count)
+                .map(([k, v]) => `${k}:${v}`).join(', ')}\n`;
+          
+          if (nodeInfo.regions && Object.keys(nodeInfo.regions).length) {
+            nodeStats +=
+              `地区分布: ${Object.entries(nodeInfo.regions)
+                .map(([k, v]) => `${k}:${v}`).join(', ')}\n`;
+            
+            if (nodeInfo.node_count && typeof nodeInfo.node_count === 'number') {
+              const topRegion = Object.entries(nodeInfo.regions)
+                .sort((a, b) => b[1] - a[1])[0];
+              if (topRegion)
+                nodeStats +=
+                  `主要: ${topRegion[0]}(${Math.round(topRegion[1] / (nodeInfo.node_count as number) * 10000) / 100}%)`;
+            }
+          }
+          seg.push(`<pre>${nodeStats.trim()}</pre>`);
+        } else {
+          seg.push(`(未能解析节点列表)`);
+        }
+
+        // 5. 状态
+        seg.push(`<b>查询时间</b>: <code>${dayjs().format('YYYY-MM-DD HH:mm:ss')}</code>`);
+        seg.push(`<b>状态</b>: <b>${status}</b>`);
+        
+        reports.push(seg.join('\n'));
+        // --- 输出生成逻辑结束 ---
+      } catch (err: any) {
+        reports.push(`订阅链接: <code>${htmlEscape(url)}</code>\n<b>查询失败:</b> <code>${htmlEscape(err.message || '未知错误')}</code>`);
+        stats.失败++;
+      }
+    }
+
+    let resultText = reports.join('\n\n' + '='.repeat(30) + '\n\n');
+    if (urls.length > 1) resultText +=
+      `\n📈 <b>统计:</b> ✅有效:${stats.有效} | ⚠️耗尽:${stats.耗尽} | ⏰过期:${stats.过期} | ❌失败:${stats.失败}`;
+    const messageParts = splitLongMessage(resultText, 4090);
+    if (messageParts.length === 1) {
+      await msg.edit({ text: messageParts[0], parseMode: "html" });
+    } else {
+      await msg.edit({ text: messageParts[0], parseMode: "html" });
+      for (let i = 1; i < messageParts.length; i++) {
+        await client.sendMessage(msg.chatId, {
+          message: messageParts[i],
+          parseMode: "html",
+          replyTo: msg.id
+        });
+      }
     }
   }
 }
 
-export default new SubQueryPlugin();
+export default new SubinfoPlugin();
