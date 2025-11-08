@@ -17,7 +17,7 @@ npm i <名>
 - `annualreport` - 年度报告  
 - `atadmins` - 一键艾特全部管理员  
 - `audio_to_voice` - 音乐转音频  
-- `autochangename` - 自动定时修改用户名  
+- `autochangename` - 自动定时修改用户名插  
 - `autodel` - 定时删除消息  
 - `autodelcmd` - 自动删除命令消息  
 - `banana` - Nano-Banana 图像编辑  
