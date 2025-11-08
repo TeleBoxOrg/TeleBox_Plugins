@@ -9,7 +9,7 @@ npm i <名>
 ```
 
 ## 可用插件列表
-- `aban` - 高级封禁管理工具  
+- `aban` - 高级封禁管理  
 - `acron` - 定时发送/转发/复制/置顶/取消置顶/删除消息/执行命令  
 - `aff` - 机场Aff信息管理  
 - `ai` - ai聚合  
@@ -24,10 +24,10 @@ npm i <名>
 - `bin` - 卡头检测  
 - `bizhi` - 发送一张壁纸  
 - `bs` - 保送  
-- `bulk_delete` - 批量删除消息工具  
+- `bulk_delete` - 批量删除消息  
 - `calc` - 计算器  
-- `clean_member` - 群组成员清理工具  
-- `cleanda` - 已注销账号清理工具  
+- `clean_member` - 群组成员清理  
+- `cleanda` - 已注销账号清理  
 - `clear_sticker` - 批量删除群组内贴纸  
 - `clearblocked` - 批量清理已拉黑用户  
 - `convert` - 视频转音频  
@@ -37,14 +37,14 @@ npm i <名>
 - `da` - 删除群内所有消息  
 - `dbdj` - 点兵点将 - 从最近的消息中随机抽取指定人数的用户  
 - `dc` - 获取实体DC  
-- `dig` - DNS 查询工具  
+- `dig` - DNS 查询  
 - `diss` - 儒雅随和版祖安语录  
 - `dme` - 删除指定数量的自己发送的消息  
 - `eat` - 生成带头像表情包  
 - `eatgif` - 生成"吃掉"动图表情包  
 - `encode` - 简单的编码解码  
 - `fadian` - fadian语录  
-- `getdel` - 死号检测清理工具  
+- `getdel` - 死号检测清理  
 - `getstickers` - 下载整个贴纸包  
 - `gif` - GIF与视频转贴纸  
 - `git_PR` - Git PR 管理  
@@ -58,7 +58,7 @@ npm i <名>
 - `kitt` - 高级触发器: 匹配 -> 执行, 高度自定义, 逻辑自由  
 - `komari` - Komari 服务器监控  
 - `listusernames` - 列出属于自己的公开群组/频道  
-- `lottery` - 抽奖工具  
+- `lottery` - 抽奖  
 - `lu_bs` - 鲁小迅整点报时  
 - `manage_admin` - 管理管理员  
 - `moyu` - 摸鱼日报  
@@ -71,23 +71,23 @@ npm i <名>
 - `paolu` - 群组一键跑路  
 - `parsehub` - 社交媒体链接解析助手  
 - `pic_to_sticker` - 图片转表情  
-- `portball` - 临时禁言工具  
+- `portball` - 临时禁言  
 - `premium` - 群组大会员统计  
 - `q` - 消息引用生成贴纸  
 - `qr` - QR 二维码  
 - `rate` - 货币实时汇率查询与计算  
 - `restore_pin` - 恢复群组被取消的置顶消息  
-- `search` - 频道消息搜索工具  
-- `service` - systemd服务状态查看工具  
+- `search` - 频道消息搜索  
+- `service` - systemd服务状态查看  
 - `shift` - 智能消息转发系统  
 - `soutu` - soutu搜图  
 - `speedlink` - 对其他服务器测速  
-- `speedtest` - 网络速度测试工具  
+- `speedtest` - 网络速度测试  
 - `ssh` - ssh管理  
 - `sticker` - 偷表情  
 - `sticker_to_pic` - 表情转图片  
 - `sub` - substore简单管理  
-- `subinfo` - 订阅链接信息查询工具  
+- `subinfo` - 订阅链接信息查询  
 - `sunremove` - 定向批量解除封禁用户  
 - `t` - 文字转语音  
 - `teletype` - 打字机效果  
@@ -98,7 +98,7 @@ npm i <名>
 - `xm` - 全自动羡慕  
 - `yinglish` - 淫语翻译  
 - `yiyan` - 获取随机一言  
-- `yt-dlp` - YouTube 视频下载工具  
+- `yt-dlp` - YouTube 视频下载  
 - `yvlu` - 为被回复用户生成语录  
 - `zhijiao` - 掷筊 强随机 使用 笅杯卦辞廿七句  
 - `zpr` - 二次元图片  
