@@ -2,7 +2,8 @@ import { Plugin } from "@utils/pluginBase";
 import { getGlobalClient } from "@utils/globalClient";
 import { createDirectoryInAssets } from "@utils/pathHelpers";
 import { Api, TelegramClient } from "telegram";
-import Database from "better-sqlite3";
+import { Low } from "lowdb";
+import { JSONFile } from "lowdb/node";
 import path from "path";
 
 // ==================== 配置常量 ====================
@@ -12,7 +13,7 @@ const CONFIG = {
   DEFAULT_MUTE_DURATION: 0, // 0表示永久禁言
   MESSAGE_AUTO_DELETE: 10,
   PER_GROUP_SCAN_LIMIT: 2000,
-  CACHE_DB_NAME: "aban_cache.db"
+  CACHE_DB_NAME: "aban_cache.json"
 };
 
 // ==================== 帮助文本 ====================
@@ -52,17 +53,17 @@ function parseTimeString(timeStr?: string): number {
 }
 
 // ==================== 缓存管理器 ====================
+type CacheData = {
+  cache: Record<string, any>;
+};
+
 class CacheManager {
-  private db: Database.Database;
+  private db: Low<CacheData> | null = null;
   private static instance: CacheManager;
+  private initPromise: Promise<void>;
 
   private constructor() {
-    const dbPath = path.join(
-      createDirectoryInAssets("aban"),
-      CONFIG.CACHE_DB_NAME
-    );
-    this.db = new Database(dbPath);
-    this.initDb();
+    this.initPromise = this.initDb();
   }
 
   static getInstance(): CacheManager {
@@ -72,41 +73,38 @@ class CacheManager {
     return this.instance;
   }
 
-  private initDb(): void {
-    this.db.exec(`
-      CREATE TABLE IF NOT EXISTS cache (
-        key TEXT PRIMARY KEY,
-        value TEXT NOT NULL,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-      )
-    `);
-  }
-
-  get(key: string): any {
-    const stmt = this.db.prepare("SELECT value FROM cache WHERE key = ?");
-    const row = stmt.get(key) as { value: string } | undefined;
-    
-    if (row) {
-      try {
-        return JSON.parse(row.value);
-      } catch {
-        return row.value;
-      }
+  private async initDb(): Promise<void> {
+    const dbPath = path.join(
+      createDirectoryInAssets("aban"),
+      CONFIG.CACHE_DB_NAME
+    );
+    const adapter = new JSONFile<CacheData>(dbPath);
+    this.db = new Low(adapter, { cache: {} });
+    await this.db.read();
+    if (!this.db.data) {
+      this.db.data = { cache: {} };
+      await this.db.write();
     }
-    return null;
   }
 
-  set(key: string, value: any): void {
-    const jsonValue = typeof value === "string" ? value : JSON.stringify(value);
-    const stmt = this.db.prepare(`
-      INSERT OR REPLACE INTO cache (key, value) 
-      VALUES (?, ?)
-    `);
-    stmt.run(key, jsonValue);
+  async get(key: string): Promise<any> {
+    await this.initPromise;
+    if (!this.db) return null;
+    return this.db.data.cache[key] || null;
   }
 
-  clear(): void {
-    this.db.exec("DELETE FROM cache");
+  async set(key: string, value: any): Promise<void> {
+    await this.initPromise;
+    if (!this.db) return;
+    this.db.data.cache[key] = value;
+    await this.db.write();
+  }
+
+  async clear(): Promise<void> {
+    await this.initPromise;
+    if (!this.db) return;
+    this.db.data.cache = {};
+    await this.db.write();
   }
 }
 
@@ -275,7 +273,7 @@ class GroupManager {
     client: TelegramClient
   ): Promise<Array<{ id: number; title: string }>> {
     // 尝试从缓存获取
-    const cached = this.cache.get("managed_groups");
+    const cached = await this.cache.get("managed_groups");
     if (cached) return cached;
 
     const groups: Array<{ id: number; title: string }> = [];
@@ -283,7 +281,8 @@ class GroupManager {
     try {
       const dialogs = await client.getDialogs({ limit: 500 });
       
-      for (const dialog of dialogs) {
+      // 并发检查权限
+      const checkPromises = dialogs.map(async (dialog) => {
         if (dialog.isChannel || dialog.isGroup) {
           const hasPermission = await PermissionManager.checkAdminPermission(
             client,
@@ -291,16 +290,20 @@ class GroupManager {
           );
           
           if (hasPermission) {
-            groups.push({
+            return {
               id: Number(dialog.id),
               title: dialog.title || "Unknown"
-            });
+            };
           }
         }
-      }
+        return null;
+      });
+      
+      const results = await Promise.all(checkPromises);
+      groups.push(...results.filter((g): g is { id: number; title: string } => g !== null));
       
       // 缓存结果
-      this.cache.set("managed_groups", groups);
+      await this.cache.set("managed_groups", groups);
     } catch (error) {
       console.error(`[GroupManager] 获取群组失败: ${error}`);
     }
@@ -308,8 +311,8 @@ class GroupManager {
     return groups;
   }
 
-  static clearCache(): void {
-    this.cache.clear();
+  static async clearCache(): Promise<void> {
+    await this.cache.clear();
   }
 }
 
@@ -456,14 +459,14 @@ class BanManager {
     }
   }
 
-  // 批量封禁操作（极速版本 - 学习 Pyrogram 的实现）
+  // 批量封禁操作（极速版本）
   static async batchBanUser(
     client: TelegramClient,
     groups: Array<{ id: number; title: string }>,
     userId: number,
     reason: string = "跨群违规"
   ): Promise<{ success: number; failed: number; failedGroups: string[] }> {
-    // 预创建所有必需对象，减少运行时开销
+    // 预创建权限对象
     const rights = new Api.ChatBannedRights({
       untilDate: 0,
       viewMessages: true,
@@ -475,11 +478,8 @@ class BanManager {
       sendInline: true,
       embedLinks: true,
     });
-
-    // 火力全开模式：同时启动所有封禁任务
-    const startTime = performance.now();
     
-    // 立即发送所有请求，不等待响应（fire-and-forget + 结果收集）
+    // 全并发执行所有封禁请求
     const taskPromises = groups.map((group) => {
       return client.invoke(new Api.channels.EditBanned({
         channel: group.id,
@@ -490,12 +490,11 @@ class BanManager {
       .catch(() => ({ success: false, group }));
     });
 
-    // 设置超时机制：最多等待1.5秒
+    // 设置3秒超时
     const timeoutPromise = new Promise<never>((_, reject) => {
-      setTimeout(() => reject(new Error('TIMEOUT')), 1500);
+      setTimeout(() => reject(new Error('TIMEOUT')), 3000);
     });
 
-    // 竞速：要么所有完成，要么超时
     let results: Array<{ success: boolean; group: { id: number; title: string } }>;
     
     try {
@@ -504,7 +503,8 @@ class BanManager {
         timeoutPromise
       ]);
     } catch {
-      // 超时则收集已完成的结果
+      // 超时后等待已发送的请求
+      await new Promise(resolve => setTimeout(resolve, 500));
       const settled = await Promise.allSettled(taskPromises);
       results = settled
         .filter((r): r is PromiseFulfilledResult<{ success: boolean; group: { id: number; title: string } }> => 
@@ -512,7 +512,7 @@ class BanManager {
         .map(r => r.value);
     }
     
-    // 快速计数（避免多次遍历）
+    // 快速统计
     let success = 0;
     let failed = 0;
     const failedGroups: string[] = [];
@@ -529,18 +529,17 @@ class BanManager {
     return { success, failed, failedGroups };
   }
 
-  // 批量解封操作（超高速异步版本）
+  // 批量解封操作（全并发版本）
   static async batchUnbanUser(
     client: TelegramClient,
     groups: Array<{ id: number; title: string }>,
     userId: number
   ): Promise<{ success: number; failed: number; failedGroups: string[] }> {
-    // 解封权限（全部设为0）
     const rights = new Api.ChatBannedRights({
       untilDate: 0,
     });
 
-    // 创建所有请求
+    // 全并发执行所有解封请求
     const promises = groups.map(group => 
       client.invoke(
         new Api.channels.EditBanned({
@@ -552,22 +551,40 @@ class BanManager {
        .catch(() => ({ success: false, group }))
     );
 
-    // 并发执行所有请求
-    const results = await Promise.all(promises);
+    // 3秒超时机制
+    const timeoutPromise = new Promise<never>((_, reject) => {
+      setTimeout(() => reject(new Error('TIMEOUT')), 3000);
+    });
+
+    let results: Array<{ success: boolean; group: { id: number; title: string } }>;
     
-    // 快速统计结果
+    try {
+      results = await Promise.race([
+        Promise.all(promises),
+        timeoutPromise
+      ]);
+    } catch {
+      await new Promise(resolve => setTimeout(resolve, 500));
+      const settled = await Promise.allSettled(promises);
+      results = settled
+        .filter((r): r is PromiseFulfilledResult<{ success: boolean; group: { id: number; title: string } }> => 
+          r.status === 'fulfilled')
+        .map(r => r.value);
+    }
+    
+    // 快速统计
     let success = 0;
     let failed = 0;
     const failedGroups: string[] = [];
     
-    for (const result of results) {
+    results.forEach((result) => {
       if (result.success) {
         success++;
       } else {
         failed++;
         failedGroups.push(result.group.title);
       }
-    }
+    });
 
     return { success, failed, failedGroups };
   }
@@ -683,7 +700,7 @@ class CommandHandlers {
       // 立即返回处理中状态
       const status = await MessageManager.smartEdit(
         message,
-        `⚡ ${htmlEscape(display)} ${groups.length}群组处理中...`,
+        `⚡ 在${groups.length}个频道/群组中封禁该用户...`,
         0
       );
 
@@ -704,10 +721,10 @@ class CommandHandlers {
         const { success = 0, failed = groups.length } = 
           banResult.status === 'fulfilled' ? banResult.value : {};
 
-        // 更新最终结果（精简版）
-        const result = `✅ ${htmlEscape(display)}\n🗑️${deleteSuccess ? '✓' : '✗'} 📊${success}✓/${failed}✗ ⏱️${elapsed.toFixed(1)}s`;
+        // 更新最终结果
+        const result = `✅ 在${success}个频道/群组中封禁该用户 ${htmlEscape(display)}\n🗑️当前群组消息: ${deleteSuccess ? '✓已清理' : '✗'} | ⏱️${elapsed.toFixed(1)}s`;
         
-        // 3秒后更新为最终结果
+        // 更新为最终结果
         setTimeout(() => {
           MessageManager.smartEdit(status, result, 30).catch(() => {});
         }, 100);
@@ -746,7 +763,7 @@ class CommandHandlers {
       // 立即返回处理中状态
       const status = await MessageManager.smartEdit(
         message,
-        `🔓 ${htmlEscape(display)} ${groups.length}群组解封中...`,
+        `🔓 在${groups.length}个频道/群组中解封该用户...`,
         0
       );
 
@@ -757,7 +774,7 @@ class CommandHandlers {
           await BanManager.batchUnbanUser(client, groups, uid).catch(() => ({ success: 0, failed: groups.length }));
         
         const elapsed = (Date.now() - startTime) / 1000;
-        const result = `✅ ${htmlEscape(display)}\n📊${success}✓/${failed}✗ ⏱️${elapsed.toFixed(1)}s`;
+        const result = `✅ 在${success}个频道/群组中解封该用户 ${htmlEscape(display)} | ⏱️${elapsed.toFixed(1)}s`;
         
         setTimeout(() => {
           MessageManager.smartEdit(status, result, 30).catch(() => {});
