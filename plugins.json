@@ -103,6 +103,10 @@
     "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/rate/rate.ts?raw=true",
     "desc": "货币实时汇率查询与计算"
   },
+  "keep_online": {
+    "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/keep_online/keep_online.ts?raw=true",
+    "desc": "保活自动重启(测试版) 请查看说明操作"
+  },
   "kitt": {
     "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/kitt/kitt.ts?raw=true",
     "desc": "高级触发器: 匹配 -> 执行, 高度自定义, 逻辑自由"
