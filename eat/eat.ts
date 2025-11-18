@@ -263,8 +263,28 @@ async function compositeWithEntryConfig(parmas: {
 
   // 使用 CustomFile 指定文件名与大小，避免落地
   const file = new CustomFile("output.webp", outBuffer.length, "", outBuffer);
+  const { width = 512, height = 512 } = await sharp(outBuffer).metadata();
+
+  const stickerAttr = new Api.DocumentAttributeSticker({
+    alt: entry.name,
+    stickerset: new Api.InputStickerSetEmpty(),
+  });
+
+  const imageSizeAttr = new Api.DocumentAttributeImageSize({
+    w: width,
+    h: height,
+  });
+
+  const filenameAttr = new Api.DocumentAttributeFilename({
+    fileName: "output.webp",
+  });
+
   await msg.client?.sendFile(msg.peerId, {
     file,
+    // 贴纸通常不带 caption，这里留空
+    forceDocument: false,
+    // 包含所有必要的属性以确保正确识别为贴纸
+    attributes: [stickerAttr, imageSizeAttr, filenameAttr],
     replyTo: await msg.getReplyMessage(),
   });
 }
