@@ -24,6 +24,75 @@ import { CustomFile } from "telegram/client/uploads.js";
 
 const timeout = 60000; // 超时
 
+// 读取WebP图片尺寸的辅助函数
+
+function getWebPDimensions(imageBuffer: any): {
+  width: number;
+  height: number;
+} {
+  try {
+    // WebP文件格式解析
+
+    if (imageBuffer.length < 30) {
+      throw new Error("Invalid WebP file: too short");
+    }
+
+    // 检查RIFF头
+
+    if (imageBuffer.toString("ascii", 0, 4) !== "RIFF") {
+      throw new Error("Invalid WebP file: missing RIFF header");
+    }
+
+    // 检查WEBP标识
+
+    if (imageBuffer.toString("ascii", 8, 12) !== "WEBP") {
+      throw new Error("Invalid WebP file: missing WEBP signature");
+    }
+
+    // 读取VP8或VP8L头
+
+    const chunkHeader = imageBuffer.toString("ascii", 12, 16);
+
+    if (chunkHeader === "VP8 ") {
+      // VP8格式
+
+      const width = imageBuffer.readUInt16LE(26) & 0x3fff;
+
+      const height = imageBuffer.readUInt16LE(28) & 0x3fff;
+
+      return { width, height };
+    } else if (chunkHeader === "VP8L") {
+      // VP8L格式
+
+      const data = imageBuffer.readUInt32LE(21);
+
+      const width = (data & 0x3fff) + 1;
+
+      const height = ((data >> 14) & 0x3fff) + 1;
+
+      return { width, height };
+    } else if (chunkHeader === "VP8X") {
+      // VP8X格式
+
+      const width = (imageBuffer.readUInt32LE(24) & 0xffffff) + 1;
+
+      const height = (imageBuffer.readUInt32LE(27) & 0xffffff) + 1;
+
+      return { width, height };
+    }
+
+    // 如果无法解析，返回默认尺寸
+
+    console.warn("Unknown WebP format, using default dimensions");
+
+    return { width: 512, height: 768 };
+  } catch (error) {
+    console.warn("Failed to parse WebP dimensions:", error);
+
+    return { width: 512, height: 768 };
+  }
+}
+
 const prefixes = getPrefixes();
 const mainPrefix = prefixes[0];
 
@@ -435,18 +504,44 @@ class YvluPlugin extends Plugin {
               imageBuffer
             );
 
+            // 从生成的图片文件中读取实际尺寸
+
+            const dimensions = getWebPDimensions(imageBuffer);
+
+            console.log(
+              `检测到的图片尺寸: ${dimensions.width}x${dimensions.height}`
+            );
+
             // 发送语录贴纸到指定对话
-            // 通过设置 DocumentAttributeSticker，使其作为贴纸发送（用户会话可发送含贴纸属性的文档显示为贴纸）
+
+            // 通过设置完整的文档属性，确保始终显示为贴纸
+
             const stickerAttr = new Api.DocumentAttributeSticker({
-              alt: "quote",
+              alt: "📝",
+
               stickerset: new Api.InputStickerSetEmpty(),
+            });
+
+            // 添加图片尺寸属性，使用实际检测到的尺寸
+
+            const imageSizeAttr = new Api.DocumentAttributeImageSize({
+              w: dimensions.width,
+
+              h: dimensions.height,
+            });
+
+            // 添加文件名属性
+
+            const filenameAttr = new Api.DocumentAttributeFilename({
+              fileName: `sticker.${imageExt}`,
             });
 
             await client.sendFile(msg.peerId, {
               file,
               // 贴纸通常不带 caption，这里留空
               forceDocument: false,
-              attributes: [stickerAttr],
+              // 包含所有必要的属性以确保正确识别为贴纸
+              attributes: [stickerAttr, imageSizeAttr, filenameAttr],
               replyTo: replied?.id,
             });
           } catch (fileError) {
