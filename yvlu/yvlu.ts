@@ -492,7 +492,7 @@ class YvluPlugin extends Plugin {
                 name,
                 first_name: firstName || undefined,
                 last_name: lastName || undefined,
-                username: username || undefined,
+                username: photo ? username || undefined : undefined,
                 photo,
                 emoji_status: emojiStatus || undefined,
               },
