@@ -24,6 +24,18 @@ import { CustomFile } from "telegram/client/uploads.js";
 
 const timeout = 60000; // 超时
 
+const hashCode = (s: any) => {
+  const l = s.length;
+  let h = 0;
+  let i = 0;
+  if (l > 0) {
+    while (i < l) {
+      h = ((h << 5) - h + s.charCodeAt(i++)) | 0;
+    }
+  }
+  return h;
+};
+
 // 读取WebP图片尺寸的辅助函数
 
 function getWebPDimensions(imageBuffer: any): {
@@ -474,7 +486,9 @@ class YvluPlugin extends Plugin {
 
             items.push({
               from: {
-                id: userId ? parseInt(userId) : null,
+                id: userId
+                  ? parseInt(userId)
+                  : hashCode(sender.name || `${firstName}|${lastName}`),
                 name,
                 first_name: firstName || undefined,
                 last_name: lastName || undefined,
