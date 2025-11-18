@@ -293,16 +293,23 @@ class YvluPlugin extends Plugin {
 
           for await (const [i, message] of messages.entries()) {
             // 获取发送者信息
-            const sender =
-              (await message.forward?.getSender()) ||
-              (await message.getSender());
+            let sender: any = await message.getSender();
+            if (message.fwdFrom) {
+              sender = await message.forward?.getSender();
+              if (!sender) {
+                sender = {
+                  name: message.fwdFrom.fromName || "",
+                };
+              }
+            }
             if (!sender) {
               await msg.edit({ text: "无法获取消息发送者信息" });
               return;
             }
 
             // 准备用户数据
-            const userId = sender.id.toString();
+            const userId = (sender as any).id?.toString();
+            const name = (sender as any).name || "";
             const firstName =
               (sender as any).firstName || (sender as any).title || "";
             const lastName = (sender as any).lastName || "";
@@ -311,18 +318,25 @@ class YvluPlugin extends Plugin {
               (sender as any).emojiStatus?.documentId?.toString() || null;
 
             let photo = undefined;
-            try {
-              const buffer = await client.downloadProfilePhoto(sender as any, {
-                isBig: false,
-              });
-              if (Buffer.isBuffer(buffer)) {
-                const base64 = buffer.toString("base64");
-                photo = {
-                  url: `data:image/jpeg;base64,${base64}`,
-                };
+            if (sender.photo) {
+              try {
+                const buffer = await client.downloadProfilePhoto(
+                  sender as any,
+                  {
+                    isBig: false,
+                  }
+                );
+                if (Buffer.isBuffer(buffer) && buffer.length > 0) {
+                  const base64 = buffer.toString("base64");
+                  photo = {
+                    url: `data:image/jpeg;base64,${base64}`,
+                  };
+                } else {
+                  console.warn("下载的头像数据无效");
+                }
+              } catch (e) {
+                console.warn("下载用户头像失败", e);
               }
-            } catch (e) {
-              console.warn("下载用户头像失败", e);
             }
             if (i === 0) {
               let replyTo = (trigger || msg)?.replyTo;
@@ -460,8 +474,9 @@ class YvluPlugin extends Plugin {
 
             items.push({
               from: {
-                id: parseInt(userId),
-                first_name: firstName,
+                id: userId ? parseInt(userId) : null,
+                name,
+                first_name: firstName || undefined,
                 last_name: lastName || undefined,
                 username: username || undefined,
                 photo,
