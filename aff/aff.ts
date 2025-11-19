@@ -7,6 +7,12 @@ import * as path from "path";
 interface AffData {
   text: string;
   web_page: boolean;
+  created_at?: number;
+}
+
+interface DBData {
+  aff?: AffData; // 旧数据兼容
+  affs: AffData[];
 }
 
 class AffPlugin extends Plugin {
@@ -16,12 +22,14 @@ class AffPlugin extends Plugin {
   // 插件描述
   description = `✈️ 机场Affiliate信息管理
 
-在别人要打算买机场的时候光速发出自己的aff信息（请尽量配合短链接）
+在别人要打算买机场的时候光速发出自己的aff信息（支持多条）
 
 <b>使用方法：</b>
-• <code>.aff</code> - 发送已保存的aff信息
-• <code>.aff save</code> - 回复一条消息以保存aff信息
-• <code>.aff remove</code> - 删除已保存的aff信息`;
+• <code>.aff</code> - 发送默认aff（如有多条则显示列表）
+• <code>.aff &lt;序号&gt;</code> - 发送指定序号的aff
+• <code>.aff list</code> - 查看所有已保存的aff
+• <code>.aff save</code> - 回复一条消息以新增aff
+• <code>.aff remove &lt;序号&gt;</code> - 删除指定aff`;
 
   // 命令处理器
   cmdHandlers = {
@@ -37,29 +45,43 @@ class AffPlugin extends Plugin {
       "data.json"
     );
     
-    this.db = await JSONFilePreset<{ aff?: AffData }>(dbPath, {});
-  }
-
-  // 获取aff信息
-  private async getAff(): Promise<AffData | null> {
-    await this.initDB();
-    return this.db.data.aff || null;
-  }
-
-  // 设置aff信息
-  private async setAff(text: string, web_page: boolean = false): Promise<void> {
-    await this.initDB();
-    this.db.data.aff = { text, web_page };
-    await this.db.write();
-  }
-
-  // 删除aff信息
-  private async delAff(): Promise<void> {
-    await this.initDB();
+    this.db = await JSONFilePreset<DBData>(dbPath, { affs: [] });
+    
+    // 迁移旧数据
     if (this.db.data.aff) {
+      this.db.data.affs.push(this.db.data.aff);
       delete this.db.data.aff;
       await this.db.write();
     }
+  }
+
+  // 获取aff列表
+  private async getAffs(): Promise<AffData[]> {
+    await this.initDB();
+    return this.db.data.affs || [];
+  }
+
+  // 新增aff
+  private async addAff(text: string, web_page: boolean = false): Promise<void> {
+    await this.initDB();
+    this.db.data.affs.push({ 
+      text, 
+      web_page,
+      created_at: Date.now()
+    });
+    await this.db.write();
+  }
+
+  // 删除aff
+  private async removeAff(index: number): Promise<boolean> {
+    await this.initDB();
+    const affs = this.db.data.affs;
+    if (index >= 0 && index < affs.length) {
+      affs.splice(index, 1);
+      await this.db.write();
+      return true;
+    }
+    return false;
   }
 
   // HTML转义函数（必需）
@@ -76,22 +98,36 @@ class AffPlugin extends Plugin {
       const text = msg.text || "";
       const parts = text.trim().split(/\s+/);
       const subCommand = parts[1]?.toLowerCase();
+      const param = parts[2];
 
-      // 无参数：发送aff信息
+      // 1. 无参数：智能发送
       if (!subCommand) {
-        await this.sendAffInfo(msg);
+        await this.handleSmartSend(msg);
         return;
       }
 
-      // 保存aff信息
+      // 2. 数字参数：发送指定序号
+      const index = parseInt(subCommand);
+      if (!isNaN(index)) {
+        await this.sendAffByIndex(msg, index);
+        return;
+      }
+
+      // 3. 保存命令
       if (subCommand === "save") {
         await this.saveAffInfo(msg);
         return;
       }
 
-      // 删除aff信息
-      if (subCommand === "remove") {
-        await this.removeAffInfo(msg);
+      // 4. 列表命令
+      if (subCommand === "list") {
+        await this.listAffs(msg);
+        return;
+      }
+
+      // 5. 删除命令
+      if (subCommand === "remove" || subCommand === "rm" || subCommand === "del") {
+        await this.handleRemove(msg, param);
         return;
       }
 
@@ -99,9 +135,10 @@ class AffPlugin extends Plugin {
       await msg.edit({
         text: "❌ <b>无效的参数</b>\n\n" + 
               "💡 使用方法：\n" +
-              "• <code>.aff</code> - 发送aff信息\n" +
-              "• <code>.aff save</code> - 保存aff信息（回复消息）\n" +
-              "• <code>.aff remove</code> - 删除aff信息",
+              "• <code>.aff</code> - 发送/列表\n" +
+              "• <code>.aff &lt;序号&gt;</code> - 发送指定条目\n" +
+              "• <code>.aff save</code> - 保存回复\n" +
+              "• <code>.aff remove &lt;序号&gt;</code> - 删除条目",
         parseMode: "html"
       });
 
@@ -110,23 +147,79 @@ class AffPlugin extends Plugin {
     }
   }
 
-  // 发送aff信息
-  private async sendAffInfo(msg: Api.Message): Promise<void> {
-    const affData = await this.getAff();
+  // 智能发送：1条直接发，多条显示列表，0条提示保存
+  private async handleSmartSend(msg: Api.Message): Promise<void> {
+    const affs = await this.getAffs();
     
-    if (!affData || !affData.text) {
+    if (affs.length === 0) {
       await msg.edit({
-        text: "❌ <b>Aff消息不存在</b>\n\n" +
-              "💡 请先使用 <code>.aff save</code> 命令保存aff信息",
+        text: "❌ <b>暂无Aff信息</b>\n\n💡 请回复一条消息使用 <code>.aff save</code> 保存",
         parseMode: "html"
       });
       return;
     }
 
+    if (affs.length === 1) {
+      await this.sendAffContent(msg, affs[0]);
+      return;
+    }
+
+    await this.listAffs(msg);
+  }
+
+  // 发送指定序号
+  private async sendAffByIndex(msg: Api.Message, index: number): Promise<void> {
+    const affs = await this.getAffs();
+    // 用户输入通常是 1-based，所以减 1
+    const realIndex = index - 1;
+    
+    if (realIndex >= 0 && realIndex < affs.length) {
+      await this.sendAffContent(msg, affs[realIndex]);
+    } else {
+      await msg.edit({
+        text: `❌ <b>找不到序号为 ${index} 的Aff信息</b>`,
+        parseMode: "html"
+      });
+    }
+  }
+
+  // 发送内容的核心方法
+  private async sendAffContent(msg: Api.Message, aff: AffData): Promise<void> {
     await msg.edit({
-      text: affData.text,
+      text: aff.text,
       parseMode: "html",
-      linkPreview: !affData.web_page
+      linkPreview: !aff.web_page
+    });
+  }
+
+  // 列出所有Aff
+  private async listAffs(msg: Api.Message): Promise<void> {
+    const affs = await this.getAffs();
+    
+    if (affs.length === 0) {
+      await msg.edit({
+        text: "📂 <b>Aff列表为空</b>",
+        parseMode: "html"
+      });
+      return;
+    }
+
+    let listText = "📋 <b>已保存的Aff列表：</b>\n\n";
+    
+    affs.forEach((aff, idx) => {
+      // 截取前30个字符作为预览
+      let preview = aff.text.replace(/\n/g, " ").substring(0, 30);
+      if (aff.text.length > 30) preview += "...";
+      preview = this.htmlEscape(preview);
+      
+      listText += `<b>${idx + 1}.</b> ${preview}\n`;
+    });
+
+    listText += "\n💡 使用 <code>.aff &lt;序号&gt;</code> 发送指定条目";
+
+    await msg.edit({
+      text: listText,
+      parseMode: "html"
     });
   }
 
@@ -156,22 +249,47 @@ class AffPlugin extends Plugin {
     // 检测是否包含网页预览（简单的URL检测）
     const hasWebPage = /https?:\/\/[^\s]+/.test(text);
     
-    await this.setAff(text, hasWebPage);
+    await this.addAff(text, hasWebPage);
     
+    const affs = await this.getAffs();
     await msg.edit({
-      text: "✅ <b>Aff信息保存成功！</b>",
+      text: `✅ <b>Aff信息保存成功！</b>\n🆔 当前序号：${affs.length}`,
       parseMode: "html"
     });
   }
 
   // 删除aff信息
-  private async removeAffInfo(msg: Api.Message): Promise<void> {
-    await this.delAff();
+  private async handleRemove(msg: Api.Message, param?: string): Promise<void> {
+    if (!param) {
+      await msg.edit({
+        text: "❌ <b>请指定要删除的序号</b>\n💡 例如：<code>.aff remove 1</code>",
+        parseMode: "html"
+      });
+      return;
+    }
+
+    const index = parseInt(param);
+    if (isNaN(index)) {
+      await msg.edit({
+        text: "❌ <b>无效的序号</b>",
+        parseMode: "html"
+      });
+      return;
+    }
+
+    const success = await this.removeAff(index - 1);
     
-    await msg.edit({
-      text: "✅ <b>Aff信息删除成功！</b>",
-      parseMode: "html"
-    });
+    if (success) {
+      await msg.edit({
+        text: `✅ <b>已删除序号 ${index} 的Aff信息</b>`,
+        parseMode: "html"
+      });
+    } else {
+      await msg.edit({
+        text: `❌ <b>删除失败：找不到序号 ${index}</b>`,
+        parseMode: "html"
+      });
+    }
   }
 
   // 错误处理
