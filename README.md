@@ -26,6 +26,7 @@ npm i <名>
 - `bs` - 保送  
 - `bulk_delete` - 批量删除消息  
 - `calc` - 计算器  
+- `cha` - 查询订阅基础信息  
 - `clean_member` - 群组成员清理  
 - `cleanda` - 已注销账号清理  
 - `clear_sticker` - 批量删除群组内贴纸  
