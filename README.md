@@ -63,6 +63,7 @@ npm i <名>
 - `lottery` - 抽奖  
 - `lu_bs` - 鲁小迅整点报时  
 - `manage_admin` - 管理管理员  
+- `mode` - 自定义消息格式  
 - `moyu` - 摸鱼日报  
 - `music` - YouTube音乐  
 - `music_bot` - 多音源音乐搜索  
