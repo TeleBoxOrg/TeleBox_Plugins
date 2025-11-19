@@ -128,7 +128,7 @@ function estimateDepletionDate(remain: number, dailyUsage: number): string {
 // 节点统计
 async function getNodeInfo(url: string): Promise<{ node_count: number | string, type_count: Record<string, number>, regions: Record<string, number> } | null> {
   try {
-    const res = await axios.get(url, { timeout: 10000 });
+    const res = await axios.get(url, { timeout: 10000, responseType: 'text' });
     // 尝试 parse yaml
     try {
       const config = yaml.load(res.data);
@@ -222,11 +222,9 @@ function getSubType(expireTs: number): { isLongTerm: boolean; isSingle: boolean;
   }
 }
 
-// 订阅开始时间推断
-function getSubscriptionStartTime(infoNum: number[]): number {
-  if (infoNum.length >= 5) return infoNum[4];
-  else if (infoNum.length >= 4) return infoNum[3] - 30 * 86400; 
-  else return 0;
+// 订阅开始时间推断 (已弃用复杂推断，改为直接读取)
+function getSubscriptionStartTime(startTime: number): number {
+  return startTime > 0 ? startTime : 0;
 }
 
 // 电报长消息分割
@@ -249,8 +247,12 @@ function splitLongMessage(text: string, maxLength = 4000): string[] {
 class SubinfoPlugin extends Plugin {
   description =
     `📈 订阅链接多维度查询工具
-<code>.subinfo [订阅链接]</code> 查询订阅(回复消息可自动提取)
-支持流量/月重置/长期订阅/节点数量/类型/地区分布/到期/建议/耗尽预测/上下行比例/自动识别机场名`;
+
+<b>使用方法：</b>
+• <code>.subinfo [订阅链接]</code> - 查询订阅(回复消息可自动提取)
+
+<b>功能特性：</b>
+支持批量多链接查询、流量统计、月度重置检测、节点分布分析、到期预测、耗尽时间预测、上下行比例统计、自动识别机场名称。`;
 
   cmdHandlers = {
     subinfo: this.handleSubinfo.bind(this)
@@ -355,16 +357,23 @@ class SubinfoPlugin extends Plugin {
     if (msg.replyToMsgId) {
       try {
         const replyMsg = await msg.getReplyMessage();
-        sourceText = (replyMsg.text ?? '') + ' ' + (replyMsg.caption ?? '');
+        if (replyMsg) {
+            sourceText = (replyMsg.text ?? '') + ' ' + ((replyMsg as any).caption ?? '');
+        }
       } catch { sourceText = ''; }
     }
     const myText = (msg.text ?? '').trim();
     const parts = myText.split(/\s+/);
     if (parts.length > 1) sourceText += ' ' + parts.slice(1).join(' ');
     sourceText = sourceText.trim();
+    
+    // 默认行为：如果没有参数且没有回复，显示帮助
     if (!sourceText) {
       await msg.edit({
-        text: "❌ <b>用法:</b>\n<code>.subinfo [订阅链接]</code> 或回复消息查询\n支持批量多链接查询",
+        text: "❌ <b>无效的参数</b>\n\n" +
+              "💡 使用方法：\n" +
+              "• <code>.subinfo [订阅链接]</code> - 查询订阅链接\n" +
+              "• 回复包含链接的消息并发送 <code>.subinfo</code>",
         parseMode: "html"
       });
       return;
@@ -447,9 +456,8 @@ class SubinfoPlugin extends Plugin {
         try { nodeInfo = await getNodeInfo(url); } catch { nodeInfo = null; }
 
         // 订阅开始时间
-        const infoNum = [upload, download, total, expireTs, parseInt(userInfoParts.starttime || '0')].filter(n => n > 0);
-        const startTs = getSubscriptionStartTime(infoNum);
-
+        const startTs = parseInt(userInfoParts.starttime || '0');
+        
         // 订阅类型区分
         const { isLongTerm, isSingle, resetInfo, daysToReset } = getSubType(expireTs ?? 0);
 
@@ -544,7 +552,7 @@ class SubinfoPlugin extends Plugin {
     } else {
       await msg.edit({ text: messageParts[0], parseMode: "html" });
       for (let i = 1; i < messageParts.length; i++) {
-        await client.sendMessage(msg.chatId, {
+        await client.sendMessage(msg.chatId!, {
           message: messageParts[i],
           parseMode: "html",
           replyTo: msg.id
