@@ -1,7 +1,7 @@
 # TeleBox_Plugins
 
 ## 简介
-TeleBox_Plugins 是 [TeleBox](https://github.com/TeleBoxOrg/TeleBox) 项目的官方仓库，提供丰富的功能扩展。
+TeleBox_Plugins 是 [TeleBox](https://github.com/TeleBoxOrg/TeleBox) 项目的官方插件仓库，提供丰富的功能扩展。
 
 ## 安装方式
 ```bash
