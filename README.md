@@ -5,7 +5,7 @@ TeleBox_Plugins 是 [TeleBox](https://github.com/TeleBoxOrg/TeleBox) 项目的�
 
 ## 安装方式
 ```bash
-tpm i <名>
+tpm i <插件名>
 ```
 
 ## 可用插件列表
