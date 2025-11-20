@@ -48,6 +48,7 @@ interface CommandRule {
 interface AutoDeleteConfig {
   customRules?: CommandRule[]; // 用户自定义规则
   enabled?: boolean; // 功能总开关，默认false
+  configVersion?: number; // 配置文件版本号，用于迁移
 }
 
 // 解析别名到原始命令
@@ -76,6 +77,9 @@ function getMaxRuleId(rules: CommandRule[]): number {
 function generateRuleId(existingRules: CommandRule[]): string {
   return (getMaxRuleId(existingRules) + 1).toString();
 }
+
+// 当前配置文件版本号
+const CURRENT_CONFIG_VERSION = 1;
 
 class AutoDeleteService {
   private client: any;
@@ -120,27 +124,9 @@ class AutoDeleteService {
     ];
   }
 
-  // 获取有效的规则集（合并默认规则和用户自定义规则）
+  // 获取有效的规则集（直接使用配置文件中的规则）
   private getEffectiveRules(): CommandRule[] {
-    const defaultRules = this.getDefaultRules();
-    const customRules = Array.isArray(this.config.customRules) ? this.config.customRules : [];
-    
-    // 用户自定义规则优先级更高，可以覆盖默认规则
-    const ruleMap = new Map<string, CommandRule>();
-    
-    // 首先添加默认规则
-    defaultRules.forEach(rule => {
-      const key = this.getRuleKey(rule);
-      ruleMap.set(key, rule);
-    });
-    
-    // 然后添加用户自定义规则（会覆盖同名的默认规则）
-    customRules.forEach(rule => {
-      const key = this.getRuleKey(rule);
-      ruleMap.set(key, rule);
-    });
-    
-    return Array.from(ruleMap.values());
+    return Array.isArray(this.config.customRules) ? this.config.customRules : [];
   }
 
   // 生成规则的唯一key
@@ -159,9 +145,17 @@ class AutoDeleteService {
       const data = await fs.readFile(CONFIG_FILE_PATH, "utf-8");
       this.config = JSON.parse(data);
       
+      let needSave = false;
+      
+      // 检查是否需要版本迁移
+      if (!this.config.configVersion || this.config.configVersion < CURRENT_CONFIG_VERSION) {
+        console.log("[autodelcmd] 检测到旧版本配置，正在迁移...");
+        await this.migrateConfig();
+        needSave = true;
+      }
+      
       // 为没有 ID 的规则生成简单数字 ID
       if (this.config.customRules) {
-        let needSave = false;
         let nextId = getMaxRuleId(this.config.customRules) + 1;
         
         // 为没有ID的规则分配连续的数字ID
@@ -172,13 +166,70 @@ class AutoDeleteService {
             needSave = true;
           }
         });
-        
-        if (needSave) {
-          await this.saveConfig();
-        }
+      }
+      
+      if (needSave) {
+        await this.saveConfig();
       }
     } catch (error) {
-      console.log("[autodelcmd] 未找到配置，使用默认配置。");
+      console.log("[autodelcmd] 首次运行，正在创建默认配置文件...");
+      // 首次运行时，将默认规则写入配置文件
+      await this.initializeDefaultConfig();
+    }
+  }
+
+  private async initializeDefaultConfig() {
+    const defaultRules = this.getDefaultRules();
+    
+    // 为默认规则分配ID
+    defaultRules.forEach((rule, index) => {
+      rule.id = (index + 1).toString();
+    });
+    
+    this.config = {
+      enabled: false, // 默认禁用
+      customRules: defaultRules,
+      configVersion: CURRENT_CONFIG_VERSION
+    };
+    
+    await this.saveConfig();
+    console.log("[autodelcmd] 已创建默认配置文件，包含 " + defaultRules.length + " 条规则");
+  }
+
+  // 配置迁移方法
+  private async migrateConfig() {
+    const currentVersion = this.config.configVersion || 0;
+    
+    // 从版本 0 迁移到版本 1：添加默认规则
+    if (currentVersion < 1) {
+      console.log("[autodelcmd] 从版本 0 迁移到版本 1");
+      
+      if (!this.config.customRules) {
+        this.config.customRules = [];
+      }
+      
+      const existingRules = this.config.customRules;
+      const defaultRules = this.getDefaultRules();
+      
+      // 获取当前最大ID
+      let nextId = getMaxRuleId(existingRules) + 1;
+      
+      // 将默认规则中不存在的规则添加到配置中
+      let addedCount = 0;
+      for (const defaultRule of defaultRules) {
+        const ruleKey = this.getRuleKey(defaultRule);
+        const exists = existingRules.some(r => this.getRuleKey(r) === ruleKey);
+        
+        if (!exists) {
+          defaultRule.id = nextId.toString();
+          existingRules.push(defaultRule);
+          nextId++;
+          addedCount++;
+        }
+      }
+      
+      console.log(`[autodelcmd] 迁移完成，新增 ${addedCount} 条默认规则`);
+      this.config.configVersion = 1;
     }
   }
 
@@ -465,13 +516,13 @@ class AutoDeleteService {
       this.config.customRules = [];
     }
     
-    // 只检查自定义规则之间的冲突，不检查与默认规则的冲突
+    // 检查所有规则之间的冲突
     const existingCustomRules = this.getCustomRules();
     
     // 检查参数冲突（带参数的规则）
     if (rule.parameters && rule.parameters.length > 0) {
       for (const param of rule.parameters) {
-        // 查找是否有其他自定义规则使用了相同的参数但条件不同
+        // 查找是否有其他规则使用了相同的参数但条件不同
         const conflictingRule = existingCustomRules.find(r => 
           r.command === rule.command && 
           r.parameters && 
@@ -484,7 +535,7 @@ class AutoDeleteService {
           const newResponse = rule.deleteResponse ? " (含响应)" : "";
           return {
             success: false,
-            error: `参数冲突: 参数 "${param}" 已存在于自定义规则 "${rule.command} → ${conflictingRule.delay}秒删除${conflictResponse}" 中，与新规则 "${rule.command} → ${rule.delay}秒删除${newResponse}" 冲突\n
+            error: `参数冲突: 参数 "${param}" 已存在于规则 "${rule.command} → ${conflictingRule.delay}秒删除${conflictResponse}" 中，与新规则 "${rule.command} → ${rule.delay}秒删除${newResponse}" 冲突\n
 💡 提示: 使用 "<code>${mainPrefix}autodelcmd del ${conflictingRule.id}</code>" 删除冲突规则后重试`
           };
         }
@@ -493,7 +544,7 @@ class AutoDeleteService {
     
     // 检查不带参数规则的冲突
     if (!rule.parameters || rule.parameters.length === 0) {
-      // 查找是否存在相同命令、相同exactMatch模式的不带参数自定义规则但其他条件不同
+      // 查找是否存在相同命令、相同exactMatch模式的不带参数规则但其他条件不同
       const conflictingRule = existingCustomRules.find(r => 
         r.command === rule.command && 
         (!r.parameters || r.parameters.length === 0) &&
@@ -509,7 +560,7 @@ class AutoDeleteService {
         
         return {
           success: false,
-          error: `规则冲突: 命令 "${rule.command}" 已存在自定义规则 "→ ${conflictingRule.delay}秒删除${conflictResponse}${conflictExact}"，与新规则 "→ ${rule.delay}秒删除${newResponse}${newExact}" 冲突\n
+          error: `规则冲突: 命令 "${rule.command}" 已存在规则 "→ ${conflictingRule.delay}秒删除${conflictResponse}${conflictExact}"，与新规则 "→ ${rule.delay}秒删除${newResponse}${newExact}" 冲突\n
 💡 提示: 使用 "<code>${mainPrefix}autodelcmd del ${conflictingRule.id}</code>" 删除冲突规则后重试`
         };
       }
@@ -582,9 +633,9 @@ class AutoDeleteService {
     return this.getEffectiveRules();
   }
 
-  public resetToDefaults(): Promise<void> {
-    this.config.customRules = [];
-    return this.saveConfig();
+  public async resetToDefaults(): Promise<void> {
+    // 重置为初始默认配置
+    await this.initializeDefaultConfig();
   }
 
   // 开关管理方法
@@ -645,23 +696,19 @@ class AutoDeletePlugin extends Plugin {
 <b>功能说明:</b>
 - 自动监听并延迟删除特定命令的消息
 - 支持所有配置的自定义前缀和别名命令
-- 支持用户自定义删除规则和延迟时间
+- 支持自定义删除规则和延迟时间
+- 首次运行自动创建配置文件，包含预设的默认规则
 
 <b>消息处理范围:</b>
 - 自己发出的所有命令消息
 - Saved Messages（收藏夹）中的命令消息
 
-<b>默认删除规则:</b>
-• 短延迟 (10秒): lang, alias, reload, eat set, tpm
-• 长延迟 (120秒): h, help, dc, ip, ping, pingdc, sysinfo, whois, bf, update, trace, service
-• 特殊规则: tpm [s,search,ls,i,install] (120秒), s/speedtest/spt/v (120秒+🔄删除响应)
-
 <b>配置管理命令:</b>
 • <code>${mainPrefix}autodelcmd on/off</code> - 启用/禁用自动删除功能
 • <code>${mainPrefix}autodelcmd status</code> - 查看功能状态和规则统计
 • <code>${mainPrefix}autodelcmd list</code> - 查看所有规则
-• <code>${mainPrefix}autodelcmd add [命令] [延迟秒数] [参数1] [参数2] [...] [-r] [-e]</code> - 添加自定义规则
-• <code>${mainPrefix}autodelcmd del [规则ID或命令名]</code> - 删除自定义规则或查看规则
+• <code>${mainPrefix}autodelcmd add [命令] [延迟秒数] [参数1] [参数2] [...] [-r] [-e]</code> - 添加规则
+• <code>${mainPrefix}autodelcmd del [规则ID或命令名]</code> - 删除规则或查看规则
 • <code>${mainPrefix}autodelcmd reset</code> - 重置为默认配置
 
 <b>特殊选项:</b>
@@ -672,16 +719,20 @@ class AutoDeletePlugin extends Plugin {
 
 <b>使用示例:</b>
 • <code>${mainPrefix}autodelcmd on</code> - 启用自动删除功能
-• <code>${mainPrefix}autodelcmd status</code> - 查看功能状态
+• <code>${mainPrefix}autodelcmd list</code> - 查看所有配置规则
 • <code>${mainPrefix}autodelcmd add ping 30</code> - ping命令30秒后删除
 • <code>${mainPrefix}autodelcmd add speedtest 60 -r</code> - speedtest命令60秒后删除（🔄包含响应）
 • <code>${mainPrefix}autodelcmd add tpm 60 list ls search</code> - tpm list/ls/search任一命令60秒后删除
 • <code>${mainPrefix}autodelcmd add ping 30 -e</code> - 只有无参数的ping命令30秒后删除
-• <code>${mainPrefix}autodelcmd del ping</code> - 查看ping命令的所有自定义规则
+• <code>${mainPrefix}autodelcmd del ping</code> - 查看ping命令的所有规则
 • <code>${mainPrefix}autodelcmd del 1</code> - 使用ID删除指定规则
+• <code>${mainPrefix}autodelcmd reset</code> - 重置为默认配置
 • <code>${mainPrefix}autodelcmd off</code> - 禁用自动删除功能
 
-<b>注意:</b> 插件默认处于禁用状态，需要手动启用才能工作。`;
+<b>配置文件位置:</b>
+配置文件保存在 <code>assets/autodelcmd/config.json</code>，可直接编辑修改规则。
+
+<b>注意:</b> 插件默认处于禁用状态，需要手动启用才能工作。首次运行会自动创建配置文件并写入默认规则。`;
 
   cmdHandlers: Record<string, (msg: Api.Message) => Promise<void>> = {
     autodelcmd: async (msg) => {
@@ -732,51 +783,30 @@ class AutoDeletePlugin extends Plugin {
 
   private async handleListRules(msg: Api.Message) {
     const allRules = serviceInstance!.getAllRules();
-    const customRules = serviceInstance!.getCustomRules();
     
     let text = "📋 <b>自动删除规则列表</b>\n\n";
     
-    if (customRules.length > 0) {
-      text += "🔧 <b>自定义规则:</b>\n";
-      customRules.forEach((rule, index) => {
-        const params = rule.parameters?.length ? ` [${rule.parameters.join(', ')}]` : '';
-        const response = rule.deleteResponse ? ' 🔄' : '';
-        const exact = rule.exactMatch ? ' 🎯' : '';
-        const ruleId = rule.id || 'unknown';
-        text += `${index + 1}. <code>${rule.command}${params}</code> → ${rule.delay}秒${response}${exact} <code>[ID: ${ruleId}]</code>\n`;
-      });
-      text += "\n";
+    if (allRules.length === 0) {
+      text += "暂无配置规则\n\n";
+      text += `💡 使用 <code>${mainPrefix}autodelcmd add [命令] [延迟秒数]</code> 添加规则`;
+      await msg.edit({ text, parseMode: "html" });
+      return;
     }
     
-    text += "⚙️ <b>所有有效规则:</b>\n";
-    const groupedRules = new Map();
-    
-    allRules.forEach(rule => {
-      const key = `${rule.delay}${rule.deleteResponse ? '_response' : ''}`;
-      if (!groupedRules.has(key)) {
-        groupedRules.set(key, []);
-      }
-      groupedRules.get(key).push(rule);
+    text += "⚙️ <b>配置规则:</b>\n";
+    allRules.forEach((rule, index) => {
+      const params = rule.parameters?.length ? ` [${rule.parameters.join(', ')}]` : '';
+      const response = rule.deleteResponse ? ' 🔄' : '';
+      const exact = rule.exactMatch ? ' 🎯' : '';
+      const ruleId = rule.id || 'unknown';
+      text += `${index + 1}. <code>${rule.command}${params}</code> → ${rule.delay}秒${response}${exact} <code>[ID: ${ruleId}]</code>\n`;
     });
-    
-    Array.from(groupedRules.entries())
-      .sort(([a], [b]) => parseInt(a) - parseInt(b))
-      .forEach(([key, rules]) => {
-        const delay = parseInt(key);
-        const withResponse = key.includes('_response');
-        text += `\n<b>${delay}秒删除${withResponse ? ' 🔄' : ''}:</b>\n`;
-        rules.forEach((rule: CommandRule) => {
-          const params = rule.parameters?.length ? ` [${rule.parameters.join(', ')}]` : '';
-          const response = rule.deleteResponse && !withResponse ? ' 🔄' : '';
-          const exact = rule.exactMatch ? ' 🎯' : '';
-          text += `• ${rule.command}${params}${response}${exact}\n`;
-        });
-      });
 
     // 添加图标说明
     text += `\n<b>📖 图标说明:</b>\n`;
     text += `• 🔄 = 同时删除响应消息\n`;
-    text += `• 🎯 = 精确匹配（只匹配无参数调用）`;
+    text += `• 🎯 = 精确匹配（只匹配无参数调用）\n\n`;
+    text += `💡 使用 <code>${mainPrefix}autodelcmd del [ID]</code> 删除规则`;
 
     await msg.edit({ text, parseMode: "html" });
   }
@@ -964,13 +994,16 @@ class AutoDeletePlugin extends Plugin {
 
   private async handleReset(msg: Api.Message) {
     await serviceInstance!.resetToDefaults();
-    await msg.edit({ text: "✅ 已重置为默认配置", parseMode: "html" });
+    const allRules = serviceInstance!.getAllRules();
+    await msg.edit({ 
+      text: `✅ 已重置为默认配置\n\n已恢复 ${allRules.length} 条预设规则\n\n使用 <code>${mainPrefix}autodelcmd list</code> 查看所有规则`, 
+      parseMode: "html" 
+    });
   }
 
   private async handleStatus(msg: Api.Message) {
     const isEnabled = serviceInstance!.isEnabled();
     const allRules = serviceInstance!.getAllRules();
-    const customRules = serviceInstance!.getCustomRules();
     
     const statusIcon = isEnabled ? "🟢" : "🔴";
     const statusText = isEnabled ? "已启用" : "已禁用";
@@ -978,9 +1011,7 @@ class AutoDeletePlugin extends Plugin {
     let text = `📊 <b>自动删除功能状态</b>\n\n`;
     text += `${statusIcon} 功能状态: <b>${statusText}</b>\n\n`;
     text += `📋 规则统计:\n`;
-    text += `• 总规则数: ${allRules.length}\n`;
-    text += `• 自定义规则: ${customRules.length}\n`;
-    text += `• 默认规则: ${allRules.length - customRules.length}\n\n`;
+    text += `• 配置规则数: ${allRules.length}\n\n`;
     
     if (!isEnabled) {
       text += `💡 使用 <code>autodelcmd on</code> 启用功能`;
