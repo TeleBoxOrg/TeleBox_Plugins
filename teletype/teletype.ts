@@ -1,8 +1,10 @@
 import { Plugin } from "@utils/pluginBase";
 import { Api } from "telegram";
 import { getGlobalClient } from "@utils/globalClient";
+import { JSONFilePreset } from "lowdb/node";
+import { createDirectoryInAssets } from "@utils/pathHelpers";
+import * as path from "path";
 
-// HTML转义函数（必需）
 const htmlEscape = (text: string): string => 
   text.replace(/[&<>"']/g, m => ({ 
     '&': '&amp;', '<': '&lt;', '>': '&gt;', 
@@ -10,66 +12,102 @@ const htmlEscape = (text: string): string =>
   }[m] || m));
 
 class TeletypePlugin extends Plugin {
-  // 插件配置
   private readonly PLUGIN_NAME = "teletype";
-  private readonly PLUGIN_VERSION = "1.0.0";
+  private readonly PLUGIN_VERSION = "1.1.0";
+  private db: any = null;
   
-  // 帮助文档
   private readonly HELP_TEXT = `⌨️ <b>打字机效果插件</b>
 
 <b>命令格式：</b>
-<code>.teletype [文本内容]</code>
-
-<b>功能说明：</b>
-• 模拟打字机效果，逐个字符显示文本
-• 支持中英文和特殊字符
-• 自动处理消息编辑冲突
+<code>.teletype [文本]</code> - 手动打字机效果
+<code>.teletype on</code> - 开启自动模式
+<code>.teletype off</code> - 关闭自动模式
+<code>.teletype status</code> - 查看状态
 
 <b>使用示例：</b>
 <code>.teletype Hello World!</code>
-<code>.teletype 这是一个测试消息</code>`;
+<code>.teletype on</code>`;
   
-  // 插件描述
   description = this.HELP_TEXT;
-  
-  // 命令处理器
   cmdHandlers = {
     teletype: this.handleTeletype.bind(this)
   };
   
-  // 主命令处理
+  listenMessageHandler = this.handleAutoTeletype.bind(this);
+  listenMessageHandlerIgnoreEdited = true;
+  
+  constructor() {
+    super();
+    this.initDatabase();
+  }
+  
+  private async initDatabase(): Promise<void> {
+    try {
+      const dbPath = path.join(createDirectoryInAssets(this.PLUGIN_NAME), "config.json");
+      this.db = await JSONFilePreset(dbPath, {
+        autoMode: false,
+        enabledUsers: [] as string[]
+      });
+    } catch (error) {
+      console.error(`[${this.PLUGIN_NAME}] 数据库初始化失败:`, error);
+      this.db = {
+        data: { autoMode: false, enabledUsers: [] },
+        write: async () => {}
+      };
+    }
+  }
+  
   private async handleTeletype(msg: Api.Message): Promise<void> {
     const client = await getGlobalClient();
     if (!client) return;
     
     try {
-      // 参数解析
-      const text = this.parseArguments(msg);
-      if (!text) {
+      const { subCommand, args, text } = this.parseArguments(msg);
+      
+      if (!subCommand && !text) {
         await this.showUsage(msg);
         return;
       }
       
-      // 执行打字机效果
-      await this.executeTeletype(msg, text);
+      switch (subCommand?.toLowerCase()) {
+        case 'on':
+          await this.enableAutoMode(msg);
+          break;
+        case 'off':
+          await this.disableAutoMode(msg);
+          break;
+        case 'status':
+          await this.showStatus(msg);
+          break;
+        default:
+          if (text) {
+            await this.executeTeletype(msg, text);
+          } else {
+            await this.showUsage(msg);
+          }
+      }
       
     } catch (error: any) {
       await this.handleError(msg, error);
     }
   }
   
-  // 参数解析
-  private parseArguments(msg: Api.Message): string {
+  private parseArguments(msg: Api.Message): { subCommand?: string, args: string[], text?: string } {
     const text = msg.text || "";
     const parts = text.trim().split(/\s+/);
     
-    // 移除命令部分，获取剩余文本
-    if (parts.length < 2) return "";
+    if (parts.length < 2) return { args: [] };
     
-    return parts.slice(1).join(" ");
+    const subCommand = parts[1];
+    const remainingParts = parts.slice(2);
+    
+    if (['on', 'off', 'status'].includes(subCommand.toLowerCase())) {
+      return { subCommand, args: remainingParts };
+    }
+    
+    return { args: remainingParts, text: parts.slice(1).join(' ') };
   }
   
-  // 显示用法
   private async showUsage(msg: Api.Message): Promise<void> {
     await msg.edit({
       text: `❌ <b>参数错误</b>\n\n${this.HELP_TEXT}`,
@@ -77,28 +115,115 @@ class TeletypePlugin extends Plugin {
     });
   }
   
-  // 执行打字机效果
+  private async enableAutoMode(msg: Api.Message): Promise<void> {
+    if (!this.db) await this.initDatabase();
+    
+    const userId = msg.senderId?.toString();
+    if (!userId) {
+      await msg.edit({ text: "❌ <b>无法获取用户ID</b>", parseMode: "html" });
+      return;
+    }
+    
+    if (!this.db.data.enabledUsers) {
+      this.db.data.enabledUsers = [];
+    }
+    
+    if (!this.db.data.enabledUsers.includes(userId)) {
+      this.db.data.enabledUsers.push(userId);
+    }
+    
+    this.db.data.autoMode = true;
+    await this.db.write();
+    
+    await msg.edit({
+      text: "✅ <b>自动打字机模式已开启</b>",
+      parseMode: "html"
+    });
+  }
+  
+  private async disableAutoMode(msg: Api.Message): Promise<void> {
+    if (!this.db) await this.initDatabase();
+    
+    const userId = msg.senderId?.toString();
+    if (userId && this.db.data.enabledUsers) {
+      this.db.data.enabledUsers = this.db.data.enabledUsers.filter((id: string) => id !== userId);
+    }
+    
+    this.db.data.autoMode = false;
+    await this.db.write();
+    
+    await msg.edit({
+      text: "❌ <b>自动打字机模式已关闭</b>",
+      parseMode: "html"
+    });
+  }
+  
+  private async showStatus(msg: Api.Message): Promise<void> {
+    if (!this.db) await this.initDatabase();
+    
+    const userId = msg.senderId?.toString();
+    const isEnabled = userId && this.db.data.enabledUsers ? 
+      this.db.data.enabledUsers.includes(userId) : false;
+    const status = isEnabled ? "🟢 开启" : "🔴 关闭";
+    
+    await msg.edit({
+      text: `📊 <b>状态</b>\n\n自动模式: ${status}`,
+      parseMode: "html"
+    });
+  }
+  
+  private async handleAutoTeletype(msg: Api.Message): Promise<void> {
+    if (!this.db) await this.initDatabase();
+    if (!this.db?.data?.autoMode) return;
+    
+    const userId = msg.senderId?.toString();
+    if (!userId || !this.db.data.enabledUsers?.includes(userId)) return;
+    
+    const text = msg.text || "";
+    const prefixes = await this.getPrefixes();
+    const isCommand = prefixes.some(prefix => text.startsWith(prefix));
+    
+    if (isCommand || !text || text.trim().length < 2) return;
+    
+    const client = await getGlobalClient();
+    if (!client) return;
+    
+    const self = await client.getMe();
+    if (!msg.senderId?.eq(self.id)) return;
+    
+    try {
+      await this.executeTeletype(msg, text);
+    } catch (error: any) {
+      console.error(`[${this.PLUGIN_NAME}] Auto teletype error:`, error);
+    }
+  }
+  
+  private async getPrefixes(): Promise<string[]> {
+    try {
+      const { getPrefixes } = await import("@utils/pluginManager");
+      return getPrefixes();
+    } catch (error) {
+      return [".", "。", "!"];
+    }
+  }
+  
   private async executeTeletype(msg: Api.Message, text: string): Promise<void> {
-    const interval = 50; // 50ms 间隔
+    const interval = 50;
     const cursor = "█";
     let buffer = "";
     
-    // 初始化消息，显示光标
     let currentMsg = await msg.edit({
       text: cursor,
       parseMode: "html"
     });
     
-    // 等待初始间隔
     await this.sleep(interval);
     
-    // 逐个字符显示
     for (const character of text) {
       buffer += character;
-      const bufferWithCursor = `${buffer}${cursor}`;
+      const bufferWithCursor = `${htmlEscape(buffer)}${cursor}`;
       
       try {
-        // 显示文本+光标
         currentMsg = await currentMsg.edit({
           text: bufferWithCursor,
           parseMode: "html"
@@ -106,40 +231,47 @@ class TeletypePlugin extends Plugin {
         
         await this.sleep(interval);
         
-        // 显示文本（去掉光标）
-        currentMsg = await currentMsg.edit({
-          text: buffer,
-          parseMode: "html"
-        });
+        if (buffer.length > 0) {
+          currentMsg = await currentMsg.edit({
+            text: htmlEscape(buffer),
+            parseMode: "html"
+          });
+        }
         
       } catch (error: any) {
-        // 忽略消息未修改错误，继续执行
         if (!error.message?.includes("MESSAGE_NOT_MODIFIED")) {
           throw error;
         }
+        continue;
       }
       
       await this.sleep(interval);
     }
     
-    // 最终确认消息
-    await currentMsg.edit({
-      text: `${htmlEscape(text)}`,
-      parseMode: "html"
-    });
+    const finalText = htmlEscape(text);
+    try {
+      await currentMsg.edit({
+        text: finalText,
+        parseMode: "html"
+      });
+    } catch (error: any) {
+      if (!error.message?.includes("MESSAGE_NOT_MODIFIED")) {
+        throw error;
+      }
+    }
   }
   
-  // 错误处理
   private async handleError(msg: Api.Message, error: any): Promise<void> {
     console.error(`[${this.PLUGIN_NAME}] Error:`, error);
+    
+    if (error.message?.includes("MESSAGE_NOT_MODIFIED")) {
+      return;
+    }
     
     let errorMessage = "❌ <b>操作失败:</b> ";
     
     if (error.message?.includes("MESSAGE_TOO_LONG")) {
-      errorMessage += "消息过长，请缩短文本内容";
-    } else if (error.message?.includes("MESSAGE_NOT_MODIFIED")) {
-      // 忽略消息未修改错误
-      return;
+      errorMessage += "消息过长";
     } else {
       errorMessage += htmlEscape(error.message || "未知错误");
     }
@@ -150,7 +282,6 @@ class TeletypePlugin extends Plugin {
     });
   }
   
-  // 睡眠函数
   private sleep(ms: number): Promise<void> {
     return new Promise(resolve => setTimeout(resolve, ms));
   }
