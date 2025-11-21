@@ -383,4 +383,8 @@
     "url": "https://github.com/TeleBoxOrg/TeleBox_Plugins/blob/main/mode/mode.ts?raw=true",
     "desc": "自定义消息格式"
   }
+  "openlist": {
+    "url": "https://github.com/TeleBoxOrg/TeleBox_Plugins/blob/main/openlist/openlist.ts?raw=true",
+    "desc": "openlist管理"
+  }
 }
