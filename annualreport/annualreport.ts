@@ -217,7 +217,7 @@ TeleBox 已陪伴你的 TG ${days} 天
 你的黑名单里有 ${blockedCount} 人
 ${blockedText}
 
-${premiumText ? `⭐ <b>会员特权</b>\n${premiumText}\n\n` : ''}
+${premiumText ? `⭐ <b>会员特权</b>\n${premiumText}\n` : ''}
 💫 <b>年度寄语</b>
 ${hitokotoText}
 
