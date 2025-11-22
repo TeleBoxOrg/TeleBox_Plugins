@@ -11,11 +11,22 @@ type Provider = { apiKey: string; baseUrl: string; compatauth?: Compat; authMeth
 type Compat = "openai" | "gemini" | "claude";
 type Models = { chat: string; search: string; image: string; tts: string };
 type Telegraph = { enabled: boolean; limit: number; token: string; posts: { title: string; url: string; createdAt: string }[] };
-type DB = { dataVersion?: number; providers: Record<string, Provider>; modelCompat?: Record<string, Record<string, Compat>>; modelCatalog?: { map: Record<string, Compat>; updatedAt?: string }; models: Models; contextEnabled: boolean; collapse: boolean; telegraph: Telegraph; histories: Record<string, { role: string; content: string }[]>; histMeta?: Record<string, { lastAt: string }> };
+type VoiceConfig = { gemini: string; openai: string };
+type DB = { dataVersion?: number; providers: Record<string, Provider>; modelCompat?: Record<string, Record<string, Compat>>; modelCatalog?: { map: Record<string, Compat>; updatedAt?: string }; models: Models; contextEnabled: boolean; collapse: boolean; telegraph: Telegraph; voices?: VoiceConfig; histories: Record<string, { role: string; content: string }[]>; histMeta?: Record<string, { lastAt: string }> };
 
 const MAX_MSG = 4096;
 const PAGE_EXTRA = 48;
 const WRAP_EXTRA_COLLAPSED = 64;
+
+const GEMINI_VOICES = [
+  "Zephyr", "Puck", "Charon", "Kore", "Fenrir", "Leda", "Orus", "Aoede",
+  "Callirhoe", "Autonoe", "Enceladus", "Iapetus", "Umbriel", "Algieba",
+  "Despina", "Erinome", "Algenib", "Rasalgethi", "Laomedeia", "Achernar",
+  "Alnilam", "Schedar", "Gacrux", "Pulcherrima", "Achird", "Zubenelgenubi",
+  "Vindemiatrix", "Sadachbia", "Sadaltager", "Sulafar"
+] as const;
+
+const OPENAI_VOICES = ["alloy", "echo", "fable", "onyx", "nova", "shimmer"] as const;
 const trimBase = (u: string) => u.replace(/\/$/, "");
 const html = (t: string) => t.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
 function escapeRegExp(s: string): string { return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"); }
@@ -194,6 +205,7 @@ class Store {
     contextEnabled: false,
     collapse: false,
     telegraph: { enabled: false, limit: 0, token: "", posts: [] },
+    voices: { gemini: "Kore", openai: "alloy" },
     histories: {}
   };
   static baseDir: string = "";
@@ -207,6 +219,7 @@ class Store {
       models: { chat: "", search: "", image: "", tts: "" },
       contextEnabled: false, collapse: false,
       telegraph: { enabled: false, limit: 0, token: "", posts: [] },
+      voices: { gemini: "Kore", openai: "alloy" },
       histories: {}
     });
     this.data = this.db.data;
@@ -221,6 +234,7 @@ class Store {
     if (typeof d.contextEnabled !== "boolean") d.contextEnabled = false;
     if (typeof d.collapse !== "boolean") d.collapse = false;
     if (!d.telegraph) d.telegraph = { enabled: false, limit: 0, token: "", posts: [] };
+    if (!d.voices) d.voices = { gemini: "Kore", openai: "alloy" };
     if (!d.histories) d.histories = {};
     if (!d.histMeta) d.histMeta = {};
     if (d.dataVersion < 2) d.dataVersion = 2;
@@ -252,6 +266,10 @@ class Store {
         }
       } catch {}
       d.dataVersion = 3;
+    }
+    if (d.dataVersion < 4) {
+      if (!d.voices) d.voices = { gemini: "Kore", openai: "alloy" };
+      d.dataVersion = 4;
     }
     await this.writeSoon();
   }
@@ -1235,11 +1253,12 @@ async function callChat(kind: "chat" | "search", text: string, msg: Api.Message)
 
 const help = `🔧 📝 <b>特性</b>
 兼容 Google Gemini、OpenAI、Anthropic Claude、Baidu 标准接口，统一指令，一处配置，多处可用。
+
 ✨ <b>亮点</b>
 • 🔀 模型混用：对话 / 搜索 / 图片 / 语音 可分别指定不同服务商的不同模型
 • 🧠 可选上下文记忆、📰 长文自动发布 Telegraph、🧾 消息折叠显示
 
-💬 <b>对话</b>
+<blockquote expandable>💬 <b>对话</b>
 <code>ai chat [问题]</code>
 • 示例：<code>ai chat 你好，帮我简单介绍一下你</code>
 • 支持多轮对话（可执行 <code>ai context on</code> 开启记忆）
@@ -1276,6 +1295,14 @@ const help = `🔧 📝 <b>特性</b>
 • limit &lt;数量&gt;：设置字数阈值（0 表示不限制）
 • 自动创建 / 管理 / 删除 Telegraph 文章
 
+🎤 <b>音色管理</b>
+<code>ai voice list</code> - 查看所有可用音色（Gemini 30种 / OpenAI 6种）
+<code>ai voice show</code> - 查看当前音色配置
+<code>ai voice gemini [音色名]</code> - 设置 Gemini TTS 音色
+<code>ai voice openai [音色名]</code> - 设置 OpenAI TTS 音色
+• Gemini 音色示例：Kore, Puck, Charon, Leda, Aoede 等
+• OpenAI 音色示例：alloy, echo, fable, onyx, nova, shimmer
+
 ⚙️ <b>模型管理</b>
 <code>ai model list</code> - 查看当前模型配置
 <code>ai model chat|search|image|tts [服务商] [模型]</code> - 设置各功能模型
@@ -1308,7 +1335,7 @@ const help = `🔧 📝 <b>特性</b>
 • 模型：<code>ai m list</code> / 设置：<code>ai m chat|search|image|tts [服务商] [模型]</code>
 • 配置：<code>ai c add [服务商] [API密钥] [BaseURL]</code>
 • 别名：<code>s</code>=search, <code>img</code>/<code>i</code>=image, <code>v</code>=tts, <code>a</code>=audio, <code>sa</code>=searchaudio, <code>ctx</code>=context, <code>fold</code>=collapse, <code>cfg</code>/<code>c</code>=config, <code>m</code>=model
-`;
+</blockquote>`;
 
 const CMD_AI = "ai" as const;
 class AiPlugin extends Plugin {
@@ -1333,7 +1360,7 @@ class AiPlugin extends Plugin {
       };
       const subn = aliasMap[subl] || subl;
       const knownSubs = [
-        "config","model","context","collapse","telegraph",
+        "config","model","context","collapse","telegraph","voice",
         "chat","search","image","tts","audio","searchaudio"
       ];
       const isUnknownBareQuery = !!subn && !knownSubs.includes(subn);
@@ -1700,6 +1727,62 @@ class AiPlugin extends Plugin {
           await msg.edit({ text: "❌ 未知 telegraph 子命令", parseMode: "html" }); return;
         }
         
+        if (subn === "voice") {
+          const a0 = (args[0] || "").toLowerCase();
+          if (!Store.data.voices) Store.data.voices = { gemini: "Kore", openai: "alloy" };
+          
+          if (a0 === "list") {
+            const geminiList = GEMINI_VOICES.map((v, i) => `${i + 1}. ${v}`).join("\n");
+            const openaiList = OPENAI_VOICES.map((v, i) => `${i + 1}. ${v}`).join("\n");
+            const header = `🎤 <b>可用音色列表</b>\n\n<b>当前配置:</b>\nGemini: <code>${Store.data.voices.gemini}</code>\nOpenAI: <code>${Store.data.voices.openai}</code>\n\n`;
+            const collapsedContent = `<b>Gemini (${GEMINI_VOICES.length}种):</b>\n${geminiList}\n\n<b>OpenAI (${OPENAI_VOICES.length}种):</b>\n${openaiList}`;
+            const txt = header + `<blockquote expandable>${collapsedContent}</blockquote>`;
+            await sendLong(msg, txt);
+            return;
+          }
+          
+          if (a0 === "show") {
+            const txt = `🎤 <b>当前音色配置</b>\n\n<b>Gemini:</b> <code>${Store.data.voices.gemini}</code>\n<b>OpenAI:</b> <code>${Store.data.voices.openai}</code>`;
+            await msg.edit({ text: txt, parseMode: "html" });
+            return;
+          }
+          
+          if (a0 === "gemini") {
+            const voiceName = args[1];
+            if (!voiceName) {
+              await msg.edit({ text: `❌ 请指定音色名称\n当前: <code>${Store.data.voices.gemini}</code>`, parseMode: "html" });
+              return;
+            }
+            if (!GEMINI_VOICES.includes(voiceName as any)) {
+              await msg.edit({ text: `❌ 未知音色: ${html(voiceName)}\n使用 <code>ai voice list</code> 查看可用音色`, parseMode: "html" });
+              return;
+            }
+            Store.data.voices.gemini = voiceName;
+            await Store.writeSoon();
+            await msg.edit({ text: `✅ 已设置 Gemini 音色: <code>${html(voiceName)}</code>`, parseMode: "html" });
+            return;
+          }
+          
+          if (a0 === "openai") {
+            const voiceName = args[1];
+            if (!voiceName) {
+              await msg.edit({ text: `❌ 请指定音色名称\n当前: <code>${Store.data.voices.openai}</code>`, parseMode: "html" });
+              return;
+            }
+            if (!OPENAI_VOICES.includes(voiceName as any)) {
+              await msg.edit({ text: `❌ 未知音色: ${html(voiceName)}\n使用 <code>ai voice list</code> 查看可用音色`, parseMode: "html" });
+              return;
+            }
+            Store.data.voices.openai = voiceName;
+            await Store.writeSoon();
+            await msg.edit({ text: `✅ 已设置 OpenAI 音色: <code>${html(voiceName)}</code>`, parseMode: "html" });
+            return;
+          }
+          
+          await msg.edit({ text: "❌ 未知 voice 子命令\n支持: list|show|gemini <音色>|openai <音色>", parseMode: "html" });
+          return;
+        }
+        
         if (subn === "chat" || subn === "search" || !subn || isUnknownBareQuery) {
           const replyMsg = await msg.getReplyMessage();
           const isSearch = subn === "search";
@@ -1799,7 +1882,8 @@ class AiPlugin extends Plugin {
           const ptts = providerOf(mtts.provider); if (!ptts) { await msg.edit({ text: "❌ 服务商未配置", parseMode: "html" }); return; }
           if (!ptts.apiKey) { await msg.edit({ text: "❌ 未提供令牌，请先配置 API Key（ai config add/update）", parseMode: "html" }); return; }
           const compat = await resolveCompat(mtts.provider, mtts.model, ptts);
-          const voice = compat === "gemini" ? "Kore" : "alloy";
+          if (!Store.data.voices) Store.data.voices = { gemini: "Kore", openai: "alloy" };
+          const voice = compat === "gemini" ? Store.data.voices.gemini : Store.data.voices.openai;
 
           await msg.edit({ text: "🔊 合成中...", parseMode: "html" });
           const replyToId = replyMsg?.id || 0;
@@ -1807,11 +1891,10 @@ class AiPlugin extends Plugin {
           if (compat === "openai") {
             if (!ptts.apiKey) { await msg.edit({ text: "❌ 未提供令牌，请先配置 API Key（ai config add/update）", parseMode: "html" }); return; }
             const audio = await ttsOpenAI(ptts, mtts.model, content, voice);
-            const formattedContent = formatQA(q, content);
             await sendVoiceWithCaption(
               msg,
               audio,
-              formattedContent + footer(mtts.model, isSearch ? ("Audio with Search") : ("Audio")),
+              "",
               replyToId
             );
             await msg.delete();
@@ -1820,11 +1903,10 @@ class AiPlugin extends Plugin {
             const { audio, mime } = await ttsGemini(ptts, mtts.model, content, voice);
             if (audio) {
               const { buf: outBuf } = convertPcmL16ToWavIfNeeded(audio, mime);
-              const formattedContent = formatQA(q, content);
               await sendVoiceWithCaption(
                 msg,
                 outBuf,
-                formattedContent + footer(mtts.model, isSearch ? ("Audio with Search") : ("Audio")),
+                "",
                 replyToId
               );
               await msg.delete();
@@ -1847,7 +1929,8 @@ class AiPlugin extends Plugin {
           const p = providerOf(m.provider)!;
           if (!p.apiKey) { await msg.edit({ text: "❌ 未提供令牌，请先配置 API Key（ai config add/update）", parseMode: "html" }); return; }
           const compat = await resolveCompat(m.provider, m.model, p);
-          const voice = compat === "gemini" ? "Kore" : "alloy";
+          if (!Store.data.voices) Store.data.voices = { gemini: "Kore", openai: "alloy" };
+          const voice = compat === "gemini" ? Store.data.voices.gemini : Store.data.voices.openai;
           await msg.edit({ text: "🔊 合成中...", parseMode: "html" });
           const replyToId = replyMsg?.id || 0;
           if (compat === "openai") {
@@ -1856,7 +1939,7 @@ class AiPlugin extends Plugin {
             await sendVoiceWithCaption(
               msg,
               audio,
-              formatQA(t, t) + footer(m.model, `Audio`),
+              "",
               replyToId
             );
             await msg.delete();
@@ -1868,7 +1951,7 @@ class AiPlugin extends Plugin {
               await sendVoiceWithCaption(
                 msg,
                 outBuf,
-                formatQA(t, t) + footer(m.model, `Audio`),
+                "",
                 replyToId
               );
               await msg.delete();
