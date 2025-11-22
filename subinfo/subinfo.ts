@@ -222,11 +222,6 @@ function getSubType(expireTs: number): { isLongTerm: boolean; isSingle: boolean;
   }
 }
 
-// 订阅开始时间推断 (已弃用复杂推断，改为直接读取)
-function getSubscriptionStartTime(startTime: number): number {
-  return startTime > 0 ? startTime : 0;
-}
-
 // 电报长消息分割
 function splitLongMessage(text: string, maxLength = 4000): string[] {
   if (text.length <= maxLength) return [text];
@@ -446,10 +441,13 @@ class SubinfoPlugin extends Plugin {
         const remain = total > used ? total - used : 0;
         const percent = total > 0 ? Math.round((used / total) * 10000) / 100 : 0;
         
+        // 状态判断
         let status = "有效";
         if (total > 0 && remain <= 0) { status = "耗尽"; stats.耗尽++; }
         if (expireTs && Date.now() > expireTs * 1000) { status = "过期"; stats.过期++; }
         if (status === "有效") stats.有效++;
+        
+        let statusEmoji = "⏰";
 
         // 节点信息
         let nodeInfo: { node_count: number | string, type_count: Record<string, number>, regions: Record<string, number> } | null = null;
@@ -466,18 +464,21 @@ class SubinfoPlugin extends Plugin {
 
         // 1. 基本信息
         seg.push(`📄 <b>机场名称</b>: <code>${htmlEscape(finalConfigName)}</code>`);
-        seg.push(`🔗 <b>订阅链接</b>: <code>${htmlEscape(url)}</code>`); 
+        seg.push(`🔗 <b>订阅链接</b>: <code>${htmlEscape(url)}</code>`);
         
-        // 2. 流量信息
+        // 2. 查询时间与状态 (上移)
+        seg.push(`⏱️ <b>查询时间</b>: <code>${dayjs().format('YYYY-MM-DD HH:mm:ss')}</code>`);
+        seg.push(`${statusEmoji} <b>状态</b>: <b>${status}</b>\n`);
+        
+        // 3. 流量信息 (折叠)
         seg.push(`📊 <b>流量信息</b>`);
         let trafficInfo = `总计: ${formatSize(total)}\n` +
                           `已用: ${formatSize(used)} (↑${formatSize(upload)} ↓${formatSize(download)})\n` +
                           `剩余: ${formatSize(remain)}\n` +
-                          `进度: ${percent}% ${getSpeedEmoji(percent)}\n` +
-                          `进度栏: ${'█'.repeat(Math.round(percent / 5))}${'░'.repeat(20 - Math.round(percent / 5))}`;
-        seg.push(`<pre>${trafficInfo}</pre>`);
+                          `进度: ${'█'.repeat(Math.round(percent / 5))}${'░'.repeat(20 - Math.round(percent / 5))} ${percent}% ${getSpeedEmoji(percent)}`;
+        seg.push(`<blockquote expandable>${trafficInfo}</blockquote>`);
         
-        // 3. 时间信息
+        // 4. 时间信息 (折叠)
         if (expireTs) {
           seg.push(`⏱️ <b>时间信息</b>`);
           let timeInfo = '';
@@ -501,10 +502,10 @@ class SubinfoPlugin extends Plugin {
             timeInfo += `预计耗尽日期: ${estimateDepletionDate(remain, dayUsageBytes)}\n`;
             timeInfo += `上下行比例: ↑${Math.round((upload / used) * 10000) / 100}% ↓${Math.round((download / used) * 10000) / 100}%`;
           }
-          seg.push(`<pre>${timeInfo.trim()}</pre>`);
+          seg.push(`<blockquote expandable>${timeInfo.trim()}</blockquote>`);
         }
         
-        // 4. 节点统计
+        // 5. 节点统计 (折叠)
         seg.push(`🌐 <b>节点信息</b>`);
         if (nodeInfo) {
           let nodeStats = `数量: ${nodeInfo.node_count}\n`;
@@ -526,14 +527,10 @@ class SubinfoPlugin extends Plugin {
                   `主要: ${topRegion[0]}(${Math.round(topRegion[1] / (nodeInfo.node_count as number) * 10000) / 100}%)`;
             }
           }
-          seg.push(`<pre>${nodeStats.trim()}</pre>`);
+          seg.push(`<blockquote expandable>${nodeStats.trim()}</blockquote>`);
         } else {
           seg.push(`(未能解析节点列表)`);
         }
-
-        // 5. 状态
-        seg.push(`<b>查询时间</b>: <code>${dayjs().format('YYYY-MM-DD HH:mm:ss')}</code>`);
-        seg.push(`<b>状态</b>: <b>${status}</b>`);
         
         reports.push(seg.join('\n'));
         // --- 输出生成逻辑结束 ---
