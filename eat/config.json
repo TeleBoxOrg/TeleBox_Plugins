@@ -43,6 +43,15 @@
         "mask": "eat/maskcn.png"
       }
     },
+    "css": {
+      "name": "吃手手",
+      "url": "eat/eatcss.png",
+      "you": {
+        "x": 88,
+        "y": 0,
+        "mask": "eat/maskcss.png"
+      }
+    },
     "dd": {
       "name": "逗逗你呀~",
       "url": "eat/eatdd.png",
