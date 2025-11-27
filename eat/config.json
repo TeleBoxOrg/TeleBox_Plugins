@@ -34,6 +34,15 @@
         "mask": "eat/maskbc2.png"
       }
     },
+    "bp": {
+      "name": "群伸手党前来白嫖",
+      "url": "eat/eatbp.png",
+      "you": {
+        "x": 98,
+        "y": 39,
+        "mask": "eat/maskbp.png"
+      }
+    },
     "cn": {
       "name": "呲你",
       "url": "eat/eatcn.png",
