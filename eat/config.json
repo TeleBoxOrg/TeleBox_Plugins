@@ -180,7 +180,7 @@
         "y": 63,
         "mask": "eat/maskqy.png"
       }
-    },    
+    },
     "ri": {
       "name": "日一下",
       "url": "https://github.com/FoKit/PagerMaid_Plugins/raw/modify/eat/eatri.png",
@@ -293,6 +293,24 @@
         "x": 55,
         "y": 52,
         "mask": "eat/maskyuyu.png"
+      }
+    },
+    "pr": {
+      "name": "prpr~",
+      "url": "eat/eatpr.png",
+      "you": {
+        "x": -15,
+        "y": 209,
+        "mask": "eat/maskpr.png"
+      }
+    },
+    "kf": {
+      "name": "狂粉",
+      "url": "eat/eatkf.png",
+      "you": {
+        "x": 115,
+        "y": 0,
+        "mask": "eat/maskkf.png"
       }
     }
   }
