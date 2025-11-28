@@ -299,8 +299,8 @@
       "name": "prpr~",
       "url": "eat/eatpr.png",
       "you": {
-        "x": 55,
-        "y": 52,
+        "x": -15,
+        "y": 209,
         "mask": "eat/maskpr.png"
       }
     },
@@ -308,8 +308,8 @@
       "name": "狂粉",
       "url": "eat/eatkf.png",
       "you": {
-        "x": 55,
-        "y": 52,
+        "x": 115,
+        "y": 0,
         "mask": "eat/maskkf.png"
       }
     }
