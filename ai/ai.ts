@@ -12,7 +12,20 @@ type Compat = "openai" | "gemini" | "claude";
 type Models = { chat: string; search: string; image: string; tts: string };
 type Telegraph = { enabled: boolean; limit: number; token: string; posts: { title: string; url: string; createdAt: string }[] };
 type VoiceConfig = { gemini: string; openai: string };
-type DB = { dataVersion?: number; providers: Record<string, Provider>; modelCompat?: Record<string, Record<string, Compat>>; modelCatalog?: { map: Record<string, Compat>; updatedAt?: string }; models: Models; contextEnabled: boolean; collapse: boolean; telegraph: Telegraph; voices?: VoiceConfig; histories: Record<string, { role: string; content: string }[]>; histMeta?: Record<string, { lastAt: string }> };
+type DB = { 
+  dataVersion?: number; 
+  providers: Record<string, Provider>; 
+  modelCompat?: Record<string, Record<string, Compat>>; 
+  modelCatalog?: { map: Record<string, Compat>; updatedAt?: string }; 
+  models: Models; 
+  contextEnabled: boolean; 
+  collapse: boolean; 
+  telegraph: Telegraph; 
+  voices?: VoiceConfig; 
+  histories: Record<string, { role: string; content: string }[]>; 
+  histMeta?: Record<string, { lastAt: string }>;
+  presetPrompt?: string;  // 新增：全局Prompt预设
+};
 
 const MAX_MSG = 4096;
 const PAGE_EXTRA = 48;
@@ -206,7 +219,8 @@ class Store {
     collapse: false,
     telegraph: { enabled: false, limit: 0, token: "", posts: [] },
     voices: { gemini: "Kore", openai: "alloy" },
-    histories: {}
+    histories: {},
+    presetPrompt: ""  // 新增：全局Prompt预设
   };
   static baseDir: string = "";
   static file: string = "";
@@ -220,10 +234,11 @@ class Store {
       contextEnabled: false, collapse: false,
       telegraph: { enabled: false, limit: 0, token: "", posts: [] },
       voices: { gemini: "Kore", openai: "alloy" },
-      histories: {}
+      histories: {},
+      presetPrompt: "You are a helpful assistance."  // 新增：全局Prompt预设
     });
     this.data = this.db.data;
-    // 数据结构迁移：dataVersion / modelCompat / histMeta
+    // 数据结构迁移：dataVersion / modelCompat / histMeta / presetPrompt
     const d: any = this.data;
     if (typeof d.dataVersion !== "number") d.dataVersion = 1;
     if (!d.providers) d.providers = {};
@@ -237,6 +252,7 @@ class Store {
     if (!d.voices) d.voices = { gemini: "Kore", openai: "alloy" };
     if (!d.histories) d.histories = {};
     if (!d.histMeta) d.histMeta = {};
+    if (typeof d.presetPrompt !== "string") d.presetPrompt = "";  // 新增：预设Prompt迁移
     if (d.dataVersion < 2) d.dataVersion = 2;
     if (d.dataVersion < 3) {
       try {
@@ -270,6 +286,10 @@ class Store {
     if (d.dataVersion < 4) {
       if (!d.voices) d.voices = { gemini: "Kore", openai: "alloy" };
       d.dataVersion = 4;
+    }
+    if (d.dataVersion < 5) {
+      if (typeof d.presetPrompt !== "string") d.presetPrompt = "";  // 确保presetPrompt存在
+      d.dataVersion = 5;
     }
     await this.writeSoon();
   }
@@ -536,7 +556,7 @@ function cleanTextBasic(t: string): string {
 function escapeAndFormatForTelegram(raw: string): string {
   const cleaned = cleanTextBasic(raw || "");
   let escaped = html(cleaned);
-  // 轻量级 Markdown → HTML 转换（仅针对“引用来源”常见格式）
+  // 轻量级 Markdown → HTML 转换（仅针对"引用来源"常见格式）
   // 加粗：**文本** → <b>文本</b>
   escaped = escaped.replace(/\*\*([^*]+)\*\*/g, '<b>$1</b>');
   // 标题别名：**[引用来源]** 或 **引用来源** → <b>引用来源</b>
@@ -557,7 +577,7 @@ function escapeAndFormatForTelegram(raw: string): string {
   escaped = escaped.replace(/^&gt;\s?(.+)$/gm, '<blockquote>$1</blockquote>');
   return escaped;
 }
-// 判断是否为“路由不存在”类错误；用于 /v1beta -> /v1 降级
+// 判断是否为"路由不存在"类错误；用于 /v1beta -> /v1 降级
 function isRouteError(err: any): boolean {
   const s = err?.response?.status;
   const txt = String(err?.response?.data || err?.message || "").toLowerCase();
@@ -1221,13 +1241,25 @@ async function listModelsByAnyCompat(p: Provider): Promise<{ models: string[]; c
   return { models: Array.from(merged.values()), compat: primary, compats, modelMap };
 }
 
+// 新增：应用预设Prompt到用户输入
+function applyPresetPrompt(userInput: string): string {
+  const preset = Store.data.presetPrompt || "";
+  if (!preset.trim()) return userInput;
+  
+  // 如果预设Prompt不为空，将其添加到用户输入前
+  return `${preset}\n\n${userInput}`;
+}
+
 async function callChat(kind: "chat" | "search", text: string, msg: Api.Message): Promise<{ content: string; model: string }> {
   const m = pick(kind); if (!m) throw new Error(`未设置${kind}模型，请先配置`);
   const p = providerOf(m.provider); if (!p) throw new Error(`服务商 ${m.provider} 未配置`);
   const compat = await resolveCompat(m.provider, m.model, p);
   const id = chatIdStr(msg); const msgs: { role: string; content: string }[] = [];
 
-  msgs.push({ role: "user", content: text });
+  // 应用预设Prompt到用户输入
+  const processedText = applyPresetPrompt(text);
+  
+  msgs.push({ role: "user", content: processedText });
   let out = "";
   try {
     const isSearch = kind === "search";
@@ -1243,7 +1275,7 @@ async function callChat(kind: "chat" | "search", text: string, msg: Api.Message)
   
   // 保存到本地历史记录（如果context开启）
   if (Store.data.contextEnabled) { 
-    pushHist(id, "user", text); 
+    pushHist(id, "user", text);  // 保存原始用户输入，不包含预设Prompt
     pushHist(id, "assistant", out); 
     await Store.writeSoon(); 
   }
@@ -1257,6 +1289,7 @@ const help = `🔧 📝 <b>特性</b>
 ✨ <b>亮点</b>
 • 🔀 模型混用：对话 / 搜索 / 图片 / 语音 可分别指定不同服务商的不同模型
 • 🧠 可选上下文记忆、📰 长文自动发布 Telegraph、🧾 消息折叠显示
+• 🎯 全局Prompt预设：为所有对话设置统一的系统提示词
 
 <blockquote expandable>💬 <b>对话</b>
 <code>ai chat [问题]</code>
@@ -1283,6 +1316,12 @@ const help = `🔧 📝 <b>特性</b>
 🔍🎤 <b>搜索并语音回答</b>
 <code>ai searchaudio [查询]</code>
 • 示例：<code>ai searchaudio 2024 年最新科技趋势</code>
+
+🎯 <b>全局Prompt预设</b>
+<code>ai prompt set [内容]</code> - 设置全局Prompt预设
+<code>ai prompt clear</code> - 清除全局Prompt预设
+<code>ai prompt show</code> - 显示当前Prompt预设
+• 预设将自动添加到所有对话请求前，适用于角色设定、回答风格等统一配置
 
 💭 <b>对话上下文</b>
 <code>ai context on|off|show|del</code>
@@ -1360,7 +1399,7 @@ class AiPlugin extends Plugin {
       };
       const subn = aliasMap[subl] || subl;
       const knownSubs = [
-        "config","model","context","collapse","telegraph","voice",
+        "config","model","context","collapse","telegraph","voice","prompt",  // 新增prompt
         "chat","search","image","tts","audio","searchaudio"
       ];
       const isUnknownBareQuery = !!subn && !knownSubs.includes(subn);
@@ -1372,6 +1411,46 @@ class AiPlugin extends Plugin {
           const compat = await resolveCompat(m.provider, m.model, p); return { m, p, compat };
         };
         
+        // 新增：Prompt预设管理
+        if (subn === "prompt") {
+          const a0 = (args[0] || "").toLowerCase();
+          
+          if (a0 === "set") {
+            const promptContent = args.slice(1).join(" ").trim();
+            if (!promptContent) {
+              await msg.edit({ text: "❌ 请提供预设Prompt内容", parseMode: "html" });
+              return;
+            }
+            Store.data.presetPrompt = promptContent;
+            await Store.writeSoon();
+            await msg.edit({ 
+              text: `✅ 已设置全局Prompt预设\n\n<blockquote expandable>${html(promptContent)}</blockquote>`, 
+              parseMode: "html" 
+            });
+            return;
+          }
+          
+          if (a0 === "clear") {
+            Store.data.presetPrompt = "";
+            await Store.writeSoon();
+            await msg.edit({ text: "✅ 已清除全局Prompt预设", parseMode: "html" });
+            return;
+          }
+          
+          if (a0 === "show") {
+            const currentPrompt = Store.data.presetPrompt || "";
+            if (!currentPrompt) {
+              await msg.edit({ text: "📝 当前未设置全局Prompt预设", parseMode: "html" });
+              return;
+            }
+            await sendLong(msg, `📝 <b>当前全局Prompt预设</b>\n\n<blockquote expandable>${html(currentPrompt)}</blockquote>`);
+            return;
+          }
+          
+          await msg.edit({ text: "❌ 未知 prompt 子命令\n支持: set|clear|show", parseMode: "html" });
+          return;
+        }
+        
         if (subn === "config") {
           if ((msg as any).isGroup || (msg as any).isChannel) { await msg.edit({ text: "❌ 为保护用户隐私，禁止在公共对话环境使用ai config所有子命令", parseMode: "html" }); return; }
           const a0 = (args[0] || "").toLowerCase();
@@ -1381,6 +1460,7 @@ class AiPlugin extends Plugin {
               `• 上下文: ${Store.data.contextEnabled ? "开启" : "关闭"}`,
               `• 折叠: ${Store.data.collapse ? "开启" : "关闭"}`,
               `• Telegraph: ${Store.data.telegraph.enabled ? "开启" : "关闭"}${Store.data.telegraph.enabled && Store.data.telegraph.limit ? `（阈值 ${Store.data.telegraph.limit}）` : ""}`,
+              `• Prompt预设: ${Store.data.presetPrompt ? "✅ 已设置" : "❌ 未设置"}`,
             ].join("\n");
             const provList = Object.entries(Store.data.providers)
               .map(([n, v]) => {
@@ -1802,7 +1882,9 @@ class AiPlugin extends Plugin {
               const buf: Buffer | undefined = Buffer.isBuffer(raw) ? raw as Buffer : (raw != null ? Buffer.from(String(raw)) : undefined);
               if (!buf || !buf.length) { await msg.edit({ text: "❌ 无法下载被回复的媒体", parseMode: "html" }); return; }
               const b64 = buf.toString('base64');
-              content = await chatVision(p, compat, m.model, b64, q);
+              // 对图片对话也应用预设Prompt
+              const processedPrompt = applyPresetPrompt(q || "描述这张图片");
+              content = await chatVision(p, compat, m.model, b64, processedPrompt);
             } catch (e: any) {
               await msg.edit({ text: `❌ 处理图片失败：${html(mapError(e, 'vision'))}`, parseMode: "html" }); return;
             }
