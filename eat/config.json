@@ -1,10 +1,4 @@
 {
-  "meta": {
-    "repo_owner": "TeleBoxDev",
-    "repo_name": "TeleBox_Plugins",
-    "branch": "main",
-    "base_url_template": "https://github.com/${repo_owner}/${repo_name}/raw/${branch}"
-  },
   "resources": {
     "ada": {
       "name": "给爷死",
@@ -311,6 +305,15 @@
         "x": 115,
         "y": 0,
         "mask": "eat/maskkf.png"
+      }
+    },
+    "mb": {
+      "name": "膜拜大佬",
+      "url": "eat/eatmb.png",
+      "you": {
+        "x": 275,
+        "y": 321,
+        "mask": "eat/maskmb.png"
       }
     }
   }
