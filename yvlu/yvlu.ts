@@ -304,7 +304,7 @@ class YvluPlugin extends Plugin {
           }
 
           const items = [] as any[];
-          let previousUserId: string | null = null;
+          let previousUserIdentifier: string | null = null;
 
           for await (const [i, message] of messages.entries()) {
             // 获取发送者信息
@@ -332,9 +332,12 @@ class YvluPlugin extends Plugin {
             const emojiStatus =
               (sender as any).emojiStatus?.documentId?.toString() || null;
 
+            // 生成用户唯一标识符：优先使用 userId，如果没有则使用名称的 hashCode
+            const currentUserIdentifier = userId || hashCode(name || `${firstName}|${lastName}` || `user_${i}`).toString();
+
             // 判断是否应该显示头像：只有当前用户与上一条消息的用户不同时才显示
-            const shouldShowAvatar = userId !== previousUserId;
-            previousUserId = userId;
+            const shouldShowAvatar = currentUserIdentifier !== previousUserIdentifier;
+            previousUserIdentifier = currentUserIdentifier;
 
             let photo = undefined;
             if (sender.photo && shouldShowAvatar) {
