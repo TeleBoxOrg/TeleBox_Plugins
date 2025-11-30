@@ -31,6 +31,10 @@
     "url": "kz/kz.json",
     "desc": "看来真得铐走你了"
   },
+  "md": {
+    "url": "md/md.json",
+    "desc": "耄耋耄耋"
+  },  
   "pz": {
     "url": "pz/pz.json",
     "desc": "柯文哲大怒拍桌"
