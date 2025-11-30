@@ -1,3 +1,10 @@
+/**
+ * TeleBox AI 插件（完美整合版）
+ * 兼容 OpenAI / Gemini / Claude / 百度 等标准接口
+ * 功能：对话、搜索、识图、生图、TTS、语音回答、全局 Prompt 预设、上下文记忆、 Telegraph 长文等
+ * 用法：.ai  或  .ai chat|search|image|tts|audio|searchaudio|prompt|config|model|...
+ * 2025-05 最终优化版
+ */
 import { Plugin } from "@utils/pluginBase";
 import { Api } from "telegram";
 import axios, { AxiosRequestConfig, AxiosResponse } from "axios";
@@ -6,18 +13,42 @@ import * as path from "path";
 import * as fs from "fs";
 import { createDirectoryInAssets } from "@utils/pathHelpers";
 
-// ---- 存储 ----
-type Provider = { apiKey: string; baseUrl: string; compatauth?: Compat; authMethod?: AuthMethod; authConfig?: AuthConfig };
+/* ---------- 类型定义 ---------- */
+type Provider = {
+  apiKey: string;
+  baseUrl: string;
+  compatauth?: Compat;
+  authMethod?: AuthMethod;
+  authConfig?: AuthConfig;
+};
 type Compat = "openai" | "gemini" | "claude";
 type Models = { chat: string; search: string; image: string; tts: string };
-type Telegraph = { enabled: boolean; limit: number; token: string; posts: { title: string; url: string; createdAt: string }[] };
+type Telegraph = {
+  enabled: boolean;
+  limit: number;
+  token: string;
+  posts: { title: string; url: string; createdAt: string }[];
+};
 type VoiceConfig = { gemini: string; openai: string };
-type DB = { dataVersion?: number; providers: Record<string, Provider>; modelCompat?: Record<string, Record<string, Compat>>; modelCatalog?: { map: Record<string, Compat>; updatedAt?: string }; models: Models; contextEnabled: boolean; collapse: boolean; telegraph: Telegraph; voices?: VoiceConfig; histories: Record<string, { role: string; content: string }[]>; histMeta?: Record<string, { lastAt: string }> };
+type DB = {
+  dataVersion?: number;
+  providers: Record<string, Provider>;
+  modelCompat?: Record<string, Record<string, Compat>>;
+  modelCatalog?: { map: Record<string, Compat>; updatedAt?: string };
+  models: Models;
+  contextEnabled: boolean;
+  collapse: boolean;
+  telegraph: Telegraph;
+  voices?: VoiceConfig;
+  histories: Record<string, { role: string; content: string }[]>;
+  histMeta?: Record<string, { lastAt: string }>;
+  presetPrompt?: string; // 全局 Prompt 预设
+};
 
+/* ---------- 常量 ---------- */
 const MAX_MSG = 4096;
 const PAGE_EXTRA = 48;
 const WRAP_EXTRA_COLLAPSED = 64;
-
 const GEMINI_VOICES = [
   "Zephyr", "Puck", "Charon", "Kore", "Fenrir", "Leda", "Orus", "Aoede",
   "Callirhoe", "Autonoe", "Enceladus", "Iapetus", "Umbriel", "Algieba",
@@ -25,39 +56,44 @@ const GEMINI_VOICES = [
   "Alnilam", "Schedar", "Gacrux", "Pulcherrima", "Achird", "Zubenelgenubi",
   "Vindemiatrix", "Sadachbia", "Sadaltager", "Sulafar"
 ] as const;
-
 const OPENAI_VOICES = ["alloy", "echo", "fable", "onyx", "nova", "shimmer"] as const;
+
+/* ---------- 工具函数 ---------- */
 const trimBase = (u: string) => u.replace(/\/$/, "");
-const html = (t: string) => t.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
-function escapeRegExp(s: string): string { return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"); }
-function shortenUrlForDisplay(u: string): string {
+const html = (t: string) =>
+  t.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+const escapeRegExp = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+const shortenUrlForDisplay = (u: string) => {
   try {
     const url = new URL(u);
     const host = url.hostname;
     const path = url.pathname && url.pathname !== "/" ? url.pathname : "";
     let text = host + path;
-    if (text.length > 60) {
-      const head = text.slice(0, 45);
-      const tail = text.slice(-10);
-      text = head + "…" + tail;
-    }
+    if (text.length > 60) text = text.slice(0, 45) + "…" + text.slice(-10);
     return text || u;
   } catch {
-    return u.length > 60 ? (u.slice(0, 45) + "…" + u.slice(-10)) : u;
+    return u.length > 60 ? u.slice(0, 45) + "…" + u.slice(-10) : u;
   }
-}
+};
 const nowISO = () => new Date().toISOString();
 const sleep = (ms: number) => new Promise<void>(res => setTimeout(res, ms));
-function shouldRetry(err: any): boolean {
+const shouldRetry = (err: any): boolean => {
   const s = err?.response?.status;
   const code = err?.code;
-  return s === 429 || s === 500 || s === 502 || s === 503 || s === 504 ||
-         code === "ECONNRESET" || code === "ETIMEDOUT" || code === "ENOTFOUND" ||
-         !!(err?.isAxiosError && !err?.response);
-}
-async function axiosWithRetry<T = any>(config: AxiosRequestConfig, tries = 2, backoffMs = 500): Promise<AxiosResponse<T>> {
-  let attempt = 0; let lastErr: any;
-  const defaultTimeout = config.url?.includes('/messages') ? 90000 : 30000;
+  return (
+    s === 429 || s === 500 || s === 502 || s === 503 || s === 504 ||
+    code === "ECONNRESET" || code === "ETIMEDOUT" || code === "ENOTFOUND" ||
+    !!(err?.isAxiosError && !err?.response)
+  );
+};
+const axiosWithRetry = async <T = any>(
+  config: AxiosRequestConfig,
+  tries = 2,
+  backoffMs = 500
+): Promise<AxiosResponse<T>> => {
+  let attempt = 0;
+  let lastErr: any;
+  const defaultTimeout = config.url?.includes("/messages") ? 90000 : 30000;
   const baseConfig: AxiosRequestConfig = { timeout: defaultTimeout, ...config };
   while (attempt <= tries) {
     try {
@@ -71,27 +107,25 @@ async function axiosWithRetry<T = any>(config: AxiosRequestConfig, tries = 2, ba
     }
   }
   throw lastErr;
-}
+};
 
-// 原子 JSON 写入：写临时文件后 rename 覆盖，避免部分写入
-async function atomicWriteJSON(file: string, data: any) {
+/* ---------- 原子 JSON 写入 ---------- */
+const atomicWriteJSON = async (file: string, data: any) => {
   const dir = path.dirname(file);
   if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
   const tmp = file + ".tmp";
-  const json = JSON.stringify(data, null, 2);
-  await fs.promises.writeFile(tmp, json, { encoding: "utf8" });
+  await fs.promises.writeFile(tmp, JSON.stringify(data, null, 2), "utf8");
   await fs.promises.rename(tmp, file);
-}
+};
 
-// 通用权鉴处理器枚举和接口
+/* ---------- 通用鉴权 ---------- */
 enum AuthMethod {
   BEARER_TOKEN = "bearer_token",
-  API_KEY_HEADER = "api_key_header", 
+  API_KEY_HEADER = "api_key_header",
   QUERY_PARAM = "query_param",
   BASIC_AUTH = "basic_auth",
   CUSTOM_HEADER = "custom_header"
 }
-
 interface AuthConfig {
   method: AuthMethod;
   apiKey: string;
@@ -100,103 +134,76 @@ interface AuthConfig {
   username?: string;
   password?: string;
 }
-
-// 通用权鉴处理器
 class UniversalAuthHandler {
   static buildAuthHeaders(config: AuthConfig): Record<string, string> {
     const headers: Record<string, string> = {};
-    
     switch (config.method) {
       case AuthMethod.BEARER_TOKEN:
         headers["Authorization"] = `Bearer ${config.apiKey}`;
         break;
       case AuthMethod.API_KEY_HEADER:
-        const headerName = config.headerName || "X-API-Key";
-        headers[headerName] = config.apiKey;
+        headers[config.headerName || "X-API-Key"] = config.apiKey;
         break;
       case AuthMethod.CUSTOM_HEADER:
-        if (config.headerName) {
-          headers[config.headerName] = config.apiKey;
-        }
+        if (config.headerName) headers[config.headerName] = config.apiKey;
         break;
       case AuthMethod.BASIC_AUTH:
-        const credentials = Buffer.from(`${config.username || config.apiKey}:${config.password || ""}`).toString('base64');
-        headers["Authorization"] = `Basic ${credentials}`;
+        headers["Authorization"] = `Basic ${Buffer.from(
+          `${config.username || config.apiKey}:${config.password || ""}`
+        ).toString("base64")}`;
         break;
     }
-    
     return headers;
   }
-  
   static buildAuthParams(config: AuthConfig): Record<string, string> {
     const params: Record<string, string> = {};
-    
     if (config.method === AuthMethod.QUERY_PARAM) {
-      const paramName = config.paramName || "key";
-      params[paramName] = config.apiKey;
+      params[config.paramName || "key"] = config.apiKey;
     }
-    
     return params;
   }
-  
-  static detectAuthMethod(baseUrl: string, _apiKey: string): AuthMethod {
+  static detectAuthMethod(baseUrl: string): AuthMethod {
     const url = baseUrl.toLowerCase();
-    
-    // 谷歌 Gemini 接口
-    if (url.includes("generativelanguage.googleapis.com") || url.includes("aiplatform.googleapis.com")) {
+    if (url.includes("generativelanguage.googleapis.com") || url.includes("aiplatform.googleapis.com"))
       return AuthMethod.QUERY_PARAM;
-    }
-    
-    // Anthropic Claude 接口
-    if (url.includes("anthropic.com")) {
-      return AuthMethod.API_KEY_HEADER;
-    }
-    
-    // 百度文心一言
-    if (url.includes("aip.baidubce.com")) {
-      return AuthMethod.QUERY_PARAM;
-    }
-    
-    // 默认使用Bearer Token（适用于OpenAI及大多数兼容接口）
+    if (url.includes("anthropic.com")) return AuthMethod.API_KEY_HEADER;
+    if (url.includes("aip.baidubce.com")) return AuthMethod.QUERY_PARAM;
     return AuthMethod.BEARER_TOKEN;
   }
 }
 
-// 统一的鉴权尝试构建器
-function buildAuthAttempts(p: Provider, extraHeaders: Record<string, string> = {}) {
+/* ---------- 统一鉴权构建 ---------- */
+const buildAuthAttempts = (p: Provider, extraHeaders: Record<string, string> = {}) => {
   if (p.authConfig) {
-    const authHeaders = UniversalAuthHandler.buildAuthHeaders(p.authConfig);
-    const authParams = UniversalAuthHandler.buildAuthParams(p.authConfig);
-    return [{ headers: { ...authHeaders, ...extraHeaders }, params: authParams }];
+    const headers = { ...UniversalAuthHandler.buildAuthHeaders(p.authConfig), ...extraHeaders };
+    const params = { ...UniversalAuthHandler.buildAuthParams(p.authConfig) };
+    return [{ headers, params }];
   }
-  
-  // 智能检测权鉴方式
-  const detectedMethod = UniversalAuthHandler.detectAuthMethod(p.baseUrl, p.apiKey);
-  const authConfig: AuthConfig = {
-    method: detectedMethod,
+  const detected = UniversalAuthHandler.detectAuthMethod(p.baseUrl);
+  const cfg: AuthConfig = {
+    method: detected,
     apiKey: p.apiKey,
-    headerName: detectedMethod === AuthMethod.API_KEY_HEADER ? "x-api-key" : undefined,
-    paramName: detectedMethod === AuthMethod.QUERY_PARAM ? "key" : undefined
+    headerName: detected === AuthMethod.API_KEY_HEADER ? "x-api-key" : undefined,
+    paramName: detected === AuthMethod.QUERY_PARAM ? "key" : undefined
   };
-  
-  const smartAuthHeaders = UniversalAuthHandler.buildAuthHeaders(authConfig);
-  const smartAuthParams = UniversalAuthHandler.buildAuthParams(authConfig);
-  
-  return [{ headers: { ...smartAuthHeaders, ...extraHeaders }, params: smartAuthParams }];
-}
-async function tryPostJSON(url: string, body: any, attempts: Array<{ headers?: any; params?: any }>): Promise<any> {
+  const headers = { ...UniversalAuthHandler.buildAuthHeaders(cfg), ...extraHeaders };
+  const params = { ...UniversalAuthHandler.buildAuthParams(cfg) };
+  return [{ headers, params }];
+};
+const tryPostJSON = async (url: string, body: any, attempts: Array<{ headers?: any; params?: any }>) => {
   let lastErr: any;
   for (const a of attempts) {
     try {
       const r = await axiosWithRetry({ method: "POST", url, data: body, ...(a || {}) });
       return r.data;
-    } catch (err: any) {
+    } catch (err) {
       lastErr = err;
     }
   }
   throw lastErr;
-}
+};
 
+/* ---------- lowdb 封装 ---------- */
 class Store {
   static db: any = null;
   static data: DB = {
@@ -206,28 +213,21 @@ class Store {
     collapse: false,
     telegraph: { enabled: false, limit: 0, token: "", posts: [] },
     voices: { gemini: "Kore", openai: "alloy" },
-    histories: {}
+    histories: {},
+    presetPrompt: ""
   };
-  static baseDir: string = "";
-  static file: string = "";
+  static baseDir = "";
+  static file = "";
   static async init() {
     if (this.db) return;
     this.baseDir = createDirectoryInAssets("ai");
     this.file = path.join(this.baseDir, "config.json");
-    this.db = await JSONFilePreset<DB>(this.file, {
-      providers: {},
-      models: { chat: "", search: "", image: "", tts: "" },
-      contextEnabled: false, collapse: false,
-      telegraph: { enabled: false, limit: 0, token: "", posts: [] },
-      voices: { gemini: "Kore", openai: "alloy" },
-      histories: {}
-    });
+    this.db = await JSONFilePreset<DB>(this.file, this.data);
     this.data = this.db.data;
-    // 数据结构迁移：dataVersion / modelCompat / histMeta
+    // 迁移逻辑
     const d: any = this.data;
     if (typeof d.dataVersion !== "number") d.dataVersion = 1;
     if (!d.providers) d.providers = {};
-    if ((d as any).compat) delete (d as any).compat;
     if (!d.modelCompat) d.modelCompat = {};
     if (!d.modelCatalog) d.modelCatalog = { map: {}, updatedAt: undefined };
     if (!d.models) d.models = { chat: "", search: "", image: "", tts: "" };
@@ -237,40 +237,14 @@ class Store {
     if (!d.voices) d.voices = { gemini: "Kore", openai: "alloy" };
     if (!d.histories) d.histories = {};
     if (!d.histMeta) d.histMeta = {};
+    if (typeof d.presetPrompt !== "string") d.presetPrompt = "";
     if (d.dataVersion < 2) d.dataVersion = 2;
     if (d.dataVersion < 3) {
-      try {
-        await refreshModelCatalog(true);
-        const catMap: Record<string, Compat> = (((Store.data.modelCatalog?.map) || {}) as Record<string, Compat>);
-        const providers = Store.data.providers || {};
-        const mc = Store.data.modelCompat || {};
-        for (const [prov, mm] of Object.entries(mc)) {
-          const provCfg = (providers as any)[prov] as Provider | undefined;
-          const base = provCfg?.baseUrl || "";
-          const dict = mm as Record<string, Compat>;
-          for (const [k0, v0] of Object.entries(dict)) {
-            const k = String(k0 || "").toLowerCase();
-            const cur = v0 as Compat;
-            const cat = (catMap as any)[k] as Compat | undefined;
-            if (cat && cat !== cur) {
-              dict[k] = cat;
-              continue;
-            }
-            if (!cat && cur === "openai") {
-              const inf = detectCompat(prov, k, base);
-              if (inf === "gemini" || inf === "claude") {
-                dict[k] = inf;
-              }
-            }
-          }
-        }
-      } catch {}
+      try { await refreshModelCatalog(true); } catch {}
       d.dataVersion = 3;
     }
-    if (d.dataVersion < 4) {
-      if (!d.voices) d.voices = { gemini: "Kore", openai: "alloy" };
-      d.dataVersion = 4;
-    }
+    if (d.dataVersion < 4) { if (!d.voices) d.voices = { gemini: "Kore", openai: "alloy" }; d.dataVersion = 4; }
+    if (d.dataVersion < 5) { if (typeof d.presetPrompt !== "string") d.presetPrompt = ""; d.dataVersion = 5; }
     await this.writeSoon();
   }
   static async write() { await atomicWriteJSON(this.file, this.data); }
@@ -285,20 +259,19 @@ class Store {
   }
 }
 
-function applyWrap(s: string, collapse?: boolean) { 
-  if (!collapse) return s; 
-  if (/<blockquote(?:\s|>|\/)\/?>/i.test(s) || /<blockquote(?:\s|>|\/)/i.test(s)) return s; 
-  return `<span class="tg-spoiler">${s}</span>`; 
-}
-// 构建分片，可选折叠包装与页脚；最后一片附加后缀（若提供）
-function buildChunks(text: string, collapse?: boolean, postfix?: string): string[] {
+/* ---------- 消息分片 & 折叠 ---------- */
+const applyWrap = (s: string, collapse?: boolean) => {
+  if (!collapse) return s;
+  if (/<blockquote(?:\s|>|\/)\/?>/i.test(s)) return s;
+  return `<span class="tg-spoiler">${s}</span>`;
+};
+const buildChunks = (text: string, collapse?: boolean, postfix?: string) => {
   const WRAP_EXTRA = collapse ? WRAP_EXTRA_COLLAPSED : 0;
   const parts = splitMessage(text, PAGE_EXTRA + WRAP_EXTRA);
   if (parts.length === 0) return [];
-  if (parts.length === 1) {
-    return [applyWrap(parts[0], collapse) + (postfix || "")];
-  }
-  const total = parts.length; const chunks: string[] = [];
+  if (parts.length === 1) return [applyWrap(parts[0], collapse) + (postfix || "")];
+  const total = parts.length;
+  const chunks: string[] = [];
   for (let i = 0; i < total; i++) {
     const isLast = i === total - 1;
     const header = `📄 (${i + 1}/${total})\n\n`;
@@ -307,37 +280,31 @@ function buildChunks(text: string, collapse?: boolean, postfix?: string): string
     chunks.push(wrapped);
   }
   return chunks;
-}
-// 确保页脚不被折叠：通过 sendLong 系列在折叠外追加
-async function sendLong(msg: Api.Message, text: string, opts?: { collapse?: boolean }, postfix?: string) {
+};
+const sendLong = async (msg: Api.Message, text: string, opts?: { collapse?: boolean }, postfix?: string) => {
   const chunks = buildChunks(text, opts?.collapse, postfix);
   if (chunks.length === 0) return;
   if (chunks.length === 1) { await msg.edit({ text: chunks[0], parseMode: "html" }); return; }
   await msg.edit({ text: chunks[0], parseMode: "html" });
   if (msg.client) {
     const peer = msg.peerId;
-    for (let i = 1; i < chunks.length; i++) {
-      await msg.client.sendMessage(peer, { message: chunks[i], parseMode: "html" });
-    }
+    for (let i = 1; i < chunks.length; i++) await msg.client.sendMessage(peer, { message: chunks[i], parseMode: "html" });
   } else {
-    for (let i = 1; i < chunks.length; i++) {
-      await msg.reply({ message: chunks[i], parseMode: "html" });
-    }
+    for (let i = 1; i < chunks.length; i++) await msg.reply({ message: chunks[i], parseMode: "html" });
   }
-}
-async function sendLongReply(msg: Api.Message, replyToId: number, text: string, opts?: { collapse?: boolean }, postfix?: string) {
+};
+const sendLongReply = async (msg: Api.Message, replyToId: number, text: string, opts?: { collapse?: boolean }, postfix?: string) => {
   const chunks = buildChunks(text, opts?.collapse, postfix);
-  if (!msg.client) return; const peer = msg.peerId;
-  for (const chunk of chunks) {
-    await msg.client.sendMessage(peer, { message: chunk, parseMode: "html", replyTo: replyToId });
-  }
-}
-function extractText(m: Api.Message | null | undefined): string {
+  if (!msg.client) return;
+  const peer = msg.peerId;
+  for (const chunk of chunks) await msg.client.sendMessage(peer, { message: chunk, parseMode: "html", replyTo: replyToId });
+};
+const extractText = (m: Api.Message | null | undefined) => {
   if (!m) return "";
-  const anyM: any = m as any;
+  const anyM: any = m;
   return (anyM.message || anyM.text || anyM.caption || "");
-}
-function splitMessage(text: string, reserve = 0): string[] {
+};
+const splitMessage = (text: string, reserve = 0) => {
   const limit = Math.max(1, MAX_MSG - Math.max(0, reserve));
   if (text.length <= limit) return [text];
   const parts: string[] = [];
@@ -353,23 +320,26 @@ function splitMessage(text: string, reserve = 0): string[] {
   }
   if (cur) parts.push(cur);
   return parts;
-}
-function detectCompat(_name: string, model: string, _baseUrl: string): Compat {
+};
+
+/* ---------- 兼容类型检测 ---------- */
+const detectCompat = (_name: string, model: string, _baseUrl: string): Compat => {
   const m = (model || "").toLowerCase();
   if (/\bclaude\b|anthropic/.test(m)) return "claude";
   if (/\bgemini\b|(^gemini-)|image-generation/.test(m)) return "gemini";
   if (/(^gpt-|gpt-4o|gpt-image|dall-e|^tts-1\b)/.test(m)) return "openai";
   return "openai";
-}
-// 新增：全局模型目录（catalog）与查询/刷新
+};
+
+/* ---------- 模型目录 ---------- */
 const catalogInflight: { refreshing: boolean; lastPromise: Promise<void> | null } = { refreshing: false, lastPromise: null };
-function getCompatFromCatalog(model: string): Compat | null {
+const getCompatFromCatalog = (model: string): Compat | null => {
   const ml = String(model || "").toLowerCase();
   const map = Store.data.modelCatalog?.map || ({} as Record<string, Compat>);
   const v = (map as any)[ml] as Compat | undefined;
   return v ?? null;
-}
-async function refreshModelCatalog(force = false): Promise<void> {
+};
+const refreshModelCatalog = async (force = false): Promise<void> => {
   if (!force && catalogInflight.refreshing) return catalogInflight.lastPromise || Promise.resolve();
   catalogInflight.refreshing = true;
   const work = (async () => {
@@ -380,9 +350,7 @@ async function refreshModelCatalog(force = false): Promise<void> {
         try {
           const res = await listModelsByAnyCompat(p);
           const mp: Record<string, Compat> = (((res as any).modelMap) || {}) as Record<string, Compat>;
-          for (const [k, v] of (Object.entries(mp) as Array<[string, Compat]>)) {
-            merged[k] = v;
-          }
+          for (const [k, v] of Object.entries(mp)) merged[k] = v;
         } catch {}
       }
       const catalog = (Store.data.modelCatalog ??= { map: {}, updatedAt: undefined } as any);
@@ -396,9 +364,9 @@ async function refreshModelCatalog(force = false): Promise<void> {
   })();
   catalogInflight.lastPromise = work;
   return work;
-}
+};
 const compatResolving = new Map<string, Promise<Compat>>();
-async function resolveCompat(name: string, model: string, p: Provider): Promise<Compat> {
+const resolveCompat = async (name: string, model: string, p: Provider): Promise<Compat> => {
   const ml = String(model || "").toLowerCase();
   const cat = getCompatFromCatalog(ml);
   if (cat) return cat;
@@ -415,27 +383,27 @@ async function resolveCompat(name: string, model: string, p: Provider): Promise<
       const map: Record<string, Compat> = (((res as any).modelMap) || {}) as Record<string, Compat>;
       if (!Store.data.modelCompat) Store.data.modelCompat = {} as any;
       if (!(Store.data.modelCompat as any)[name]) (Store.data.modelCompat as any)[name] = {} as any;
-
       for (const [k, v] of Object.entries(map)) {
         const cur = (Store.data.modelCompat as any)[name][k] as Compat | undefined;
-        if (cur !== v) { (Store.data.modelCompat as any)[name][k] = v; }
+        if (cur !== v) (Store.data.modelCompat as any)[name][k] = v;
       }
       let comp: Compat = (Store.data.modelCompat as any)[name][ml] as Compat;
       if (!comp) comp = (primary as Compat) || byName;
-      if (((Store.data.modelCompat as any)[name][ml] as Compat | undefined) !== comp) { (Store.data.modelCompat as any)[name][ml] = comp; }
+      if (((Store.data.modelCompat as any)[name][ml] as Compat | undefined) !== comp) (Store.data.modelCompat as any)[name][ml] = comp;
       const cat = (Store.data.modelCatalog ??= { map: {}, updatedAt: undefined } as any);
       const catMap = (cat as any).map as Record<string, Compat>;
-      for (const [k, v] of Object.entries(map)) { if ((catMap as any)[k] !== v) (catMap as any)[k] = v as Compat; }
+      for (const [k, v] of Object.entries(map)) if ((catMap as any)[k] !== v) (catMap as any)[k] = v as Compat;
       if ((catMap as any)[ml] !== comp) (catMap as any)[ml] = comp;
       (cat as any).updatedAt = nowISO();
-      if (primary && p) { if (p.compatauth !== primary) { p.compatauth = primary; } }
+      if (primary && p) if (p.compatauth !== primary) p.compatauth = primary;
       await Store.writeSoon();
       return comp;
     } catch {
       const comp: Compat = byName;
       if (!Store.data.modelCompat) Store.data.modelCompat = {} as any;
       if (!(Store.data.modelCompat as any)[name]) (Store.data.modelCompat as any)[name] = {} as any;
-      if (!(Store.data.modelCompat as any)[name][ml]) { (Store.data.modelCompat as any)[name][ml] = comp; try { await Store.writeSoon(); } catch {} }
+      if (!(Store.data.modelCompat as any)[name][ml]) (Store.data.modelCompat as any)[name][ml] = comp;
+      try { await Store.writeSoon(); } catch {}
       setTimeout(() => { void refreshModelCatalog(false).catch(() => {}); }, 0);
       return comp;
     } finally {
@@ -445,9 +413,10 @@ async function resolveCompat(name: string, model: string, p: Provider): Promise<
   })();
   compatResolving.set(name + "::" + ml, task);
   return await task;
-}
-// 统一错误提示映射
-function mapError(err: any, ctx?: string): string {
+};
+
+/* ---------- 错误映射 ---------- */
+const mapError = (err: any, ctx?: string): string => {
   const s = err?.response?.status as number | undefined;
   const body = err?.response?.data;
   const raw = body?.error?.message || body?.message || err?.message || String(err);
@@ -459,31 +428,44 @@ function mapError(err: any, ctx?: string): string {
   else if (!s) hint = "网络异常，请检查网络或 BaseURL";
   const where = ctx ? `（${ctx}）` : "";
   return `${raw}${hint ? "｜" + hint : ""}${s ? `｜HTTP ${s}` : ""}${where}`;
-}
-// 规范化模型 id/name，提取短名用于显示与配置
-function normalizeModelName(x: any): string {
+};
+
+/* ---------- 模型名规范化 ---------- */
+const normalizeModelName = (x: any): string => {
   let s = String(x?.id || x?.slug || x?.name || x || "");
   s = s.trim();
-  // 防御性处理：去除查询参数与片段
-  const q = s.indexOf("?"); if (q >= 0) s = s.slice(0, q);
-  const h = s.indexOf("#"); if (h >= 0) s = s.slice(0, h);
-  // 常见前缀：models/<id>、publishers/.../models/<id>、projects/.../locations/.../models/<id>
-  if (s.includes("/")) s = (s.split("/").pop() || s);
+  const q = s.indexOf("?");
+  if (q >= 0) s = s.slice(0, q);
+  const h = s.indexOf("#");
+  if (h >= 0) s = s.slice(0, h);
+  if (s.includes("/")) s = s.split("/").pop() || s;
   return s.trim();
-}
-function pick(kind: keyof Models): { provider: string; model: string } | null {
-  const s = Store.data.models[kind]; if (!s) return null; const i = s.indexOf(" "); if (i <= 0) return null;
-  const provider = s.slice(0, i); const model = s.slice(i + 1);
+};
+
+/* ---------- 快捷选取 ---------- */
+const pick = (kind: keyof Models): { provider: string; model: string } | null => {
+  const s = Store.data.models[kind];
+  if (!s) return null;
+  const i = s.indexOf(" ");
+  if (i <= 0) return null;
+  const provider = s.slice(0, i);
+  const model = s.slice(i + 1);
   return { provider, model };
-}
-function providerOf(name: string): Provider | null { return Store.data.providers[name] || null; }
-function footer(model: string, extra?: string) { const src = model.toLowerCase().includes("claude") ? "Anthropic Claude" : model.toLowerCase().includes("gemini") ? "Google Gemini" : "OpenAI"; return `\n\n<i>Powered by ${src}${extra ? " " + extra : ""}</i>`; }
-function ensureDir() { if (!fs.existsSync(Store.baseDir)) fs.mkdirSync(Store.baseDir, { recursive: true }); }
-function chatIdStr(msg: Api.Message) { return String((msg.peerId as any)?.channelId || (msg.peerId as any)?.userId || (msg.peerId as any)?.chatId || "global"); }
-function histFor(id: string) { return Store.data.histories[id] || []; }
+};
+const providerOf = (name: string): Provider | null => Store.data.providers[name] || null;
+const footer = (model: string, extra?: string) => {
+  const src = model.toLowerCase().includes("claude") ? "Anthropic Claude" : model.toLowerCase().includes("gemini") ? "Google Gemini" : "OpenAI";
+  return `\n\n<i>Powered by ${src}${extra ? " " + extra : ""}</i>`;
+};
+const ensureDir = () => {
+  if (!fs.existsSync(Store.baseDir)) fs.mkdirSync(Store.baseDir, { recursive: true });
+};
+const chatIdStr = (msg: Api.Message) =>
+  String((msg.peerId as any)?.channelId || (msg.peerId as any)?.userId || (msg.peerId as any)?.chatId || "global");
+const histFor = (id: string) => Store.data.histories[id] || [];
 const HISTORY_GLOBAL_MAX_SESSIONS = 200;
-const HISTORY_GLOBAL_MAX_BYTES = 2 * 1024 * 1024; // 2MB
-function pruneGlobalHistories() {
+const HISTORY_GLOBAL_MAX_BYTES = 2 * 1024 * 1024;
+const pruneGlobalHistories = () => {
   const ids = Object.keys(Store.data.histories || {});
   if (!ids.length) return;
   const meta = (Store.data.histMeta || {}) as Record<string, { lastAt: string }>;
@@ -493,9 +475,8 @@ function pruneGlobalHistories() {
   for (const id of ids) totalBytes += sizeOfHist(Store.data.histories[id] || []);
   if (ids.length <= HISTORY_GLOBAL_MAX_SESSIONS && totalBytes <= HISTORY_GLOBAL_MAX_BYTES) return;
   const sorted = ids.sort((a, b) => {
-    const mm = meta || {} as Record<string, { lastAt: string }>;
-    const ta = Date.parse(mm[a]?.lastAt || "1970-01-01T00:00:00.000Z");
-    const tb = Date.parse(mm[b]?.lastAt || "1970-01-01T00:00:00.000Z");
+    const ta = Date.parse((meta[a]?.lastAt) || "1970-01-01T00:00:00.000Z");
+    const tb = Date.parse((meta[b]?.lastAt) || "1970-01-01T00:00:00.000Z");
     return ta - tb;
   });
   while ((sorted.length > HISTORY_GLOBAL_MAX_SESSIONS || totalBytes > HISTORY_GLOBAL_MAX_BYTES) && sorted.length) {
@@ -505,14 +486,14 @@ function pruneGlobalHistories() {
     delete Store.data.histories[victim];
     if (Store.data.histMeta) delete Store.data.histMeta[victim];
   }
-}
-function pushHist(id: string, role: string, content: string) {
+};
+const pushHist = (id: string, role: string, content: string) => {
   if (!Store.data.histories[id]) Store.data.histories[id] = [];
   Store.data.histories[id].push({ role, content });
   const h = Store.data.histories[id];
   const MAX_ITEMS = 50;
   while (h.length > MAX_ITEMS) h.shift();
-  const MAX_BYTES = 64 * 1024; // 64KB
+  const MAX_BYTES = 64 * 1024;
   const sizeOf = (x: { role: string; content: string }) => Buffer.byteLength(`${x.role}:${x.content}`);
   let total = 0;
   for (const x of h) total += sizeOf(x);
@@ -520,28 +501,22 @@ function pushHist(id: string, role: string, content: string) {
   if (!Store.data.histMeta) Store.data.histMeta = {} as any;
   (Store.data.histMeta as any)[id] = { lastAt: new Date().toISOString() };
   pruneGlobalHistories();
-}
-// 基础文本清理（去除不可见字符、统一换行与标准化）
-function cleanTextBasic(t: string): string {
-  if (!t) return "";
-  return t
+};
+
+/* ---------- 文本清理 & 格式化 ---------- */
+const cleanTextBasic = (t: string): string =>
+  t
     .replace(/\uFEFF/g, "")
     .replace(/[\uFFFC\uFFFF\uFFFE]/g, "")
     .replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, "")
     .replace(/\r\n/g, "\n")
     .replace(/[\u200B\u200C\u200D\u2060]/g, "")
-    .normalize('NFKC');
-}
-// 转义为 HTML，并将纯文本 URL 转为 <a> 链接；行首 > 转为引用块
-function escapeAndFormatForTelegram(raw: string): string {
+    .normalize("NFKC");
+const escapeAndFormatForTelegram = (raw: string): string => {
   const cleaned = cleanTextBasic(raw || "");
   let escaped = html(cleaned);
-  // 轻量级 Markdown → HTML 转换（仅针对“引用来源”常见格式）
-  // 加粗：**文本** → <b>文本</b>
-  escaped = escaped.replace(/\*\*([^*]+)\*\*/g, '<b>$1</b>');
-  // 标题别名：**[引用来源]** 或 **引用来源** → <b>引用来源</b>
-  escaped = escaped.replace(/\*\*\s*\[?引用来源]?\s*\*\*/g, '<b>引用来源</b>');
-  // 列表链接：- [标题](URL) → • <a href="URL">标题</a>
+  escaped = escaped.replace(/\*\*([^*]+)\*\*/g, "<b>$1</b>");
+  escaped = escaped.replace(/\*\*\s*\[?引用来源]?\s*\*\*/g, "<b>引用来源</b>");
   escaped = escaped.replace(/^\s*-\s*\[([^]]+)]\((https?:\/\/[^\s)]+)\)\s*$/gm, (_m, title: string, url: string) => {
     const href = html(String(url));
     return `• <a href="${href}">${title}</a>`;
@@ -554,17 +529,17 @@ function escapeAndFormatForTelegram(raw: string): string {
     const anchor = `<a href="${html(u)}">${html(display)}</a>`;
     escaped = escaped.replace(new RegExp(escapeRegExp(escapedUrl), "g"), anchor);
   }
-  escaped = escaped.replace(/^&gt;\s?(.+)$/gm, '<blockquote>$1</blockquote>');
+  escaped = escaped.replace(/^&gt;\s?(.+)$/gm, "<blockquote>$1</blockquote>");
   return escaped;
-}
-// 判断是否为“路由不存在”类错误；用于 /v1beta -> /v1 降级
-function isRouteError(err: any): boolean {
+};
+
+/* ---------- 路由降级 ---------- */
+const isRouteError = (err: any): boolean => {
   const s = err?.response?.status;
   const txt = String(err?.response?.data || err?.message || "").toLowerCase();
   return s === 404 || s === 405 || (s === 400 && /(unknown|not found|invalid path|no route)/.test(txt));
-}
-// 通用：Gemini 从 /v1beta -> /v1 的降级请求助手，并在鉴权方式间回退（params.key 与 Authorization Bearer 互换）
-async function geminiRequestWithFallback(p: Provider, path: string, axiosConfig: any): Promise<any> {
+};
+const geminiRequestWithFallback = async (p: Provider, path: string, axiosConfig: any): Promise<any> => {
   const base = trimBase(p.baseUrl);
   const mkConfigs = () => {
     const baseCfg = { ...axiosConfig };
@@ -575,7 +550,8 @@ async function geminiRequestWithFallback(p: Provider, path: string, axiosConfig:
     const cfgAuth = { ...baseCfg, headers: { ...headersBase, Authorization: `Bearer ${p.apiKey}` }, params: { ...paramsBase } };
     const pref = p.compatauth;
     const ordered = (pref === "openai" || pref === "claude") ? [cfgAuth, cfgXGoog, cfgKey] : [cfgKey, cfgXGoog, cfgAuth];
-    const seen = new Set<string>(); const out: any[] = [];
+    const seen = new Set<string>();
+    const out: any[] = [];
     for (const c of ordered) {
       const sig = JSON.stringify({ h: c.headers || {}, p: c.params || {} });
       if (!seen.has(sig)) { seen.add(sig); out.push(c); }
@@ -597,10 +573,11 @@ async function geminiRequestWithFallback(p: Provider, path: string, axiosConfig:
     }
   }
   throw lastErr;
-}
-// 动态发现并缓存 Anthropic 版本
+};
+
+/* ---------- Anthropic 版本缓存 ---------- */
 const anthropicVersionCache = new Map<string, string>();
-async function getAnthropicVersion(p: Provider): Promise<string> {
+const getAnthropicVersion = async (p: Provider): Promise<string> => {
   const key = trimBase(p.baseUrl) || "anthropic";
   const cached = anthropicVersionCache.get(key);
   if (cached) return cached;
@@ -618,29 +595,36 @@ async function getAnthropicVersion(p: Provider): Promise<string> {
   }
   anthropicVersionCache.set(key, ver);
   return ver;
-}
-function formatQA(qRaw: string, aRaw: string): string {
-  const expandAttr = Store.data.collapse ? " expandable" : "";
+};
+
+/* ---------- 格式化 Q&A ---------- */
+const formatQA = (qRaw: string, aRaw: string) => {
+  const expandAttr = Store.data.collapse ? ' expandable' : "";
   const qEsc = escapeAndFormatForTelegram(qRaw);
   const aEsc = escapeAndFormatForTelegram(aRaw);
   const Q = `<b>Q:</b>\n<blockquote${expandAttr}>${qEsc}</blockquote>`;
   const A = `<b>A:</b>\n<blockquote${expandAttr}>${aEsc}</blockquote>`;
   return `${Q}\n\n${A}`;
-}
+};
 
-function toNodes(text: string) { return JSON.stringify(text.split("\n\n").map(p => ({ tag: "p", children: [p] }))); }
-async function ensureTGToken(): Promise<string> {
+/* ---------- Telegraph 工具 ---------- */
+const toNodes = (text: string) => JSON.stringify(text.split("\n\n").map(p => ({ tag: "p", children: [p] })));
+const ensureTGToken = async (): Promise<string> => {
   if (Store.data.telegraph.token) return Store.data.telegraph.token;
   const resp = await axiosWithRetry({
     method: "POST",
     url: "https://api.telegra.ph/createAccount",
     params: { short_name: "TeleBoxAI", author_name: "TeleBox" }
   });
-  const t = resp.data?.result?.access_token || ""; Store.data.telegraph.token = t; await Store.writeSoon(); return t;
-}
-async function createTGPage(title: string, text: string): Promise<string | null> {
+  const t = resp.data?.result?.access_token || "";
+  Store.data.telegraph.token = t;
+  await Store.writeSoon();
+  return t;
+};
+const createTGPage = async (title: string, text: string): Promise<string | null> => {
   try {
-    const token = await ensureTGToken(); if (!token) return null;
+    const token = await ensureTGToken();
+    if (!token) return null;
     const resp = await axiosWithRetry({
       method: "POST",
       url: "https://api.telegra.ph/createPage",
@@ -648,12 +632,13 @@ async function createTGPage(title: string, text: string): Promise<string | null>
     });
     return resp.data?.result?.url || null;
   } catch { return null; }
-}
+};
 
-async function chatOpenAI(p: Provider, model: string, msgs: { role: string; content: string }[], maxTokens?: number, useSearch?: boolean) {
+/* ---------- 聊天适配 ---------- */
+const chatOpenAI = async (p: Provider, model: string, msgs: { role: string; content: string }[], maxTokens?: number, useSearch?: boolean) => {
   const url = trimBase(p.baseUrl) + "/v1/chat/completions";
   const body: any = { model, messages: msgs, max_tokens: maxTokens || 1024 };
-  if (useSearch && p.baseUrl?.includes('api.openai.com')) {
+  if (useSearch && p.baseUrl?.includes("api.openai.com")) {
     body.tools = [{
       type: "function",
       function: {
@@ -661,59 +646,43 @@ async function chatOpenAI(p: Provider, model: string, msgs: { role: string; cont
         description: "Search the web for current information and return relevant results",
         parameters: {
           type: "object",
-          properties: {
-            query: {
-              type: "string",
-              description: "The search query to execute"
-            }
-          },
+          properties: { query: { type: "string", description: "The search query to execute" } },
           required: ["query"]
         }
       }
     }];
   } else if (useSearch) {
-    // 第三方平台：将搜索提示并入用户消息
     const searchPrompt = "请基于你的知识回答以下问题，如果需要最新信息请说明。";
     msgs[msgs.length - 1].content = searchPrompt + "\n\n" + msgs[msgs.length - 1].content;
   }
-  
   const attempts = buildAuthAttempts(p);
   try {
     const data: any = await tryPostJSON(url, body, attempts);
     return data?.choices?.[0]?.message?.content || "";
   } catch (lastErr: any) {
-    const status = lastErr?.response?.status; const bodyErr = lastErr?.response?.data; const msg = bodyErr?.error?.message || bodyErr?.message || lastErr?.message || String(lastErr);
+    const status = lastErr?.response?.status;
+    const bodyErr = lastErr?.response?.data;
+    const msg = bodyErr?.error?.message || bodyErr?.message || lastErr?.message || String(lastErr);
     throw new Error(`[chatOpenAI] adapter=openai model=${html(model)} status=${status || "network"} message=${msg}`);
   }
-}
-async function chatClaude(p: Provider, model: string, msgs: { role: string; content: string }[], maxTokens?: number, useSearch?: boolean) {
+};
+const chatClaude = async (p: Provider, model: string, msgs: { role: string; content: string }[], maxTokens?: number, useSearch?: boolean) => {
   const url = trimBase(p.baseUrl) + "/v1/messages";
   const body: any = { model, max_tokens: maxTokens || 1024, messages: msgs.map(m => ({ role: m.role === "assistant" ? "assistant" : "user", content: m.content })) };
-  if (useSearch && p.baseUrl?.includes('api.anthropic.com')) {
-    body.tools = [{
-      type: "web_search_20241220",
-      name: "web_search",
-      max_uses: 3
-    }];
+  if (useSearch && p.baseUrl?.includes("api.anthropic.com")) {
+    body.tools = [{ type: "web_search_20241220", name: "web_search", max_uses: 3 }];
   }
-  
   const v = await getAnthropicVersion(p);
   const attempts = buildAuthAttempts(p, { "anthropic-version": v });
   try {
     const data: any = await tryPostJSON(url, body, attempts);
     if (data?.content && Array.isArray(data.content)) {
-      // 提取文本内容
       const textBlocks = data.content
-        .filter((block: any) => block.type === 'text')
+        .filter((block: any) => block.type === "text")
         .map((block: any) => block.text)
         .filter((text: string) => text && text.trim());
-      
-      if (textBlocks.length > 0) {
-        return textBlocks.join('\n\n');
-      }
+      if (textBlocks.length > 0) return textBlocks.join("\n\n");
     }
-    
-    // 回退：兼容多种第三方返回结构
     const possibleTexts = [
       data?.content?.[0]?.text,
       data?.message?.content?.[0]?.text,
@@ -724,44 +693,30 @@ async function chatClaude(p: Provider, model: string, msgs: { role: string; cont
       data?.message?.content,
       data?.output
     ];
-    
-    for (const text of possibleTexts) {
-      if (typeof text === 'string' && text.trim()) {
-        return text.trim();
-      }
-    }
-    
+    for (const text of possibleTexts) if (typeof text === "string" && text.trim()) return text.trim();
     return "";
   } catch (lastErr: any) {
-    const status = lastErr?.response?.status; const bodyErr = lastErr?.response?.data; const msg = bodyErr?.error?.message || bodyErr?.message || lastErr?.message || String(lastErr);
+    const status = lastErr?.response?.status;
+    const bodyErr = lastErr?.response?.data;
+    const msg = bodyErr?.error?.message || bodyErr?.message || lastErr?.message || String(lastErr);
     throw new Error(`[chatClaude] adapter=claude model=${html(model)} status=${status || "network"} message=${msg}`);
   }
-}
-async function chatGemini(p: Provider, model: string, msgs: { role: string; content: string }[], useSearch: boolean = false) {
+};
+const chatGemini = async (p: Provider, model: string, msgs: { role: string; content: string }[], useSearch: boolean = false) => {
   const path = `/models/${encodeURIComponent(model)}:generateContent`;
-  
-  // 构建请求数据
-  const requestData: any = {
-    contents: [{ parts: msgs.map(m => ({ text: (m.role === "user" ? "" : "") + m.content })) }]
-  };
-  
-  // 如果启用搜索，添加Google搜索工具
-  if (useSearch) {
-    requestData.tools = [{ googleSearch: {} }];
-  }
-  
+  const requestData: any = { contents: [{ parts: msgs.map(m => ({ text: (m.role === "user" ? "" : "") + m.content })) }] };
+  if (useSearch) requestData.tools = [{ googleSearch: {} }];
   const data = await geminiRequestWithFallback(p, path, {
     method: "POST",
     data: requestData,
     params: { key: p.apiKey }
   });
-  
   const parts = data?.candidates?.[0]?.content?.parts || [];
   return parts.map((x: any) => x.text || "").join("");
-}
+};
 
-// 图像输入对话（OpenAI）
-async function chatVisionOpenAI(p: Provider, model: string, imageB64: string, prompt?: string) {
+/* ---------- 视觉对话 ---------- */
+const chatVisionOpenAI = async (p: Provider, model: string, imageB64: string, prompt?: string) => {
   const url = trimBase(p.baseUrl) + "/v1/chat/completions";
   const content = [
     { type: "text", text: prompt || "用中文描述此图片" },
@@ -773,13 +728,13 @@ async function chatVisionOpenAI(p: Provider, model: string, imageB64: string, pr
     const data: any = await tryPostJSON(url, body, attempts);
     return data?.choices?.[0]?.message?.content || "";
   } catch (lastErr: any) {
-    const status = lastErr?.response?.status; const bodyErr = lastErr?.response?.data; const msg = bodyErr?.error?.message || bodyErr?.message || lastErr?.message || String(lastErr);
+    const status = lastErr?.response?.status;
+    const bodyErr = lastErr?.response?.data;
+    const msg = bodyErr?.error?.message || bodyErr?.message || lastErr?.message || String(lastErr);
     throw new Error(`[chatVisionOpenAI] adapter=openai model=${html(model)} status=${status || "network"} message=${msg}`);
   }
-}
-
-// 图像输入对话（Gemini）
-async function chatVisionGemini(p: Provider, model: string, imageB64: string, prompt?: string) {
+};
+const chatVisionGemini = async (p: Provider, model: string, imageB64: string, prompt?: string) => {
   const path = `/models/${encodeURIComponent(model)}:generateContent`;
   try {
     const data = await geminiRequestWithFallback(p, path, {
@@ -805,9 +760,8 @@ async function chatVisionGemini(p: Provider, model: string, imageB64: string, pr
     const msg = body?.error?.message || body?.message || err?.message || String(err);
     throw new Error(`[chatVisionGemini] adapter=gemini model=${html(model)} status=${status || "network"} message=${msg}`);
   }
-}
-// 图像输入对话（Claude）
-async function chatVisionClaude(p: Provider, model: string, imageB64: string, prompt?: string) {
+};
+const chatVisionClaude = async (p: Provider, model: string, imageB64: string, prompt?: string) => {
   const url = trimBase(p.baseUrl) + "/v1/messages";
   const v = await getAnthropicVersion(p);
   const body = {
@@ -829,21 +783,21 @@ async function chatVisionClaude(p: Provider, model: string, imageB64: string, pr
     const blocks = data?.content || data?.message?.content || [];
     return Array.isArray(blocks) ? blocks.map((b: any) => b?.text || b?.content?.[0]?.text || "").join("") : "";
   } catch (lastErr: any) {
-    const status = lastErr?.response?.status; const bodyErr = lastErr?.response?.data; const msg = bodyErr?.error?.message || bodyErr?.message || lastErr?.message || String(lastErr);
+    const status = lastErr?.response?.status;
+    const bodyErr = lastErr?.response?.data;
+    const msg = bodyErr?.error?.message || bodyErr?.message || lastErr?.message || String(lastErr);
     throw new Error(`[chatVisionClaude] adapter=claude model=${html(model)} status=${status || "network"} message=${msg}`);
   }
-}
-// 统一的视觉对话入口；按兼容类型路由
-async function chatVision(p: Provider, compat: string, model: string, imageB64: string, prompt?: string): Promise<string> {
+};
+const chatVision = async (p: Provider, compat: string, model: string, imageB64: string, prompt?: string): Promise<string> => {
   if (compat === "openai") return chatVisionOpenAI(p, model, imageB64, prompt);
   if (compat === "gemini") return chatVisionGemini(p, model, imageB64, prompt);
   if (compat === "claude") return chatVisionClaude(p, model, imageB64, prompt);
-   // 若提供方不支持视觉，回退为纯文本描述（以 OpenAI 风格对话作泛化回退）
   return chatOpenAI(p, model, [{ role: "user", content: prompt || "描述这张图片" } as any] as any);
-}
+};
 
-// 图像生成（OpenAI）
-async function imageOpenAI(p: Provider, model: string, prompt: string): Promise<string> {
+/* ---------- 生图 ---------- */
+const imageOpenAI = async (p: Provider, model: string, prompt: string): Promise<string> => {
   const url = trimBase(p.baseUrl) + "/v1/images/generations";
   const body = { model, prompt, n: 1, response_format: "b64_json", size: "1024x1024" };
   const attempts = buildAuthAttempts(p, { "Content-Type": "application/json" });
@@ -861,42 +815,33 @@ async function imageOpenAI(p: Provider, model: string, prompt: string): Promise<
     } catch {}
   }
   return "";
-}
-// 图像生成（Gemini）
-async function imageGemini(p: Provider, model: string, prompt: string): Promise<{ image?: Buffer; text?: string; mime?: string }> {
-  // 确保使用支持图片生成的模型
+};
+const imageGemini = async (p: Provider, model: string, prompt: string): Promise<{ image?: Buffer; text?: string; mime?: string }> => {
   let imageModel = model;
   if (!model.includes("image") && !model.includes("2.5-flash") && !model.includes("2.0-flash")) {
-    // 如果模型不支持图片生成，尝试使用默认的图片生成模型
     imageModel = "gemini-2.5-flash-image-preview";
   }
-  
   const path = `/models/${encodeURIComponent(imageModel)}:generateContent`;
   try {
     const data = await geminiRequestWithFallback(p, path, {
       method: "POST",
       data: {
-        contents: [{ 
-          role: "user", 
-          parts: [{ text: prompt }] 
-        }],
-        generationConfig: { 
-          responseModalities: ["TEXT", "IMAGE"],
-          temperature: 0.7,
-          maxOutputTokens: 2048
-        }
+        contents: [{ role: "user", parts: [{ text: prompt }] }],
+        generationConfig: { responseModalities: ["TEXT", "IMAGE"], temperature: 0.7, maxOutputTokens: 2048 }
       },
       params: { key: p.apiKey }
     });
     const parts = data?.candidates?.[0]?.content?.parts || [];
-    let text: string | undefined; let image: Buffer | undefined; let mime: string | undefined;
+    let text: string | undefined;
+    let image: Buffer | undefined;
+    let mime: string | undefined;
     for (const part of parts) {
       const pAny: any = part;
       if (pAny?.text) text = String(pAny.text);
       const inline = pAny?.inlineData || pAny?.inline_data;
-      if (inline?.data) { 
-        image = Buffer.from(inline.data, "base64"); 
-        mime = inline?.mimeType || inline?.mime_type || "image/png"; 
+      if (inline?.data) {
+        image = Buffer.from(inline.data, "base64");
+        mime = inline?.mimeType || inline?.mime_type || "image/png";
       }
       const fileUri = pAny?.fileData?.fileUri || pAny?.file_data?.file_uri;
       if (fileUri) {
@@ -912,21 +857,22 @@ async function imageGemini(p: Provider, model: string, prompt: string): Promise<
     console.error(`[imageGemini] 图片生成失败: model=${imageModel} status=${status || "network"} message=${msg}`);
     throw new Error(`图片生成失败：${msg}`);
   }
-}
-// 文本转语音（Gemini）
-async function ttsGemini(p: Provider, model: string, input: string, voiceName?: string): Promise<{ audio?: Buffer; mime?: string }> {
+};
+
+/* ---------- TTS ---------- */
+const ttsGemini = async (p: Provider, model: string, input: string, voiceName?: string): Promise<{ audio?: Buffer; mime?: string }> => {
   const path = `/models/${encodeURIComponent(model)}:generateContent`;
   const voice = voiceName || "Kore";
   const buildPayloads = () => [
     {
-      contents: [ { role: "user", parts: [{ text: input }] } ],
+      contents: [{ role: "user", parts: [{ text: input }] }],
       generationConfig: {
         responseModalities: ["AUDIO"],
         speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: voice } } }
       }
     },
     {
-      contents: [ { role: "user", parts: [{ text: input }] } ],
+      contents: [{ role: "user", parts: [{ text: input }] }],
       generationConfig: { responseModalities: ["AUDIO"] }
     }
   ];
@@ -962,10 +908,8 @@ async function ttsGemini(p: Provider, model: string, input: string, voiceName?: 
     console.error(`[ttsGemini] 整体异常:`, e?.message || e);
     return {};
   }
-}
-
-// 文本转语音（OpenAI）
-async function ttsOpenAI(p: Provider, model: string, input: string, voiceName?: string): Promise<Buffer> {
+};
+const ttsOpenAI = async (p: Provider, model: string, input: string, voiceName?: string): Promise<Buffer> => {
   const base = trimBase(p.baseUrl);
   const paths = ["/v1/audio/speech", "/v1/audio/tts", "/audio/speech"];
   const payload = { model, input, voice: voiceName || "alloy", format: "opus" };
@@ -984,29 +928,31 @@ async function ttsOpenAI(p: Provider, model: string, input: string, voiceName?: 
       }
     }
   }
-  const status = lastErr?.response?.status; const bodyErr = lastErr?.response?.data; const msg = bodyErr?.error?.message || bodyErr?.message || lastErr?.message || String(lastErr);
+  const status = lastErr?.response?.status;
+  const bodyErr = lastErr?.response?.data;
+  const msg = bodyErr?.error?.message || bodyErr?.message || lastErr?.message || String(lastErr);
   throw new Error(`[ttsOpenAI] adapter=openai model=${html(model)} status=${status || "network"} message=${msg}`);
-}
+};
 
-// 通用：如 Gemini 返回 L16/PCM，这里补 WAV 头
-function convertPcmL16ToWavIfNeeded(raw: Buffer, mime?: string): { buf: Buffer; mime: string } {
+/* ---------- PCM -> WAV ---------- */
+const convertPcmL16ToWavIfNeeded = (raw: Buffer, mime?: string): { buf: Buffer; mime: string } => {
   let buf = raw;
-  let outMime = (mime || "audio/ogg");
+  let outMime = mime || "audio/ogg";
   const lm = outMime.toLowerCase();
-  if (lm.includes('l16') && lm.includes('pcm')) {
+  if (lm.includes("l16") && lm.includes("pcm")) {
     try {
       const parse = (mt: string) => {
-        const [fileType, ...params] = mt.split(';').map(s => s.trim());
-        const [, format] = (fileType || '').split('/');
+        const [fileType, ...params] = mt.split(";").map(s => s.trim());
+        const [, format] = (fileType || "").split("/");
         const opts: any = { numChannels: 1, sampleRate: 24000, bitsPerSample: 16 };
-        if (format && format.toUpperCase().startsWith('L')) {
+        if (format && format.toUpperCase().startsWith("L")) {
           const bits = parseInt(format.slice(1), 10);
           if (!isNaN(bits)) opts.bitsPerSample = bits;
         }
         for (const param of params) {
-          const [k, v] = param.split('=').map(s => s.trim());
-          if (k === 'rate') { const r = parseInt(v, 10); if (!isNaN(r)) opts.sampleRate = r; }
-          if (k === 'channels') { const c = parseInt(v, 10); if (!isNaN(c)) opts.numChannels = c; }
+          const [k, v] = param.split("=").map(s => s.trim());
+          if (k === "rate") { const r = parseInt(v, 10); if (!isNaN(r)) opts.sampleRate = r; }
+          if (k === "channels") { const c = parseInt(v, 10); if (!isNaN(c)) opts.numChannels = c; }
         }
         return opts;
       };
@@ -1014,10 +960,10 @@ function convertPcmL16ToWavIfNeeded(raw: Buffer, mime?: string): { buf: Buffer; 
         const byteRate = o.sampleRate * o.numChannels * o.bitsPerSample / 8;
         const blockAlign = o.numChannels * o.bitsPerSample / 8;
         const b = Buffer.alloc(44);
-        b.write('RIFF', 0);
+        b.write("RIFF", 0);
         b.writeUInt32LE(36 + len, 4);
-        b.write('WAVE', 8);
-        b.write('fmt ', 12);
+        b.write("WAVE", 8);
+        b.write("fmt ", 12);
         b.writeUInt32LE(16, 16);
         b.writeUInt16LE(1, 20);
         b.writeUInt16LE(o.numChannels, 22);
@@ -1025,21 +971,21 @@ function convertPcmL16ToWavIfNeeded(raw: Buffer, mime?: string): { buf: Buffer; 
         b.writeUInt32LE(byteRate, 28);
         b.writeUInt16LE(blockAlign, 32);
         b.writeUInt16LE(o.bitsPerSample, 34);
-        b.write('data', 36);
+        b.write("data", 36);
         b.writeUInt32LE(len, 40);
         return b;
       };
       const opts = parse(outMime);
       const header = createHeader(buf.length, opts);
       buf = Buffer.concat([header, buf]);
-      outMime = 'audio/wav';
+      outMime = "audio/wav";
     } catch {}
   }
   return { buf, mime: outMime };
-}
+};
 
-// 通用：发送语音（带标题和语音属性）
-async function sendVoiceWithCaption(msg: Api.Message, fileBuf: Buffer, caption: string, replyToId?: number): Promise<void> {
+/* ---------- 语音发送 ---------- */
+const sendVoiceWithCaption = async (msg: Api.Message, fileBuf: Buffer, caption: string, replyToId?: number): Promise<void> => {
   try {
     const file: any = Object.assign(fileBuf, { name: "ai.ogg" });
     await msg.client?.sendFile(msg.peerId, {
@@ -1047,12 +993,11 @@ async function sendVoiceWithCaption(msg: Api.Message, fileBuf: Buffer, caption: 
       caption,
       parseMode: "html",
       replyTo: replyToId || undefined,
-      attributes: [new Api.DocumentAttributeAudio({ duration: 0, voice: true })],
+      attributes: [new Api.DocumentAttributeAudio({ duration: 0, voice: true })]
     });
   } catch (error: any) {
-    // 如果语音发送被禁止，先尝试以普通音频/文件形式发送，仍失败再退到文本
-    if (error?.message?.includes('CHAT_SEND_VOICES_FORBIDDEN') || error?.message?.includes('VOICES_FORBIDDEN')) {
-      console.warn('[AI] Voice sending forbidden, retrying as regular audio/document');
+    if (error?.message?.includes("CHAT_SEND_VOICES_FORBIDDEN") || error?.message?.includes("VOICES_FORBIDDEN")) {
+      console.warn("[AI] Voice sending forbidden, retrying as regular audio/document");
       try {
         const altFile: any = Object.assign(fileBuf, { name: "ai.wav" });
         await msg.client?.sendFile(msg.peerId, {
@@ -1060,71 +1005,47 @@ async function sendVoiceWithCaption(msg: Api.Message, fileBuf: Buffer, caption: 
           caption,
           parseMode: "html",
           replyTo: replyToId || undefined
-          // 不带 voice 属性，避免被识别为语音消息
         });
         return;
       } catch (e2: any) {
-        console.warn('[AI] Fallback to regular audio/document failed, falling back to text');
+        console.warn("[AI] Fallback to regular audio/document failed, falling back to text");
+        const fallbackText = caption + "\n\n⚠️ 语音发送被禁止，已转为文本消息";
         if (replyToId) {
-          await msg.client?.sendMessage(msg.peerId, {
-            message: caption + "\n\n⚠️ 语音发送被禁止，已转为文本消息",
-            parseMode: "html",
-            replyTo: replyToId
-          });
+          await msg.client?.sendMessage(msg.peerId, { message: fallbackText, parseMode: "html", replyTo: replyToId });
         } else {
-          await msg.client?.sendMessage(msg.peerId, {
-            message: caption + "\n\n⚠️ 语音发送被禁止，已转为文本消息",
-            parseMode: "html"
-          });
+          await msg.client?.sendMessage(msg.peerId, { message: fallbackText, parseMode: "html" });
         }
       }
     } else {
-      // 其他错误继续抛出
       throw error;
     }
   }
-}
+};
 
-async function sendImageFile(
-  msg: Api.Message,
-  buf: Buffer,
-  caption: string,
-  replyToId?: number,
-  mimeHint?: string
-): Promise<void> {
+/* ---------- 图片发送 ---------- */
+const sendImageFile = async (msg: Api.Message, buf: Buffer, caption: string, replyToId?: number, mimeHint?: string): Promise<void> => {
   const ext = (mimeHint || "image/png").includes("png") ? "png" : (mimeHint || "").includes("jpeg") ? "jpg" : "png";
   const file: any = Object.assign(buf, { name: `ai.${ext}` });
-  await msg.client?.sendFile(msg.peerId, {
-    file,
-    caption,
-    parseMode: "html",
-    replyTo: replyToId || undefined
-  });
-}
+  await msg.client?.sendFile(msg.peerId, { file, caption, parseMode: "html", replyTo: replyToId || undefined });
+};
 
-// 新增：统一的长文发送（根据是否为回复自动选择 sendLong/sendLongReply）
-async function sendLongAuto(
-  msg: Api.Message,
-  text: string,
-  replyToId?: number,
-  opts?: { collapse?: boolean },
-  postfix?: string
-): Promise<void> {
+/* ---------- 长文自动选择 ---------- */
+const sendLongAuto = async (msg: Api.Message, text: string, replyToId?: number, opts?: { collapse?: boolean }, postfix?: string): Promise<void> => {
   if (replyToId) {
     await sendLongReply(msg, replyToId, text, opts, postfix);
   } else {
     await sendLong(msg, text, opts, postfix);
   }
-}
+};
 
-// 新增：统一解析模型列表响应
-function parseModelListFromResponse(data: any): string[] {
-  const arr = Array.isArray(data) ? data : (data?.data || data?.models || []);
+/* ---------- 模型列表解析 ---------- */
+const parseModelListFromResponse = (data: any): string[] => {
+  const arr = Array.isArray(data) ? data : data?.data || data?.models || [];
   return (arr || []).map((x: any) => normalizeModelName(x));
-}
+};
 
-// 新增：按兼容类型通用的模型枚举
-async function listModels(p: Provider, compat: Compat): Promise<string[]> {
+/* ---------- 按兼容类型枚举模型 ---------- */
+const listModels = async (p: Provider, compat: Compat): Promise<string[]> => {
   const base = trimBase(p.baseUrl);
   const tryGet = async (url: string, headers: Record<string, string> = {}, prefer?: Compat) => {
     const attempts = buildAuthAttempts({ ...p, compatauth: prefer || p.compatauth } as Provider, headers);
@@ -1133,7 +1054,9 @@ async function listModels(p: Provider, compat: Compat): Promise<string[]> {
       try {
         const r = await axiosWithRetry({ method: "GET", url, ...(a || {}) });
         return r.data;
-      } catch (e: any) { lastErr = e; }
+      } catch (e: any) {
+        lastErr = e;
+      }
     }
     throw lastErr;
   };
@@ -1143,59 +1066,73 @@ async function listModels(p: Provider, compat: Compat): Promise<string[]> {
     try {
       const data = await tryGet(url);
       return parseModelListFromResponse(data);
-    } catch (e: any) { lastErr = e; }
-    // 回退其它风格
+    } catch (e: any) {
+      lastErr = e;
+    }
     try {
       const vAnth = await getAnthropicVersion(p);
       const data = await tryGet(url, { "anthropic-version": vAnth }, "claude");
       return parseModelListFromResponse(data);
-    } catch (e: any) { lastErr = e; }
+    } catch (e: any) {
+      lastErr = e;
+    }
     try {
       const data = await tryGet(base + "/v1beta/models", {}, "gemini");
       return parseModelListFromResponse(data);
-    } catch (e: any) { lastErr = e; }
+    } catch (e: any) {
+      lastErr = e;
+    }
   } else if (compat === "claude") {
     const url = base + "/v1/models";
     try {
       const vAnth = await getAnthropicVersion(p);
       const data = await tryGet(url, { "anthropic-version": vAnth }, "claude");
       return parseModelListFromResponse(data);
-    } catch (e: any) { lastErr = e; }
+    } catch (e: any) {
+      lastErr = e;
+    }
     try {
       const data = await tryGet(url);
       return parseModelListFromResponse(data);
-    } catch (e: any) { lastErr = e; }
+    } catch (e: any) {
+      lastErr = e;
+    }
     try {
       const data = await tryGet(base + "/v1beta/models", {}, "gemini");
       return parseModelListFromResponse(data);
-    } catch (e: any) { lastErr = e; }
+    } catch (e: any) {
+      lastErr = e;
+    }
   } else {
-    
     const url1 = base + "/v1beta/models";
     const url2 = base + "/v1/models";
     try {
       const data = await tryGet(url1, {}, "gemini");
       const list = parseModelListFromResponse(data);
       if (list.length) return list;
-    } catch (e: any) { lastErr = e; }
+    } catch (e: any) {
+      lastErr = e;
+    }
     try {
       const data = await tryGet(url2, {}, "gemini");
       const list = parseModelListFromResponse(data);
       if (list.length) return list;
-    } catch (e: any) { lastErr = e; }
+    } catch (e: any) {
+      lastErr = e;
+    }
     try {
       const data = await tryGet(url2);
       return parseModelListFromResponse(data);
-    } catch (e: any) { lastErr = e; }
+    } catch (e: any) {
+      lastErr = e;
+    }
   }
   if (lastErr) throw lastErr;
   throw new Error("无法获取模型列表：服务无有效输出");
-}
-
-// 新增：按标准三种兼容类型依次尝试列出模型
-async function listModelsByAnyCompat(p: Provider): Promise<{ models: string[]; compat: Compat | null; compats: Compat[]; modelMap?: Record<string, Compat> }> {
+};
+const listModelsByAnyCompat = async (p: Provider): Promise<{ models: string[]; compat: Compat | null; compats: Compat[]; modelMap?: Record<string, Compat> }> => {
   const order: Compat[] = ["openai", "gemini", "claude"];
-  const merged = new Map<string, string>(); // key: lower-case name -> original
+  const merged = new Map<string, string>();
   const compats: Compat[] = [];
   const modelMap: Record<string, Compat> = {};
   let primary: Compat | null = null;
@@ -1203,7 +1140,7 @@ async function listModelsByAnyCompat(p: Provider): Promise<{ models: string[]; c
     try {
       const list = await listModels(p, c);
       if (Array.isArray(list) && list.length) {
-        if (!primary) primary = c; // 首个成功的 compat 作为 primary
+        if (!primary) primary = c;
         if (!compats.includes(c)) compats.push(c);
         for (const m of list) {
           const k = String(m || "").toLowerCase();
@@ -1213,26 +1150,34 @@ async function listModelsByAnyCompat(p: Provider): Promise<{ models: string[]; c
       }
     } catch {}
   }
-  // 纠偏：若模型名强匹配 Claude/Gemini，则覆盖为对应 family，避免因尝试顺序被标记为 OpenAI
   for (const k of Object.keys(modelMap)) {
     const g = detectCompat("", k, "");
     if ((g === "gemini" || g === "claude") && modelMap[k] !== g) modelMap[k] = g;
   }
   return { models: Array.from(merged.values()), compat: primary, compats, modelMap };
-}
+};
 
-async function callChat(kind: "chat" | "search", text: string, msg: Api.Message): Promise<{ content: string; model: string }> {
-  const m = pick(kind); if (!m) throw new Error(`未设置${kind}模型，请先配置`);
-  const p = providerOf(m.provider); if (!p) throw new Error(`服务商 ${m.provider} 未配置`);
+/* ---------- 预设 Prompt 应用 ---------- */
+const applyPresetPrompt = (userInput: string): string => {
+  const preset = Store.data.presetPrompt || "";
+  if (!preset.trim()) return userInput;
+  return `${preset}\n\n${userInput}`;
+};
+
+/* ---------- 统一聊天调用 ---------- */
+const callChat = async (kind: "chat" | "search", text: string, msg: Api.Message): Promise<{ content: string; model: string }> => {
+  const m = pick(kind);
+  if (!m) throw new Error(`未设置${kind}模型，请先配置`);
+  const p = providerOf(m.provider);
+  if (!p) throw new Error(`服务商 ${m.provider} 未配置`);
   const compat = await resolveCompat(m.provider, m.model, p);
-  const id = chatIdStr(msg); const msgs: { role: string; content: string }[] = [];
-
-  msgs.push({ role: "user", content: text });
+  const id = chatIdStr(msg);
+  const msgs: { role: string; content: string }[] = [];
+  const processedText = applyPresetPrompt(text);
+  msgs.push({ role: "user", content: processedText });
   let out = "";
   try {
     const isSearch = kind === "search";
-    
-    // 根据兼容性类型调用相应的聊天函数
     if (compat === "openai") out = await chatOpenAI(p, m.model, msgs, undefined, isSearch);
     else if (compat === "claude") out = await chatClaude(p, m.model, msgs, undefined, isSearch);
     else out = await chatGemini(p, m.model, msgs, isSearch);
@@ -1240,23 +1185,22 @@ async function callChat(kind: "chat" | "search", text: string, msg: Api.Message)
     const em = e?.message || String(e);
     throw new Error(`[${kind}] provider=${m.provider} compat=${compat} model=${html(m.model)} :: ${em}`);
   }
-  
-  // 保存到本地历史记录（如果context开启）
-  if (Store.data.contextEnabled) { 
-    pushHist(id, "user", text); 
-    pushHist(id, "assistant", out); 
-    await Store.writeSoon(); 
+  if (Store.data.contextEnabled) {
+    pushHist(id, "user", text);
+    pushHist(id, "assistant", out);
+    await Store.writeSoon();
   }
-  
   return { content: out, model: m.model };
-}
+};
 
-const help = `🔧 📝 <b>特性</b>
+/* ---------- 帮助文案 ---------- */
+const help_text = `🔧 📝 <b>特性</b>
 兼容 Google Gemini、OpenAI、Anthropic Claude、Baidu 标准接口，统一指令，一处配置，多处可用。
 
 ✨ <b>亮点</b>
 • 🔀 模型混用：对话 / 搜索 / 图片 / 语音 可分别指定不同服务商的不同模型
 • 🧠 可选上下文记忆、📰 长文自动发布 Telegraph、🧾 消息折叠显示
+• 🎯 全局Prompt预设：为所有对话设置统一的系统提示词
 
 <blockquote expandable>💬 <b>对话</b>
 <code>ai chat [问题]</code>
@@ -1283,6 +1227,12 @@ const help = `🔧 📝 <b>特性</b>
 🔍🎤 <b>搜索并语音回答</b>
 <code>ai searchaudio [查询]</code>
 • 示例：<code>ai searchaudio 2024 年最新科技趋势</code>
+
+🎯 <b>全局Prompt预设</b>
+<code>ai prompt set [内容]</code> - 设置全局Prompt预设
+<code>ai prompt clear</code> - 清除全局Prompt预设
+<code>ai prompt show</code> - 显示当前Prompt预设
+• 预设将自动添加到所有对话请求前，适用于角色设定、回答风格等统一配置
 
 💭 <b>对话上下文</b>
 <code>ai context on|off|show|del</code>
@@ -1337,43 +1287,88 @@ const help = `🔧 📝 <b>特性</b>
 • 别名：<code>s</code>=search, <code>img</code>/<code>i</code>=image, <code>v</code>=tts, <code>a</code>=audio, <code>sa</code>=searchaudio, <code>ctx</code>=context, <code>fold</code>=collapse, <code>cfg</code>/<code>c</code>=config, <code>m</code>=model
 </blockquote>`;
 
+/* ---------- 插件主体 ---------- */
 const CMD_AI = "ai" as const;
 class AiPlugin extends Plugin {
-  description: string = `🤖 智能AI助手\n\n${help}`;
+  description = `🤖 智能AI助手\n\n${help_text}`;
   cmdHandlers = {
     [CMD_AI]: async (msg: Api.Message) => {
-      await Store.init(); ensureDir();
-      const text = (msg as any).text || (msg as any).message || ""; const lines = text.trim().split(/\r?\n/g); const parts = (lines[0] || "").split(/\s+/);
-      const [, sub, ...args] = parts; const subl = (sub || "").toLowerCase();
+      await Store.init();
+      ensureDir();
+      const text = (msg as any).text || (msg as any).message || "";
+      const lines = text.trim().split(/\r?\n/g);
+      const parts = (lines[0] || "").split(/\s+/);
+      const [, sub, ...args] = parts;
+      const subl = (sub || "").toLowerCase();
       const aliasMap: Record<string, string> = {
-      s: "search",
-      img: "image",
-      i: "image",
-      v: "tts",
-      a: "audio",
-      sa: "searchaudio",
-      ctx: "context",
-      fold: "collapse",
-      cfg: "config",
-      c: "config",
-      m: "model",
+        s: "search",
+        img: "image",
+        i: "image",
+        v: "tts",
+        a: "audio",
+        sa: "searchaudio",
+        ctx: "context",
+        fold: "collapse",
+        cfg: "config",
+        c: "config",
+        m: "model"
       };
       const subn = aliasMap[subl] || subl;
       const knownSubs = [
-        "config","model","context","collapse","telegraph","voice",
+        "config","model","context","collapse","telegraph","voice","prompt",
         "chat","search","image","tts","audio","searchaudio"
       ];
       const isUnknownBareQuery = !!subn && !knownSubs.includes(subn);
       try {
-        const preflight = async (kind: keyof Models): Promise<{ m: { provider: string; model: string }, p: Provider, compat: Compat } | null> => {
-          const m = pick(kind); if (!m) { await msg.edit({ text: `❌ 未设置 ${kind} 模型`, parseMode: "html" }); return null; }
-          const p = providerOf(m.provider); if (!p) { await msg.edit({ text: "❌ 服务商未配置", parseMode: "html" }); return null; }
+        const preflight = async (kind: keyof Models): Promise<{ m: { provider: string; model: string }; p: Provider; compat: Compat } | null> => {
+          const m = pick(kind);
+          if (!m) { await msg.edit({ text: `❌ 未设置 ${kind} 模型`, parseMode: "html" }); return null; }
+          const p = providerOf(m.provider);
+          if (!p) { await msg.edit({ text: "❌ 服务商未配置", parseMode: "html" }); return null; }
           if (!p.apiKey) { await msg.edit({ text: "❌ 未提供令牌，请先配置 API Key（ai config add/update）", parseMode: "html" }); return null; }
-          const compat = await resolveCompat(m.provider, m.model, p); return { m, p, compat };
+          const compat = await resolveCompat(m.provider, m.model, p);
+          return { m, p, compat };
         };
-        
+
+        /* ---------- Prompt 预设管理 ---------- */
+        if (subn === "prompt") {
+          const a0 = (args[0] || "").toLowerCase();
+          if (a0 === "set") {
+            const promptContent = args.slice(1).join(" ").trim();
+            if (!promptContent) {
+              await msg.edit({ text: "❌ 请提供预设Prompt内容", parseMode: "html" });
+              return;
+            }
+            Store.data.presetPrompt = promptContent;
+            await Store.writeSoon();
+            await msg.edit({ text: `✅ 已设置全局Prompt预设\n\n<blockquote expandable>${html(promptContent)}</blockquote>`, parseMode: "html" });
+            return;
+          }
+          if (a0 === "clear") {
+            Store.data.presetPrompt = "";
+            await Store.writeSoon();
+            await msg.edit({ text: "✅ 已清除全局Prompt预设", parseMode: "html" });
+            return;
+          }
+          if (a0 === "show") {
+            const currentPrompt = Store.data.presetPrompt || "";
+            if (!currentPrompt) {
+              await msg.edit({ text: "📝 当前未设置全局Prompt预设", parseMode: "html" });
+              return;
+            }
+            await sendLong(msg, `📝 <b>当前全局Prompt预设</b>\n\n<blockquote expandable>${html(currentPrompt)}</blockquote>`);
+            return;
+          }
+          await msg.edit({ text: "❌ 未知 prompt 子命令\n支持: set|clear|show", parseMode: "html" });
+          return;
+        }
+
+        /* ---------- 配置管理 ---------- */
         if (subn === "config") {
-          if ((msg as any).isGroup || (msg as any).isChannel) { await msg.edit({ text: "❌ 为保护用户隐私，禁止在公共对话环境使用ai config所有子命令", parseMode: "html" }); return; }
+          if ((msg as any).isGroup || (msg as any).isChannel) {
+            await msg.edit({ text: "❌ 为保护用户隐私，禁止在公共对话环境使用ai config所有子命令", parseMode: "html" });
+            return;
+          }
           const a0 = (args[0] || "").toLowerCase();
           if (a0 === "status") {
             const cur = Store.data.models;
@@ -1381,6 +1376,7 @@ class AiPlugin extends Plugin {
               `• 上下文: ${Store.data.contextEnabled ? "开启" : "关闭"}`,
               `• 折叠: ${Store.data.collapse ? "开启" : "关闭"}`,
               `• Telegraph: ${Store.data.telegraph.enabled ? "开启" : "关闭"}${Store.data.telegraph.enabled && Store.data.telegraph.limit ? `（阈值 ${Store.data.telegraph.limit}）` : ""}`,
+              `• Prompt预设: ${Store.data.presetPrompt ? "✅ 已设置" : "❌ 未设置"}`
             ].join("\n");
             const provList = Object.entries(Store.data.providers)
               .map(([n, v]) => {
@@ -1389,109 +1385,168 @@ class AiPlugin extends Plugin {
               })
               .join("\n") || "(空)";
             const txt = `⚙️ <b>AI 配置概览</b>\n\n<b>功能模型</b>\n<b>chat:</b> <code>${html(cur.chat) || "(未设)"}</code>\n<b>search:</b> <code>${html(cur.search) || "(未设)"}</code>\n<b>image:</b> <code>${html(cur.image) || "(未设)"}</code>\n<b>tts:</b> <code>${html(cur.tts) || "(未设)"}</code>\n\n<b>功能开关</b>\n${flags}\n\n<b>服务商</b>\n${provList}`;
-            await sendLong(msg, txt); return;
+            await sendLong(msg, txt);
+            return;
           }
           if (a0 === "add") {
             const [name, key, baseUrl] = [args[1], args[2], args[3]];
-            if (!name || !key || !baseUrl) { await msg.edit({ text: "❌ 参数不足", parseMode: "html" }); return; }
+            if (!name || !key || !baseUrl) {
+              await msg.edit({ text: "❌ 参数不足", parseMode: "html" });
+              return;
+            }
             try {
               const u = new URL(baseUrl);
-              if (u.protocol !== "http:" && u.protocol !== "https:") { await msg.edit({ text: "❌ baseUrl 无效，请使用 http/https 协议", parseMode: "html" }); return; }
+              if (u.protocol !== "http:" && u.protocol !== "https:") {
+                await msg.edit({ text: "❌ baseUrl 无效，请使用 http/https 协议", parseMode: "html" });
+                return;
+              }
             } catch {
-              await msg.edit({ text: "❌ baseUrl 无效，请检查是否为合法 URL", parseMode: "html" }); return;
+              await msg.edit({ text: "❌ baseUrl 无效，请检查是否为合法 URL", parseMode: "html" });
+              return;
             }
             Store.data.providers[name] = { apiKey: key, baseUrl: trimBase(baseUrl.trim()) };
             if (Store.data.modelCompat) delete Store.data.modelCompat[name];
             compatResolving.delete(name);
             await Store.writeSoon();
             await refreshModelCatalog(true).catch(() => {});
-            await msg.edit({ text: `✅ 已添加 <b>${html(name)}</b>`, parseMode: "html" }); return;
+            await msg.edit({ text: `✅ 已添加 <b>${html(name)}</b>`, parseMode: "html" });
+            return;
           }
           if (a0 === "update") {
             const [name, field, ...rest] = args.slice(1);
             const value = (rest.join(" ") || "").trim();
-            if (!name || !field || !value) { await msg.edit({ text: "❌ 参数不足", parseMode: "html" }); return; }
-            const p = Store.data.providers[name]; if (!p) { await msg.edit({ text: "❌ 未找到服务商", parseMode: "html" }); return; }
-            if (field.toLowerCase() === "apikey") { p.apiKey = value; delete (p as any).compatauth; }
-            else if (field.toLowerCase() === "baseurl") {
+            if (!name || !field || !value) {
+              await msg.edit({ text: "❌ 参数不足", parseMode: "html" });
+              return;
+            }
+            const p = Store.data.providers[name];
+            if (!p) {
+              await msg.edit({ text: "❌ 未找到服务商", parseMode: "html" });
+              return;
+            }
+            if (field.toLowerCase() === "apikey") {
+              p.apiKey = value;
+              delete (p as any).compatauth;
+            } else if (field.toLowerCase() === "baseurl") {
               try {
                 const u = new URL(value);
-                if (u.protocol !== "http:" && u.protocol !== "https:") { await msg.edit({ text: "❌ baseUrl 无效，请使用 http/https 协议", parseMode: "html" }); return; }
+                if (u.protocol !== "http:" && u.protocol !== "https:") {
+                  await msg.edit({ text: "❌ baseUrl 无效，请使用 http/https 协议", parseMode: "html" });
+                  return;
+                }
               } catch {
-                await msg.edit({ text: "❌ baseUrl 无效，请检查是否为合法 URL", parseMode: "html" }); return;
+                await msg.edit({ text: "❌ baseUrl 无效，请检查是否为合法 URL", parseMode: "html" });
+                return;
               }
-              p.baseUrl = trimBase(value.trim()); delete (p as any).compatauth;
+              p.baseUrl = trimBase(value.trim());
+              delete (p as any).compatauth;
+            } else {
+              await msg.edit({ text: "❌ 字段仅支持 apikey|baseurl", parseMode: "html" });
+              return;
             }
-            else { await msg.edit({ text: "❌ 字段仅支持 apikey|baseurl", parseMode: "html" }); return; }
             if (Store.data.modelCompat) delete Store.data.modelCompat[name];
             compatResolving.delete(name);
             await Store.writeSoon();
             await refreshModelCatalog(true).catch(() => {});
-            await msg.edit({ text: `✅ 已更新 <b>${html(name)}</b> 的 <code>${html(field)}</code>`, parseMode: "html" }); return;
+            await msg.edit({ text: `✅ 已更新 <b>${html(name)}</b> 的 <code>${html(field)}</code>`, parseMode: "html" });
+            return;
           }
           if (a0 === "remove") {
             const target = (args[1] || "").toLowerCase();
-            if (!target) { await msg.edit({ text: "❌ 请输入服务商名称或 all", parseMode: "html" }); return; }
-            if (target === "all") { Store.data.providers = {}; Store.data.modelCompat = {}; Store.data.modelCatalog = { map: {}, updatedAt: undefined } as any; compatResolving.clear(); }
-            else {
-              if (!Store.data.providers[target]) { await msg.edit({ text: "❌ 未找到服务商", parseMode: "html" }); return; }
-              delete Store.data.providers[target]; if (Store.data.modelCompat) delete Store.data.modelCompat[target];
-              const kinds: (keyof Models)[] = ["chat","search","image","tts"];
-              for (const k of kinds) { const v = Store.data.models[k]; if (v && v.startsWith(target + " ")) Store.data.models[k] = ""; }
+            if (!target) {
+              await msg.edit({ text: "❌ 请输入服务商名称或 all", parseMode: "html" });
+              return;
+            }
+            if (target === "all") {
+              Store.data.providers = {};
+              Store.data.modelCompat = {};
+              Store.data.modelCatalog = { map: {}, updatedAt: undefined } as any;
+              compatResolving.clear();
+            } else {
+              if (!Store.data.providers[target]) {
+                await msg.edit({ text: "❌ 未找到服务商", parseMode: "html" });
+                return;
+              }
+              delete Store.data.providers[target];
+              if (Store.data.modelCompat) delete Store.data.modelCompat[target];
+              const kinds: (keyof Models)[] = ["chat", "search", "image", "tts"];
+              for (const k of kinds) {
+                const v = Store.data.models[k];
+                if (v && v.startsWith(target + " ")) Store.data.models[k] = "";
+              }
             }
             await Store.writeSoon();
             await refreshModelCatalog(true).catch(() => {});
-            await msg.edit({ text: "✅ 已删除", parseMode: "html" }); return;
+            await msg.edit({ text: "✅ 已删除", parseMode: "html" });
+            return;
           }
           if (a0 === "list") {
-            const list = Object.entries(Store.data.providers).map(([n, v]) => { const base=v.baseUrl; const display=shortenUrlForDisplay(base); return `• <b>${html(n)}</b> - key:${v.apiKey ? "✅" : "❌"} base:<a href="${html(base)}">${html(display)}</a>`; }).join("\n") || "(空)";
-            await sendLong(msg, `📦 <b>已配置服务商</b>\n\n${list}`); return;
+            const list = Object.entries(Store.data.providers)
+              .map(([n, v]) => {
+                const display = shortenUrlForDisplay(v.baseUrl);
+                return `• <b>${html(n)}</b> - key:${v.apiKey ? "✅" : "❌"} base:<a href="${html(v.baseUrl)}">${html(display)}</a>`;
+              })
+              .join("\n") || "(空)";
+            await sendLong(msg, `📦 <b>已配置服务商</b>\n\n${list}`);
+            return;
           }
           if (a0 === "model") {
-            const name = args[1]; const p = name && providerOf(name);
-            if (!p) { await msg.edit({ text: "❌ 未找到服务商", parseMode: "html" }); return; }
+            const name = args[1];
+            const p = name && providerOf(name);
+            if (!p) {
+              await msg.edit({ text: "❌ 未找到服务商", parseMode: "html" });
+              return;
+            }
             let models: string[] = [];
             let selected: Compat | null = null;
             try {
               const res = await listModelsByAnyCompat(p);
-              models = res.models; selected = res.compat;
+              models = res.models;
+              selected = res.compat;
             } catch {}
             if (!models.length || !selected) {
-              await msg.edit({ text: "❌ 该服务商的权鉴方式未使用OpenAI、Google Gemini、Claude的标准接口，不做兼容。", parseMode: "html" }); return;
+              await msg.edit({ text: "❌ 该服务商的权鉴方式未使用OpenAI、Google Gemini、Claude的标准接口，不做兼容。", parseMode: "html" });
+              return;
             }
             const buckets = { chat: [] as string[], search: [] as string[], image: [] as string[], tts: [] as string[] };
             for (const m of models) {
               const ml = String(m).toLowerCase();
               if (/image|dall|sd|gpt-image/.test(ml)) buckets.image.push(m);
               else if (/tts|voice|audio\.speech|gpt-4o.*-tts|\b-tts\b/.test(ml)) buckets.tts.push(m);
-              else { buckets.chat.push(m); buckets.search.push(m); }
+              else {
+                buckets.chat.push(m);
+                buckets.search.push(m);
+              }
             }
-
             const txt = `🧾 <b>${html(name!)}</b> 可用模型\n\n<b>chat/search</b>:\n${buckets.chat.length ? buckets.chat.map(x => "• " + html(x)).join("\n") : "(空)"}\n\n<b>image</b>:\n${buckets.image.length ? buckets.image.map(x => "• " + html(x)).join("\n") : "(空)"}\n\n<b>tts</b>:\n${buckets.tts.length ? buckets.tts.map(x => "• " + html(x)).join("\n") : "(空)"}`;
-            await sendLong(msg, txt); return;
+            await sendLong(msg, txt);
+            return;
           }
-          await msg.edit({ text: "❌ 未知 config 子命令", parseMode: "html" }); return;
+          await msg.edit({ text: "❌ 未知 config 子命令", parseMode: "html" });
+          return;
         }
-        
+
+        /* ---------- 模型管理 ---------- */
         if (subn === "model") {
           const a0 = (args[0] || "").toLowerCase();
-          
           if (a0 === "list") {
             const cur = Store.data.models;
             const txt = `⚙️ <b>当前模型配置</b>\n\n<b>chat:</b> <code>${html(cur.chat) || "(未设)"}</code>\n<b>search:</b> <code>${html(cur.search) || "(未设)"}</code>\n<b>image:</b> <code>${html(cur.image) || "(未设)"}</code>\n<b>tts:</b> <code>${html(cur.tts) || "(未设)"}</code>`;
-            await sendLong(msg, txt); return;
+            await sendLong(msg, txt);
+            return;
           }
-
           if (a0 === "default") {
             Store.data.models = { chat: "", search: "", image: "", tts: "" };
             await Store.writeSoon();
             await msg.edit({ text: "✅ 已清空所有功能模型设置", parseMode: "html" });
             return;
           }
-          
           if (a0 === "auto") {
             const entries = Object.entries(Store.data.providers);
-            if (!entries.length) { await msg.edit({ text: "❌ 请先使用 ai config add 添加服务商", parseMode: "html" }); return; }
+            if (!entries.length) {
+              await msg.edit({ text: "❌ 请先使用 ai config add 添加服务商", parseMode: "html" });
+              return;
+            }
             const modelsBy: Record<string, string[]> = {};
             for (const [n, p] of entries) {
               try {
@@ -1512,11 +1567,14 @@ class AiPlugin extends Plugin {
                 const ml = String(m).toLowerCase();
                 if (/image|dall|sd|gpt-image/.test(ml)) buckets.image.push(m);
                 else if (/tts|voice|audio\.speech|gpt-4o.*-tts|\b-tts\b/.test(ml)) buckets.tts.push(m);
-                else { buckets.chat.push(m); buckets.search.push(m); }
+                else {
+                  buckets.chat.push(m);
+                  buckets.search.push(m);
+                }
               }
               bucketsBy[n] = buckets;
             }
-            const orders: Array<Compat | "other"> = ["openai","gemini","claude","other"];
+            const orders: Array<Compat | "other"> = ["openai", "gemini", "claude", "other"];
             const modelFamilyOf = (m: string): Compat | "other" => {
               const s = String(m).toLowerCase();
               if (/(gpt-|dall-e|gpt-image|tts-1|gpt-4o|\bo[134](?:-|\b))/.test(s)) return "openai";
@@ -1540,80 +1598,27 @@ class AiPlugin extends Plugin {
               return w;
             };
             const popularPatterns: Record<Compat | "other", RegExp[]> = {
-                // OpenAI 常用/官方型号
-                openai: [
-                  /\bgpt-4o\b/i,
-                  /\bgpt-4o-mini\b/i,
-                  /\bgpt-4\.1\b/i,
-                  /\bgpt-4\.1-mini\b/i,
-                  /\bgpt-4-turbo\b/i,
-                  /\bgpt-4\b/i,
-                  /\bgpt-3\.5-turbo\b/i,
-                  /\bgpt-image-1\b/i,
-                  /\btts-1\b/i,
-                  /\btts-1-hd\b/i,
-                  /\bo3\b/i,
-                  /\bo4-mini\b/i,
-                  /\bo3-mini\b/i,
-                  /\bo1\b/i
-                ],
-                // Anthropic Claude 常用/官方型号
-                claude: [
-                  /\bclaude-3\.7-sonnet\b/i,
-                  /\bclaude-3-7-sonnet\b/i,
-                  /\bclaude-3\.5-sonnet\b/i,
-                  /\bclaude-3-5-sonnet\b/i,
-                  /\bclaude-3\.5-haiku\b/i,
-                  /\bclaude-3-5-haiku\b/i,
-                  /\bclaude-3-opus\b/i,
-                  /\bclaude-3-sonnet\b/i,
-                  /\bclaude-3-haiku\b/i,
-                  /\bclaude-2\.1\b/i,
-                  /\bclaude-2\b/i
-                ],
-                // Google Gemini 常用/官方型号（优先 2.5 系列，其次 1.5 兼容名）
-                gemini: [
-                  /\bgemini-2\.5-pro\b/i,
-                  /\bgemini-2\.5-flash\b/i,
-                  /\bgemini-2\.5-flash-lite\b/i,
-                  /\bgemini-2\.0-flash\b/i,
-                  /\bgemini-1\.5-pro\b/i,
-                  /\bgemini-1\.5-flash\b/i,
-                  /\bgemini-1\.5-flash-8b\b/i,
-                  /\bgemini-1\.0-pro\b/i,
-                  /\bgemini-1\.0-pro-vision\b/i
-                ],
-                // 其它生态中常用型号（对接 OpenAI/兼容协议的第三方）
-                other: [
-                  /\bdeepseek-chat\b/i,
-                  /\bdeepseek-reasoner\b/i,
-                  /\bdeepseek-v3\b/i,
-                  /\bdeepseek-v3\.1\b/i,
-                  /\bdeepseek-r1\b/i,
-                  /\bgrok-2\b/i,
-                  /\bgrok-2-1212\b/i,
-                  /\bgrok-2-vision-1212\b/i,
-                  /\bgrok-1\b/i,
-                  /\bllama-3\.1-405b-instruct\b/i,
-                  /\bllama-3\.1-70b-instruct\b/i,
-                  /\bllama-3-70b-instruct\b/i,
-                  /\bllama-3\.1-8b-instruct\b/i,
-                  /\bllama-3-8b-instruct\b/i,
-                  /\bllama-3\.3-70b-instruct\b/i,
-                  /\bmistral-large\b/i,
-                  /\bmistral-large-2\b/i,
-                  /\bmixtral-8x22b-instruct\b/i,
-                  /\bmixtral-8x7b-instruct\b/i,
-                  /\bqwen2\.5-72b-instruct\b/i,
-                  /\bqwen2-72b-instruct\b/i,
-                  /\bqwen2\.5-32b-instruct\b/i,
-                  /\bqwen2\.5-7b-instruct\b/i,
-                  /\bqwen2-7b-instruct\b/i,
-                  /\bcommand-r\+\b/i,
-                  /\bcommand-r-plus\b/i,
-                  /\bcommand-r\b/i
-                ]
-              };
+              openai: [
+                /\bgpt-4o\b/i, /\bgpt-4o-mini\b/i, /\bgpt-4\.1\b/i, /\bgpt-4\.1-mini\b/i, /\bgpt-4-turbo\b/i, /\bgpt-4\b/i, /\bgpt-3\.5-turbo\b/i,
+                /\bgpt-image-1\b/i, /\btts-1\b/i, /\btts-1-hd\b/i, /\bo3\b/i, /\bo4-mini\b/i, /\bo3-mini\b/i, /\bo1\b/i
+              ],
+              claude: [
+                /\bclaude-3\.7-sonnet\b/i, /\bclaude-3-7-sonnet\b/i, /\bclaude-3\.5-sonnet\b/i, /\bclaude-3-5-sonnet\b/i, /\bclaude-3\.5-haiku\b/i,
+                /\bclaude-3-5-haiku\b/i, /\bclaude-3-opus\b/i, /\bclaude-3-sonnet\b/i, /\bclaude-3-haiku\b/i, /\bclaude-2\.1\b/i, /\bclaude-2\b/i
+              ],
+              gemini: [
+                /\bgemini-2\.5-pro\b/i, /\bgemini-2\.5-flash\b/i, /\bgemini-2\.5-flash-lite\b/i, /\bgemini-2\.0-flash\b/i, /\bgemini-1\.5-pro\b/i,
+                /\bgemini-1\.5-flash\b/i, /\bgemini-1\.5-flash-8b\b/i, /\bgemini-1\.0-pro\b/i, /\bgemini-1\.0-pro-vision\b/i
+              ],
+              other: [
+                /\bdeepseek-chat\b/i, /\bdeepseek-reasoner\b/i, /\bdeepseek-v3\b/i, /\bdeepseek-v3\.1\b/i, /\bdeepseek-r1\b/i,
+                /\bgrok-2\b/i, /\bgrok-2-1212\b/i, /\bgrok-2-vision-1212\b/i, /\bgrok-1\b/i, /\bllama-3\.1-405b-instruct\b/i,
+                /\bllama-3\.1-70b-instruct\b/i, /\bllama-3-70b-instruct\b/i, /\bllama-3\.1-8b-instruct\b/i, /\bllama-3-8b-instruct\b/i,
+                /\bllama-3\.3-70b-instruct\b/i, /\bmistral-large\b/i, /\bmistral-large-2\b/i, /\bmixtral-8x22b-instruct\b/i,
+                /\bmixtral-8x7b-instruct\b/i, /\bqwen2\.5-72b-instruct\b/i, /\bqwen2-72b-instruct\b/i, /\bqwen2\.5-32b-instruct\b/i,
+                /\bqwen2\.5-7b-instruct\b/i, /\bqwen2-7b-instruct\b/i, /\bcommand-r\+\b/i, /\bcommand-r-plus\b/i, /\bcommand-r\b/i
+              ]
+            };
             const isPopularByFamily = (m: string, family: Compat | "other") => {
               const s = String(m).toLowerCase();
               const pats = popularPatterns[family] || [];
@@ -1624,13 +1629,11 @@ class AiPlugin extends Plugin {
               const s = String(m).toLowerCase();
               const numMatch = s.match(/(\d+(?:\.\d+)?)/);
               let base = numMatch ? parseFloat(numMatch[1]) : 0;
-              // special cases
               if (/gpt-4o/.test(s)) base = Math.max(base, 4.01);
               if (/tts-1/.test(s)) base = Math.max(base, 1.0);
               return base + labelWeight(s) + popularityWeight(m, family);
             };
-            const sortCandidates = (_kind: "chat"|"search"|"image"|"tts", family: Compat|"other", list: string[]) => {
-              // 若存在常用模型，优先在常用集合中排序；否则使用原集合
+            const sortCandidates = (_kind: "chat" | "search" | "image" | "tts", family: Compat | "other", list: string[]) => {
               const preferred = list.filter(m => isPopularByFamily(m, family));
               const useList = preferred.length ? preferred : list;
               const stable = useList.filter(m => isStable(m));
@@ -1640,7 +1643,7 @@ class AiPlugin extends Plugin {
               unstable.sort(cmp);
               return [...stable, ...unstable];
             };
-            const pickAcrossKind = (kind: "chat"|"search"|"image"|"tts", preferredProvider?: string) => {
+            const pickAcrossKind = (kind: "chat" | "search" | "image" | "tts", preferredProvider?: string) => {
               const providerOrder = (() => {
                 const names = entries.map(([n]) => n);
                 if (preferredProvider && names.includes(preferredProvider)) {
@@ -1649,7 +1652,6 @@ class AiPlugin extends Plugin {
                 }
                 return names;
               })();
-              // 全局跨服务商选择：家族优先 -> 稳定优先 -> 版本号/标签权重降序
               for (const fam of orders) {
                 for (const n of providerOrder) {
                   const bucket = bucketsBy[n]?.[kind] || [];
@@ -1661,7 +1663,6 @@ class AiPlugin extends Plugin {
                   if (m) return { n, m, c: fam };
                 }
               }
-              // 兜底：other
               for (const n of providerOrder) {
                 const bucket = bucketsBy[n]?.[kind] || [];
                 if (!bucket.length) continue;
@@ -1675,13 +1676,15 @@ class AiPlugin extends Plugin {
             const searchPref = pick("search")?.provider || undefined;
             const imagePref = pick("image")?.provider || undefined;
             const ttsPref = pick("tts")?.provider || undefined;
-            // 偏好但不限制：如果有锚，则优先尝试该服务商，但依然允许跨服务商全局选择
             const anchorProvider = chatPref || searchPref || imagePref || ttsPref || undefined;
             const chatSel = pickAcrossKind("chat", anchorProvider);
             const searchSel = pickAcrossKind("search", anchorProvider);
             const imageSel = pickAcrossKind("image", anchorProvider);
             const ttsSel = pickAcrossKind("tts", anchorProvider);
-            if (!chatSel) { await msg.edit({ text: "❌ 未在任何已配置服务商中找到可用 chat 模型", parseMode: "html" }); return; }
+            if (!chatSel) {
+              await msg.edit({ text: "❌ 未在任何已配置服务商中找到可用 chat 模型", parseMode: "html" });
+              return;
+            }
             const prev = { ...Store.data.models };
             Store.data.models.chat = `${chatSel.n} ${chatSel.m}`;
             Store.data.models.search = searchSel ? `${searchSel.n} ${searchSel.m}` : prev.search;
@@ -1690,47 +1693,118 @@ class AiPlugin extends Plugin {
             await Store.writeSoon();
             const cur = Store.data.models;
             const detail = `✅ 已智能分配 chat/search/image/tts\n\n<b>chat:</b> <code>${html(cur.chat) || "(未设)"}</code>\n<b>search:</b> <code>${html(cur.search) || "(未设)"}</code>\n<b>image:</b> <code>${html(cur.image) || "(未设)"}</code>\n<b>tts:</b> <code>${html(cur.tts) || "(未设)"}</code>`;
-            await msg.edit({ text: detail, parseMode: "html" }); return;
+            await msg.edit({ text: detail, parseMode: "html" });
+            return;
           }
-          
           const kind = a0 as keyof Models;
-          if (["chat","search","image","tts"].includes(kind)) {
+          if (["chat", "search", "image", "tts"].includes(kind)) {
             const [provider, ...mm] = args.slice(1);
             const model = (mm.join(" ") || "").trim();
-            if (!provider || !model) { await msg.edit({ text: "❌ 参数不足", parseMode: "html" }); return; }
-            if (!Store.data.providers[provider]) { await msg.edit({ text: "❌ 未知服务商", parseMode: "html" }); return; }
+            if (!provider || !model) {
+              await msg.edit({ text: "❌ 参数不足", parseMode: "html" });
+              return;
+            }
+            if (!Store.data.providers[provider]) {
+              await msg.edit({ text: "❌ 未知服务商", parseMode: "html" });
+              return;
+            }
             Store.data.models[kind] = `${provider} ${model}`;
             await Store.writeSoon();
-            await msg.edit({ text: `✅ 已设置 ${kind}: <code>${html(Store.data.models[kind])}</code>`, parseMode: "html" }); return;
+            await msg.edit({ text: `✅ 已设置 ${kind}: <code>${html(Store.data.models[kind])}</code>`, parseMode: "html" });
+            return;
           }
-          await msg.edit({ text: "❌ 未知 model 子命令", parseMode: "html" }); return;
+          await msg.edit({ text: "❌ 未知 model 子命令", parseMode: "html" });
+          return;
         }
-        
+
+        /* ---------- 上下文管理 ---------- */
         if (subn === "context") {
-          const a0 = (args[0] || "").toLowerCase(); const id = chatIdStr(msg);
-          if (a0 === "on") { Store.data.contextEnabled = true; await Store.writeSoon(); await msg.edit({ text: "✅ 已开启上下文", parseMode: "html" }); return; }
-          if (a0 === "off") { Store.data.contextEnabled = false; await Store.writeSoon(); await msg.edit({ text: "✅ 已关闭上下文", parseMode: "html" }); return; }
-          if (a0 === "show") { const items = histFor(id); const t = items.map(x => `${x.role}: ${html(x.content)}`).join("\n"); await sendLong(msg, t || "(空)"); return; }
-          if (a0 === "del") { delete Store.data.histories[id]; if (Store.data.histMeta) delete Store.data.histMeta[id]; await Store.writeSoon(); await msg.edit({ text: "✅ 已清空本会话上下文", parseMode: "html" }); return; }
-          await msg.edit({ text: "❌ 未知 context 子命令\n支持: on|off|show|del", parseMode: "html" }); return;
+          const a0 = (args[0] || "").toLowerCase();
+          const id = chatIdStr(msg);
+          if (a0 === "on") {
+            Store.data.contextEnabled = true;
+            await Store.writeSoon();
+            await msg.edit({ text: "✅ 已开启上下文", parseMode: "html" });
+            return;
+          }
+          if (a0 === "off") {
+            Store.data.contextEnabled = false;
+            await Store.writeSoon();
+            await msg.edit({ text: "✅ 已关闭上下文", parseMode: "html" });
+            return;
+          }
+          if (a0 === "show") {
+            const items = histFor(id);
+            const t = items.map(x => `${x.role}: ${html(x.content)}`).join("\n");
+            await sendLong(msg, t || "(空)");
+            return;
+          }
+          if (a0 === "del") {
+            delete Store.data.histories[id];
+            if (Store.data.histMeta) delete Store.data.histMeta[id];
+            await Store.writeSoon();
+            await msg.edit({ text: "✅ 已清空本会话上下文", parseMode: "html" });
+            return;
+          }
+          await msg.edit({ text: "❌ 未知 context 子命令\n支持: on|off|show|del", parseMode: "html" });
+          return;
         }
-        
-        if (subn === "collapse") { const a0 = (args[0] || "").toLowerCase(); Store.data.collapse = a0 === "on"; await Store.writeSoon(); await msg.edit({ text: `✅ 消息折叠: ${Store.data.collapse ? "开启" : "关闭"}`, parseMode: "html" }); return; }
-        
+
+        /* ---------- 折叠开关 ---------- */
+        if (subn === "collapse") {
+          const a0 = (args[0] || "").toLowerCase();
+          Store.data.collapse = a0 === "on";
+          await Store.writeSoon();
+          await msg.edit({ text: `✅ 消息折叠: ${Store.data.collapse ? "开启" : "关闭"}`, parseMode: "html" });
+          return;
+        }
+
+        /* ---------- Telegraph ---------- */
         if (subn === "telegraph") {
           const a0 = (args[0] || "").toLowerCase();
-          if (a0 === "on") { Store.data.telegraph.enabled = true; await Store.writeSoon(); await msg.edit({ text: "✅ 已开启 telegraph", parseMode: "html" }); return; }
-          if (a0 === "off") { Store.data.telegraph.enabled = false; await Store.writeSoon(); await msg.edit({ text: "✅ 已关闭 telegraph", parseMode: "html" }); return; }
-          if (a0 === "limit") { const n = parseInt(args[1] || "0"); Store.data.telegraph.limit = isFinite(n) ? n : 0; await Store.writeSoon(); await msg.edit({ text: `✅ 阈值: ${Store.data.telegraph.limit}`, parseMode: "html" }); return; }
-          if (a0 === "list") { const list = Store.data.telegraph.posts.map((p, i) => `${i + 1}. <a href="${p.url}">${html(p.title)}</a> ${p.createdAt}`).join("\n") || "(空)"; await sendLong(msg, `🧾 <b>Telegraph 列表</b>\n\n${list}`); return; }
-          if (a0 === "del") { const t = (args[1] || "").toLowerCase(); if (t === "all") Store.data.telegraph.posts = []; else { const i = parseInt(args[1] || "0") - 1; if (i >= 0) Store.data.telegraph.posts.splice(i, 1); } await Store.writeSoon(); await msg.edit({ text: "✅ 操作完成", parseMode: "html" }); return; }
-          await msg.edit({ text: "❌ 未知 telegraph 子命令", parseMode: "html" }); return;
+          if (a0 === "on") {
+            Store.data.telegraph.enabled = true;
+            await Store.writeSoon();
+            await msg.edit({ text: "✅ 已开启 telegraph", parseMode: "html" });
+            return;
+          }
+          if (a0 === "off") {
+            Store.data.telegraph.enabled = false;
+            await Store.writeSoon();
+            await msg.edit({ text: "✅ 已关闭 telegraph", parseMode: "html" });
+            return;
+          }
+          if (a0 === "limit") {
+            const n = parseInt(args[1] || "0");
+            Store.data.telegraph.limit = isFinite(n) ? n : 0;
+            await Store.writeSoon();
+            await msg.edit({ text: `✅ 阈值: ${Store.data.telegraph.limit}`, parseMode: "html" });
+            return;
+          }
+          if (a0 === "list") {
+            const list = Store.data.telegraph.posts.map((p, i) => `${i + 1}. <a href="${p.url}">${html(p.title)}</a> ${p.createdAt}`).join("\n") || "(空)";
+            await sendLong(msg, `🧾 <b>Telegraph 列表</b>\n\n${list}`);
+            return;
+          }
+          if (a0 === "del") {
+            const t = (args[1] || "").toLowerCase();
+            if (t === "all") Store.data.telegraph.posts = [];
+            else {
+              const i = parseInt(args[1] || "0") - 1;
+              if (i >= 0) Store.data.telegraph.posts.splice(i, 1);
+            }
+            await Store.writeSoon();
+            await msg.edit({ text: "✅ 操作完成", parseMode: "html" });
+            return;
+          }
+          await msg.edit({ text: "❌ 未知 telegraph 子命令", parseMode: "html" });
+          return;
         }
-        
+
+        /* ---------- 音色管理 ---------- */
         if (subn === "voice") {
           const a0 = (args[0] || "").toLowerCase();
           if (!Store.data.voices) Store.data.voices = { gemini: "Kore", openai: "alloy" };
-          
           if (a0 === "list") {
             const geminiList = GEMINI_VOICES.map((v, i) => `${i + 1}. ${v}`).join("\n");
             const openaiList = OPENAI_VOICES.map((v, i) => `${i + 1}. ${v}`).join("\n");
@@ -1740,13 +1814,11 @@ class AiPlugin extends Plugin {
             await sendLong(msg, txt);
             return;
           }
-          
           if (a0 === "show") {
             const txt = `🎤 <b>当前音色配置</b>\n\n<b>Gemini:</b> <code>${Store.data.voices.gemini}</code>\n<b>OpenAI:</b> <code>${Store.data.voices.openai}</code>`;
             await msg.edit({ text: txt, parseMode: "html" });
             return;
           }
-          
           if (a0 === "gemini") {
             const voiceName = args[1];
             if (!voiceName) {
@@ -1762,7 +1834,6 @@ class AiPlugin extends Plugin {
             await msg.edit({ text: `✅ 已设置 Gemini 音色: <code>${html(voiceName)}</code>`, parseMode: "html" });
             return;
           }
-          
           if (a0 === "openai") {
             const voiceName = args[1];
             if (!voiceName) {
@@ -1778,11 +1849,11 @@ class AiPlugin extends Plugin {
             await msg.edit({ text: `✅ 已设置 OpenAI 音色: <code>${html(voiceName)}</code>`, parseMode: "html" });
             return;
           }
-          
           await msg.edit({ text: "❌ 未知 voice 子命令\n支持: list|show|gemini <音色>|openai <音色>", parseMode: "html" });
           return;
         }
-        
+
+        /* ---------- 对话 / 搜索 ---------- */
         if (subn === "chat" || subn === "search" || !subn || isUnknownBareQuery) {
           const replyMsg = await msg.getReplyMessage();
           const isSearch = subn === "search";
@@ -1790,30 +1861,41 @@ class AiPlugin extends Plugin {
           const repliedText = extractText(replyMsg).trim();
           const q = (plain || repliedText).trim();
           const hasImage = !!(replyMsg && (replyMsg as any).media);
-          if (!q && !hasImage) { await msg.edit({ text: "❌ 请输入内容或回复一条消息", parseMode: "html" }); return; }
+          if (!q && !hasImage) {
+            await msg.edit({ text: "❌ 请输入内容或回复一条消息", parseMode: "html" });
+            return;
+          }
           await msg.edit({ text: "🔄 处理中...", parseMode: "html" });
-          const pre = await preflight(isSearch ? "search" : "chat"); if (!pre) return; const { m, p, compat } = pre;
+          const pre = await preflight(isSearch ? "search" : "chat");
+          if (!pre) return;
+          const { m, p, compat } = pre;
 
-          let content = ""; let usedModel = m.model;
+          let content = "";
+          let usedModel = m.model;
           if (hasImage) {
             try {
-
               const raw = await msg.client?.downloadMedia(replyMsg as any);
-              const buf: Buffer | undefined = Buffer.isBuffer(raw) ? raw as Buffer : (raw != null ? Buffer.from(String(raw)) : undefined);
-              if (!buf || !buf.length) { await msg.edit({ text: "❌ 无法下载被回复的媒体", parseMode: "html" }); return; }
-              const b64 = buf.toString('base64');
-              content = await chatVision(p, compat, m.model, b64, q);
+              const buf: Buffer | undefined = Buffer.isBuffer(raw) ? raw as Buffer : raw != null ? Buffer.from(String(raw)) : undefined;
+              if (!buf || !buf.length) {
+                await msg.edit({ text: "❌ 无法下载被回复的媒体", parseMode: "html" });
+                return;
+              }
+              const b64 = buf.toString("base64");
+              const processedPrompt = applyPresetPrompt(q || "描述这张图片");
+              content = await chatVision(p, compat, m.model, b64, processedPrompt);
             } catch (e: any) {
-              await msg.edit({ text: `❌ 处理图片失败：${html(mapError(e, 'vision'))}`, parseMode: "html" }); return;
+              await msg.edit({ text: `❌ 处理图片失败：${html(mapError(e, "vision"))}`, parseMode: "html" });
+              return;
             }
           } else {
             const res = await callChat(isSearch ? "search" : "chat", q, msg);
-            content = res.content; usedModel = res.model;
+            content = res.content;
+            usedModel = res.model;
           }
 
           const footTxt = footer(usedModel, isSearch ? "with Search" : "");
           const full = formatQA(q || "(图片)", content);
-          const replyToId = replyMsg?.id || 0; // Do not reply to service/status messages
+          const replyToId = replyMsg?.id || 0;
           if (Store.data.telegraph.enabled && Store.data.telegraph.limit > 0 && full.length > Store.data.telegraph.limit) {
             const url = await createTGPage("TeleBox AI", content);
             if (url) {
@@ -1821,139 +1903,111 @@ class AiPlugin extends Plugin {
               Store.data.telegraph.posts = Store.data.telegraph.posts.slice(0, 10);
               await Store.writeSoon();
               await sendLongAuto(msg, `📰 <a href="${url}">内容较长，已创建 Telegraph</a>`, replyToId, { collapse: Store.data.collapse }, footTxt);
-              if (replyToId) { try { await msg.delete(); } catch {} }
-               return;
+              if (replyToId) {
+                try { await msg.delete(); } catch {}
+              }
+              return;
             }
           }
           await sendLongAuto(msg, full, replyToId, { collapse: Store.data.collapse }, footTxt);
-          if (replyToId) { try { await msg.delete(); } catch {} }
-           return;
+          if (replyToId) {
+            try { await msg.delete(); } catch {}
+          }
+          return;
         }
-        
+
+        /* ---------- 生图 ---------- */
         if (subn === "image") {
           const replyMsg = await msg.getReplyMessage();
           const prm = (args.join(" ") || "").trim() || extractText(replyMsg).trim();
-          if (!prm) { await msg.edit({ text: "❌ 请输入提示词", parseMode: "html" }); return; }
-          const pre = await preflight("image"); if (!pre) return; const { m, p, compat } = pre;
+          if (!prm) {
+            await msg.edit({ text: "❌ 请输入提示词", parseMode: "html" });
+            return;
+          }
+          const pre = await preflight("image");
+          if (!pre) return;
+          const { m, p, compat } = pre;
           await msg.edit({ text: "🎨 生成中...", parseMode: "html" });
           const replyToId = replyMsg?.id || 0;
           if (compat === "openai") {
             const b64 = await imageOpenAI(p, m.model, prm);
-            if (!b64) { await msg.edit({ text: "❌ 图片生成失败：服务无有效输出", parseMode: "html" }); return; }
+            if (!b64) {
+              await msg.edit({ text: "❌ 图片生成失败：服务无有效输出", parseMode: "html" });
+              return;
+            }
             const buf = Buffer.from(b64, "base64");
             await sendImageFile(msg, buf, `🖼️ ${html(prm)}` + footer(m.model), replyToId);
-            await msg.delete(); return;
+            await msg.delete();
+            return;
           } else if (compat === "gemini") {
             try {
               const { image, text, mime } = await imageGemini(p, m.model, prm);
               if (image) {
                 await sendImageFile(msg, image, `🖼️ ${html(prm)}` + footer(m.model), replyToId, mime);
-                await msg.delete(); return;
+                await msg.delete();
+                return;
               }
-
               if (text) {
                 const textOut = formatQA(prm, text);
                 await sendLongAuto(msg, textOut, replyToId, { collapse: Store.data.collapse }, footer(m.model));
-                await msg.delete(); return;
+                await msg.delete();
+                return;
               }
-              await msg.edit({ text: "❌ 图片生成失败：服务无有效输出", parseMode: "html" }); return;
+              await msg.edit({ text: "❌ 图片生成失败：服务无有效输出", parseMode: "html" });
+              return;
             } catch (e: any) {
-              await msg.edit({ text: `❌ 图片生成失败：${html(mapError(e, 'image'))}` , parseMode: "html" });
+              await msg.edit({ text: `❌ 图片生成失败：${html(mapError(e, "image"))}`, parseMode: "html" });
               return;
             }
           } else {
-            await msg.edit({ text: "❌ 当前服务商不支持图片生成功能", parseMode: "html" }); return;
+            await msg.edit({ text: "❌ 当前服务商不支持图片生成功能", parseMode: "html" });
+            return;
           }
         }
-        
+
+        /* ---------- 语音回答 ---------- */
         if (subn === "audio" || subn === "searchaudio") {
           const replyMsg = await msg.getReplyMessage();
           const plain = (args.join(" ") || "").trim();
           const repliedText = extractText(replyMsg).trim();
           const q = (plain || repliedText).trim();
-          if (!q) { await msg.edit({ text: "❌ 请输入内容或回复一条消息", parseMode: "html" }); return; }
-
+          if (!q) {
+            await msg.edit({ text: "❌ 请输入内容或回复一条消息", parseMode: "html" });
+            return;
+          }
           await msg.edit({ text: "🔄 处理中...", parseMode: "html" });
           const isSearch = subn === "searchaudio";
           const res = await callChat(isSearch ? "search" : "chat", q, msg);
           const content = res.content;
-
-          const mtts = pick("tts"); if (!mtts) { await msg.edit({ text: "❌ 未设置 tts 模型", parseMode: "html" }); return; }
-          const ptts = providerOf(mtts.provider); if (!ptts) { await msg.edit({ text: "❌ 服务商未配置", parseMode: "html" }); return; }
-          if (!ptts.apiKey) { await msg.edit({ text: "❌ 未提供令牌，请先配置 API Key（ai config add/update）", parseMode: "html" }); return; }
+          const mtts = pick("tts");
+          if (!mtts) {
+            await msg.edit({ text: "❌ 未设置 tts 模型", parseMode: "html" });
+            return;
+          }
+          const ptts = providerOf(mtts.provider);
+          if (!ptts) {
+            await msg.edit({ text: "❌ 服务商未配置", parseMode: "html" });
+            return;
+          }
+          if (!ptts.apiKey) {
+            await msg.edit({ text: "❌ 未提供令牌，请先配置 API Key（ai config add/update）", parseMode: "html" });
+            return;
+          }
           const compat = await resolveCompat(mtts.provider, mtts.model, ptts);
           if (!Store.data.voices) Store.data.voices = { gemini: "Kore", openai: "alloy" };
           const voice = compat === "gemini" ? Store.data.voices.gemini : Store.data.voices.openai;
-
           await msg.edit({ text: "🔊 合成中...", parseMode: "html" });
           const replyToId = replyMsg?.id || 0;
-
           if (compat === "openai") {
-            if (!ptts.apiKey) { await msg.edit({ text: "❌ 未提供令牌，请先配置 API Key（ai config add/update）", parseMode: "html" }); return; }
             const audio = await ttsOpenAI(ptts, mtts.model, content, voice);
-            await sendVoiceWithCaption(
-              msg,
-              audio,
-              "",
-              replyToId
-            );
+            await sendVoiceWithCaption(msg, audio, "", replyToId);
             await msg.delete();
             return;
           } else if (compat === "gemini") {
             const { audio, mime } = await ttsGemini(ptts, mtts.model, content, voice);
             if (audio) {
               const { buf: outBuf } = convertPcmL16ToWavIfNeeded(audio, mime);
-              await sendVoiceWithCaption(
-                msg,
-                outBuf,
-                "",
-                replyToId
-              );
-              await msg.delete();
-              return;
-            } else {
-              await msg.edit({ text: "❌ 语音合成失败：服务无有效输出", parseMode: "html" });
-              return;
-            }
-          } else {
-            await msg.edit({ text: "❌ 当前服务商不支持语音合成功能", parseMode: "html" });
-            return;
-          }
-        }
-        
-        if (subn === "tts") {
-          const replyMsg = await msg.getReplyMessage();
-          const t = (args.join(" ") || "").trim() || extractText(replyMsg).trim();
-          if (!t) { await msg.edit({ text: "❌ 请输入文本", parseMode: "html" }); return; }
-          const m = pick("tts"); if (!m) { await msg.edit({ text: "❌ 未设置 tts 模型", parseMode: "html" }); return; }
-          const p = providerOf(m.provider)!;
-          if (!p.apiKey) { await msg.edit({ text: "❌ 未提供令牌，请先配置 API Key（ai config add/update）", parseMode: "html" }); return; }
-          const compat = await resolveCompat(m.provider, m.model, p);
-          if (!Store.data.voices) Store.data.voices = { gemini: "Kore", openai: "alloy" };
-          const voice = compat === "gemini" ? Store.data.voices.gemini : Store.data.voices.openai;
-          await msg.edit({ text: "🔊 合成中...", parseMode: "html" });
-          const replyToId = replyMsg?.id || 0;
-          if (compat === "openai") {
-            if (!p.apiKey) { await msg.edit({ text: "❌ 未提供令牌，请先配置 API Key（ai config add/update）", parseMode: "html" }); return; }
-            const audio = await ttsOpenAI(p, m.model, t, voice);
-            await sendVoiceWithCaption(
-              msg,
-              audio,
-              "",
-              replyToId
-            );
-            await msg.delete();
-            return;
-          } else if (compat === "gemini") {
-            const { audio, mime } = await ttsGemini(p, m.model, t, voice);
-            if (audio) {
-              const { buf: outBuf } = convertPcmL16ToWavIfNeeded(audio, mime);
-              await sendVoiceWithCaption(
-                msg,
-                outBuf,
-                "",
-                replyToId
-              );
+              await sendVoiceWithCaption(msg, outBuf, "", replyToId);
               await msg.delete();
               return;
             } else {
@@ -1966,11 +2020,56 @@ class AiPlugin extends Plugin {
           }
         }
 
-        // 未知子命令兜底
+        /* ---------- TTS ---------- */
+        if (subn === "tts") {
+          const replyMsg = await msg.getReplyMessage();
+          const t = (args.join(" ") || "").trim() || extractText(replyMsg).trim();
+          if (!t) {
+            await msg.edit({ text: "❌ 请输入文本", parseMode: "html" });
+            return;
+          }
+          const m = pick("tts");
+          if (!m) {
+            await msg.edit({ text: "❌ 未设置 tts 模型", parseMode: "html" });
+            return;
+          }
+          const p = providerOf(m.provider)!;
+          if (!p.apiKey) {
+            await msg.edit({ text: "❌ 未提供令牌，请先配置 API Key（ai config add/update）", parseMode: "html" });
+            return;
+          }
+          const compat = await resolveCompat(m.provider, m.model, p);
+          if (!Store.data.voices) Store.data.voices = { gemini: "Kore", openai: "alloy" };
+          const voice = compat === "gemini" ? Store.data.voices.gemini : Store.data.voices.openai;
+          await msg.edit({ text: "🔊 合成中...", parseMode: "html" });
+          const replyToId = replyMsg?.id || 0;
+          if (compat === "openai") {
+            const audio = await ttsOpenAI(p, m.model, t, voice);
+            await sendVoiceWithCaption(msg, audio, "", replyToId);
+            await msg.delete();
+            return;
+          } else if (compat === "gemini") {
+            const { audio, mime } = await ttsGemini(p, m.model, t, voice);
+            if (audio) {
+              const { buf: outBuf } = convertPcmL16ToWavIfNeeded(audio, mime);
+              await sendVoiceWithCaption(msg, outBuf, "", replyToId);
+              await msg.delete();
+              return;
+            } else {
+              await msg.edit({ text: "❌ 语音合成失败：服务无有效输出", parseMode: "html" });
+              return;
+            }
+          } else {
+            await msg.edit({ text: "❌ 当前服务商不支持语音合成功能", parseMode: "html" });
+            return;
+          }
+        }
+
+        /* ---------- 兜底 ---------- */
         await msg.edit({ text: "❌ 未知子命令", parseMode: "html" });
         return;
       } catch (e: any) {
-        await msg.edit({ text: `❌ 出错：${html(mapError(e, subn))}` , parseMode: "html" });
+        await msg.edit({ text: `❌ 出错：${html(mapError(e, subn))}`, parseMode: "html" });
         return;
       }
     }
