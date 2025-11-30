@@ -48,16 +48,19 @@ function resolveResourceUrl(path: string): string {
 async function loadConfigResource(url: string, forceUpdate = false) {
   const parseAndSetConfig = (content: string) => {
     const fullConfig = JSON.parse(content);
-    if (!fullConfig.meta || !fullConfig.resources) {
-      throw new Error("配置文件格式错误，缺少 meta 或 resources 字段");
+    if (!fullConfig.resources) {
+      throw new Error("配置文件格式错误，缺少resources 字段");
     }
-
-    const meta = fullConfig.meta;
-    const { repo_owner, repo_name, branch, base_url_template } = meta;
-
-    if (!repo_owner || !repo_name || !branch || !base_url_template) {
+// "https://raw.githubusercontent.com/TeleBoxOrg/TeleBox_Plugins/refs/heads/main/eat/config.json";
+    //放弃meta配置，改为直接从url中解析出owner, repo, branch,等信息
+    const regex = /^https:\/\/raw\.githubusercontent\.com\/([^\/]+)\/([^\/]+)\/refs\/heads\/([^\/]+)\/(.+)$/;
+    const match = url.match(regex);
+    if (!match) throw new Error("URL格式不正确");
+    const [, repo_owner, repo_name, branch] = match;
+    const base_url_template ="https://github.com/${repo_owner}/${repo_name}/raw/${branch}"
+    if (!repo_owner || !repo_name || !branch) {
       throw new Error(
-        "meta配置不完整, 缺少 repo_owner, repo_name, branch, 或 base_url_template 之一"
+        "URL格式不正确, 缺少 repo_owner, repo_name, branch等信息"
       );
     }
 
