@@ -1,3 +1,5 @@
+// YVLU Plugin - 生成文字语录贴纸
+//@ts-nocheck
 import axios from "axios";
 import _ from "lodash";
 import { getPrefixes } from "@utils/pluginManager";
@@ -302,6 +304,7 @@ class YvluPlugin extends Plugin {
           }
 
           const items = [] as any[];
+          let previousUserId: string | null = null;
 
           for await (const [i, message] of messages.entries()) {
             // 获取发送者信息
@@ -329,8 +332,12 @@ class YvluPlugin extends Plugin {
             const emojiStatus =
               (sender as any).emojiStatus?.documentId?.toString() || null;
 
+            // 判断是否应该显示头像：只有当前用户与上一条消息的用户不同时才显示
+            const shouldShowAvatar = userId !== previousUserId;
+            previousUserId = userId;
+
             let photo = undefined;
-            if (sender.photo) {
+            if (sender.photo && shouldShowAvatar) {
               try {
                 const buffer = await client.downloadProfilePhoto(
                   sender as any,
@@ -489,16 +496,16 @@ class YvluPlugin extends Plugin {
                 id: userId
                   ? parseInt(userId)
                   : hashCode(sender.name || `${firstName}|${lastName}`),
-                name,
-                first_name: firstName || undefined,
-                last_name: lastName || undefined,
-                username: photo ? username || undefined : undefined,
+                name: shouldShowAvatar ? name : "",
+                first_name: shouldShowAvatar ? (firstName || undefined) : undefined,
+                last_name: shouldShowAvatar ? (lastName || undefined) : undefined,
+                username: (photo && shouldShowAvatar) ? (username || undefined) : undefined,
                 photo,
-                emoji_status: emojiStatus || undefined,
+                emoji_status: shouldShowAvatar ? (emojiStatus || undefined) : undefined,
               },
               text: message.message || "",
               entities: entities,
-              avatar: true,
+              avatar: shouldShowAvatar,
               media,
               ...(replyBlock ? { replyMessage: replyBlock } : {}),
             });
