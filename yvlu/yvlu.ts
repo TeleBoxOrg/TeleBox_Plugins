@@ -107,6 +107,51 @@ function getWebPDimensions(imageBuffer: any): {
   }
 }
 
+const getPeerNumericId = (peer?: Api.TypePeer): number | undefined => {
+  if (!peer) return undefined;
+  if (peer instanceof Api.PeerUser) return peer.userId;
+  if (peer instanceof Api.PeerChat) return -peer.chatId;
+  if (peer instanceof Api.PeerChannel) return -peer.channelId;
+  return undefined;
+};
+
+const resolveForwardSenderFromHeader = async (
+  forwardHeader: Api.MessageFwdHeader,
+  client: any
+) => {
+  if (!forwardHeader) return undefined;
+
+  const peerCandidates = [
+    forwardHeader.fromId,
+    forwardHeader.savedFromPeer,
+  ].filter(Boolean);
+
+  for (const peer of peerCandidates) {
+    try {
+      const entity = await client?.getEntity(peer as any);
+      if (entity) {
+        return entity;
+      }
+    } catch (error) {
+      console.warn("解析转发发送者失败", error);
+    }
+  }
+
+  const displayName = forwardHeader.fromName || forwardHeader.postAuthor || "";
+  if (displayName) {
+    return {
+      id: getPeerNumericId(forwardHeader.fromId) || hashCode(displayName),
+      firstName: displayName,
+      lastName: "",
+      username: forwardHeader.postAuthor || undefined,
+      title: displayName,
+      name: displayName,
+    };
+  }
+
+  return undefined;
+};
+
 const prefixes = getPrefixes();
 const mainPrefix = prefixes[0];
 
@@ -310,12 +355,25 @@ class YvluPlugin extends Plugin {
             // 获取发送者信息
             let sender: any = await message.getSender();
             if (message.fwdFrom) {
-              sender = await message.forward?.getSender();
-              if (!sender) {
-                sender = {
-                  name: message.fwdFrom.fromName || "",
-                };
+              let forwardedSender = undefined;
+              try {
+                forwardedSender = await message.forward?.getSender();
+              } catch (error) {
+                console.warn("获取转发发送者失败", error);
               }
+
+              if (!forwardedSender) {
+                forwardedSender = await resolveForwardSenderFromHeader(
+                  message.fwdFrom,
+                  client
+                );
+              }
+
+              if (!forwardedSender) {
+                await msg.edit({ text: "无法获取被转发消息的发送者信息" });
+                return;
+              }
+              sender = forwardedSender;
             }
             if (!sender) {
               await msg.edit({ text: "无法获取消息发送者信息" });
@@ -333,10 +391,15 @@ class YvluPlugin extends Plugin {
               (sender as any).emojiStatus?.documentId?.toString() || null;
 
             // 生成用户唯一标识符：优先使用 userId，如果没有则使用名称的 hashCode
-            const currentUserIdentifier = userId || hashCode(name || `${firstName}|${lastName}` || `user_${i}`).toString();
+            const currentUserIdentifier =
+              userId ||
+              hashCode(
+                name || `${firstName}|${lastName}` || `user_${i}`
+              ).toString();
 
             // 判断是否应该显示头像：只有当前用户与上一条消息的用户不同时才显示
-            const shouldShowAvatar = currentUserIdentifier !== previousUserIdentifier;
+            const shouldShowAvatar =
+              currentUserIdentifier !== previousUserIdentifier;
             previousUserIdentifier = currentUserIdentifier;
 
             let photo = undefined;
@@ -500,11 +563,16 @@ class YvluPlugin extends Plugin {
                   ? parseInt(userId)
                   : hashCode(sender.name || `${firstName}|${lastName}`),
                 name: shouldShowAvatar ? name : "",
-                first_name: shouldShowAvatar ? (firstName || undefined) : undefined,
-                last_name: shouldShowAvatar ? (lastName || undefined) : undefined,
-                username: (photo && shouldShowAvatar) ? (username || undefined) : undefined,
+                first_name: shouldShowAvatar
+                  ? firstName || undefined
+                  : undefined,
+                last_name: shouldShowAvatar ? lastName || undefined : undefined,
+                username:
+                  photo && shouldShowAvatar ? username || undefined : undefined,
                 photo,
-                emoji_status: shouldShowAvatar ? (emojiStatus || undefined) : undefined,
+                emoji_status: shouldShowAvatar
+                  ? emojiStatus || undefined
+                  : undefined,
               },
               text: message.message || "",
               entities: entities,
