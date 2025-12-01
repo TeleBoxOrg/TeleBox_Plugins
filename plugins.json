@@ -375,10 +375,6 @@
     "url": "https://github.com/TeleBoxOrg/TeleBox_Plugins/blob/main/diss/diss.ts?raw=true",
     "desc": "儒雅随和版祖安语录"
   },
-  "cha": {
-    "url": "https://github.com/TeleBoxOrg/TeleBox_Plugins/blob/main/cha/cha.ts?raw=true",
-    "desc": "查询订阅基础信息"
-  },
   "mode": {
     "url": "https://github.com/TeleBoxOrg/TeleBox_Plugins/blob/main/mode/mode.ts?raw=true",
     "desc": "自定义消息格式"
