@@ -37,6 +37,16 @@
         "mask": "eat/maskbp.png"
       }
     },
+    "bfq": {
+      "name": "怎么，你不服气吗",
+      "url": "eat/eatbfq.png",
+      "you": {
+        "x": 53,
+        "y": 0,
+        "mask": "eat/maskbfq.png",
+        "rotate": -15
+      }
+    },
     "cn": {
       "name": "呲你",
       "url": "eat/eatcn.png",
@@ -130,6 +140,15 @@
         "mask": "eat/maskhy2.png"
       }
     },
+    "kf": {
+      "name": "狂粉",
+      "url": "eat/eatkf.png",
+      "you": {
+        "x": 115,
+        "y": 0,
+        "mask": "eat/maskkf.png"
+      }
+    },
     "ko": {
       "name": "升龙拳",
       "url": "https://github.com/FoKit/PagerMaid_Plugins/raw/modify/eat/eatko.png",
@@ -157,6 +176,24 @@
         "mask": "eat/maskld.png"
       }
     },
+    "mb": {
+      "name": "膜拜大佬",
+      "url": "eat/eatmb.png",
+      "you": {
+        "x": 275,
+        "y": 321,
+        "mask": "eat/maskmb.png"
+      }
+    },
+    "pd": {
+      "name": "扑倒~",
+      "url": "eat/eatpd.png",
+      "you": {
+        "x": 146,
+        "y": 146,
+        "mask": "eat/maskpd.png"
+      }
+    },
     "pl": {
       "name": "我他妈直接跑路",
       "url": "eat/eatpl.png",
@@ -164,6 +201,15 @@
         "x": 163,
         "y": 15,
         "mask": "eat/maskpl.png"
+      }
+    },
+    "pr": {
+      "name": "prpr~",
+      "url": "eat/eatpr.png",
+      "you": {
+        "x": -15,
+        "y": 209,
+        "mask": "eat/maskpr.png"
       }
     },
     "qy": {
@@ -287,33 +333,6 @@
         "x": 55,
         "y": 52,
         "mask": "eat/maskyuyu.png"
-      }
-    },
-    "pr": {
-      "name": "prpr~",
-      "url": "eat/eatpr.png",
-      "you": {
-        "x": -15,
-        "y": 209,
-        "mask": "eat/maskpr.png"
-      }
-    },
-    "kf": {
-      "name": "狂粉",
-      "url": "eat/eatkf.png",
-      "you": {
-        "x": 115,
-        "y": 0,
-        "mask": "eat/maskkf.png"
-      }
-    },
-    "mb": {
-      "name": "膜拜大佬",
-      "url": "eat/eatmb.png",
-      "you": {
-        "x": 275,
-        "y": 321,
-        "mask": "eat/maskmb.png"
       }
     }
   }
