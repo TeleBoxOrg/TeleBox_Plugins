@@ -315,8 +315,8 @@
     "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/soutu/soutu.ts?raw=true",
     "desc": "soutu搜图"
   },
-  "xm": {
-    "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/xm/xm.ts?raw=true",
+  "xmsl": {
+    "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/xmsl/xmsl.ts?raw=true",
     "desc": "全自动羡慕"
   },
   "yiyan": {
@@ -382,5 +382,9 @@
   "openlist": {
     "url": "https://github.com/TeleBoxOrg/TeleBox_Plugins/blob/main/openlist/openlist.ts?raw=true",
     "desc": "openlist管理"
+  },
+  "rev": {
+    "url": "https://github.com/TeleBoxOrg/TeleBox_Plugins/blob/main/rev/rev.ts?raw=true",
+    "desc": "反转你的消息"
   }
 }
