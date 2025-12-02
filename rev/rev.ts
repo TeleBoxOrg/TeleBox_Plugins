@@ -52,7 +52,6 @@ class REVPlugin extends Plugin {
 • 回复 GIF + <code>.rev c</code> → 负片效果的 GIF
 • 回复 WebM + <code>.rev h c</code> → 水平翻转 + 负片效果`;
 
-
 	cmdHandlers = {
 		rev: async (msg: Api.Message) => {
 			try {
@@ -79,9 +78,9 @@ class REVPlugin extends Plugin {
 					if (handled) return;
 				}
 
-				// 无有效内容
+				// 无有效内容时的提示
 				await msg.edit({
-					text: '❌ 请提供内容或回复一条文本/图片消息\n💡 使用: <code>.fan [内容]</code> 或回复消息/图片 <code>.fan</code>',
+					text: '❌ 请提供文本内容或回复一条支持的消息\n\n<b>支持的格式：</b>\n• 文本消息（逐行反转）\n• 图片（JPG/PNG/BMP/WebP）\n• 动图（GIF/.gif.mp4）\n• 贴纸（WebM）\n\n💡 <b>使用方法：</b>\n<code>.rev [文本]</code> 或回复消息使用 <code>.rev [参数]</code>',
 					parseMode: 'html',
 				});
 			} catch (error: any) {
@@ -92,8 +91,6 @@ class REVPlugin extends Plugin {
 			}
 		},
 	};
-
-	// ==================== 文本处理 ====================
 
 	// ==================== 文本处理 ====================
 
@@ -160,10 +157,15 @@ class REVPlugin extends Plugin {
 	}
 
 	private reverseStringWithEntities(text: string, entities: any[] = []) {
-		const chars = Array.from(text);
-		const reversed = chars.reverse().join('');
+		// 逐行反转字符顺序，保持行的顺序不变
+		const lines = text.split('\n');
+		const reversedLines = lines.map((line) =>
+			Array.from(line).reverse().join('')
+		);
+		const reversed = reversedLines.join('\n');
 		const textLength = text.length;
 
+		// 反转实体的位置偏移
 		const reversedEntities = entities.map((entity: any) => {
 			const newEntity = { ...entity };
 			newEntity.offset = textLength - entity.offset - entity.length;
@@ -172,8 +174,6 @@ class REVPlugin extends Plugin {
 
 		return { reversed, reversedEntities };
 	}
-
-	// ==================== 媒体处理 ====================
 
 	// ==================== 媒体处理 ====================
 
@@ -341,14 +341,17 @@ class REVPlugin extends Plugin {
 
 	// ==================== 媒体检测 ====================
 
-	// ==================== 媒体检测 ====================
-
 	private isSupportedMedia(media: any): boolean {
 		if (!media) return false;
 		if (media instanceof Api.MessageMediaPhoto) return true;
 		if (media instanceof Api.MessageMediaDocument) {
 			const doc = media.document as Api.Document;
 			const mime = doc?.mimeType || '';
+			const fileName = this.getFileNameFromDocument(doc);
+			// 支持 .gif.mp4（Telegram 动图格式），但不支持普通 .mp4
+			if (fileName && fileName.toLowerCase().endsWith('.gif.mp4')) {
+				return true;
+			}
 			return (
 				mime.startsWith('image/') ||
 				mime === 'video/webm' ||
@@ -358,9 +361,24 @@ class REVPlugin extends Plugin {
 		return false;
 	}
 
+	private getFileNameFromDocument(doc: Api.Document): string | null {
+		if (!doc || !doc.attributes) return null;
+		for (const attr of doc.attributes) {
+			if (attr instanceof Api.DocumentAttributeFilename) {
+				return attr.fileName;
+			}
+		}
+		return null;
+	}
+
 	private isGifMedia(media: any): boolean {
 		if (media instanceof Api.MessageMediaDocument) {
 			const doc = media.document as Api.Document;
+			const fileName = this.getFileNameFromDocument(doc);
+			// .gif.mp4 按 GIF 处理（使用调色板优化）
+			if (fileName && fileName.toLowerCase().endsWith('.gif.mp4')) {
+				return true;
+			}
 			return (doc?.mimeType || '').toLowerCase().includes('gif');
 		}
 		return false;
@@ -377,6 +395,11 @@ class REVPlugin extends Plugin {
 	private getExtensionFromMedia(media: any): string {
 		if (media instanceof Api.MessageMediaDocument) {
 			const doc = media.document as Api.Document;
+			const fileName = this.getFileNameFromDocument(doc);
+			// 保留 .gif.mp4 完整扩展名
+			if (fileName && fileName.toLowerCase().endsWith('.gif.mp4')) {
+				return '.gif.mp4';
+			}
 			return this.getExtensionFromMime(doc?.mimeType);
 		}
 		return '.jpg';
@@ -392,8 +415,6 @@ class REVPlugin extends Plugin {
 		if (mime.includes('jpeg') || mime.includes('jpg')) return '.jpg';
 		return '.jpg';
 	}
-
-	// ==================== FFmpeg 转换 ====================
 
 	// ==================== FFmpeg 转换 ====================
 
@@ -454,6 +475,7 @@ class REVPlugin extends Plugin {
 		const args = ['-y', '-i', inputPath];
 		const filterChain = filters.join(',');
 
+		// GIF 使用调色板优化保持质量
 		if (isGif) {
 			const baseFilter = filterChain || 'null';
 			const paletteGraph = `[0:v]${baseFilter}[flip];[flip]split[a][b];[a]palettegen=stats_mode=diff[p];[b][p]paletteuse=dither=bayer`;
@@ -462,6 +484,7 @@ class REVPlugin extends Plugin {
 			args.push('-vf', filterChain);
 		}
 
+		// WebM 特殊编码参数（贴纸格式）
 		if (isWebm) {
 			args.push(
 				'-c:v',
@@ -483,8 +506,7 @@ class REVPlugin extends Plugin {
 
 	// ==================== 参数解析 ====================
 
-	// ==================== 参数解析 ====================
-
+	// 解析媒体处理参数: h=水平翻转, v=垂直翻转, c=颜色反转
 	private extractMediaOptions(args: string[]): MediaOptions {
 		let flipMode: FlipMode = null;
 		let flipSpecified = false;
@@ -525,8 +547,6 @@ class REVPlugin extends Plugin {
 			remaining: args.slice(index),
 		};
 	}
-
-	// ==================== 工具方法 ====================
 
 	// ==================== 工具方法 ====================
 
