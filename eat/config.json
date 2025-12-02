@@ -37,6 +37,16 @@
         "mask": "eat/maskbp.png"
       }
     },
+    "bfq": {
+      "name": "怎么，你不服气吗",
+      "url": "eat/eatbfq.png",
+      "you": {
+        "x": 53,
+        "y": 0,
+        "mask": "eat/maskbp.png"
+        "rotate": -15
+      }
+    },
     "cn": {
       "name": "呲你",
       "url": "eat/eatcn.png",
@@ -178,7 +188,7 @@
     "pd": {
       "name": "扑倒~",
       "url": "eat/eatpd.png",
-      "me": {
+      "you": {
         "x": 146,
         "y": 146,
         "mask": "eat/maskpd.png"
