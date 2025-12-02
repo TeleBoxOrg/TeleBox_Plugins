@@ -80,6 +80,7 @@ tpm i <插件名>
 - `qr` - QR 二维码  
 - `rate` - 货币实时汇率查询与计算  
 - `restore_pin` - 恢复群组被取消的置顶消息  
+- `rev` - 反转你的消息  
 - `search` - 频道消息搜索  
 - `service` - systemd服务状态查看  
 - `shift` - 智能消息转发系统  
@@ -98,7 +99,7 @@ tpm i <插件名>
 - `warp` - warp管理  
 - `weather` - 天气查询  
 - `whois` - 域名查询  
-- `xm` - 全自动羡慕  
+- `xmsl` - 全自动羡慕  
 - `yinglish` - 淫语翻译  
 - `yiyan` - 获取随机一言  
 - `yt-dlp` - YouTube 视频下载  
