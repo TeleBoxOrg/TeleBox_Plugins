@@ -19,6 +19,10 @@
     "url": "dr/dr.json",
     "desc": "想要了吧"
   },
+  "gz": {
+    "url": "gz/gz.json",
+    "desc": "滑稽鼓掌"
+  },
   "j": {
     "url": "j/j.json",
     "desc": "撅"

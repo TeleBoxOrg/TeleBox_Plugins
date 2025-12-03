@@ -1,0 +1,51 @@
+{
+  "width": 240,
+  "height": 240,
+  "res": [
+    {
+      "url": "gz/gz0.png",
+      "delay": 100,
+      "you": {
+        "x": 27,
+        "y": 17,
+        "mask": "gz/you.png"
+      }
+    },
+    {
+      "url": "gz/gz1.png",
+      "delay": 100,
+      "you": {
+        "x": 28,
+        "y": 15,
+        "mask": "gz/you.png"
+      }
+    },
+    {
+      "url": "gz/gz2.png",
+      "delay": 100,
+      "you": {
+        "x": 27,
+        "y": 14,
+        "mask": "gz/you.png"
+      }
+    },
+    {
+      "url": "gz/gz3.png",
+      "delay": 100,
+      "you": {
+        "x": 27,
+        "y": 14,
+        "mask": "gz/you.png"
+      }
+    },
+    {
+      "url": "gz/gz4.png",
+      "delay": 100,
+      "you": {
+        "x": 29,
+        "y": 12,
+        "mask": "gz/you.png"
+      }
+    }
+  ]
+}
