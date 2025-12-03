@@ -6,8 +6,8 @@
       "url": "gz/gz0.png",
       "delay": 100,
       "you": {
-        "x": 27,
-        "y": 17,
+        "x": 26,
+        "y": 16,
         "mask": "gz/you.png"
       }
     },
@@ -15,8 +15,8 @@
       "url": "gz/gz1.png",
       "delay": 100,
       "you": {
-        "x": 27,
-        "y": 17,
+        "x": 26,
+        "y": 16,
         "mask": "gz/you.png"
       }
     },
@@ -24,8 +24,8 @@
       "url": "gz/gz2.png",
       "delay": 100,
       "you": {
-        "x": 27,
-        "y": 17,
+        "x": 26,
+        "y": 16,
         "mask": "gz/you.png"
       }
     },
@@ -33,8 +33,8 @@
       "url": "gz/gz3.png",
       "delay": 100,
       "you": {
-        "x": 27,
-        "y": 17,
+        "x": 26,
+        "y": 16,
         "mask": "gz/you.png"
       }
     },
@@ -42,8 +42,8 @@
       "url": "gz/gz4.png",
       "delay": 100,
       "you": {
-        "x": 27,
-        "y": 17,
+        "x": 26,
+        "y": 16,
         "mask": "gz/you.png"
       }
     }
