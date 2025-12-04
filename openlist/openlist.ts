@@ -4,6 +4,9 @@ import { Api } from "telegram";
 import { getGlobalClient } from "@utils/globalClient";
 import * as fs from "fs/promises";
 import * as path from "path";
+import axios from "axios";
+import { JSONFilePreset } from "lowdb/node";
+import { createDirectoryInAssets } from "@utils/pathHelpers";
 
 import { exec } from "child_process";
 import { promisify } from "util";
@@ -37,8 +40,10 @@ const helpText = `⚙️ <b>OpenList 管理插件</b>
 • <code>${commandName} admin setuser [用户名]</code>
 • <code>${commandName} admin setpass [密码]</code>
 • <code>${commandName} admin random</code>
+• <code>${commandName} login [用户] [密码]</code> - 手动配置账号信息
+• <code>${commandName} setdefault [路径]</code> - 设置默认保存路径 (不填则恢复默认)
 
-• <code>${commandName} save</code> - (回复文件) 保存到 Openlist 目录
+• <code>${commandName} save [路径]</code> - (回复文件) 保存到 Openlist 目录 (指定路径则上传到挂载盘)
 
 <b>💡 示例:</b>
 • <code>${commandName} install /data/openlist</code>
@@ -49,6 +54,9 @@ class OpenListPlugin extends Plugin {
   description: string = `\nOpenList 管理\n\n${helpText}`;
   cmdHandlers: Record<string, (msg: Api.Message) => Promise<void>> = {
     openlist: async (msg: Api.Message) => {
+      await this.handleCommand(msg);
+    },
+    op: async (msg: Api.Message) => {
       await this.handleCommand(msg);
     },
   };
@@ -120,7 +128,17 @@ class OpenListPlugin extends Plugin {
         await this.handleSetPort(msg, args[2]);
         break;
       case "save":
-        await this.handleSave(msg);
+        await this.handleSave(msg, args[2]);
+        break;
+      case "login":
+        if (!(await this.isSavedMessages(msg))) {
+          await msg.edit({ text: "⚠️ 此命令仅限在「收藏夹」中使用" });
+          return;
+        }
+        await this.handleLogin(msg, args[2], args[3]);
+        break;
+      case "setdefault":
+        await this.handleSetDefault(msg, args[2]);
         break;
       default:
         await msg.edit({ text: helpText, parseMode: "html" });
@@ -204,6 +222,11 @@ class OpenListPlugin extends Plugin {
       const passMatch = randOut.match(/password:\s*(\S+)/i);
       const username = userMatch ? userMatch[1] : "";
       const password = passMatch ? passMatch[1] : "";
+
+      // 自动保存初始凭证
+      if (username && password) {
+        await this.updateStoredCredentials(username, password);
+      }
 
       const { stdout: verOut } = await execAsync(
         `bash -lc '"${installPath}/openlist" version 2>&1 || true'`
@@ -384,6 +407,10 @@ class OpenListPlugin extends Plugin {
       const arg = adminArgs[1] || "";
       let cmd = "";
 
+      // 记录需要更新的凭证
+      let newUser = "";
+      let newPass = "";
+
       switch (sub) {
         case "setuser":
           if (!arg) {
@@ -391,6 +418,7 @@ class OpenListPlugin extends Plugin {
             return;
           }
           cmd = `admin setuser "${arg}"`;
+          newUser = arg;
           break;
         case "setpass":
           if (!arg) {
@@ -398,6 +426,7 @@ class OpenListPlugin extends Plugin {
             return;
           }
           cmd = `admin set "${arg}"`; // 原脚本中使用 'set' 而非 'setpass'
+          newPass = arg;
           break;
         case "random":
           cmd = "admin random";
@@ -411,11 +440,65 @@ class OpenListPlugin extends Plugin {
       const { stdout } = await execAsync(
         `bash -lc 'cd "${installPath}" && ./openlist ${cmd} 2>&1'`
       );
-      await msg.edit({ text: `执行结果:\n\n<pre>${(stdout || "").trim()}</pre>`, parseMode: "html" });
+
+      // 如果是 random，解析输出
+      if (sub === "random") {
+        const userMatch = stdout.match(/username:\s*(\S+)/i);
+        const passMatch = stdout.match(/password:\s*(\S+)/i);
+        if (userMatch) newUser = userMatch[1];
+        if (passMatch) newPass = passMatch[1];
+      }
+
+      // 更新本地凭证
+      if (newUser || newPass) {
+        await this.updateStoredCredentials(newUser, newPass);
+        await msg.edit({ text: `执行结果:\n\n<pre>${(stdout || "").trim()}</pre>\n\n✅ 凭证已同步更新`, parseMode: "html" });
+      } else {
+        await msg.edit({ text: `执行结果:\n\n<pre>${(stdout || "").trim()}</pre>`, parseMode: "html" });
+      }
     } catch (error: any) {
       await msg.edit({ text: `管理命令失败: ${error?.message || error}` });
     }
   }
+
+  private async handleLogin(msg: Api.Message, user?: string, pass?: string) {
+    if (!user || !pass) {
+      await msg.edit({ text: `用法: ${commandName} login [用户名] [密码]` });
+      return;
+    }
+    await this.updateStoredCredentials(user, pass);
+    await msg.edit({ text: "✅ 账号信息已保存，可以尝试上传文件了。" });
+  }
+
+  private async handleSetDefault(msg: Api.Message, path?: string) {
+    const db = await this.getDb();
+    if (!path) {
+      // 清空默认路径，恢复为宿主机路径
+      await db.update((data) => {
+        data.defaultPath = "";
+      });
+      await msg.edit({ text: "✅ 默认上传路径已清空，将恢复为宿主机 /root/Openlist 路径。" });
+      return;
+    }
+    await db.update((data) => {
+      data.defaultPath = path;
+    });
+    await msg.edit({ text: `✅ 默认上传路径已设置为: ${path}\n\n现在使用 ${commandName} save 时若不指定路径，将默认上传到此位置。` });
+  }
+
+  private async updateStoredCredentials(user?: string, pass?: string) {
+    const db = await this.getDb();
+    await db.update((data) => {
+      if (user) data.username = user;
+      if (pass) data.password = pass;
+    });
+  }
+
+  private async getDb() {
+    const dbPath = path.join(createDirectoryInAssets("openlist"), "credentials.json");
+    return await JSONFilePreset(dbPath, { username: "", password: "", defaultPath: "" });
+  }
+
 
   private async handleSetPort(msg: Api.Message, port?: string) {
     try {
@@ -445,47 +528,197 @@ class OpenListPlugin extends Plugin {
     }
   }
 
-  private async handleSave(msg: Api.Message) {
+  private async handleSave(msg: Api.Message, targetPath?: string) {
     try {
       const replyToMsg = await msg.getReplyMessage();
       if (!replyToMsg || !replyToMsg.media) {
-        await msg.edit({ text: "请回复一个文件来保存。" });
+        await msg.edit({ text: "请回复一个文件、图片或视频来保存。" });
         return;
+      }
+
+      // 确定最终保存路径
+      let finalPath = targetPath;
+      if (!finalPath) {
+        // 尝试读取默认路径
+        const db = await this.getDb();
+        finalPath = db.data.defaultPath || "";
       }
 
       const media = replyToMsg.media;
-      if (
-        !(media instanceof Api.MessageMediaDocument) ||
-        !(media.document instanceof Api.Document)
-      ) {
-        await msg.edit({ text: "回复的消息不是一个有效的文件。" });
-        return;
+      let fileName = "";
+
+      if (media instanceof Api.MessageMediaPhoto) {
+        fileName = `photo_${Date.now()}.jpg`;
+      } else if (media instanceof Api.MessageMediaDocument && media.document instanceof Api.Document) {
+        const doc = media.document;
+        const fileNameAttr = doc.attributes.find(
+          (attr): attr is Api.DocumentAttributeFilename =>
+            attr instanceof Api.DocumentAttributeFilename
+        );
+
+        if (fileNameAttr) {
+          fileName = fileNameAttr.fileName;
+        } else {
+          // 根据 mimeType 推断后缀
+          let ext = "";
+          switch (doc.mimeType) {
+            case "video/mp4": ext = ".mp4"; break;
+            case "video/x-matroska": ext = ".mkv"; break;
+            case "video/quicktime": ext = ".mov"; break;
+            case "audio/mpeg": ext = ".mp3"; break;
+            case "audio/ogg": ext = ".ogg"; break;
+            case "audio/x-wav": ext = ".wav"; break;
+            case "image/jpeg": ext = ".jpg"; break;
+            case "image/png": ext = ".png"; break;
+            case "image/webp": ext = ".webp"; break;
+            case "image/gif": ext = ".gif"; break;
+            case "application/pdf": ext = ".pdf"; break;
+            case "application/zip": ext = ".zip"; break;
+            default: ext = "";
+          }
+          fileName = `file_${Date.now()}${ext}`;
+        }
+      } else {
+        // 其他媒体类型，暂时命名为 media_xxx
+        fileName = `media_${Date.now()}`;
       }
 
-      const doc = media.document;
-      const fileNameAttr = doc.attributes.find(
-        (attr): attr is Api.DocumentAttributeFilename =>
-          attr instanceof Api.DocumentAttributeFilename
-      );
-
-      const fileName = fileNameAttr ? fileNameAttr.fileName : `file_${Date.now()}`;
-
-      await msg.edit({ text: `正在下载文件: ${fileName}` });
+      await msg.edit({ text: `正在下载: ${fileName}` });
 
       const client = await getGlobalClient();
       const buffer = await client.downloadMedia(replyToMsg.media);
 
-      if (buffer) {
+      if (!buffer || !(buffer instanceof Buffer)) {
+        await msg.edit({ text: "文件下载失败或格式不支持。" });
+        return;
+      }
+
+      if (finalPath) {
+        await this.uploadToOpenList(msg, buffer, fileName, finalPath);
+      } else {
         const saveDir = "/root/Openlist";
         await fs.mkdir(saveDir, { recursive: true });
         const savePath = path.join(saveDir, fileName);
         await fs.writeFile(savePath, buffer);
         await msg.edit({ text: `文件已保存到: ${savePath}` });
-      } else {
-        await msg.edit({ text: "文件下载失败。" });
       }
     } catch (error: any) {
       await msg.edit({ text: `文件保存失败: ${error?.message || error}` });
+    }
+  }
+
+  private async uploadToOpenList(msg: Api.Message, buffer: Buffer, fileName: string, targetDir: string) {
+    try {
+      await msg.edit({ text: "正在登录 OpenList API..." });
+      const credentials = await this.getOpenListCredentials();
+      if (!credentials) {
+        throw new Error("未找到 OpenList 凭证。\n请使用以下命令手动配置：\n`op login [用户名] [密码]`");
+      }
+
+      const token = await this.getOpenListToken(credentials.username, credentials.password);
+      if (!token) {
+        throw new Error("登录 OpenList 失败");
+      }
+
+      // 处理路径，确保是 API 友好的格式
+      let fullPath = path.join(targetDir, fileName).replace(/\\/g, "/");
+      if (!fullPath.startsWith("/")) fullPath = "/" + fullPath;
+      // 移除多余的斜杠
+      fullPath = fullPath.replace(/\/+/g, "/");
+
+      await msg.edit({ text: `正在上传到: ${fullPath}` });
+
+      const apiUrl = "http://127.0.0.1:5244/api/fs/put";
+      
+      // 注意：Header 中的中文路径需要编码
+      await axios.put(apiUrl, buffer, {
+        headers: {
+          "Authorization": token,
+          "File-Path": encodeURIComponent(fullPath),
+          "path": encodeURIComponent(fullPath), 
+          "Content-Type": "application/octet-stream",
+          "As-Task": "false"
+        },
+        maxBodyLength: Infinity,
+        maxContentLength: Infinity
+      });
+
+      await msg.edit({ text: `✅ 文件已上传到 OpenList: ${fullPath}` });
+
+    } catch (error: any) {
+      console.error("OpenList Upload Error:", error);
+      const errMsg = error?.response?.data?.message || error.message || "未知错误";
+      throw new Error(`上传失败: ${errMsg}`);
+    }
+  }
+
+  private async getOpenListCredentials() {
+    // 1. Get DB credentials
+    let dbUser = "";
+    let dbPass = "";
+    try {
+      const db = await this.getDb();
+      dbUser = db.data.username;
+      dbPass = db.data.password;
+    } catch (e) {}
+
+    // 2. Get Config credentials
+    let configUser = "";
+    let configPass = "";
+    const installPath = await this.detectInstalledPath();
+    const configPath = `${installPath}/data/config.json`;
+
+    if (await this.fileExists(configPath)) {
+      try {
+        let configContent = "";
+        try {
+          configContent = await fs.readFile(configPath, "utf-8");
+        } catch {
+          const { stdout } = await execAsync(`cat "${configPath}" 2>/dev/null`);
+          configContent = stdout;
+        }
+
+        if (configContent) {
+          const config = JSON.parse(configContent);
+          if (config.users && config.users.length > 0) {
+            configUser = config.users[0].username;
+            configPass = config.users[0].password;
+          }
+        }
+      } catch (e) {
+        console.error("Error reading config:", e);
+      }
+    }
+
+    // 3. Merge (Prefer DB)
+    // If DB is missing username but has password (e.g. after setpass), use config username
+    const finalUser = dbUser || configUser;
+    // If DB is missing password but has username (e.g. after setuser), use config password (if available/valid)
+    const finalPass = dbPass || configPass;
+
+    if (finalUser && finalPass) {
+      // Auto-sync if we had to combine sources
+      if (!dbUser || !dbPass) {
+        await this.updateStoredCredentials(finalUser, finalPass);
+      }
+      return { username: finalUser, password: finalPass };
+    }
+    
+    return null;
+  }
+
+  private async getOpenListToken(username: string, password: string): Promise<string> {
+    try {
+      const response = await axios.post("http://127.0.0.1:5244/api/auth/login", {
+        username,
+        password
+      });
+      if (response.data && response.data.code === 200) {
+        return response.data.data.token;
+      }
+      throw new Error(response.data?.message || "Login failed");
+    } catch (error) {
+      throw error;
     }
   }
 
