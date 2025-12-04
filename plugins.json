@@ -386,5 +386,13 @@
   "rev": {
     "url": "https://github.com/TeleBoxOrg/TeleBox_Plugins/blob/main/rev/rev.ts?raw=true",
     "desc": "反转你的消息"
+  },
+  "kkp": {
+    "url": "https://github.com/TeleBoxOrg/TeleBox_Plugins/blob/main/kkp/kkp.ts?raw=true",
+    "desc": "获取NSFW视频"
+  },
+  "botmzt": {
+    "url": "https://github.com/TeleBoxOrg/TeleBox_Plugins/blob/main/botmzt/botmzt.ts?raw=true",
+    "desc": "随机获取写真图片"
   }
 }
