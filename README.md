@@ -23,6 +23,7 @@ tpm i <插件名>
 - `banana` - Nano-Banana 图像编辑  
 - `bin` - 卡头检测  
 - `bizhi` - 发送一张壁纸  
+- `botmzt` - 随机获取写真图片  
 - `bs` - 保送  
 - `bulk_delete` - 批量删除消息  
 - `calc` - 计算器  
@@ -57,6 +58,7 @@ tpm i <插件名>
 - `keep_online` - 保活自动重启(测试版) 请查看说明操作  
 - `keyword` - 关键词自动回复  
 - `kitt` - 高级触发器: 匹配 -> 执行, 高度自定义, 逻辑自由  
+- `kkp` - 获取NSFW视频  
 - `komari` - Komari 服务器监控  
 - `listusernames` - 列出属于自己的公开群组/频道  
 - `lottery` - 抽奖  
