@@ -25,9 +25,15 @@ class GetStickersPlugin extends Plugin {
 • 自动生成 pack.txt 与全部资源，并以 ZIP 发送<br/><br/>
 <b>用法</b><br/>
 1) 回复一张贴纸并发送 <code>.getstickers</code><br/><br/>
+<b>依赖安装</b><br/>
+• <b>FFmpeg</b>（必需）:<br/>
+  - Windows: <code>choco install ffmpeg</code><br/>
+  - macOS: <code>brew install ffmpeg</code><br/>
+  - Linux: <code>sudo apt install ffmpeg</code><br/>
+• <b>lottie</b>（tgs转换需要）:<br/>
+  - <code>pip install lottie[all]</code><br/><br/>
 <b>注意</b><br/>
-• 若贴纸包很大，处理时间较长，请耐心等待<br/>
-• 需要系统安装 FFmpeg`;
+• 若贴纸包很大，处理时间较长，请耐心等待`;
   
   cmdHandlers: Record<string, (msg: Api.Message) => Promise<void>> = {
     "getstickers": this.handleGetStickers.bind(this),
@@ -44,6 +50,22 @@ class GetStickersPlugin extends Plugin {
     }
     
     try {
+      await msg.edit({
+        text: "⚙️ 检查工具依赖..."
+      });
+      
+      const tools = await this.checkAndInstallTools();
+      
+      if (!tools.ffmpeg) {
+        await msg.edit({
+          text: "❌ 未检测到 FFmpeg，请先安装:\n• Windows: choco install ffmpeg\n• macOS: brew install ffmpeg\n• Linux: sudo apt install ffmpeg"
+        });
+        return;
+      }
+      
+      if (!tools.lottie) {
+        console.log('lottie 未安装，tgs格式将无法转换');
+      }
 
       const dataDir = path.join(process.cwd(), 'data', 'sticker');
       if (!fs.existsSync(dataDir)) {
@@ -471,26 +493,60 @@ class GetStickersPlugin extends Plugin {
     }
   }
   
+  private async checkAndInstallTools(): Promise<{ ffmpeg: boolean; lottie: boolean }> {
+    const result = { ffmpeg: false, lottie: false };
+    
+    try {
+      await execAsync('ffmpeg -version');
+      result.ffmpeg = true;
+      console.log('FFmpeg 已安装');
+    } catch {
+      console.log('FFmpeg 未安装');
+    }
+    
+    try {
+      await execAsync('pip show lottie');
+      result.lottie = true;
+      console.log('lottie 已安装');
+    } catch {
+      console.log('lottie 未安装');
+    }
+    
+    return result;
+  }
+  
   private async convertWebpToGif(webpPath: string, gifPath: string): Promise<void> {
     const ffmpegCmd = `ffmpeg -i "${webpPath}" -vf "scale=512:512:force_original_aspect_ratio=decrease,pad=512:512:(ow-iw)/2:(oh-ih)/2:color=white@0" -loop 0 "${gifPath}"`;
     await execAsync(ffmpegCmd);
   }
   
   private async convertTgsToGif(tgsPath: string, gifPath: string): Promise<void> {
-    const pngDir = path.join(path.dirname(tgsPath), 'temp_frames');
-    if (!fs.existsSync(pngDir)) {
-      fs.mkdirSync(pngDir, { recursive: true });
-    }
+    const pythonScript = `
+import sys
+import gzip
+import json
+from lottie.exporters.gif import export_gif
+from lottie.parsers.tgs import parse_tgs
+
+tgs_path = sys.argv[1]
+gif_path = sys.argv[2]
+
+with gzip.open(tgs_path, 'rb') as f:
+    lottie_data = json.loads(f.read())
+
+animation = parse_tgs(lottie_data)
+export_gif(animation, gif_path, 512, 512, 30)
+`;
+    
+    const scriptPath = path.join(path.dirname(tgsPath), 'convert_tgs.py');
+    fs.writeFileSync(scriptPath, pythonScript);
     
     try {
-      const lottieCmd = `lottie_to_gif "${tgsPath}" "${pngDir}" 512 512 30`;
-      await execAsync(lottieCmd);
-      
-      const ffmpegCmd = `ffmpeg -framerate 30 -i "${pngDir}/frame_%04d.png" -vf "scale=512:512:force_original_aspect_ratio=decrease,pad=512:512:(ow-iw)/2:(oh-ih)/2:color=white@0" "${gifPath}"`;
-      await execAsync(ffmpegCmd);
+      const pythonCmd = `python "${scriptPath}" "${tgsPath}" "${gifPath}"`;
+      await execAsync(pythonCmd, { timeout: 60000 });
     } finally {
-      if (fs.existsSync(pngDir)) {
-        fs.rmSync(pngDir, { recursive: true, force: true });
+      if (fs.existsSync(scriptPath)) {
+        fs.unlinkSync(scriptPath);
       }
     }
   }
