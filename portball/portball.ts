@@ -9,6 +9,23 @@ const htmlEscape = (text: string): string =>
     '"': '&quot;', "'": '&#x27;' 
   }[m] || m));
 
+const parseTimeString = (timeStr: string): number => {
+  const match = timeStr.match(/^(\d+)([smhd])?$/i);
+  if (!match) return -1;
+  
+  const value = parseInt(match[1]);
+  const unit = match[2]?.toLowerCase() || 's';
+  
+  const multipliers: Record<string, number> = {
+    's': 1,
+    'm': 60,
+    'h': 3600,
+    'd': 86400
+  };
+  
+  return value * (multipliers[unit] || 1);
+};
+
 class PortballPlugin extends Plugin {
   name = "portball";
   description = "🔇 临时禁言工具 - 回复消息实现XX秒禁言";
@@ -20,11 +37,19 @@ class PortballPlugin extends Plugin {
   private readonly helpText = `🔇 <b>Portball 临时禁言工具</b>
 
 <b>用法：</b>
-<code>.portball [理由] 时间(秒)</code>
+<code>.portball [理由] 时间</code>
+
+<b>时间单位：</b>
+• s - 秒 (默认)
+• m - 分钟
+• h - 小时
+• d - 天
 
 <b>示例：</b>
-• <code>.portball 广告 300</code> - 禁言5分钟，理由"广告"
-• <code>.portball 600</code> - 禁言10分钟，无理由
+• <code>.portball 广告 5m</code> - 禁言5分钟
+• <code>.portball 10m</code> - 禁言10分钟
+• <code>.portball 刷屏 1h</code> - 禁言1小时
+• <code>.portball 300</code> - 禁言300秒
 
 <b>注意：</b>
 • 需要回复目标用户的消息
@@ -87,10 +112,8 @@ class PortballPlugin extends Plugin {
       let seconds = -1;
 
       if (parts.length === 1) {
-        // 只有一个参数：时间
-        try {
-          seconds = parseInt(parts[0]);
-        } catch {
+        seconds = parseTimeString(parts[0]);
+        if (seconds === -1) {
           await msg.edit({
             text: "❌ <b>错误：</b>无效的时间参数",
             parseMode: "html"
@@ -99,11 +122,9 @@ class PortballPlugin extends Plugin {
           return;
         }
       } else if (parts.length >= 2) {
-        // 两个或多个参数：理由 时间
         reason = parts.slice(0, -1).join(" ");
-        try {
-          seconds = parseInt(parts[parts.length - 1]);
-        } catch {
+        seconds = parseTimeString(parts[parts.length - 1]);
+        if (seconds === -1) {
           await msg.edit({
             text: "❌ <b>错误：</b>无效的时间参数",
             parseMode: "html"
@@ -134,25 +155,23 @@ class PortballPlugin extends Plugin {
       const untilDate = Math.floor(Date.now() / 1000) + seconds;
 
       try {
-        // 使用正确的 API 方法禁言用户
-        // 在 Telegram API 中，应该使用 editBanned 方法
         await client.invoke(new Api.channels.EditBanned({
           channel: msg.chat.id,
           participant: sender.id,
           bannedRights: new Api.ChatBannedRights({
             untilDate: untilDate,
-            viewMessages: true, // 允许查看消息
-            sendMessages: false, // 禁止发送消息
-            sendMedia: false, // 禁止发送媒体
-            sendStickers: false, // 禁止发送贴纸
-            sendGifs: false, // 禁止发送GIF
-            sendGames: false, // 禁止发送游戏
-            sendInline: false, // 禁止发送内联
-            embedLinks: false, // 禁止嵌入链接
-            sendPolls: false, // 禁止发送投票
-            changeInfo: false, // 禁止更改信息
-            inviteUsers: false, // 禁止邀请用户
-            pinMessages: false // 禁止置顶消息
+            viewMessages: false,
+            sendMessages: true,
+            sendMedia: true,
+            sendStickers: true,
+            sendGifs: true,
+            sendGames: true,
+            sendInline: true,
+            embedLinks: true,
+            sendPolls: true,
+            changeInfo: true,
+            inviteUsers: true,
+            pinMessages: true
           })
         }));
 
