@@ -28,6 +28,10 @@ interface UserInfo {
   last_online: string | null;
 }
 
+interface FailedUserInfo extends UserInfo {
+  error_message: string;
+}
+
 interface CacheData {
   chat_id: number;
   chat_title: string;
@@ -61,8 +65,13 @@ function setCache(chatId: number, mode: string, day: number, data: CacheData): v
 }
 
 async function ensureDirectories(): Promise<void> {
-  if (!fs.existsSync(CACHE_DIR)) {
-    fs.mkdirSync(CACHE_DIR, { recursive: true });
+  try {
+    if (!fs.existsSync(CACHE_DIR)) {
+      fs.mkdirSync(CACHE_DIR, { recursive: true });
+    }
+  } catch (error) {
+    console.error('Failed to create cache directory:', error);
+    throw error;
   }
 }
 
@@ -98,7 +107,50 @@ async function generateReport(cacheData: CacheData): Promise<string> {
     ]);
   }
   const csvString = csvContent.map((row) => row.join(",")).join("\n");
-  fs.writeFileSync(reportFile, "\ufeff" + csvString, "utf8");
+  try {
+    fs.writeFileSync(reportFile, "\ufeff" + csvString, "utf8");
+    console.log(`Report generated: ${reportFile}`);
+  } catch (error) {
+    console.error('Failed to write report file:', error);
+    await sleep(1000);
+    fs.writeFileSync(reportFile, "\ufeff" + csvString, "utf8");
+  }
+  return reportFile;
+}
+
+async function generateFailedReport(failedUsers: FailedUserInfo[], chatTitle: string, chatId: number): Promise<string> {
+  await ensureDirectories();
+  const timestamp = new Date().toISOString().replace(/[:.]/g, "").slice(0, 15);
+  const reportFile = path.join(CACHE_DIR, `failed_${chatId}_${timestamp}.csv`);
+  const csvContent = [
+    ["群组清理失败用户报告"],
+    ["群组名称", chatTitle],
+    ["群组ID", chatId.toString()],
+    ["失败时间", new Date().toISOString().slice(0, 19)],
+    ["失败用户数量", failedUsers.length.toString()],
+    [],
+    ["用户ID", "用户名", "姓名", "最后上线时间", "是否注销", "失败原因"],
+  ];
+  for (const user of failedUsers) {
+    const fullName = `${user.first_name} ${user.last_name}`.trim();
+    csvContent.push([
+      user.id.toString(),
+      user.username,
+      fullName,
+      user.last_online || "未知",
+      user.is_deleted ? "是" : "否",
+      user.error_message
+    ]);
+  }
+  const csvString = csvContent.map((row) => row.join(",")).join("\n");
+  try {
+    fs.writeFileSync(reportFile, "\ufeff" + csvString, "utf8");
+    console.log(`Failed report generated: ${reportFile}`);
+  } catch (error) {
+    console.error('Failed to write failed report file:', error);
+    await sleep(1000);
+    fs.writeFileSync(reportFile, "\ufeff" + csvString, "utf8");
+  }
   return reportFile;
 }
 
@@ -235,6 +287,7 @@ interface StreamProcessResult {
   totalFound: number;
   totalRemoved: number;
   users: UserInfo[];
+  failedUsers: FailedUserInfo[];
 }
 
 async function streamProcessMembers(options: StreamProcessOptions): Promise<StreamProcessResult> {
@@ -243,7 +296,8 @@ async function streamProcessMembers(options: StreamProcessOptions): Promise<Stre
     totalScanned: 0,
     totalFound: 0,
     totalRemoved: 0,
-    users: []
+    users: [],
+    failedUsers: []
   };
   let offset = 0;
   const limit = 200;
@@ -381,6 +435,11 @@ async function streamProcessMembers(options: StreamProcessOptions): Promise<Stre
                 }
               } catch (error: any) {
                 console.error(`Failed to remove user ${uid}:`, error);
+                const failedUser: FailedUserInfo = {
+                  ...userInfo,
+                  error_message: error.message || error.toString()
+                };
+                result.failedUsers.push(failedUser);
               }
             }
           }
@@ -457,7 +516,7 @@ function getHelpText(): string {
   return `<b>🧹 群成员清理工具 Pro</b>
 
 <b>🔧 使用格式:</b>
-<code>${mainPrefix}clean_member &lt;模式&gt; &lt;参数&gt; [limit:数量] [search]</code>
+<code>${mainPrefix}clean_member &lt;模式&gt; &lt;参数&gt; [chat:-100xxx] [limit:数量] [search]</code>
 
 <b>📋 清理模式:</b>
 ┌─────────────────────────
@@ -469,6 +528,7 @@ function getHelpText(): string {
 └─────────────────────────
 
 <b>⚙️ 可选参数:</b>
+• <code>chat:-100xxx</code> - 指定群组ID(跨群查询)
 • <code>limit:100</code> - 限制最多移出100人
 • <code>search</code> - 仅搜索不移出（预览模式）
 
@@ -477,8 +537,8 @@ function getHelpText(): string {
   └ 搜索30天未上线的用户（预览）
 • <code>${mainPrefix}clean_member 2 60 limit:50</code>
   └ 移出60天未发言，最多50人
-• <code>${mainPrefix}clean_member 4</code>
-  └ 移出所有已注销账户
+• <code>${mainPrefix}clean_member 4 chat:-1001234567890</code>
+  └ 移出指定群组的注销账户
 • <code>${mainPrefix}clean_member 1 7 limit:10</code>
   └ 移出7天未上线，最多10人
 `;
@@ -512,15 +572,26 @@ const clean_member = async (msg: Api.Message) => {
   let day = 0;
   let onlySearch = false;
   let maxRemove: number | undefined = undefined;
+  let targetChatId: string | number | undefined = undefined;
+  
   if (args.some((arg) => arg.toLowerCase() === "search")) {
     onlySearch = true;
   }
+  
   const limitArg = args.find((arg) => arg.toLowerCase().startsWith("limit:"));
   if (limitArg) {
     const limitValue = limitArg.split(":")[1];
     const parsed = parseInt(limitValue);
     if (!isNaN(parsed) && parsed > 0) {
       maxRemove = parsed;
+    }
+  }
+  
+  const chatArg = args.find((arg) => arg.toLowerCase().startsWith("chat:"));
+  if (chatArg) {
+    const chatValue = chatArg.split(":")[1];
+    if (chatValue) {
+      targetChatId = chatValue;
     }
   }
   if (mode === "1") {
@@ -582,14 +653,33 @@ const clean_member = async (msg: Api.Message) => {
     "5": "所有普通成员",
   };
 
-  const chatTitle = (msg.chat as any)?.title || "当前群组";
-  const chatId = msg.peerId;
-  if (!chatId) {
-    await msg.edit({
-      text: "❌ 无法获取群组ID，请在群组中使用",
-      parseMode: "html",
-    });
-    return;
+  let chatTitle = (msg.chat as any)?.title || "当前群组";
+  let chatId = msg.peerId;
+  let channelEntity: any;
+  
+  if (targetChatId) {
+    try {
+      channelEntity = await client.getEntity(targetChatId);
+      if ('title' in channelEntity) {
+        chatTitle = (channelEntity as any).title || "目标群组";
+      }
+      chatId = channelEntity;
+    } catch (error: any) {
+      await msg.edit({
+        text: `❌ <b>错误：</b>无法访问指定群组\n\n请确认群组ID正确且您是该群组成员\n错误: ${htmlEscape(error.message || error.toString())}`,
+        parseMode: "html",
+      });
+      return;
+    }
+  } else {
+    if (!chatId) {
+      await msg.edit({
+        text: "❌ 无法获取群组ID，请在群组中使用或指定chat参数",
+        parseMode: "html",
+      });
+      return;
+    }
+    channelEntity = chatId;
   }
   const startMessage = onlySearch ? 
     `🔍 开始搜索: ${modeNames[mode]}` : 
@@ -659,7 +749,7 @@ const clean_member = async (msg: Api.Message) => {
       console.log("Status update failed:", error);
     }
   };
-  const channelEntity = chatId;
+  
   let numericChatId: number = 0;
   try {
     if (typeof chatId === "object" && "channelId" in chatId) {
@@ -783,6 +873,24 @@ const clean_member = async (msg: Api.Message) => {
       console.log("完整报告已发送到收藏夹");
     } catch (error) {
       console.error("发送完整报告失败:", error);
+    }
+  }
+  
+  if (!onlySearch && result.failedUsers.length > 0 && numericChatId) {
+    try {
+      const failedReportPath = await generateFailedReport(result.failedUsers, chatTitle, numericChatId);
+      await client.sendMessage("me", {
+        message: `⚠️ <b>清理失败用户报告</b>\n\n` +
+          `🏷️ 群组: <b>${htmlEscape(chatTitle)}</b>\n` +
+          `❌ 失败数量: <code>${result.failedUsers.length}</code> 人\n` +
+          `📁 报告文件: <code>${path.basename(failedReportPath)}</code>\n\n` +
+          `📊 详细信息请查看 CSV 文件`,
+        parseMode: "html",
+        file: failedReportPath
+      });
+      console.log(`失败用户报告已发送到收藏夹: ${failedReportPath}`);
+    } catch (error) {
+      console.error("生成或发送失败报告失败:", error);
     }
   }
 };
