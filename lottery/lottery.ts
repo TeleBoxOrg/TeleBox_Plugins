@@ -7,6 +7,7 @@ import { getEntityWithHash } from "@utils/entityHelpers";
 import { Api } from "telegram/tl";
 import { TelegramClient } from "telegram";
 import { getPrefixes } from "@utils/pluginManager";
+import bigInt from "big-integer";
 
 // Get command prefixes
 const prefixes = getPrefixes();
@@ -502,15 +503,16 @@ function getWinnerStatusIcon(status: string): string {
   }
 }
 
-function expireOldClaims(): void {
-  if (!db) return;
+function expireOldClaims(): number {
+  if (!db) return 0;
   
   const stmt = db.prepare(`
     UPDATE lottery_winners 
     SET status = ? 
     WHERE status = ? AND expires_at < ?
   `);
-  stmt.run(PrizeStatus.EXPIRED, PrizeStatus.PENDING, Date.now());
+  const result = stmt.run(PrizeStatus.EXPIRED, PrizeStatus.PENDING, Date.now());
+  return result.changes;
 }
 
 // Enhanced prize distribution
@@ -611,13 +613,9 @@ async function sendPrizeToWinner(client: TelegramClient, winner: any, prizeText:
 
 // Format user line for display
 function formatUserLine(uid: number, userObj?: any): string {
-  // 第一优先级：用户名（纯文本，不用超链接）
-  if (userObj && userObj.username) {
-    return `• @${userObj.username}`;
-  }
-
-  // 第二优先级：昵称+超链接
   let displayName = "";
+  let username = "";
+  
   if (userObj) {
     if (userObj.firstName && userObj.lastName) {
       displayName = `${userObj.firstName} ${userObj.lastName}`;
@@ -626,18 +624,77 @@ function formatUserLine(uid: number, userObj?: any): string {
     } else if (userObj.lastName) {
       displayName = userObj.lastName;
     }
+    
+    if (userObj.username) {
+      username = `@${userObj.username}`;
+    }
   }
 
-  // 如果有昵称，使用昵称+超链接
-  if (displayName) {
+  if (displayName && username) {
+    return `• <a href="tg://user?id=${uid}">${htmlEscape(displayName)} ${htmlEscape(username)}</a>`;
+  } else if (displayName) {
     return `• <a href="tg://user?id=${uid}">${htmlEscape(displayName)}</a>`;
+  } else if (username) {
+    return `• <a href="tg://user?id=${uid}">${htmlEscape(username)}</a>`;
   }
 
-  // 兜底：纯ID
-  return `• ${uid}`;
+  return `• <a href="tg://user?id=${uid}">${uid}</a>`;
 }
 
-// Enhanced lottery draw function
+async function isUserAdmin(client: TelegramClient, chatId: string, userId: string): Promise<boolean> {
+  try {
+    const chatEntity = await client.getEntity(chatId);
+    
+    // 检查是否为超级群或频道
+    if (chatEntity.className === 'Channel' || (chatEntity as any).megagroup) {
+      try {
+        const participant = await client.invoke(
+          new Api.channels.GetParticipant({
+            channel: chatEntity,
+            participant: userId,
+          })
+        );
+        
+        if (participant && participant.participant) {
+          const participantType = participant.participant.className;
+          return participantType === 'ChannelParticipantAdmin' || 
+                 participantType === 'ChannelParticipantCreator';
+        }
+      } catch (e) {
+        // 如果GetParticipant失败，可能是普通群组，尝试其他方法
+        console.warn("GetParticipant failed, trying alternative method:", e);
+      }
+    }
+    
+    // 对于普通群组，尝试获取消息发送者的权限
+    try {
+      const chatAdmins = await client.invoke(
+        new Api.channels.GetParticipants({
+          channel: chatEntity,
+          filter: new Api.ChannelParticipantsAdmins(),
+          offset: 0,
+          limit: 200,
+          hash: bigInt(0)
+        })
+      );
+      
+      if (chatAdmins && (chatAdmins as any).participants) {
+        return (chatAdmins as any).participants.some((p: any) => 
+          String(p.userId || p.user_id) === String(userId)
+        );
+      }
+    } catch (e) {
+      // 如果仍然失败，返回false
+      console.warn("Alternative admin check failed:", e);
+    }
+    
+    return false;
+  } catch (error) {
+    console.error("Error checking admin status:", error);
+    return false;
+  }
+}
+
 async function performLotteryDraw(client: TelegramClient, lottery: any): Promise<void> {
   try {
     // Delete original lottery message
@@ -684,15 +741,33 @@ async function performLotteryDraw(client: TelegramClient, lottery: any): Promise
     
     for (const winner of updatedWinners) {
       const statusIcon = getWinnerStatusIcon(winner.status);
-      const displayName = winner.username ? `@${winner.username}` : 
-                         (winner.first_name || winner.last_name || `用户 ${winner.user_id}`);
+      let displayName = "";
+      let username = "";
+      
+      if (winner.first_name || winner.last_name) {
+        displayName = [winner.first_name, winner.last_name].filter(Boolean).join(" ");
+      }
+      if (winner.username) {
+        username = `@${winner.username}`;
+      }
+      
+      let formattedName = "";
+      if (displayName && username) {
+        formattedName = `${htmlEscape(displayName)} ${htmlEscape(username)}`;
+      } else if (displayName) {
+        formattedName = htmlEscape(displayName);
+      } else if (username) {
+        formattedName = htmlEscape(username);
+      } else {
+        formattedName = `用户 ${winner.user_id}`;
+      }
       
       let statusText = "";
       if (winner.status === PrizeStatus.PENDING && lottery.distribution_mode === DistributionMode.CLAIM) {
         statusText = ` - 请私聊 @${lottery.creator_id} 领取奖品`;
       }
       
-      winnerLines.push(`${statusIcon} ${htmlEscape(displayName)}${statusText}`);
+      winnerLines.push(`${statusIcon} ${formattedName}${statusText}`);
     }
     
     const winUsersText = winnerLines.join("\n");
@@ -856,10 +931,10 @@ const help_text = `🎰 <b>智能抽奖插件 - 完整功能指南</b>
   · <b>仓库名/序号</b> - 奖品仓库名称或序号（需先创建仓库并添加奖品）
   · <b>通知</b>（可选） - 置顶时是否通知，添加 notify 参数会发送通知
 • <code>${mainPrefix}lottery create list</code> - 查看可用奖品仓库列表
-• <code>${mainPrefix}lottery draw</code> - 手动开奖（管理员）
+• <code>${mainPrefix}lottery draw</code> - 手动开奖（创建者或群组管理员）
 • <code>${mainPrefix}lottery status</code> - 查看当前抽奖状态
 • <code>${mainPrefix}lottery list</code> - 查看参与用户列表（超长自动生成文件）
-• <code>${mainPrefix}lottery delete</code> - 强制删除抽奖活动（仅创建者）
+• <code>${mainPrefix}lottery delete</code> - 强制删除抽奖活动（创建者或群组管理员）
 • <code>${mainPrefix}lottery init</code> - 初始化数据库（修复抽奖失败问题）
 
 ⚠️ <b>重要提示:</b>
@@ -1229,6 +1304,17 @@ const lottery = async (msg: Api.Message) => {
         return;
       }
 
+      const isCreator = String(msg.senderId) === activeLottery.creator_id;
+      const isAdmin = await isUserAdmin(client, chatId, String(msg.senderId));
+      
+      if (!isCreator && !isAdmin) {
+        await msg.edit({
+          text: `❌ <b>权限不足</b>\n\n只有抽奖创建者或群组管理员可以手动开奖`,
+          parseMode: "html"
+        });
+        return;
+      }
+
       await msg.edit({
         text: `🔄 <b>开奖中...</b>\n\n正在为 "${htmlEscape(activeLottery.title)}" 进行开奖`,
         parseMode: "html"
@@ -1251,12 +1337,12 @@ const lottery = async (msg: Api.Message) => {
         return;
       }
 
-      // Check if user is creator or admin (optional, can be removed for force delete)
       const isCreator = String(msg.senderId) === activeLottery.creator_id;
+      const isAdmin = await isUserAdmin(client, chatId, String(msg.senderId));
       
-      if (!isCreator) {
+      if (!isCreator && !isAdmin) {
         await msg.edit({
-          text: `❌ <b>错误:</b> 只有抽奖创建者可以删除活动\n\n💡 创建者: <code>${activeLottery.creator_id}</code>`,
+          text: `❌ <b>权限不足</b>\n\n只有抽奖创建者或群组管理员可以删除活动`,
           parseMode: "html"
         });
         return;
@@ -1264,7 +1350,6 @@ const lottery = async (msg: Api.Message) => {
 
       await msg.edit({ text: "🔄 <b>删除抽奖活动...</b>", parseMode: "html" });
       
-      // Delete lottery and all related data
       const success = deleteLotteryActivity(activeLottery.id);
       
       if (success) {
@@ -1621,8 +1706,7 @@ const lottery = async (msg: Api.Message) => {
         return;
       }
 
-      expireOldClaims();
-      const expiredCount = 0; // Function doesn't return count
+      const expiredCount = expireOldClaims();
       await msg.edit({
         text: `✅ <b>过期处理完成</b>\n\n已处理 ${expiredCount} 个过期未领奖品`,
         parseMode: "html"
