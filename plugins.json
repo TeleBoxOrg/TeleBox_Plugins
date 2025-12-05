@@ -394,5 +394,9 @@
   "botmzt": {
     "url": "https://github.com/TeleBoxOrg/TeleBox_Plugins/blob/main/botmzt/botmzt.ts?raw=true",
     "desc": "随机获取写真图片"
+  },
+  "pmcaptcha": {
+    "url": "https://github.com/TeleBoxOrg/TeleBox_Plugins/blob/main/pmcaptcha/pmcaptcha.ts?raw=true",
+    "desc": "简单防私聊"
   }
 }
