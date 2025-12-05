@@ -22,7 +22,7 @@ const HELP_TEXT = `<b>封禁管理</b>
 <code>.kick</code> 踢出
 <code>.ban</code> 封禁  
 <code>.unban</code> 解封
-<code>.mute</code> 禁言
+<code>.mute [time]</code> 禁言 (如 60s/5m/1h/1d，不填则永久)
 <code>.unmute</code> 解禁言
 <code>.sb</code> 批量封禁
 <code>.unsb</code> 批量解封
@@ -382,7 +382,7 @@ class BanManager {
     duration: number
   ): Promise<boolean> {
     try {
-      const until = Math.floor(Date.now() / 1000) + duration;
+      const until = duration === 0 ? 0 : Math.floor(Date.now() / 1000) + duration;
       const rights = new Api.ChatBannedRights({
         untilDate: until,
         sendMessages: true,
@@ -648,7 +648,7 @@ class CommandHandlers {
         case 'mute':
           const duration = parseTimeString(args[1]);
           success = await BanManager.muteUser(client, message.peerId, uid, duration);
-          const durationText = duration === 0 ? '永久' : `${duration}s`;
+          const durationText = duration === 0 ? '永久' : this.formatDuration(duration);
           resultText = `✅ 已禁言 ${htmlEscape(display)} ${durationText}`;
           break;
         case 'unmute':
@@ -673,6 +673,13 @@ class CommandHandlers {
       mute: '禁言', unmute: '解除禁言'
     };
     return names[action] || action;
+  }
+
+  private static formatDuration(seconds: number): string {
+    if (seconds >= 86400) return `${Math.floor(seconds / 86400)}d`;
+    if (seconds >= 3600) return `${Math.floor(seconds / 3600)}h`;
+    if (seconds >= 60) return `${Math.floor(seconds / 60)}m`;
+    return `${seconds}s`;
   }
 
   // sb命令：即时返回+后台处理
