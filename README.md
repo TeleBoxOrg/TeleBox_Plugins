@@ -76,6 +76,7 @@ tpm i <插件名>
 - `paolu` - 群组一键跑路  
 - `parsehub` - 社交媒体链接解析助手  
 - `pic_to_sticker` - 图片转表情  
+- `pmcaptcha` - 简单防私聊  
 - `portball` - 临时禁言  
 - `premium` - 群组大会员统计  
 - `q` - 消息引用生成贴纸  
