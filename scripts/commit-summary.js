@@ -214,95 +214,82 @@ function getPluginCategory(pluginName) {
 
 // 按功能分组提交信息
 function groupCommitsByFeature(commits) {
-  const groups = {};
+  const pluginGroups = {};
+  const coreUpdates = [];
   
   commits.forEach(commit => {
-    let category = '';
-    let description = commit.message;
-    
-    // 优先使用从文件变更中检测到的插件名
-    if (commit.detectedPlugins && commit.detectedPlugins.length > 0) {
-      category = '🔌 插件更新';
-      
-      // 显示详细插件名称和改动
-      if (commit.detectedPlugins.length > 1) {
-        const pluginList = commit.detectedPlugins.join(', ');
-        description = `${pluginList}: ${description}`;
-      } else {
-        description = `${commit.detectedPlugins[0]}: ${description}`;
-      }
-    } else {
-      // 判断是否为插件相关
-      const pluginMatch = description.match(/([a-zA-Z_]+)\s*(插件|plugin)/);
-      if (pluginMatch) {
-        category = '🔌 插件更新';
-        description = `${pluginMatch[1]}: ${description}`;
-      } else {
-        // 所有其他改动归为本体更新
-        category = '🏗️ 本体更新';
-      }
-    }
-    
-    if (!groups[category]) {
-      groups[category] = [];
-    }
-    
-    // 清理描述文本
-    description = description
+    let description = commit.message
       .replace(/^(feat|fix|docs|style|refactor|test|chore|perf)(\(.+\))?: /, '')
       .replace(/^(🎉|🐛|📝|💄|♻️|✅|🔧|⚡|🚀|📦|🔀|⏪|🔖|💚|👷|📈|♿|🍱|🚨|🔇|👥|🚚|📄|⚗️|🏷️|🌐|💫|🗑️|🔊|🔇|🐛|💩|⏪|🔀|📦|👽|🚚|📱|🤡|🥚|🙈|📸|⚗️|🔍|🏷️|🌱|🚩|💥|🍱|♿|💬|🗃️|🔊|📈|⚗️|🔍|🏷️)\s*/, '')
-      .replace(/^:\s*/, '') // 去除开头的冒号和空格
-      .replace(/^\s*-\s*:\s*/, '- ') // 修复 "- : " 格式为 "- "
+      .replace(/^:\s*/, '')
+      .replace(/^\s*-\s*:\s*/, '- ')
       .trim();
     
-    if (description) {
-      groups[category].push(description);
+    if (!description) return;
+    
+    if (commit.detectedPlugins && commit.detectedPlugins.length > 0) {
+      commit.detectedPlugins.forEach(plugin => {
+        if (!pluginGroups[plugin]) {
+          pluginGroups[plugin] = [];
+        }
+        pluginGroups[plugin].push(description);
+      });
+    } else if (commit.repo === 'TeleBox') {
+      coreUpdates.push(description);
     }
   });
   
-  return groups;
+  return { pluginGroups, coreUpdates };
 }
 
 // 生成基础摘要
 function generateBasicSummary(commitsByRepo) {
   let basicSummary = '';
-  const allFeatureGroups = {};
+  const allPluginGroups = {};
+  const allCoreUpdates = [];
   
-  // 合并所有仓库的提交到统一的分类中
   for (const [repoName, commits] of Object.entries(commitsByRepo)) {
     if (commits.length === 0) continue;
     
-    const featureGroups = groupCommitsByFeature(commits);
+    const { pluginGroups, coreUpdates } = groupCommitsByFeature(commits);
     
-    Object.entries(featureGroups).forEach(([category, descriptions]) => {
-      if (!allFeatureGroups[category]) {
-        allFeatureGroups[category] = [];
+    Object.entries(pluginGroups).forEach(([plugin, descriptions]) => {
+      if (!allPluginGroups[plugin]) {
+        allPluginGroups[plugin] = [];
       }
-      allFeatureGroups[category].push(...descriptions);
+      allPluginGroups[plugin].push(...descriptions);
     });
+    
+    allCoreUpdates.push(...coreUpdates);
   }
   
-  // 按分类输出，使用预定义的顺序
-  const categoryOrder = [
-    '🔌 插件更新',
-    '🏗️ 本体更新'
-  ];
+  if (Object.keys(allPluginGroups).length > 0) {
+    basicSummary += '🔌 插件更新\n';
+    
+    const sortedPlugins = Object.keys(allPluginGroups).sort();
+    sortedPlugins.forEach(plugin => {
+      const uniqueDescriptions = [...new Set(allPluginGroups[plugin])];
+      if (uniqueDescriptions.length === 1) {
+        basicSummary += `• ${plugin}: ${uniqueDescriptions[0]}\n`;
+      } else {
+        basicSummary += `• ${plugin}:\n`;
+        uniqueDescriptions.forEach(desc => {
+          basicSummary += `  - ${desc}\n`;
+        });
+      }
+    });
+    
+    basicSummary += '\n';
+  }
   
-  categoryOrder.forEach(category => {
-    if (allFeatureGroups[category] && allFeatureGroups[category].length > 0) {
-      basicSummary += `${category}\n`;
-      
-      // 去重描述并格式化
-      const uniqueDescriptions = [...new Set(allFeatureGroups[category])];
-      uniqueDescriptions.forEach(desc => {
-        if (desc.length > 0) {
-          basicSummary += `• ${desc}\n`;
-        }
-      });
-      
-      basicSummary += '\n';
-    }
-  });
+  if (allCoreUpdates.length > 0) {
+    basicSummary += '🏗️ 本体更新\n';
+    const uniqueCoreUpdates = [...new Set(allCoreUpdates)];
+    uniqueCoreUpdates.forEach(desc => {
+      basicSummary += `• ${desc}\n`;
+    });
+    basicSummary += '\n';
+  }
   
   return basicSummary;
 }
@@ -374,12 +361,7 @@ async function main() {
   const allCommits = [...dedupedTeleboxCommits, ...dedupedPluginsCommits];
   
   if (allCommits.length === 0) {
-    console.log('📭 今日无提交记录');
-    
-    // 发送无提交的通知
-    const noCommitsMessage = `📅 TeleBox 日报 - ${TARGET_DATE}\n\n🌙 今日无代码提交\n\n保持代码整洁，明日再战！`;
-    
-    sendToTelegram(noCommitsMessage);
+    console.log('📭 今日无提交记录，跳过发布');
     return;
   }
   
