@@ -277,6 +277,8 @@ interface ShiftRule {
   filters: string[];
   source_display?: string;
   target_display?: string;
+  whitelistMode?: boolean;
+  whitelistPatterns?: string[];
 }
 
 // Cache for rules
@@ -694,10 +696,17 @@ const HELP_TEXT = `🚀 <b>转发规则管理插件</b>
 • <code>${mainPrefix}shift resume &lt;序号&gt;</code> - 恢复规则
 • <code>${mainPrefix}shift stats</code> - 查看转发统计
 
-<b>🔍 过滤命令</b>
+<b>🔍 过滤命令（黑名单模式）</b>
 • <code>${mainPrefix}shift filter &lt;序号&gt; add &lt;关键词&gt;</code> - 添加过滤词
 • <code>${mainPrefix}shift filter &lt;序号&gt; del &lt;关键词&gt;</code> - 删除过滤词  
 • <code>${mainPrefix}shift filter &lt;序号&gt; list</code> - 查看过滤词
+
+<b>✅ 白名单命令（白名单模式）</b>
+• <code>${mainPrefix}shift whitelist &lt;序号&gt; enable</code> - 启用白名单模式
+• <code>${mainPrefix}shift whitelist &lt;序号&gt; disable</code> - 禁用白名单模式
+• <code>${mainPrefix}shift whitelist &lt;序号&gt; add &lt;正则&gt;</code> - 添加白名单正则
+• <code>${mainPrefix}shift whitelist &lt;序号&gt; del &lt;正则&gt;</code> - 删除白名单正则
+• <code>${mainPrefix}shift whitelist &lt;序号&gt; list</code> - 查看白名单正则
 
 <b>💾 数据管理</b>
 • <code>${mainPrefix}shift migrate</code> - 迁移到lowdb数据库
@@ -1294,7 +1303,12 @@ class ShiftPlugin extends Plugin {
                 output += `   ✏️ 监听编辑的消息\n`;
               }
               output += `   🎯 类型: ${options.join(", ") || "all"}\n`;
-              output += `   🛡️ 过滤: ${rule.filters.length} 个关键词\n\n`;
+              if (rule.whitelistMode) {
+                output += `   ✅ 白名单: ${rule.whitelistPatterns?.length || 0} 个正则\n`;
+              } else {
+                output += `   🛡️ 过滤: ${rule.filters.length} 个关键词\n`;
+              }
+              output += "\n";
             } catch (error) {
               output += `${i + 1}. ⚠️ 规则损坏 (${sourceId})\n\n`;
             }
@@ -1528,6 +1542,109 @@ class ShiftPlugin extends Plugin {
           return;
         }
 
+        if (sub === "whitelist" || sub === "wl") {
+          if (args.length < 3) {
+            await msg.edit({
+              text: `❌ <b>参数不足</b>\n\n<b>用法：</b>\n<code>${mainPrefix}shift whitelist [序号] enable/disable/add/del/list [正则...]</code>`,
+              parseMode: "html",
+            });
+            return;
+          }
+
+          const indicesStr = args[1];
+          const action = args[2];
+          const patterns = args.slice(3);
+
+          const allRules = getAllShiftRules();
+          const { indices } = parseIndices(indicesStr, allRules.length);
+
+          if (indices.length === 0) {
+            await msg.edit({
+              text: `❌ <b>无效的序号: ${htmlEscape(indicesStr)}</b>`,
+              parseMode: "html",
+            });
+            return;
+          }
+
+          let updatedCount = 0;
+          for (const index of indices) {
+            const { sourceId, rule } = allRules[index];
+
+            if (action === "enable") {
+              rule.whitelistMode = true;
+              if (!rule.whitelistPatterns) {
+                rule.whitelistPatterns = [];
+              }
+              if (saveShiftRule(sourceId, rule)) {
+                updatedCount++;
+              }
+            } else if (action === "disable") {
+              rule.whitelistMode = false;
+              if (saveShiftRule(sourceId, rule)) {
+                updatedCount++;
+              }
+            } else if (action === "add") {
+              if (!rule.whitelistPatterns) {
+                rule.whitelistPatterns = [];
+              }
+              const whitelistSet = new Set(rule.whitelistPatterns);
+              patterns.forEach((pattern) => whitelistSet.add(pattern));
+              rule.whitelistPatterns = Array.from(whitelistSet);
+              if (saveShiftRule(sourceId, rule)) {
+                updatedCount++;
+              }
+            } else if (action === "del") {
+              if (rule.whitelistPatterns) {
+                const whitelistSet = new Set(rule.whitelistPatterns);
+                patterns.forEach((pattern) => whitelistSet.delete(pattern));
+                rule.whitelistPatterns = Array.from(whitelistSet);
+                if (saveShiftRule(sourceId, rule)) {
+                  updatedCount++;
+                }
+              }
+            } else if (action === "list") {
+              const mode = rule.whitelistMode ? "✅ 已启用" : "❌ 已禁用";
+              const patternList =
+                rule.whitelistPatterns && rule.whitelistPatterns.length > 0
+                  ? rule.whitelistPatterns
+                  : ["无白名单正则"];
+              await msg.edit({
+                text: `规则 ${index + 1} 的白名单配置：\n\n模式: ${mode}\n\n正则列表：\n${patternList
+                  .map((p) => `• <code>${htmlEscape(String(p))}</code>`)
+                  .join("\n")}`,
+                parseMode: "html",
+              });
+              return;
+            } else {
+              await msg.edit({
+                text: `无效的操作: ${htmlEscape(
+                  String(action)
+                )}，支持: enable, disable, add, del, list`,
+                parseMode: "html",
+              });
+              return;
+            }
+          }
+
+          if (action === "enable") {
+            await msg.edit({
+              text: `✅ <b>已为 ${updatedCount} 条规则启用白名单模式</b>`,
+              parseMode: "html",
+            });
+          } else if (action === "disable") {
+            await msg.edit({
+              text: `✅ <b>已为 ${updatedCount} 条规则禁用白名单模式</b>`,
+              parseMode: "html",
+            });
+          } else if (action === "add" || action === "del") {
+            await msg.edit({
+              text: `✅ <b>已为 ${updatedCount} 条规则更新白名单正则</b>`,
+              parseMode: "html",
+            });
+          }
+          return;
+        }
+
         // Backup command - 增强版备份功能
         if (sub === "backup") {
           const action = args[1];
@@ -1746,6 +1863,23 @@ async function isMessageFiltered(
 ): Promise<boolean> {
   const rule = await getShiftRule(sourceId);
   if (!rule) return false;
+
+  if (rule.whitelistMode) {
+    if (!rule.whitelistPatterns || rule.whitelistPatterns.length === 0) {
+      return true;
+    }
+    if (!message.text) return true;
+    const text = message.text;
+    return !rule.whitelistPatterns.some((pattern) => {
+      try {
+        const regex = new RegExp(pattern, "i");
+        return regex.test(text);
+      } catch (e) {
+        console.error(`[SHIFT] 无效的正则表达式: ${pattern}`, e);
+        return false;
+      }
+    });
+  }
 
   const keywords = rule.filters;
   if (!keywords || keywords.length === 0 || !message.text) return false;
