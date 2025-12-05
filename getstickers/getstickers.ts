@@ -9,6 +9,9 @@ import { promisify } from "util";
 import archiver from "archiver";
 import bigInt from "big-integer";
 import { CustomFile } from "telegram/client/uploads";
+import { exec } from "child_process";
+
+const execAsync = promisify(exec);
 
 
 class GetStickersPlugin extends Plugin {
@@ -17,11 +20,14 @@ class GetStickersPlugin extends Plugin {
 • <code>.getstickers</code>（回复任意贴纸）<br/><br/>
 <b>功能</b><br/>
 • 从回复的贴纸中识别贴纸包并下载全部贴纸<br/>
+• 使用 FFmpeg 自动转换所有格式为 gif（方便微信使用）<br/>
+• 支持 webp、tgs、mp4 格式转换<br/>
 • 自动生成 pack.txt 与全部资源，并以 ZIP 发送<br/><br/>
 <b>用法</b><br/>
 1) 回复一张贴纸并发送 <code>.getstickers</code><br/><br/>
 <b>注意</b><br/>
-• 若贴纸包很大，处理时间较长，请耐心等待`;
+• 若贴纸包很大，处理时间较长，请耐心等待<br/>
+• 需要系统安装 FFmpeg`;
   
   cmdHandlers: Record<string, (msg: Api.Message) => Promise<void>> = {
     "getstickers": this.handleGetStickers.bind(this),
@@ -282,9 +288,41 @@ class GetStickersPlugin extends Plugin {
             }
           );
           
-          // 写入pack.txt
+          let finalFileName = fileName;
+          if (fileExt === 'webp') {
+            try {
+              const gifFileName = `${index.toString().padStart(3, '0')}.gif`;
+              const gifPath = path.join(packDir, gifFileName);
+              await this.convertWebpToGif(filePath, gifPath);
+              fs.unlinkSync(filePath);
+              finalFileName = gifFileName;
+            } catch (convertError) {
+              console.error(`转换webp失败，保留原格式:`, convertError);
+            }
+          } else if (fileExt === 'tgs') {
+            try {
+              const gifFileName = `${index.toString().padStart(3, '0')}.gif`;
+              const gifPath = path.join(packDir, gifFileName);
+              await this.convertTgsToGif(filePath, gifPath);
+              fs.unlinkSync(filePath);
+              finalFileName = gifFileName;
+            } catch (convertError) {
+              console.error(`转换tgs失败，保留原格式:`, convertError);
+            }
+          } else if (fileExt === 'mp4') {
+            try {
+              const gifFileName = `${index.toString().padStart(3, '0')}.gif`;
+              const gifPath = path.join(packDir, gifFileName);
+              await this.convertMp4ToGif(filePath, gifPath);
+              fs.unlinkSync(filePath);
+              finalFileName = gifFileName;
+            } catch (convertError) {
+              console.error(`转换mp4失败，保留原格式:`, convertError);
+            }
+          }
+          
           const emoji = emojis[document.id.toString()] || '';
-          const packEntry = `{'image_file': '${fileName}','emojis':${emoji}},\n`;
+          const packEntry = `{'image_file': '${finalFileName}','emojis':${emoji}},\n`;
           fs.appendFileSync(packFile, packEntry);
 
           downloaded++;
@@ -431,6 +469,35 @@ class GetStickersPlugin extends Plugin {
         text: errorMessage
       });
     }
+  }
+  
+  private async convertWebpToGif(webpPath: string, gifPath: string): Promise<void> {
+    const ffmpegCmd = `ffmpeg -i "${webpPath}" -vf "scale=512:512:force_original_aspect_ratio=decrease,pad=512:512:(ow-iw)/2:(oh-ih)/2:color=white@0" -loop 0 "${gifPath}"`;
+    await execAsync(ffmpegCmd);
+  }
+  
+  private async convertTgsToGif(tgsPath: string, gifPath: string): Promise<void> {
+    const pngDir = path.join(path.dirname(tgsPath), 'temp_frames');
+    if (!fs.existsSync(pngDir)) {
+      fs.mkdirSync(pngDir, { recursive: true });
+    }
+    
+    try {
+      const lottieCmd = `lottie_to_gif "${tgsPath}" "${pngDir}" 512 512 30`;
+      await execAsync(lottieCmd);
+      
+      const ffmpegCmd = `ffmpeg -framerate 30 -i "${pngDir}/frame_%04d.png" -vf "scale=512:512:force_original_aspect_ratio=decrease,pad=512:512:(ow-iw)/2:(oh-ih)/2:color=white@0" "${gifPath}"`;
+      await execAsync(ffmpegCmd);
+    } finally {
+      if (fs.existsSync(pngDir)) {
+        fs.rmSync(pngDir, { recursive: true, force: true });
+      }
+    }
+  }
+  
+  private async convertMp4ToGif(mp4Path: string, gifPath: string): Promise<void> {
+    const ffmpegCmd = `ffmpeg -i "${mp4Path}" -vf "fps=15,scale=512:512:force_original_aspect_ratio=decrease,pad=512:512:(ow-iw)/2:(oh-ih)/2:color=white@0" "${gifPath}"`;
+    await execAsync(ffmpegCmd);
   }
   
   private async createZipFile(sourceDir: string, zipPath: string): Promise<void> {
