@@ -398,7 +398,7 @@
   "pmcaptcha": {
     "url": "https://github.com/TeleBoxOrg/TeleBox_Plugins/blob/main/pmcaptcha/pmcaptcha.ts?raw=true",
     "desc": "简单防私聊"
-  }
+  },
   "prometheus": {
     "url": "https://github.com/TeleBoxOrg/TeleBox_Plugins/blob/main/prometheus/prometheus.ts?raw=true",
     "desc": "突破Telegram保存限制"
