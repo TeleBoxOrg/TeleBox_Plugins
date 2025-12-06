@@ -79,6 +79,7 @@ tpm i <插件名>
 - `pmcaptcha` - 简单防私聊  
 - `portball` - 临时禁言  
 - `premium` - 群组大会员统计  
+- `prometheus` - 突破Telegram保存限制  
 - `q` - 消息引用生成贴纸  
 - `qr` - QR 二维码  
 - `rate` - 货币实时汇率查询与计算  
