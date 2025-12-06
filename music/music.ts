@@ -2230,8 +2230,7 @@ ${apiKey ? "✅" : "⚪"} <b>AI搜索:</b> ${apiKey ? "已启用" : "未配置"}
       // 删除状态消息
       await statusMsg.delete();
 
-      // 清理临时文件
-      setTimeout(() => {
+      const timer = setTimeout(() => {
         try {
           if (
             downloadResult.audioPath &&
@@ -2249,6 +2248,7 @@ ${apiKey ? "✅" : "⚪"} <b>AI搜索:</b> ${apiKey ? "已启用" : "未配置"}
           console.log("[music] 清理临时文件失败:", error);
         }
       }, 5000);
+      if (timer.unref) timer.unref();
     } catch (error: any) {
       if (statusMsg) {
         await statusMsg.edit({
