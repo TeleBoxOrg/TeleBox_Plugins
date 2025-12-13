@@ -119,10 +119,6 @@
     "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/moyu/moyu.ts?raw=true",
     "desc": "摸鱼日报"
   },
-  "clearblocked": {
-    "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/clearblocked/clearblocked.ts?raw=true",
-    "desc": "批量清理已拉黑用户"
-  },
   "news": {
     "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/news/news.ts?raw=true",
     "desc": "每日新闻"
@@ -162,10 +158,6 @@
   "speedlink": {
     "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/speedlink/speedlink.ts?raw=true",
     "desc": "对其他服务器测速"
-  },
-  "sunremove": {
-    "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/sunremove/sunremove.ts?raw=true",
-    "desc": "定向批量解除封禁用户"
   },
   "whois": {
     "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/whois/whois.ts?raw=true",
@@ -351,10 +343,6 @@
     "url": "https://github.com/TeleBoxOrg/TeleBox_Plugins/blob/main/listusernames/listusernames.ts?raw=true",
     "desc": "列出属于自己的公开群组/频道"
   },
-  "getdel": {
-    "url": "https://github.com/TeleBoxOrg/TeleBox_Plugins/blob/main/getdel/getdel.ts?raw=true",
-    "desc": "死号检测清理"
-  },
   "annualreport": {
     "url": "https://github.com/TeleBoxOrg/TeleBox_Plugins/blob/main/annualreport/annualreport.ts?raw=true",
     "desc": "年度报告"
@@ -367,9 +355,9 @@
     "url": "https://github.com/TeleBoxOrg/TeleBox_Plugins/blob/main/paolu/paolu.ts?raw=true",
     "desc": "群组一键跑路"
   },
-  "cleanda": {
-    "url": "https://github.com/TeleBoxOrg/TeleBox_Plugins/blob/main/cleanda/cleanda.ts?raw=true",
-    "desc": "已注销账号清理"
+  "clean": {
+    "url": "https://github.com/TeleBoxOrg/TeleBox_Plugins/blob/main/clean/clean.ts?raw=true",
+    "desc": "账号清理工具 Pro"
   },
   "diss": {
     "url": "https://github.com/TeleBoxOrg/TeleBox_Plugins/blob/main/diss/diss.ts?raw=true",
