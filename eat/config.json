@@ -14,6 +14,16 @@
         "mask": "https://github.com/FoKit/PagerMaid_Plugins/raw/modify/eat/maskada.png"
       }
     },
+    "at": {
+      "name": "为什么艾特我",
+      "url": "eat/eatat.png",
+      "you": {
+        "x": 46,
+        "y": 15,
+        "rotate": -19,
+        "mask": "eat/maskat.png"
+      }
+    },
     "bc": {
       "name": "鞭笞",
       "url": "eat/eatbc.png",
