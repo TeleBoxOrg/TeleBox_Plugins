@@ -27,10 +27,9 @@ tpm i <插件名>
 - `bs` - 保送  
 - `bulk_delete` - 批量删除消息  
 - `calc` - 计算器  
+- `clean` - 账号清理工具 Pro  
 - `clean_member` - 群组成员清理  
-- `cleanda` - 已注销账号清理  
 - `clear_sticker` - 批量删除群组内贴纸  
-- `clearblocked` - 批量清理已拉黑用户  
 - `convert` - 视频转音频  
 - `copy_sticker_set` - 复制贴纸包  
 - `cosplay` - 获取随机cos写真  
@@ -45,7 +44,6 @@ tpm i <插件名>
 - `eatgif` - 生成"吃掉"动图表情包  
 - `encode` - 简单的编码解码  
 - `fadian` - fadian语录  
-- `getdel` - 死号检测清理  
 - `getstickers` - 下载整个贴纸包  
 - `gif` - GIF与视频转贴纸  
 - `git_PR` - Git PR 管理  
@@ -96,7 +94,6 @@ tpm i <插件名>
 - `sticker_to_pic` - 表情转图片  
 - `sub` - substore简单管理  
 - `subinfo` - 订阅链接信息查询  
-- `sunremove` - 定向批量解除封禁用户  
 - `t` - 文字转语音  
 - `teletype` - 打字机效果  
 - `trace` - 全局追踪点赞  
