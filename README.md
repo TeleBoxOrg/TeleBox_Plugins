@@ -20,6 +20,7 @@ tpm i <插件名>
 - `autochangename` - 自动定时修改用户名插  
 - `autodel` - 定时删除消息  
 - `autodelcmd` - 自动删除命令消息  
+- `autorepeat` - 智能自动复读机  
 - `banana` - Nano-Banana 图像编辑  
 - `bin` - 卡头检测  
 - `bizhi` - 发送一张壁纸  
