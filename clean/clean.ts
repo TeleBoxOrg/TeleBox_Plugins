@@ -1,9 +1,10 @@
+// file name: clean.ts
 import { Plugin } from "@utils/pluginBase";
 import { Api } from "telegram";
 import { getGlobalClient } from "@utils/globalClient";
 import { banUser, getBannedUsers, unbanUser } from "@utils/banUtils";
 
-// HTML 转义函数
+// HTML 转义函数（必需）
 const htmlEscape = (text: string): string => 
   text.replace(/[&<>"']/g, m => ({ 
     '&': '&amp;', '<': '&lt;', '>': '&gt;', 
@@ -15,7 +16,7 @@ const sleep = (ms: number): Promise<void> =>
   new Promise(resolve => setTimeout(resolve, ms));
 
 // 帮助文本
-const HELP_TEXT = `🧹 <b>账号清理工具 Pro</b>
+const HELP_TEXT = `🧹 <b>清理工具 Pro</b>
 
 <b>📝 功能概述:</b>
 • <b>删除账号清理</b>: 扫描并清理已注销/删除的账号
@@ -28,7 +29,7 @@ const HELP_TEXT = `🧹 <b>账号清理工具 Pro</b>
 • <code>.clean deleted pm</code> - 扫描私聊中的已注销账号
 • <code>.clean deleted pm rm</code> - 扫描并删除已注销账号的私聊
 • <code>.clean deleted member</code> - 扫描群组中的已注销账号
-• <code>.clean deleted member rm</code> - 扫描并清理群组中的已注销账号
+• <code>.clean deleted member rm</code> - 扫描并清理群组已注销账号
 
 <u>拉黑用户清理:</u>
 • <code>.clean blocked pm</code> - 清理拉黑用户（智能模式）
@@ -41,20 +42,32 @@ const HELP_TEXT = `🧹 <b>账号清理工具 Pro</b>
 <u>帮助信息:</u>
 • <code>.clean help</code> - 显示此帮助信息
 
+<b>⚡ 智能清理模式:</b>
+• 跳过机器人、诈骗账户、虚假账户
+• 自动处理 API 限制
+• 实时进度显示
+
+<b>📊 数据统计:</b>
+• 处理总数、成功数、失败数、跳过数
+• 实体类型统计（用户/频道/群组）
+• 清理成功率
+
 <b>⚠️ 权限要求:</b>
 • 群组操作需要管理员权限
 • 封禁清理需要封禁用户权限
 • 私聊清理仅操作机器人自身对话`;
 
-class CleanPlugin {
-  description: string | ((...args: any[]) => string | void) | ((...args: any[]) => Promise<string | void>);
-  cmdHandlers: Record<string, (msg: Api.Message, trigger?: Api.Message) => Promise<void>>;
+class CleanPlugin extends Plugin {
+  // 插件配置
+  private readonly PLUGIN_NAME = "clean";
+  private readonly PLUGIN_VERSION = "2.0.0";
   
   // 清理进度状态
   private cleanupStartTime: number = 0;
   private blockedCleanupStartTime: number = 0;
 
   constructor() {
+    super();
     this.description = HELP_TEXT;
     this.cmdHandlers = {
       clean: this.handleClean.bind(this)
@@ -215,8 +228,8 @@ class CleanPlugin {
     }
 
     await this.editMessage(msg, cleanMembers 
-      ? "🔍 正在扫描并清理群组中的已注销账号..." 
-      : "🔍 正在扫描群组群组中的已注销账号...");
+      ? "🔍 正在扫描并清理群组已注销账号..." 
+      : "🔍 正在扫描群组已注销账号...");
 
     const chatId = chat.id;
     if (cleanMembers && !await this.checkBanPermission(client, chatId)) {
