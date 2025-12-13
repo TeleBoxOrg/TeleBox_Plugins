@@ -9,7 +9,7 @@ import path from "path";
 // ==================== 配置常量 ====================
 const CONFIG = {
   CACHE_DB_NAME: "repeat.json",
-  MESSAGE_AUTO_DELETE: 10,
+  MESSAGE_AUTO_DELETE: 30,
 };
 
 // ==================== 帮助文本 ====================
@@ -18,6 +18,7 @@ const HELP_TEXT = `<b>自动复读插件使用说明</b>
 <b>指令列表：</b>
 <code>.autorepeat on</code> - 开启本群自动复读
 <code>.autorepeat off</code> - 关闭本群自动复读
+<code>.autorepeat list</code> - 查看已开启的群组
 <code>.autorepeat</code> - 查看当前状态
 
 <b>复读规则：</b>
@@ -177,6 +178,10 @@ class AutoRepeatManager {
     return this.enabledGroups.has(groupId);
   }
 
+  static getEnabledGroups(): number[] {
+    return Array.from(this.enabledGroups);
+  }
+
   static async checkAndRepeat(message: Api.Message) {
     try {
       if (!message.chatId) return;
@@ -285,22 +290,62 @@ AutoRepeatManager.init().catch(e => console.error(`[AutoRepeat] Init failed: ${e
 
 // ==================== 命令处理器 ====================
 class CommandHandlers {
-  static async handleAutoRepeatCommand(message: Api.Message) {
+  static async handleAutoRepeatCommand(message: Api.Message) {  // 修改函数名
     try {
       const args = message.message?.split(" ").slice(1) || [];
       const action = args[0]?.toLowerCase();
+
+      // 此命令仅能在群组中使用 (list 命令除外，可以在私聊查看)
+      if (message.isPrivate) {
+        if (action !== "list") {
+          await MessageManager.smartEdit(message, "❌ 此命令仅能在群组中使用");
+          return;
+        }
+      }
 
       const chatId = Number(message.chatId);
 
       if (action === "on") {
         await AutoRepeatManager.toggleGroup(chatId, true);
-        await MessageManager.smartEdit(message, "✅ 自动复读已开启", 2);
+        await MessageManager.smartEdit(message, "✅ 自动复读已开启", 2);  // 修改提示文本
       } else if (action === "off") {
         await AutoRepeatManager.toggleGroup(chatId, false);
-        await MessageManager.smartEdit(message, "❌ 自动复读已关闭", 2);
+        await MessageManager.smartEdit(message, "❌ 自动复读已关闭", 2);  // 修改提示文本
+      } else if (action === "list") {
+        const groups = AutoRepeatManager.getEnabledGroups();
+        if (groups.length === 0) {
+          await MessageManager.smartEdit(message, "📝 当前没有开启自动复读的群组");
+        } else {
+          // 获取群组信息
+          const lines = [];
+          const client = await getGlobalClient(); // 确保获取 client
+
+          if (client) {
+            for (const gid of groups) {
+              try {
+                // 尝试获取群组信息
+                const entity: any = await client.getEntity(gid);
+                const title = entity.title || "Unknown Group";
+                lines.push(`• <b>${title}</b> (<code>${gid}</code>)`);
+              } catch (e) {
+                // 如果获取失败（比如不在群里了），只显示 ID
+                lines.push(`• <code>${gid}</code> (无法获取信息)`);
+              }
+            }
+          } else {
+            // 如果没有 client 实例（理论上不应该），降级显示 ID
+            lines.push(...groups.map(id => `<code>${id}</code>`));
+          }
+
+          await MessageManager.smartEdit(
+            message,
+            `📝 <b>已开启自动复读群组 (${groups.length}):</b>\n\n` +  // 修改标题
+            lines.join("\n")
+          );
+        }
       } else {
         const status = AutoRepeatManager.isEnabled(chatId) ? "开启" : "关闭";
-        await MessageManager.smartEdit(message, `🤖 自动复读状态: ${status}`);
+        await MessageManager.smartEdit(message, `🤖 自动复读状态: ${status}`);  // 修改提示文本
       }
 
     } catch (e: any) {
@@ -310,17 +355,17 @@ class CommandHandlers {
 }
 
 // ==================== 插件主类 ====================
-class AutoRepeatPlugin extends Plugin {
+class AutoRepeatPlugin extends Plugin {  // 修改类名
   description: string = HELP_TEXT;
 
   cmdHandlers: Record<string, (msg: Api.Message) => Promise<void>> = {
-    autorepeat: async (msg) => {
+    autorepeat: async (msg) => {  // 修改命令名
       const client = await getGlobalClient();
       if (!client) {
         await MessageManager.smartEdit(msg, "❌ 客户端未初始化");
         return;
       }
-      await CommandHandlers.handleAutoRepeatCommand(msg);
+      await CommandHandlers.handleAutoRepeatCommand(msg);  // 修改调用函数名
     },
   };
 
@@ -342,4 +387,4 @@ class AutoRepeatPlugin extends Plugin {
 }
 
 // 导出插件实例
-export default new AutoRepeatPlugin();
+export default new AutoRepeatPlugin();  // 修改实例名
