@@ -390,5 +390,9 @@
   "prometheus": {
     "url": "https://github.com/TeleBoxOrg/TeleBox_Plugins/blob/main/prometheus/prometheus.ts?raw=true",
     "desc": "突破Telegram保存限制"
+  },
+    "autorepeat": {
+    "url": "https://github.com/TeleBoxOrg/TeleBox_Plugins/blob/main/autorepeat/autorepeat.ts?raw=true",
+    "desc": "智能自动复读机"
   }
 }
