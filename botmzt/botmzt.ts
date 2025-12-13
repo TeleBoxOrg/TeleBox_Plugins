@@ -52,70 +52,78 @@ async function waitForBotReply(
   expectPhoto: boolean = true
 ): Promise<Api.Message | null> {
   return new Promise((resolve) => {
-    let timeoutId: NodeJS.Timeout;
-    let eventHandler: (event: any) => void;
+    let timeoutId: NodeJS.Timeout | null = null;
+    let eventHandler: ((event: any) => void) | null = null;
+    let isResolved = false;
 
-    // 设置超时
-    timeoutId = setTimeout(() => {
-      if (eventHandler) {
-        client.removeEventHandler(eventHandler, new NewMessage({}));
+    const cleanup = (result: Api.Message | null) => {
+      if (isResolved) return;
+      isResolved = true;
+      
+      if (timeoutId) {
+        clearTimeout(timeoutId);
+        timeoutId = null;
       }
-      resolve(null);
-    }, timeout);
+      
+      if (eventHandler) {
+        try {
+          client.removeEventHandler(eventHandler, new NewMessage({}));
+        } catch (e) {
+          console.warn('[botmzt] 移除事件监听器失败:', e);
+        }
+        eventHandler = null;
+      }
+      
+      resolve(result);
+    };
 
-    // 创建事件处理器
+    timeoutId = setTimeout(() => cleanup(null), timeout);
+
     eventHandler = async (event: any) => {
       try {
         const message = event.message;
         
-        // 检查是否是来自目标机器人的消息
         if (!message || !message.peerId) return;
         
-        // 获取发送者ID
         const senderId = message.senderId?.toString();
         const botId = (botEntity as any).id?.toString();
         
-        // 确保消息来自目标机器人
         if (senderId !== botId) return;
         
-        // 检查消息时间，只处理最近的消息（避免处理历史消息）
-        const messageTime = message.date * 1000; // 转换为毫秒
+        const messageTime = message.date * 1000;
         const currentTime = Date.now();
         const timeDiff = currentTime - messageTime;
         
-        // 如果消息时间差超过5秒，可能是历史消息，忽略
         if (timeDiff > 5000) return;
         
-        // 如果期望图片，检查是否包含图片
         if (expectPhoto) {
           const hasPhoto = message.photo || 
                           (message.media && message.media.className === 'MessageMediaPhoto') ||
                           (message.document && message.document.mimeType?.startsWith('image/'));
           
           if (!hasPhoto) {
-            // 如果消息包含"没有找到"、"错误"等关键词，也认为是有效回复
             const messageText = message.message?.toLowerCase() || '';
             const errorKeywords = ['没有找到', '错误', 'error', '失败', '不存在', '无法', '无效'];
             const hasErrorKeyword = errorKeywords.some(keyword => messageText.includes(keyword));
             
-            if (!hasErrorKeyword) return; // 不是错误消息且没有图片，继续等待
+            if (!hasErrorKeyword) return;
           }
         }
         
-        // 清理事件监听器和超时
-        clearTimeout(timeoutId);
-        client.removeEventHandler(eventHandler, new NewMessage({}));
-        
-        // 返回找到的消息
-        resolve(message);
+        cleanup(message);
         
       } catch (error) {
-        console.error('[mztnew] 处理机器人回复时出错:', error);
+        console.error('[botmzt] 处理机器人回复时出错:', error);
+        cleanup(null);
       }
     };
 
-    // 注册事件监听器
-    client.addEventHandler(eventHandler, new NewMessage({}));
+    try {
+      client.addEventHandler(eventHandler, new NewMessage({}));
+    } catch (error) {
+      console.error('[botmzt] 添加事件监听器失败:', error);
+      cleanup(null);
+    }
   });
 }
 
@@ -450,7 +458,7 @@ class MztNewPlugin extends Plugin {
         });
 
         // 30秒后删除消息
-        setTimeout(async () => {
+        const deleteTimer = setTimeout(async () => {
           try {
             if (statusMsg) {
               await statusMsg.delete({ revoke: true });

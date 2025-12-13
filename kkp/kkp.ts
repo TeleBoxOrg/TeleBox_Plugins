@@ -137,14 +137,20 @@ class KkpPlugin extends Plugin {
     return new Promise((resolve) => {
       const startTime = Date.now();
       const listenerId = `${botEntity.id}_${startTime}_${Math.random()}`;
+      let isResolved = false;
       
       const cleanup = (result: Api.Message | null) => {
+        if (isResolved) return;
+        isResolved = true;
+        
         const listener = this.messageListeners.get(listenerId);
         if (listener) {
           clearTimeout(listener.timeout);
           try {
             client.removeEventHandler(listener.handler, new NewMessage({}));
-          } catch (error) { console.warn(error); }
+          } catch (error) { 
+            console.warn('[kkp] 移除事件监听器失败:', error); 
+          }
           this.messageListeners.delete(listenerId);
         }
         resolve(result);
@@ -162,7 +168,10 @@ class KkpPlugin extends Plugin {
           if (senderId === botId && message.date * 1000 >= startTime - 1000) {
             if (this.isVideoMessage(message)) cleanup(message);
           }
-        } catch (error) { console.error(error); }
+        } catch (error) { 
+          console.error('[kkp] 消息处理失败:', error);
+          cleanup(null);
+        }
       };
 
       this.messageListeners.set(listenerId, {
@@ -170,7 +179,10 @@ class KkpPlugin extends Plugin {
       });
       try {
         client.addEventHandler(messageHandler, new NewMessage({}));
-      } catch (error) { cleanup(null); }
+      } catch (error) { 
+        console.error('[kkp] 添加事件监听器失败:', error);
+        cleanup(null); 
+      }
     });
   }
 
@@ -257,12 +269,18 @@ class KkpPlugin extends Plugin {
     }
   }
 
-  cleanup(): void {
+  async cleanup(): Promise<void> {
+    const client = await getGlobalClient().catch(() => null);
+    
     for (const [listenerId, listener] of this.messageListeners) {
       clearTimeout(listener.timeout);
-      try {
-        getGlobalClient().then((c: any) => c?.removeEventHandler(listener.handler, new NewMessage({})));
-      } catch {}
+      if (client) {
+        try {
+          client.removeEventHandler(listener.handler, new NewMessage({}));
+        } catch (error) {
+          console.warn('[kkp] cleanup 移除监听器失败:', error);
+        }
+      }
     }
     this.messageListeners.clear();
   }

@@ -1,0 +1,48 @@
+{
+  "width": 272,
+  "height": 208,
+  "res": [
+    {
+      "url": "dpp/dpp0.png",
+      "delay": 100,
+      "you": {
+        "x": 99,
+        "y": 136,
+        "mask": "dpp/you.png"
+      },
+      "me": {
+        "x": 100,
+        "y": 43,
+        "mask": "dpp/me.png"
+      }
+    },
+    {
+      "url": "dpp/dpp1.png",
+      "delay": 100,
+      "you": {
+        "x": 99,
+        "y": 136,
+        "mask": "dpp/you.png"
+      },
+      "me": {
+        "x": 110,
+        "y": 46,
+        "mask": "dpp/me.png"
+      }
+    },
+    {
+      "url": "dpp/dpp2.png",
+      "delay": 100,
+      "you": {
+        "x": 89,
+        "y": 140,
+        "mask": "dpp/you.png"
+      },
+      "me": {
+        "x": 101,
+        "y": 40,
+        "mask": "dpp/me.png"
+      }
+    }
+  ]
+}
