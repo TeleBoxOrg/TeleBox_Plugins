@@ -159,29 +159,42 @@ class CleanPlugin extends Plugin {
     }
   }
 
-  // 私聊已注销账号清理
+// 私聊已注销账号清理 - 修复版：直接移除整个对话
   private async cleanDeletedPM(client: any, msg: Api.Message, deleteDialogs: boolean = false): Promise<void> {
     await this.editMessage(msg, deleteDialogs 
-      ? "🔍 正在扫描并清理私聊已注销账号..." 
+      ? "🔍 正在扫描并从对话列表中移除已注销账号..." 
       : "🔍 正在扫描私聊已注销账号...");
 
     const deletedUsers: Array<{id: string, username?: string}> = [];
-    const dialogs = await client.getDialogs();
     
-    for (const dialog of dialogs) {
-      if (dialog.isUser && dialog.entity?.className === "User") {
-        const user = dialog.entity as Api.User;
-        
-        if (user.deleted) {
+    try {
+      // 获取所有对话列表
+      const dialogs = await client.getDialogs({});
+      
+      for (const dialog of dialogs) {
+        // 检查是否为用户，且该用户实体标记为已注销
+        if (dialog.isUser && dialog.entity instanceof Api.User && dialog.entity.deleted) {
+          const user = dialog.entity;
           const userId = user.id.toString();
-          const username = user.username || "未知";
-          deletedUsers.push({ id: userId, username });
+          deletedUsers.push({ 
+            id: userId, 
+            username: user.username || "已注销账号" 
+          });
           
           if (deleteDialogs) {
             try {
-              await client.deleteDialog(user.id, { revoke: true });
-              await sleep(100);
+              /**
+               * 修复核心：
+               * 1. 使用 dialog.inputEntity 确保 ID 类型在 API 层级完全匹配。
+               * 2. 不传任何参数（默认不开启 revoke），直接从本地对话列表中移除该会话。
+               * 3. 针对已注销账号，开启 revoke 反而会导致删除失败。
+               */
+              await client.deleteDialog(dialog.inputEntity);
+              
+              // 稍微延迟，防止触发 Telegram API 的频率限制
+              await sleep(150);
             } catch (error: any) {
+              console.error(`[Clean] 无法移除对话 ${userId}:`, error.message);
               if (error.message?.includes("FLOOD_WAIT")) {
                 await this.handleFloodWait(msg, error);
                 return;
@@ -190,33 +203,35 @@ class CleanPlugin extends Plugin {
           }
         }
       }
-    }
 
-    let result = "";
-    if (deletedUsers.length === 0) {
-      result = "✅ <b>扫描完成</b>\n\n未找到已注销账号的私聊会话。";
-    } else {
-      result = deleteDialogs 
-        ? `✅ <b>清理完成</b>\n\n已清理 <code>${deletedUsers.length}</code> 个已注销账号的私聊会话:\n\n`
-        : `✅ <b>扫描完成</b>\n\n共找到 <code>${deletedUsers.length}</code> 个已注销账号的私聊会话:\n\n`;
-      
-      deletedUsers.slice(0, 15).forEach((user, index) => {
-        const userLink = user.username && user.username !== "未知" 
-          ? `<a href="https://t.me/${user.username}">@${user.username}</a>` 
-          : `<a href="tg://openmessage?user_id=${user.id}">${user.id}</a>`;
-        result += `• ${userLink}\n`;
-      });
-      
-      if (deletedUsers.length > 15) {
-        result += `\n... 还有 ${deletedUsers.length - 15} 个未显示\n`;
+      // 构建结果反馈
+      let result = "";
+      if (deletedUsers.length === 0) {
+        result = "✅ <b>扫描完成</b>\n\n对话列表中未发现已注销账号。";
+      } else {
+        result = deleteDialogs 
+          ? `✅ <b>清理完成</b>\n\n已从列表移除 <code>${deletedUsers.length}</code> 个已注销对话:\n\n`
+          : `✅ <b>扫描完成</b>\n\n共找到 <code>${deletedUsers.length}</code> 个已注销对话:\n\n`;
+        
+        // 仅展示前 15 条
+        deletedUsers.slice(0, 15).forEach((user) => {
+          result += `• <a href="tg://user?id=${user.id}">已注销账号</a> (ID: <code>${user.id}</code>)\n`;
+        });
+        
+        if (deletedUsers.length > 15) {
+          result += `\n... 以及其他 ${deletedUsers.length - 15} 个会话\n`;
+        }
+        
+        if (!deleteDialogs) {
+          result += `\n💡 使用 <code>.clean deleted pm rm</code> 直接移除这些对话`;
+        }
       }
-      
-      if (!deleteDialogs) {
-        result += `\n💡 使用 <code>.clean deleted pm rm</code> 清理这些会话`;
-      }
-    }
 
-    await this.editMessage(msg, result);
+      await this.editMessage(msg, result);
+
+    } catch (error: any) {
+      await this.handleError(msg, error);
+    }
   }
 
   // 群组已注销账号清理
