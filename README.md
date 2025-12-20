@@ -44,6 +44,7 @@ tpm i <插件名>
 - `eat` - 生成带头像表情包  
 - `eatgif` - 生成"吃掉"动图表情包  
 - `encode` - 简单的编码解码  
+- `epic` - 检查Epic Games喜加一优惠  
 - `fadian` - fadian语录  
 - `getstickers` - 下载整个贴纸包  
 - `gif` - GIF与视频转贴纸  
@@ -54,6 +55,7 @@ tpm i <插件名>
 - `ids` - 用户信息显示以及跳转链接  
 - `ip` - IP 地址查询  
 - `javdb` - 寻找番号封面  
+- `jupai` - 举牌小人  
 - `keep_online` - 保活自动重启(测试版) 请查看说明操作  
 - `keyword` - 关键词自动回复  
 - `kitt` - 高级触发器: 匹配 -> 执行, 高度自定义, 逻辑自由  
@@ -69,6 +71,7 @@ tpm i <插件名>
 - `music_bot` - 多音源音乐搜索  
 - `netease` - 网易云音乐  
 - `news` - 每日新闻  
+- `nezha` - 哪吒监控  
 - `ntp` - NTP 时间同步  
 - `openlist` - openlist管理  
 - `oxost` - 回复聊天中的文件与媒体 得到一个临时的下载链接  
