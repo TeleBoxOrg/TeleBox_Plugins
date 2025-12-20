@@ -391,8 +391,20 @@
     "url": "https://github.com/TeleBoxOrg/TeleBox_Plugins/blob/main/prometheus/prometheus.ts?raw=true",
     "desc": "突破Telegram保存限制"
   },
-    "autorepeat": {
-    "url": "https://github.com/TeleBoxOrg/TeleBox_Plugins/blob/main/autorepeat/autorepeat.ts?raw=true",
-    "desc": "智能自动复读机"
+  "autorepeat": {
+  "url": "https://github.com/TeleBoxOrg/TeleBox_Plugins/blob/main/autorepeat/autorepeat.ts?raw=true",
+  "desc": "智能自动复读机"
+  },
+  "epic": {
+  "url": "https://github.com/TeleBoxOrg/TeleBox_Plugins/blob/main/epic/epic.ts?raw=true",
+  "desc": "检查Epic Games喜加一优惠"
+  },
+  "nezha": {
+  "url": "https://github.com/TeleBoxOrg/TeleBox_Plugins/blob/main/nezha/nezha.ts?raw=true",
+  "desc": "哪吒监控"
+  },
+  "jupai": {
+  "url": "https://github.com/TeleBoxOrg/TeleBox_Plugins/blob/main/jupai/jupai.ts?raw=true",
+  "desc": "举牌小人"
   }
 }
