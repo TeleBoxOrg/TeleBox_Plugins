@@ -14,7 +14,7 @@ const CONFIG_KEYS = {
 
 // 默认配置
 const DEFAULT_CONFIG = {
-  [CONFIG_KEYS.SERVICE_DEFAULT]: "pagermaid",
+  [CONFIG_KEYS.SERVICE_DEFAULT]: "telebox",
   [CONFIG_KEYS.SERVICE_AUTO_DETECT]: "true",
 };
 
@@ -85,8 +85,8 @@ async function getCurrentServiceName(): Promise<string> {
     
     // 方法3：通过进程名称猜测（回退方案）
     try {
-      // 检查常见的pagermaid服务名称
-      const commonNames = ["pagermaid", "pgm", "pagermaid-modify", "pgm-sg", "pgm-hk"];
+      // 检查常见的telebox服务名称
+      const commonNames = ["telebox", "TeleBox"];
       for (const name of commonNames) {
         try {
           const { stdout } = await execAsync(`systemctl is-active ${name} 2>/dev/null`);
@@ -105,7 +105,7 @@ async function getCurrentServiceName(): Promise<string> {
   }
   
   // 如果所有方法都失败，返回默认值
-  return "pagermaid";
+  return "telebox";
 }
 
 // 格式化时间为中文显示
@@ -270,7 +270,7 @@ async function handleServiceRequest(msg: Api.Message): Promise<void> {
             const [sinceTime, uptimeInfo] = afterSince.split(";");
             lines[i] = `${beforeSince.trim()}\n启动时间: ${sinceTime.trim()}\n运行时间: ${uptimeInfo.trim()}`;
             
-            // 如果是当前检测到的pagermaid服务，添加bot uptime
+            // 如果是当前检测到的telebox服务，添加bot uptime
             if (isAutoDetected) {
               lines[i] += ` (${uptime})`;
             }
