@@ -12,7 +12,7 @@ interface BananaConfig {
   maxBytes: number;
 }
 
-const FIXED_MODEL = "gemini-2.5-flash-image-preview";
+const FIXED_MODEL = "gemini-3-pro-image-preview";
 const DEFAULT_MAX_IMAGE_BYTES = 10 * 1024 * 1024; // 10MB
 const MIN_ALLOWED_IMAGE_BYTES = 256 * 1024; // 256KB
 const MAX_ALLOWED_IMAGE_BYTES = 25 * 1024 * 1024; // 25MB
