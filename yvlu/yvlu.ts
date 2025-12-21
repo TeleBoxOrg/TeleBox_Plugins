@@ -38,71 +38,86 @@ const hashCode = (s: any) => {
   return h;
 };
 
-// 读取WebP图片尺寸的辅助函数
+// 检测是否为 webm 格式
+function isWebmFormat(buffer: Buffer): boolean {
+  if (!buffer || buffer.length < 4) return false;
+  // WebM 魔数: 0x1A 0x45 0xDF 0xA3 (EBML header)
+  return (
+    buffer[0] === 0x1a &&
+    buffer[1] === 0x45 &&
+    buffer[2] === 0xdf &&
+    buffer[3] === 0xa3
+  );
+}
 
+// 检测是否为动态 WebP
+function isAnimatedWebP(buffer: Buffer): boolean {
+  if (!buffer || buffer.length < 12) return false;
+
+  // 检查 RIFF + WEBP 头
+  if (
+    buffer.toString("ascii", 0, 4) !== "RIFF" ||
+    buffer.toString("ascii", 8, 12) !== "WEBP"
+  ) {
+    return false;
+  }
+
+  // 搜索 ANIM 块
+  for (let i = 12; i < buffer.length - 4; i++) {
+    if (buffer.toString("ascii", i, i + 4) === "ANIM") {
+      return true;
+    }
+  }
+  return false;
+}
+
+// 读取WebP图片尺寸的辅助函数
 function getWebPDimensions(imageBuffer: any): {
   width: number;
   height: number;
 } {
   try {
     // WebP文件格式解析
-
     if (imageBuffer.length < 30) {
       throw new Error("Invalid WebP file: too short");
     }
 
     // 检查RIFF头
-
     if (imageBuffer.toString("ascii", 0, 4) !== "RIFF") {
       throw new Error("Invalid WebP file: missing RIFF header");
     }
 
     // 检查WEBP标识
-
     if (imageBuffer.toString("ascii", 8, 12) !== "WEBP") {
       throw new Error("Invalid WebP file: missing WEBP signature");
     }
 
     // 读取VP8或VP8L头
-
     const chunkHeader = imageBuffer.toString("ascii", 12, 16);
 
     if (chunkHeader === "VP8 ") {
       // VP8格式
-
       const width = imageBuffer.readUInt16LE(26) & 0x3fff;
-
       const height = imageBuffer.readUInt16LE(28) & 0x3fff;
-
       return { width, height };
     } else if (chunkHeader === "VP8L") {
       // VP8L格式
-
       const data = imageBuffer.readUInt32LE(21);
-
       const width = (data & 0x3fff) + 1;
-
       const height = ((data >> 14) & 0x3fff) + 1;
-
       return { width, height };
     } else if (chunkHeader === "VP8X") {
       // VP8X格式
-
       const width = (imageBuffer.readUInt32LE(24) & 0xffffff) + 1;
-
       const height = (imageBuffer.readUInt32LE(27) & 0xffffff) + 1;
-
       return { width, height };
     }
 
     // 如果无法解析，返回默认尺寸
-
     console.warn("Unknown WebP format, using default dimensions");
-
     return { width: 512, height: 768 };
   } catch (error) {
     console.warn("Failed to parse WebP dimensions:", error);
-
     return { width: 512, height: 768 };
   }
 }
@@ -165,6 +180,14 @@ const help_text = `
 
 - 包含回复
 使用 <code>${commandName} r [消息数]</code> 回复一条消息(支持选择部分引用回复) ⚠️ 不得超过 5 条
+
+
+- 保存贴纸/图片到贴纸包
+使用 <code>${commandName} s</code> 回复一张贴纸或图片,将其保存到配置的贴纸包中
+
+- 配置管理
+使用 <code>${commandName} config</code> 查看当前配置
+使用 <code>${commandName} config sticker 贴纸包名称</code> 设置贴纸包名称
 `;
 
 // 转换Telegram消息实体为quote-api格式
@@ -300,8 +323,68 @@ async function generateQuote(
   }
 }
 
+interface YvluConfig {
+  stickerSetShortName: string;
+  _comment?: string;
+}
+
 class YvluPlugin extends Plugin {
   description: string = `\n生成文字语录贴纸\n\n${help_text}`;
+  private config: YvluConfig | null = null;
+  private configPath: string = "";
+
+  async onLoad() {
+    // 使用 assets 目录存储配置文件
+    const configDir = createDirectoryInAssets("yvlu");
+    this.configPath = path.join(configDir, "config.json");
+
+    console.log(`yvlu配置文件路径: ${this.configPath}`);
+
+    // 如果配置文件不存在,创建默认配置
+    if (!fs.existsSync(this.configPath)) {
+      const defaultConfig: YvluConfig = {
+        stickerSetShortName: "",
+        _comment:
+          "如果贴纸包不存在,将自动创建。shortName 只能包含字母、数字和下划线",
+      };
+      fs.writeFileSync(
+        this.configPath,
+        JSON.stringify(defaultConfig, null, 2),
+        "utf-8"
+      );
+      console.log(`已创建默认配置文件: ${this.configPath}`);
+    }
+
+    // 加载配置
+    await this.loadConfig();
+  }
+
+  async loadConfig() {
+    try {
+      // 确保 configPath 已初始化
+      if (!this.configPath || this.configPath === "") {
+        const configDir = createDirectoryInAssets("yvlu");
+        this.configPath = path.join(configDir, "config.json");
+        console.log(`重新初始化配置文件路径: ${this.configPath}`);
+      }
+
+      if (!fs.existsSync(this.configPath)) {
+        console.error(`配置文件不存在: ${this.configPath}`);
+        console.log(`请手动创建配置文件: ${this.configPath}`);
+        this.config = { stickerSetShortName: "" };
+        return;
+      }
+
+      const configData = fs.readFileSync(this.configPath, "utf-8");
+      this.config = JSON.parse(configData);
+      console.log("yvlu配置已加载:", this.config);
+      console.log("stickerSetShortName:", this.config?.stickerSetShortName);
+    } catch (error) {
+      console.error("加载yvlu配置失败:", error);
+      this.config = { stickerSetShortName: "" };
+    }
+  }
+
   cmdHandlers: Record<
     string,
     (msg: Api.Message, trigger?: Api.Message) => Promise<void>
@@ -312,6 +395,14 @@ class YvluPlugin extends Plugin {
       let count = 1;
       let r = false;
       let valid = false;
+      let saveToSet = false;
+
+      // 处理配置命令
+      if (args[1] === "config") {
+        await this.handleConfigCommand(msg, args.slice(2));
+        return;
+      }
+
       if (!args[1] || /^\d+$/.test(args[1])) {
         count = parseInt(args[1]) || 1;
         valid = true;
@@ -319,9 +410,15 @@ class YvluPlugin extends Plugin {
         r = true;
         count = parseInt(args[2]) || 1;
         valid = true;
+      } else if (args[1] === "s") {
+        saveToSet = true;
+        valid = true;
       }
 
-      if (valid) {
+      if (saveToSet) {
+        // 处理保存贴纸/图片到贴纸包的逻辑
+        await this.handleSaveStickerToSet(msg);
+      } else if (valid) {
         let replied = await msg.getReplyMessage();
         if (!replied) {
           await msg.edit({ text: "请回复一条消息" });
@@ -354,6 +451,20 @@ class YvluPlugin extends Plugin {
           for await (const [i, message] of messages.entries()) {
             // 获取发送者信息
             let sender: any = await message.getSender();
+
+            // 如果无法获取发送者（可能是以频道身份发言），尝试从 peerId 获取
+            if (!sender) {
+              try {
+                const peerId =
+                  (message as any).peerId || (message as any).fromId;
+                if (peerId) {
+                  sender = await client.getEntity(peerId);
+                }
+              } catch (e) {
+                console.warn("从 peerId 获取发送者失败", e);
+              }
+            }
+
             if (message.fwdFrom) {
               let forwardedSender = undefined;
               try {
@@ -375,6 +486,7 @@ class YvluPlugin extends Plugin {
               }
               sender = forwardedSender;
             }
+
             if (!sender) {
               await msg.edit({ text: "无法获取消息发送者信息" });
               return;
@@ -402,8 +514,8 @@ class YvluPlugin extends Plugin {
               currentUserIdentifier !== previousUserIdentifier;
             previousUserIdentifier = currentUserIdentifier;
 
-            let photo = undefined;
-            if (sender.photo && shouldShowAvatar) {
+            let photo: { url: string } | undefined = undefined;
+            if (shouldShowAvatar) {
               try {
                 const buffer = await client.downloadProfilePhoto(
                   sender as any,
@@ -417,12 +529,13 @@ class YvluPlugin extends Plugin {
                     url: `data:image/jpeg;base64,${base64}`,
                   };
                 } else {
-                  console.warn("下载的头像数据无效");
+                  console.warn("下载的头像数据无效或用户无头像");
                 }
               } catch (e) {
                 console.warn("下载用户头像失败", e);
               }
             }
+
             if (i === 0) {
               let replyTo = (trigger || msg)?.replyTo;
               if (replyTo?.quoteText) {
@@ -519,7 +632,7 @@ class YvluPlugin extends Plugin {
               }
             }
 
-            let media = undefined;
+            let media: { url: string } | undefined = undefined;
             try {
               if (message.media) {
                 let mediaTypeForQuote: string | undefined = undefined;
@@ -541,16 +654,29 @@ class YvluPlugin extends Plugin {
                 }
 
                 const mimeType = (message.media as any).document?.mimeType;
+
+                // 检测是否为动态贴纸（需要下载原文件，不用缩略图）
+                const isAnimatedSticker =
+                  isSticker &&
+                  (mimeType === "video/webm" || // 视频贴纸
+                    mimeType === "image/webp"); // 可能是动态WebP
+
                 const buffer = await (message as any).downloadMedia({
-                  thumb: ["video/webm"].includes(mimeType) ? 0 : 1,
+                  // 动态贴纸不使用缩略图，下载原始文件
+                  ...(isAnimatedSticker ? {} : { thumb: 1 }),
                 });
                 if (Buffer.isBuffer(buffer)) {
+                  // 使用实际的 mimeType
                   const mime =
-                    mediaTypeForQuote === "sticker"
+                    mimeType ||
+                    (mediaTypeForQuote === "sticker"
                       ? "image/webp"
-                      : "image/jpeg";
+                      : "image/jpeg");
                   const base64 = buffer.toString("base64");
                   media = { url: `data:${mime};base64,${base64}` };
+                  console.log(
+                    `媒体下载: mimeType=${mimeType}, isAnimated=${isAnimatedSticker}, size=${buffer.length}`
+                  );
                 }
               }
             } catch (e) {
@@ -603,54 +729,92 @@ class YvluPlugin extends Plugin {
             return;
           }
 
+          console.log(
+            `[yvlu] API返回: buffer长度=${imageBuffer?.length}, ext=${imageExt}`
+          );
+          console.log(
+            `[yvlu] buffer前20字节: ${imageBuffer
+              ?.slice(0, 20)
+              .toString("hex")}`
+          );
+
           try {
-            const file = new CustomFile(
-              `sticker.${imageExt}`,
-              imageBuffer.length,
-              "",
-              imageBuffer
-            );
-
             // 从生成的图片文件中读取实际尺寸
-
             const dimensions = getWebPDimensions(imageBuffer);
 
+            // 检测格式
+            const isWebm = isWebmFormat(imageBuffer);
+            const isAnimated = isAnimatedWebP(imageBuffer);
+
             console.log(
-              `检测到的图片尺寸: ${dimensions.width}x${dimensions.height}`
+              `检测到的图片尺寸: ${dimensions.width}x${
+                dimensions.height
+              }, 格式: ${isWebm ? "webm" : "webp"}, 动态: ${
+                isWebm || isAnimated
+              }`
             );
 
-            // 发送语录贴纸到指定对话
+            if (isWebm) {
+              // webm 格式：直接发送为贴纸（参考 eatgif）
+              const os = await import("os");
+              const tmpDir = os.tmpdir();
+              const uniqueId = Date.now().toString();
+              const webmPath = path.join(tmpDir, `sticker_${uniqueId}.webm`);
 
-            // 通过设置完整的文档属性，确保始终显示为贴纸
+              try {
+                fs.writeFileSync(webmPath, imageBuffer);
 
-            const stickerAttr = new Api.DocumentAttributeSticker({
-              alt: "📝",
+                await client.sendFile(msg.peerId, {
+                  file: webmPath,
+                  attributes: [
+                    new Api.DocumentAttributeSticker({
+                      alt: "📝",
+                      stickerset: new Api.InputStickerSetEmpty(),
+                    }),
+                  ],
+                  replyTo: replied?.id,
+                });
 
-              stickerset: new Api.InputStickerSetEmpty(),
-            });
+                console.log("[yvlu] 动态贴纸发送成功 (webm)");
+              } finally {
+                try {
+                  fs.unlinkSync(webmPath);
+                } catch (e) {}
+              }
+            } else {
+              // webp/png 格式：发送为静态贴纸
+              const file = new CustomFile(
+                `sticker.${imageExt}`,
+                imageBuffer.length,
+                "",
+                imageBuffer
+              );
 
-            // 添加图片尺寸属性，使用实际检测到的尺寸
+              const stickerAttr = new Api.DocumentAttributeSticker({
+                alt: "📝",
+                stickerset: new Api.InputStickerSetEmpty(),
+              });
 
-            const imageSizeAttr = new Api.DocumentAttributeImageSize({
-              w: dimensions.width,
+              const imageSizeAttr = new Api.DocumentAttributeImageSize({
+                w: dimensions.width,
+                h: dimensions.height,
+              });
 
-              h: dimensions.height,
-            });
+              const filenameAttr = new Api.DocumentAttributeFilename({
+                fileName: `sticker.${imageExt}`,
+              });
 
-            // 添加文件名属性
+              await client.sendFile(msg.peerId, {
+                file,
+                forceDocument: false,
+                attributes: [stickerAttr, imageSizeAttr, filenameAttr],
+                replyTo: replied?.id,
+              });
 
-            const filenameAttr = new Api.DocumentAttributeFilename({
-              fileName: `sticker.${imageExt}`,
-            });
+              console.log("[yvlu] 静态贴纸发送成功");
+            }
 
-            await client.sendFile(msg.peerId, {
-              file,
-              // 贴纸通常不带 caption，这里留空
-              forceDocument: false,
-              // 包含所有必要的属性以确保正确识别为贴纸
-              attributes: [stickerAttr, imageSizeAttr, filenameAttr],
-              replyTo: replied?.id,
-            });
+            console.log("[yvlu] 文件发送成功");
           } catch (fileError) {
             console.error(`发送文件失败: ${fileError}`);
             await msg.edit({ text: `发送文件失败: ${fileError}` });
@@ -673,6 +837,371 @@ class YvluPlugin extends Plugin {
       }
     },
   };
+
+  async handleConfigCommand(msg: Api.Message, args: string[]) {
+    try {
+      // 确保配置已加载
+      await this.loadConfig();
+
+      // 如果没有参数，显示当前配置
+      if (args.length === 0) {
+        const configInfo = `
+<b>📋 当前配置:</b>
+
+<b>贴纸包名称:</b> <code>${
+          this.config?.stickerSetShortName || "(未设置)"
+        }</code>
+${
+  this.config?.stickerSetShortName
+    ? `<b>贴纸包链接:</b> t.me/addstickers/${this.config.stickerSetShortName}`
+    : ""
+}
+
+<b>配置文件路径:</b>
+<code>${this.configPath}</code>
+
+<b>可用配置命令:</b>
+<code>${commandName} config sticker 贴纸包名称</code> - 设置贴纸包名称
+`;
+        await msg.edit({ text: configInfo, parseMode: "html" });
+        return;
+      }
+
+      const subCommand = args[0].toLowerCase();
+
+      switch (subCommand) {
+        case "sticker":
+        case "stickerset":
+        case "set": {
+          // 设置贴纸包名称
+          const newName = args.slice(1).join("_"); // 用下划线连接多个参数
+
+          if (!newName) {
+            await msg.edit({
+              text: `❌ 请提供贴纸包名称\n用法: <code>${commandName} config sticker 贴纸包名称</code>`,
+              parseMode: "html",
+            });
+            return;
+          }
+
+          // 验证贴纸包名称格式（只能包含字母、数字和下划线）
+          if (!/^[a-zA-Z0-9_]+$/.test(newName)) {
+            await msg.edit({
+              text: "❌ 贴纸包名称只能包含字母、数字和下划线",
+              parseMode: "html",
+            });
+            return;
+          }
+
+          // 贴纸包名称长度限制
+          if (newName.length < 1 || newName.length > 64) {
+            await msg.edit({
+              text: "❌ 贴纸包名称长度应在 1-64 个字符之间",
+              parseMode: "html",
+            });
+            return;
+          }
+
+          // 更新配置
+          const newConfig: YvluConfig = {
+            ...this.config,
+            stickerSetShortName: newName,
+          };
+
+          // 保存到文件
+          fs.writeFileSync(
+            this.configPath,
+            JSON.stringify(newConfig, null, 2),
+            "utf-8"
+          );
+
+          // 重新加载配置
+          await this.loadConfig();
+
+          await msg.edit({
+            text: `✅ 贴纸包名称已设置为: <code>${newName}</code>\n贴纸包链接: t.me/addstickers/${newName}`,
+            parseMode: "html",
+          });
+          break;
+        }
+
+        default:
+          await msg.edit({
+            text: `❌ 未知的配置项: <code>${subCommand}</code>\n\n可用配置命令:\n<code>${commandName} config sticker 贴纸包名称</code> - 设置贴纸包名称`,
+            parseMode: "html",
+          });
+      }
+    } catch (error: any) {
+      console.error("处理配置命令失败:", error);
+      await msg.edit({
+        text: `❌ 配置操作失败: ${error.message || error}`,
+      });
+    }
+  }
+
+  async handleSaveStickerToSet(msg: Api.Message) {
+    try {
+      // 确保配置路径已初始化
+      if (!this.configPath || this.configPath === "") {
+        const configDir = createDirectoryInAssets("yvlu");
+        this.configPath = path.join(configDir, "config.json");
+
+        // 如果配置文件不存在,创建默认配置
+        if (!fs.existsSync(this.configPath)) {
+          const defaultConfig: YvluConfig = {
+            stickerSetShortName: "",
+            _comment:
+              "如果贴纸包不存在,将自动创建。shortName 只能包含字母、数字和下划线",
+          };
+          fs.writeFileSync(
+            this.configPath,
+            JSON.stringify(defaultConfig, null, 2),
+            "utf-8"
+          );
+          console.log(`已创建默认配置文件: ${this.configPath}`);
+        }
+      }
+
+      // 重新加载配置(确保获取最新配置)
+      await this.loadConfig();
+
+      // 检查配置
+      if (
+        !this.config ||
+        !this.config.stickerSetShortName ||
+        this.config.stickerSetShortName.trim() === ""
+      ) {
+        await msg.edit({
+          text: `❌ 未配置贴纸包!\n请编辑配置文件: ${this.configPath}\n设置 stickerSetShortName`,
+        });
+        return;
+      }
+
+      // 获取回复的消息
+      const replied = await msg.getReplyMessage();
+      if (!replied) {
+        await msg.edit({ text: "❌ 请回复一张贴纸或图片" });
+        return;
+      }
+
+      // 检查是否有媒体
+      if (!replied.media) {
+        await msg.edit({ text: "❌ 回复的消息不包含贴纸或图片" });
+        return;
+      }
+
+      const client = await getGlobalClient();
+
+      // 判断媒体类型
+      let isSticker = false;
+      let isPhoto = false;
+      let documentToAdd: Api.InputDocument | null = null;
+
+      if (replied.media instanceof Api.MessageMediaDocument) {
+        const doc = replied.media.document as any;
+        if (doc && doc.attributes) {
+          isSticker = doc.attributes.some(
+            (a: any) => a instanceof Api.DocumentAttributeSticker
+          );
+        }
+        if (isSticker && doc.id && doc.accessHash) {
+          documentToAdd = new Api.InputDocument({
+            id: doc.id,
+            accessHash: doc.accessHash,
+            fileReference: doc.fileReference || Buffer.from([]),
+          });
+        }
+      } else if (replied.media instanceof Api.MessageMediaPhoto) {
+        isPhoto = true;
+      }
+
+      if (!isSticker && !isPhoto) {
+        await msg.edit({ text: "❌ 不支持的媒体类型,请回复贴纸或图片" });
+        return;
+      }
+
+      // 检查贴纸包是否存在,不存在则创建
+      let stickerSetExists = false;
+      try {
+        const stickerSet = await client.invoke(
+          new Api.messages.GetStickerSet({
+            stickerset: new Api.InputStickerSetShortName({
+              shortName: this.config.stickerSetShortName,
+            }),
+            hash: 0,
+          })
+        );
+        stickerSetExists = stickerSet instanceof Api.messages.StickerSet;
+      } catch (error: any) {
+        // 如果贴纸包不存在,会抛出异常
+        if (error.errorMessage === "STICKERSET_INVALID") {
+          stickerSetExists = false;
+        } else {
+          throw error;
+        }
+      }
+
+      // 如果贴纸包不存在,需要先创建
+      if (!stickerSetExists) {
+        await this.createStickerSet(client, msg, replied, isSticker, isPhoto);
+        return;
+      }
+
+      // 如果是贴纸,直接添加
+      if (isSticker && documentToAdd) {
+        try {
+          await client.invoke(
+            new Api.stickers.AddStickerToSet({
+              stickerset: new Api.InputStickerSetShortName({
+                shortName: this.config.stickerSetShortName,
+              }),
+              sticker: new Api.InputStickerSetItem({
+                document: documentToAdd,
+                emoji: "📝",
+              }),
+            })
+          );
+
+          await msg.edit({
+            text: `✅ 已成功添加到贴纸包!\n贴纸包: t.me/addstickers/${this.config.stickerSetShortName}`,
+          });
+        } catch (error: any) {
+          console.error("添加贴纸失败:", error);
+          await msg.edit({
+            text: `❌ 添加贴纸失败: ${error.message || error}`,
+          });
+        }
+        return;
+      }
+
+      // 如果是图片,需要先下载并转换为贴纸格式
+      if (isPhoto) {
+        try {
+          // 下载图片
+          const buffer = await replied.downloadMedia();
+          if (!Buffer.isBuffer(buffer)) {
+            await msg.edit({ text: "❌ 下载图片失败" });
+            return;
+          }
+
+          // 上传为文件
+          const file = await client.uploadFile({
+            file: new CustomFile("sticker.png", buffer.length, "", buffer),
+            workers: 1,
+          });
+
+          // 创建 InputStickerSetItem
+          const stickerItem = new Api.InputStickerSetItem({
+            document: new Api.InputDocument({
+              id: BigInt(0),
+              accessHash: BigInt(0),
+              fileReference: Buffer.from([]),
+            }),
+            emoji: "📝",
+          });
+
+          // 使用上传的文件
+          await client.invoke(
+            new Api.stickers.AddStickerToSet({
+              stickerset: new Api.InputStickerSetShortName({
+                shortName: this.config.stickerSetShortName,
+              }),
+              sticker: new Api.InputStickerSetItem({
+                document: file as any,
+                emoji: "📝",
+              }),
+            })
+          );
+
+          await msg.edit({
+            text: `✅ 已成功添加到贴纸包!\n贴纸包: t.me/addstickers/${this.config.stickerSetShortName}`,
+          });
+        } catch (error: any) {
+          console.error("处理图片失败:", error);
+          await msg.edit({
+            text: `❌ 处理图片失败: ${error.message || error}`,
+          });
+        }
+        return;
+      }
+    } catch (error: any) {
+      console.error("保存贴纸到贴纸包失败:", error);
+      await msg.edit({
+        text: `❌ 操作失败: ${error.message || error}`,
+      });
+    }
+  }
+
+  async createStickerSet(
+    client: any,
+    msg: Api.Message,
+    replied: Api.Message,
+    isSticker: boolean,
+    isPhoto: boolean
+  ) {
+    try {
+      // 准备第一个贴纸
+      let firstSticker: any = null;
+
+      if (isSticker && replied.media instanceof Api.MessageMediaDocument) {
+        const doc = replied.media.document as any;
+        if (doc && doc.id && doc.accessHash) {
+          firstSticker = new Api.InputDocument({
+            id: doc.id,
+            accessHash: doc.accessHash,
+            fileReference: doc.fileReference || Buffer.from([]),
+          });
+        }
+      } else if (isPhoto) {
+        // 下载图片
+        const buffer = await replied.downloadMedia();
+        if (!Buffer.isBuffer(buffer)) {
+          await msg.edit({ text: "❌ 下载图片失败" });
+          return;
+        }
+
+        // 上传为文件
+        firstSticker = await client.uploadFile({
+          file: new CustomFile("sticker.png", buffer.length, "", buffer),
+          workers: 1,
+        });
+      }
+
+      if (!firstSticker) {
+        await msg.edit({ text: "❌ 无法准备贴纸数据" });
+        return;
+      }
+
+      // 获取当前用户信息
+      const me = await client.getMe();
+
+      // 创建贴纸包
+      await client.invoke(
+        new Api.stickers.CreateStickerSet({
+          userId: me,
+          title: `${this.config!.stickerSetShortName}`,
+          shortName: this.config!.stickerSetShortName,
+          stickers: [
+            new Api.InputStickerSetItem({
+              document: firstSticker,
+              emoji: "📝",
+            }),
+          ],
+        })
+      );
+
+      await msg.edit({
+        text: `✅ 已创建贴纸包并添加第一个贴纸!\n贴纸包: t.me/addstickers/${
+          this.config!.stickerSetShortName
+        }`,
+      });
+    } catch (error: any) {
+      console.error("创建贴纸包失败:", error);
+      await msg.edit({
+        text: `❌ 创建贴纸包失败: ${error.message || error}`,
+      });
+    }
+  }
 }
 
 export default new YvluPlugin();
