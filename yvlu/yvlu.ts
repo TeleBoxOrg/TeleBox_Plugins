@@ -23,6 +23,11 @@ import {
 import { sleep } from "telegram/Helpers";
 import dayjs from "dayjs";
 import { CustomFile } from "telegram/client/uploads.js";
+import * as zlib from "zlib";
+import { execFile } from "child_process";
+import { promisify } from "util";
+
+const execFileAsync = promisify(execFile);
 
 const timeout = 60000; // 超时
 
@@ -48,6 +53,94 @@ function isWebmFormat(buffer: Buffer): boolean {
     buffer[2] === 0xdf &&
     buffer[3] === 0xa3
   );
+}
+
+// 检测是否为 TGS 格式 (gzip 压缩的 Lottie JSON)
+function isTgsFormat(buffer: Buffer): boolean {
+  if (!buffer || buffer.length < 2) return false;
+  // gzip 魔数: 0x1F 0x8B
+  return buffer[0] === 0x1f && buffer[1] === 0x8b;
+}
+
+// 检查 TGS 转换依赖
+async function checkTgsDependencies(): Promise<{
+  ok: boolean;
+  message: string;
+}> {
+  try {
+    await execFileAsync("python3", [
+      "-c",
+      "from rlottie_python import LottieAnimation",
+    ]);
+  } catch (e) {
+    return {
+      ok: false,
+      message:
+        "缺少 rlottie-python 依赖，请运行: pip3 install rlottie-python Pillow --break-system-packages",
+    };
+  }
+  try {
+    await execFileAsync("ffmpeg", ["-version"]);
+  } catch (e) {
+    return {
+      ok: false,
+      message: "缺少 ffmpeg，请安装: apt-get install -y ffmpeg",
+    };
+  }
+  return { ok: true, message: "" };
+}
+
+// TGS 转 WebM (使用 rlottie-python + ffmpeg)
+async function convertTgsToWebm(tgsBuffer: Buffer): Promise<Buffer> {
+  const os = await import("os");
+  const tmpDir = os.tmpdir();
+  const uniqueId =
+    Date.now().toString() + "_" + Math.random().toString(36).slice(2);
+  const tgsPath = path.join(tmpDir, `sticker_${uniqueId}.tgs`);
+  const gifPath = path.join(tmpDir, `sticker_${uniqueId}.gif`);
+  const webmPath = path.join(tmpDir, `sticker_${uniqueId}.webm`);
+
+  try {
+    fs.writeFileSync(tgsPath, tgsBuffer);
+
+    const pythonScript = `
+import sys
+from rlottie_python import LottieAnimation
+anim = LottieAnimation.from_tgs(sys.argv[1])
+anim.save_animation(sys.argv[2])
+`;
+
+    await execFileAsync("python3", ["-c", pythonScript, tgsPath, gifPath]);
+
+    await execFileAsync("ffmpeg", [
+      "-i",
+      gifPath,
+      "-c:v",
+      "libvpx-vp9",
+      "-pix_fmt",
+      "yuva420p",
+      "-b:v",
+      "400k",
+      "-auto-alt-ref",
+      "0",
+      "-an",
+      "-y",
+      webmPath,
+    ]);
+
+    const webmBuffer = fs.readFileSync(webmPath);
+    return webmBuffer;
+  } finally {
+    try {
+      fs.unlinkSync(tgsPath);
+    } catch (e) {}
+    try {
+      fs.unlinkSync(gifPath);
+    } catch (e) {}
+    try {
+      fs.unlinkSync(webmPath);
+    } catch (e) {}
+  }
 }
 
 // 检测是否为动态 WebP
@@ -77,6 +170,11 @@ function getWebPDimensions(imageBuffer: any): {
   height: number;
 } {
   try {
+    // 如果是 WebM 格式，直接返回默认尺寸
+    if (isWebmFormat(imageBuffer)) {
+      return { width: 512, height: 512 };
+    }
+
     // WebP文件格式解析
     if (imageBuffer.length < 30) {
       throw new Error("Invalid WebP file: too short");
@@ -655,27 +753,56 @@ class YvluPlugin extends Plugin {
 
                 const mimeType = (message.media as any).document?.mimeType;
 
+                // 检测是否为 TGS 动态贴纸
+                const isTgsSticker =
+                  isSticker && mimeType === "application/x-tgsticker";
+
                 // 检测是否为动态贴纸（需要下载原文件，不用缩略图）
                 const isAnimatedSticker =
                   isSticker &&
                   (mimeType === "video/webm" || // 视频贴纸
-                    mimeType === "image/webp"); // 可能是动态WebP
+                    mimeType === "image/webp" || // 可能是动态WebP
+                    isTgsSticker); // TGS 动态贴纸
 
                 const buffer = await (message as any).downloadMedia({
                   // 动态贴纸不使用缩略图，下载原始文件
                   ...(isAnimatedSticker ? {} : { thumb: 1 }),
                 });
                 if (Buffer.isBuffer(buffer)) {
+                  let finalBuffer = buffer;
+                  let finalMime = mimeType;
+
+                  // 如果是 TGS 格式，转换为 WebM
+                  if (isTgsSticker || isTgsFormat(buffer)) {
+                    try {
+                      const depCheck = await checkTgsDependencies();
+                      if (!depCheck.ok) {
+                        console.error(`[yvlu] ${depCheck.message}`);
+                      } else {
+                        console.log(
+                          `[yvlu] 检测到 TGS 贴纸，开始转换为 WebM...`
+                        );
+                        finalBuffer = await convertTgsToWebm(buffer);
+                        finalMime = "video/webm";
+                        console.log(
+                          `[yvlu] TGS -> WebM 转换成功，大小: ${finalBuffer.length}`
+                        );
+                      }
+                    } catch (convertError) {
+                      console.error(`[yvlu] TGS 转换失败:`, convertError);
+                    }
+                  }
+
                   // 使用实际的 mimeType
                   const mime =
-                    mimeType ||
+                    finalMime ||
                     (mediaTypeForQuote === "sticker"
                       ? "image/webp"
                       : "image/jpeg");
-                  const base64 = buffer.toString("base64");
+                  const base64 = finalBuffer.toString("base64");
                   media = { url: `data:${mime};base64,${base64}` };
                   console.log(
-                    `媒体下载: mimeType=${mimeType}, isAnimated=${isAnimatedSticker}, size=${buffer.length}`
+                    `媒体下载: mimeType=${mimeType}, isAnimated=${isAnimatedSticker}, isTgs=${isTgsSticker}, size=${finalBuffer.length}`
                   );
                 }
               }
