@@ -240,6 +240,29 @@ class PermissionManager {
     }
   }
 
+  static async isTargetAdmin(
+    client: TelegramClient,
+    chatId: any,
+    userId: number
+  ): Promise<boolean> {
+    try {
+      const participant = await client.invoke(
+        new Api.channels.GetParticipant({
+          channel: chatId,
+          participant: userId
+        })
+      );
+      
+      const p = participant.participant;
+      return (
+        p instanceof Api.ChannelParticipantCreator ||
+        p instanceof Api.ChannelParticipantAdmin
+      );
+    } catch (error) {
+      return false;
+    }
+  }
+
   static async canDeleteMessages(
     client: TelegramClient,
     chatId: any
@@ -282,7 +305,7 @@ class GroupManager {
       const dialogs = await client.getDialogs({ limit: 500 });
       
       // 并发检查权限
-      const checkPromises = dialogs.map(async (dialog) => {
+      const checkPromises = dialogs.map(async (dialog: any) => {
         if (dialog.isChannel || dialog.isGroup) {
           const hasPermission = await PermissionManager.checkAdminPermission(
             client,
@@ -300,7 +323,7 @@ class GroupManager {
       });
       
       const results = await Promise.all(checkPromises);
-      groups.push(...results.filter((g): g is { id: number; title: string } => g !== null));
+      groups.push(...results.filter((g: any): g is { id: number; title: string } => g !== null));
       
       // 缓存结果
       await this.cache.set("managed_groups", groups);
@@ -619,6 +642,16 @@ class CommandHandlers {
         return;
       }
 
+      // 检查目标是否为管理员
+      const isAdmin = await PermissionManager.isTargetAdmin(client, message.peerId, uid);
+      if (isAdmin) {
+        const hasConfirm = args.includes('true');
+        if (!hasConfirm) {
+          await MessageManager.smartEdit(message, "⚠️ 目标是管理员，请在命令后加上 <code>true</code> 确认执行");
+          return;
+        }
+      }
+
       const display = UserResolver.formatUser(user, uid);
       const status = await MessageManager.smartEdit(
         message,
@@ -696,6 +729,16 @@ class CommandHandlers {
         return;
       }
 
+      // 检查目标是否为当前群管理员
+      const isAdmin = await PermissionManager.isTargetAdmin(client, message.peerId, uid);
+      if (isAdmin) {
+        const hasConfirm = args.includes('true');
+        if (!hasConfirm) {
+          await MessageManager.smartEdit(message, "⚠️ 目标是管理员，请在命令后加上 <code>true</code> 确认执行");
+          return;
+        }
+      }
+
       const display = UserResolver.formatUser(user, uid);
       const groups = await GroupManager.getManagedGroups(client);
       
@@ -757,6 +800,16 @@ class CommandHandlers {
       if (!uid) {
         await MessageManager.smartEdit(message, "❌ 获取用户失败");
         return;
+      }
+
+      // 检查目标是否为当前群管理员
+      const isAdmin = await PermissionManager.isTargetAdmin(client, message.peerId, uid);
+      if (isAdmin) {
+        const hasConfirm = args.includes('true');
+        if (!hasConfirm) {
+          await MessageManager.smartEdit(message, "⚠️ 目标是管理员，请在命令后加上 <code>true</code> 确认执行");
+          return;
+        }
       }
 
       const display = UserResolver.formatUser(user, uid);
