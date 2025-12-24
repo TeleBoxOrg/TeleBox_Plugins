@@ -168,37 +168,49 @@ class CleanPlugin extends Plugin {
     const deletedUsers: Array<{id: string, username?: string}> = [];
     
     try {
-      // 获取所有对话列表
-      const dialogs = await client.getDialogs({});
-      
+      const dialogsMain = await client.getDialogs({});
+      let dialogsArchived: any[] = [];
+      try {
+        dialogsArchived = await client.getDialogs({ folderId: 1 });
+      } catch (error: any) {
+        console.error(`[Clean] 获取归档对话失败:`, error?.message || error);
+      }
+
+      const dialogByUserId = new Map<string, any>();
+      const dialogs = [...(dialogsMain || []), ...(dialogsArchived || [])];
+
       for (const dialog of dialogs) {
-        // 检查是否为用户，且该用户实体标记为已注销
         if (dialog.isUser && dialog.entity instanceof Api.User && dialog.entity.deleted) {
           const user = dialog.entity;
           const userId = user.id.toString();
-          deletedUsers.push({ 
-            id: userId, 
-            username: user.username || "已注销账号" 
-          });
-          
-          if (deleteDialogs) {
-            try {
-              /**
-               * 修复核心：
-               * 1. 使用 dialog.inputEntity 确保 ID 类型在 API 层级完全匹配。
-               * 2. 不传任何参数（默认不开启 revoke），直接从本地对话列表中移除该会话。
-               * 3. 针对已注销账号，开启 revoke 反而会导致删除失败。
-               */
-              await client.deleteDialog(dialog.inputEntity);
-              
-              // 稍微延迟，防止触发 Telegram API 的频率限制
-              await sleep(150);
-            } catch (error: any) {
-              console.error(`[Clean] 无法移除对话 ${userId}:`, error.message);
-              if (error.message?.includes("FLOOD_WAIT")) {
-                await this.handleFloodWait(msg, error);
-                return;
-              }
+
+          if (!dialogByUserId.has(userId)) {
+            dialogByUserId.set(userId, dialog);
+            deletedUsers.push({
+              id: userId,
+              username: user.username || "已注销账号"
+            });
+          }
+        }
+      }
+
+      if (deleteDialogs) {
+        for (const [userId, dialog] of dialogByUserId.entries()) {
+          try {
+            /**
+             * 修复核心：
+             * 1. 使用 dialog.inputEntity 确保 ID 类型在 API 层级完全匹配。
+             * 2. 不传任何参数（默认不开启 revoke），直接从本地对话列表中移除该会话。
+             * 3. 针对已注销账号，开启 revoke 反而会导致删除失败。
+             */
+            await client.deleteDialog(dialog.inputEntity);
+
+            await sleep(150);
+          } catch (error: any) {
+            console.error(`[Clean] 无法移除对话 ${userId}:`, error.message);
+            if (error.message?.includes("FLOOD_WAIT")) {
+              await this.handleFloodWait(msg, error);
+              return;
             }
           }
         }
