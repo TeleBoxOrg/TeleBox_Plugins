@@ -190,16 +190,17 @@ class XMSLPlugin extends Plugin {
 	private db: any = null;
 	private baseDir: string = '';
 
+	// 更新帮助文档，加入 .xm 别名说明
 	description = `🤢 <b>羡慕死了插件 - 快速赛博乞讨</b>
 
 <b>📋 命令列表</b>
 
-• <code>.xmsl [内容]</code> - 生成羡慕语句
+• <code>.xmsl [内容]</code> 或 <code>.xm [内容]</code> - 生成羡慕语句
 • <code>.xmsl</code>回复图片/贴纸 - 识别图片生成羡慕语句
-• <code>.xmsl</code> - 显示状态
-• <code>.xmsl set [key] [value]</code> - 修改配置
-• <code>.xmsl show</code> - 显示配置
-• <code>.xmsl help</code> - 显示帮助
+• <code>.xmsl</code> 或 <code>.xm</code> - 显示状态
+• <code>.xm set [key] [value]</code> - 修改配置
+• <code>.xm show</code> - 显示配置
+• <code>.xm help</code> - 显示帮助
 <b>🖼️ 支持的媒体类型</b>
 • 图片 (jpeg/png/gif)
 • 静态贴纸 (webp)
@@ -212,8 +213,10 @@ class XMSLPlugin extends Plugin {
 • <code>url</code> - API地址
 • <code>model</code> - 模型名称`;
 
+	// 同时注册 xmsl 和 xm 到同一个处理函数
 	cmdHandlers = {
 		xmsl: this.handleXmsl.bind(this),
+		xm: this.handleXmsl.bind(this),
 	};
 
 	constructor() {
@@ -464,7 +467,7 @@ class XMSLPlugin extends Plugin {
 	private async handleSet(msg: Api.Message, args: string[]) {
 		if (args.length < 2) {
 			await msg.edit({
-				text: '❌ 参数错误\n使用: <code>.xmsl set [key] [value]</code>',
+				text: '❌ 参数错误\n使用: <code>.xm set [key] [value]</code>',
 				parseMode: 'html',
 			});
 			return;
@@ -494,13 +497,13 @@ class XMSLPlugin extends Plugin {
 					this.config.baseUrl = value.endsWith('/') ? value : value + '/';
 					break;
 
-			case 'model':
-				this.config.model = value.toLowerCase();
-				break;
+				case 'model':
+					this.config.model = value.toLowerCase();
+					break;
 
-			default:
-				await msg.edit({
-					text: '❌ 未知配置项\n支持: mode, key, url, model',
+				default:
+					await msg.edit({
+						text: '❌ 未知配置项\n支持: mode, key, url, model',
 						parseMode: 'html',
 					});
 					return;
@@ -528,7 +531,7 @@ ${modeEmoji} 模式: ${this.config.apiMode}
 📍 地址: ${this.htmlEscape(this.config.baseUrl.replace(/\/$/, ''))}
 🤖 模型: ${this.config.model}
 
-使用 <code>.xmsl help</code> 查看帮助`;
+使用 <code>.xm help</code> 查看帮助`;
 
 		await msg.edit({ text: statusText, parseMode: 'html' });
 	}
@@ -541,7 +544,7 @@ key: ${this.config.apiKey ? '✅ 已设置' : '❌ 未设置'}
 url: <code>${this.htmlEscape(this.config.baseUrl.replace(/\/$/, ''))}</code>
 model: <code>${this.htmlEscape(this.config.model)}</code>
 
-使用 <code>.xmsl set [key] [value]</code> 修改配置`;
+使用 <code>.xm set [key] [value]</code> 修改配置`;
 
 		await msg.edit({ text: configText, parseMode: 'html' });
 	}
@@ -549,7 +552,7 @@ model: <code>${this.htmlEscape(this.config.model)}</code>
 	private async askAI(msg: Api.Message, question: string, imageInfo?: MediaInfo) {
 		if (!this.config.apiKey) {
 			await msg.edit({
-				text: '❌ 未设置 API 密钥\n使用: <code>.xmsl set key [你的密钥]</code>',
+				text: '❌ 未设置 API 密钥\n使用: <code>.xm set key [你的密钥]</code>',
 				parseMode: 'html',
 			});
 			return;
@@ -557,7 +560,7 @@ model: <code>${this.htmlEscape(this.config.model)}</code>
 
 		if (!this.config.model) {
 			await msg.edit({
-				text: '❌ 未设置模型\n使用: <code>.xmsl set model [模型名]</code>',
+				text: '❌ 未设置模型\n使用: <code>.xm set model [模型名]</code>',
 				parseMode: 'html',
 			});
 			return;
