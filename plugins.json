@@ -311,8 +311,8 @@
     "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/xmsl/xmsl.ts?raw=true",
     "desc": "全自动羡慕"
   },
-  "yiyan": {
-    "url": "https://github.com/TeleBoxOrg/TeleBox_Plugins/blob/main/yiyan/yiyan.ts?raw=true",
+  "hitokoto": {
+    "url": "https://github.com/TeleBoxOrg/TeleBox_Plugins/blob/main/hitokoto/hitokoto.ts?raw=true",
     "desc": "获取随机一言"
   },
   "teletype": {
