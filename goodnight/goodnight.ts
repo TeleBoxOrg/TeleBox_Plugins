@@ -265,9 +265,9 @@ class GreetingPlugin extends Plugin {
         // 构建回复内容
         const currentTime = dayjs(targetDate).format("YYYY-MM-DD HH:mm:ss");
         const actionText = type === "sleep" ? "睡觉" : "起床";
-        const replyAction = type === "sleep" ? "快睡觉" : "起床喵";
+        const replyAction = type === "sleep" ? "快睡觉喵" : "起床喵";
         
-        const replyText = `${replyAction}, ${senderName}!\n现在是 ${currentTime}, 你是本群今天第 ${rank} 个${actionText}的。`;
+        const replyText = `${replyAction}！ ${senderName}!\n现在是 ${currentTime}, 你是本群今天第 ${rank} 个${actionText}的。`;
 
         // 发送回复
         try {
