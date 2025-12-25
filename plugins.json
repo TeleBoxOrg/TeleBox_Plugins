@@ -406,5 +406,9 @@
   "jupai": {
   "url": "https://github.com/TeleBoxOrg/TeleBox_Plugins/blob/main/jupai/jupai.ts?raw=true",
   "desc": "举牌小人"
+  },
+  "goodnight": {
+  "url": "https://github.com/TeleBoxOrg/TeleBox_Plugins/blob/main/goodnight/goodnight.ts?raw=true",
+  "desc": "自动统计晚安/早安"
   }
 }
