@@ -51,6 +51,7 @@ tpm i <插件名>
 - `git_PR` - Git PR 管理  
 - `gt` - 谷歌中英文互译  
 - `his` - 查看被回复者最近消息  
+- `hitokoto` - 获取随机一言  
 - `httpcat` - 发送一张http状态码主题的猫猫图片  
 - `ids` - 用户信息显示以及跳转链接  
 - `ip` - IP 地址查询  
@@ -106,7 +107,6 @@ tpm i <插件名>
 - `whois` - 域名查询  
 - `xmsl` - 全自动羡慕  
 - `yinglish` - 淫语翻译  
-- `yiyan` - 获取随机一言  
 - `yt-dlp` - YouTube 视频下载  
 - `yvlu` - 为被回复用户生成语录  
 - `zhijiao` - 掷筊 强随机 使用 笅杯卦辞廿七句  
