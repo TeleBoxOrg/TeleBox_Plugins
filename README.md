@@ -49,6 +49,7 @@ tpm i <插件名>
 - `getstickers` - 下载整个贴纸包  
 - `gif` - GIF与视频转贴纸  
 - `git_PR` - Git PR 管理  
+- `goodnight` - 自动统计晚安/早安  
 - `gt` - 谷歌中英文互译  
 - `his` - 查看被回复者最近消息  
 - `hitokoto` - 获取随机一言  
