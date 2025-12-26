@@ -16,6 +16,7 @@ const htmlEscape = (text: string): string =>
 
 interface UserConfig {
   target: string;
+  showSource: boolean;  // 新增：来源显示配置
 }
 
 interface PrometheusDB {
@@ -31,6 +32,7 @@ const help_text = `🔥<b>Prometheus -突破Telegram保存限制</b>
 • 突破"限制保存内容"，转发任何消息
 • 支持批量处理多个消息链接
 • 支持范围保存功能（自动保存指定范围内的所有消息）
+• 支持来源显示功能
 • 同时支持<code>.prometheus</code>与<code>.pms</code>
 
 <b>🔧 使用方法:</b>
@@ -39,6 +41,10 @@ const help_text = `🔥<b>Prometheus -突破Telegram保存限制</b>
 • <code>.pms to [目标]</code> - 设置默认转发目标(支持用户名、chatid如-123456780、'me')
 • <code>.pms to me</code> - 重置为发给自己
 • <code>.pms target</code> - 查看当前目标
+
+<b>来源显示控制:</b>
+• <code>.pms source on/off</code> - 开启/关闭来源显示功能
+• <code>.pms source</code> - 查看当前来源显示状态
 
 <b>转发消息:</b>
 • <code>.pms</code> - 回复要转发的消息
@@ -49,17 +55,11 @@ const help_text = `🔥<b>Prometheus -突破Telegram保存限制</b>
 <b>💡 示例:</b>
 • <code>.pms to @group</code> - 设置默认目标
 • <code>.pms to -123456780</code> - 设置chatid为目标
+• <code>.pms source on</code> - 开启来源显示
 • <code>.pms</code> - 回复消息进行转发
 • <code>.pms https://t.me/c/123/1 https://t.me/c/123/2</code> - 批量转发
 • <code>.pms https://t.me/c/123/1 @username</code> - 转发到指定用户
 • <code>.pms t.me/c/123/1|t.me/c/123/100</code> - 自动保存123群组/频道内1-100号消息
-
-<b>⚙️ 高级特性:</b>
-• 自动识别并完整转发Media Group
-• 支持批量处理多个链接
-• 支持范围保存功能
-• 智能重试机制
-• 实时进度反馈
 
 <b>📊 支持类型:</b>
 • 文本、图片、视频、音频、语音
@@ -117,7 +117,10 @@ class PrometheusPlugin extends Plugin {
   private async getUserConfig(userId: string): Promise<UserConfig> {
     await this.initDB();
     if (!this.db.data.users[userId]) {
-      this.db.data.users[userId] = { target: "me" };
+      this.db.data.users[userId] = { 
+        target: "me",
+        showSource: false  // 默认关闭来源显示
+      };
       await this.db.write();
     }
     return this.db.data.users[userId];
@@ -126,10 +129,73 @@ class PrometheusPlugin extends Plugin {
   private async setUserConfig(userId: string, config: Partial<UserConfig>): Promise<void> {
     await this.initDB();
     if (!this.db.data.users[userId]) {
-      this.db.data.users[userId] = { target: "me" };
+      this.db.data.users[userId] = { 
+        target: "me",
+        showSource: false
+      };
     }
     Object.assign(this.db.data.users[userId], config);
     await this.db.write();
+  }
+  
+  // 生成消息跳转链接
+  private generateMessageLink(chatId: string, messageId: number): string {
+    // 处理私有频道的chatId转换
+    let linkChatId = chatId;
+    
+    // 如果chatId是数字字符串（可能为负数）
+    if (/^-?\d+$/.test(chatId)) {
+      // 如果以-100开头，需要去掉-100前缀
+      if (chatId.startsWith('-100')) {
+        linkChatId = `-${chatId.substring(4)}`;
+      } else if (!chatId.startsWith('-') && parseInt(chatId) > 0) {
+        // 正数且不是频道格式，加上-100前缀
+        linkChatId = `-100${chatId}`;
+      }
+      
+      // 最终格式：去掉-100前缀后的负号格式
+      if (linkChatId.startsWith('-100')) {
+        linkChatId = `-${linkChatId.substring(4)}`;
+      }
+      
+      return `https://t.me/c/${linkChatId}/${messageId}`;
+    }
+    
+    // 如果是用户名格式，直接使用
+    return `https://t.me/${chatId}/${messageId}`;
+  }
+  
+  // 发送来源消息（回复指定的消息）
+  private async sendSourceMessage(
+    targetPeer: any,
+    sourceChatId: string,
+    sourceMessageId: number,
+    forwardedMsg: Api.Message,
+    replyMsg?: Api.Message
+  ): Promise<void> {
+    try {
+      const client = await getGlobalClient();
+      const sourceLink = this.generateMessageLink(sourceChatId, sourceMessageId);
+      
+      const sourceText = `🔗 <b>消息来源</b>\n\n` +
+                        `📝 <a href="${htmlEscape(sourceLink)}">查看原消息</a>\n` +
+                        `👤 来源对话: <code>${htmlEscape(sourceChatId)}</code>\n` +
+                        `#️⃣ 消息ID: <code>${sourceMessageId}</code>`;
+      
+      // 回复转发的消息
+      await client.sendMessage(targetPeer, {
+        message: sourceText,
+        parseMode: 'html',
+        replyTo: forwardedMsg.id
+      });
+      
+      if (replyMsg) {
+        await this.safeEditMessage(replyMsg, `✅ 已转发并添加来源链接`, true);
+      }
+    } catch (error) {
+      console.error(`发送来源消息失败:`, error);
+      // 不中断主流程，只是来源消息发送失败
+    }
   }
   
   private parseMessageLink(link: string): { chatId: string; messageId: number } | null {
@@ -330,7 +396,7 @@ class PrometheusPlugin extends Plugin {
       fileName?: string;
     },
     replyMsg?: Api.Message
-  ): Promise<void> {
+  ): Promise<Api.Message> {
     const { path: filePath, type, caption, fileName } = mediaInfo;
     
     if (!existsSync(filePath)) {
@@ -351,28 +417,43 @@ class PrometheusPlugin extends Plugin {
       await this.safeEditMessage(replyMsg, `📤 上传 ${type}...`);
     }
     
-    await client.sendFile(targetPeer, sendOptions);
+    return await client.sendFile(targetPeer, sendOptions);
   }
   
   private async processMessage(
     sourceMsg: Api.Message, 
     targetPeer: any, 
     replyMsg: Api.Message,
+    sourceChatId: string,
+    sourceMessageId: number,
+    showSource: boolean,
     progress: string = ""
-  ): Promise<boolean> {
+  ): Promise<{ success: boolean; forwardedMsg?: Api.Message }> {
     const client = await getGlobalClient();
     let tempFileInfo: any = null;
+    let forwardedMessage: Api.Message | undefined;
     
     try {
       await this.safeEditMessage(replyMsg, `${progress}🔄 尝试直接转发...`, true);
       
       try {
-        await client.forwardMessages(targetPeer, {
+        // 直接转发，获取转发的消息
+        const result = await client.forwardMessages(targetPeer, {
           messages: [sourceMsg.id],
           fromPeer: sourceMsg.peerId
         });
+        forwardedMessage = result[0];
+        
         await this.safeEditMessage(replyMsg, `${progress}✅ 转发成功`, true);
-        return true;
+        
+        // 如果开启了来源显示，发送来源消息
+        if (showSource && forwardedMessage) {
+          await this.sendSourceMessage(targetPeer, sourceChatId, sourceMessageId, forwardedMessage, replyMsg);
+        } else {
+          return { success: true, forwardedMsg: forwardedMessage };
+        }
+        
+        return { success: true, forwardedMsg: forwardedMessage };
       } catch (forwardError: any) {
         const errorMsg = forwardError.message || '';
         const isRestricted = errorMsg.includes('SAVE') || 
@@ -384,32 +465,51 @@ class PrometheusPlugin extends Plugin {
         if (!sourceMsg.media) {
           const text = sourceMsg.text || '';
           if (text) {
-            await client.sendMessage(targetPeer, {
+            // 发送文本消息，获取发送的消息
+            forwardedMessage = await client.sendMessage(targetPeer, {
               message: text,
               parseMode: sourceMsg.text?.includes('<') ? 'html' : undefined
             });
+            
             await this.safeEditMessage(replyMsg, `${progress}✅ 文本内容已发送`, true);
-            return true;
+            
+            // 如果开启了来源显示，发送来源消息
+            if (showSource && forwardedMessage) {
+              await this.sendSourceMessage(targetPeer, sourceChatId, sourceMessageId, forwardedMessage, replyMsg);
+            } else {
+              return { success: true, forwardedMsg: forwardedMessage };
+            }
+            
+            return { success: true, forwardedMsg: forwardedMessage };
           } else {
             await this.safeEditMessage(replyMsg, `${progress}❌ 消息无内容可转发`, true);
-            return false;
+            return { success: false };
           }
         }
         
         tempFileInfo = await this.downloadMedia(sourceMsg, 0, replyMsg);
         if (!tempFileInfo) {
           await this.safeEditMessage(replyMsg, `${progress}❌ 下载媒体失败`, true);
-          return false;
+          return { success: false };
         }
         
-        await this.sendSingleMedia(client, targetPeer, tempFileInfo, replyMsg);
+        // 发送媒体消息，获取发送的消息
+        forwardedMessage = await this.sendSingleMedia(client, targetPeer, tempFileInfo, replyMsg);
         await this.safeEditMessage(replyMsg, `${progress}✅ 内容已重新上传发送`, true);
-        return true;
+        
+        // 如果开启了来源显示，发送来源消息
+        if (showSource && forwardedMessage) {
+          await this.sendSourceMessage(targetPeer, sourceChatId, sourceMessageId, forwardedMessage, replyMsg);
+        } else {
+          return { success: true, forwardedMsg: forwardedMessage };
+        }
+        
+        return { success: true, forwardedMsg: forwardedMessage };
       }
     } catch (error: any) {
       console.error(`处理消息失败:`, error);
       await this.safeEditMessage(replyMsg, `${progress}❌ 处理失败: ${htmlEscape(error.message || "未知错误")}`, true);
-      return false;
+      return { success: false };
     } finally {
       if (tempFileInfo?.path) {
         await this.cleanupTempFile(tempFileInfo.path);
@@ -417,13 +517,14 @@ class PrometheusPlugin extends Plugin {
     }
   }
   
-  // 新增：处理消息范围
+  // 处理消息范围
   private async processMessageRange(
     chatId: string,
     startId: number,
     endId: number,
     targetPeer: any,
-    replyMsg: Api.Message
+    replyMsg: Api.Message,
+    showSource: boolean
   ): Promise<{ total: number; success: number }> {
     const client = await getGlobalClient();
     let successCount = 0;
@@ -450,9 +551,17 @@ class PrometheusPlugin extends Plugin {
         }
         
         await this.safeEditMessage(replyMsg, `${progress}🔄 处理消息 ${msgId}...`, true);
-        const success = await this.processMessage(sourceMsg, targetPeer, replyMsg, progress);
+        const result = await this.processMessage(
+          sourceMsg, 
+          targetPeer, 
+          replyMsg, 
+          chatId, 
+          msgId, 
+          showSource, 
+          progress
+        );
         
-        if (success) {
+        if (result.success) {
           successCount++;
           await this.safeEditMessage(replyMsg, `${progress}✅ 消息 ${msgId} 处理完成`, true);
         } else {
@@ -487,6 +596,30 @@ class PrometheusPlugin extends Plugin {
       // 检查是否有回复消息
       const replyMsg = await msg.getReplyMessage();
       
+      // 处理source子命令
+      if (parts.length >= 2 && parts[1].toLowerCase() === "source") {
+        const config = await this.getUserConfig(userId);
+        
+        if (parts.length === 2) {
+          // 查看当前状态
+          const status = config.showSource ? "开启 ✅" : "关闭 ❌";
+          await this.safeEditMessage(msg, `📊 来源显示功能: <b>${status}</b>\n\n💡 使用 <code>.pms source on</code> 开启\n💡 使用 <code>.pms source off</code> 关闭`, true);
+          return;
+        }
+        
+        const action = parts[2].toLowerCase();
+        if (action === "on") {
+          await this.setUserConfig(userId, { showSource: true });
+          await this.safeEditMessage(msg, "✅ 已开启来源显示功能\n\n转发消息后，将回复一条包含原消息链接的来源消息。", true);
+        } else if (action === "off") {
+          await this.setUserConfig(userId, { showSource: false });
+          await this.safeEditMessage(msg, "❌ 已关闭来源显示功能\n\n转发消息后，将不再显示来源链接。", true);
+        } else {
+          await this.safeEditMessage(msg, "❌ 无效的参数\n\n💡 使用: <code>.pms source on</code> 或 <code>.pms source off</code>", true);
+        }
+        return;
+      }
+      
       // 处理子命令
       if (parts.length >= 2 && parts[1].toLowerCase() === "to") {
         if (parts.length < 3) {
@@ -512,9 +645,10 @@ class PrometheusPlugin extends Plugin {
         return;
       }
       
-      // 获取用户默认目标
+      // 获取用户配置
       const config = await this.getUserConfig(userId);
       let target = config.target;
+      const showSource = config.showSource;
       
       // 解析链接和临时目标
       const links: string[] = [];
@@ -574,7 +708,8 @@ class PrometheusPlugin extends Plugin {
           rangeInfo.startId,
           rangeInfo.endId,
           targetPeer,
-          msg
+          msg,
+          showSource
         );
         
         await this.safeEditMessage(msg, `✅ 范围处理完成\n成功: ${result.success}/${result.total} 条消息`, true);
@@ -672,8 +807,17 @@ class PrometheusPlugin extends Plugin {
           for (let j = 0; j < groupMessages.length; j++) {
             const groupMsg = groupMessages[j];
             const groupProgress = `[${i + 1}/${total}] [${j + 1}/${groupMessages.length}] `;
-            const success = await this.processMessage(groupMsg, targetPeer, msg, groupProgress);
-            if (success) successCount++;
+            const result = await this.processMessage(
+              groupMsg, 
+              targetPeer, 
+              msg, 
+              messageInfo.chatId, 
+              groupMsg.id, 
+              showSource, 
+              groupProgress
+            );
+            
+            if (result.success) successCount++;
             
             if (j < groupMessages.length - 1) {
               await new Promise(resolve => setTimeout(resolve, 300));
@@ -682,8 +826,16 @@ class PrometheusPlugin extends Plugin {
         } else {
           const sourceMsg = await this.getMessage(messageInfo.chatId, messageInfo.messageId);
           if (sourceMsg) {
-            const success = await this.processMessage(sourceMsg, targetPeer, msg, progress);
-            if (success) successCount++;
+            const result = await this.processMessage(
+              sourceMsg, 
+              targetPeer, 
+              msg, 
+              messageInfo.chatId, 
+              messageInfo.messageId, 
+              showSource, 
+              progress
+            );
+            if (result.success) successCount++;
           }
         }
         
