@@ -1,10 +1,16 @@
 import { Plugin } from '@utils/pluginBase';
 import { Api } from 'telegram';
 import axios from 'axios';
-import { createDirectoryInAssets } from '@utils/pathHelpers';
+import { createDirectoryInAssets, createDirectoryInTemp } from '@utils/pathHelpers';
 import * as path from 'path';
+import * as fs from 'fs';
 import { JSONFilePreset } from 'lowdb/node';
 import { getGlobalClient } from '@utils/globalClient';
+import { execFile } from 'child_process';
+import { promisify } from 'util';
+
+const execFileAsync = promisify(execFile);
+const XMSL_TEMP_DIR = createDirectoryInTemp('xmsl');
 
 type APIMode = 'openai' | 'gemini';
 
@@ -50,6 +56,84 @@ function detectImageMime(buffer: Buffer): string | null {
 	}
 	return null;
 }
+
+/**
+ * 从 WebM 视频提取第一帧 PNG
+ */
+async function extractWebmFirstFrame(webmBuffer: Buffer): Promise<Buffer | null> {
+	const uniqueId = Date.now().toString() + '_' + Math.random().toString(36).slice(2);
+	const webmPath = path.join(XMSL_TEMP_DIR, `sticker_${uniqueId}.webm`);
+	const pngPath = path.join(XMSL_TEMP_DIR, `sticker_${uniqueId}.png`);
+
+	try {
+		fs.writeFileSync(webmPath, webmBuffer);
+
+		await execFileAsync('ffmpeg', [
+			'-i', webmPath,
+			'-vf', 'select=eq(n\\,0)',
+			'-vframes', '1',
+			'-y',
+			pngPath
+		]);
+
+		if (fs.existsSync(pngPath)) {
+			return fs.readFileSync(pngPath);
+		}
+		return null;
+	} catch (error) {
+		console.error('[xmsl] WebM 第一帧提取失败:', error);
+		return null;
+	} finally {
+		try { fs.unlinkSync(webmPath); } catch {}
+		try { fs.unlinkSync(pngPath); } catch {}
+	}
+}
+
+/**
+ * 从 TGS (Lottie) 动画渲染第一帧 PNG
+ * 需要 rlottie-python 和 ffmpeg
+ */
+async function extractTgsFirstFrame(tgsBuffer: Buffer): Promise<Buffer | null> {
+	const uniqueId = Date.now().toString() + '_' + Math.random().toString(36).slice(2);
+	const tgsPath = path.join(XMSL_TEMP_DIR, `sticker_${uniqueId}.tgs`);
+	const gifPath = path.join(XMSL_TEMP_DIR, `sticker_${uniqueId}.gif`);
+	const pngPath = path.join(XMSL_TEMP_DIR, `sticker_${uniqueId}.png`);
+
+	try {
+		fs.writeFileSync(tgsPath, tgsBuffer);
+
+		// 使用 rlottie-python 渲染 TGS 到 GIF
+		const pythonScript = `
+import sys
+from rlottie_python import LottieAnimation
+anim = LottieAnimation.from_tgs(sys.argv[1])
+anim.save_animation(sys.argv[2])
+`;
+		await execFileAsync('python3', ['-c', pythonScript, tgsPath, gifPath]);
+
+		// 从 GIF 提取第一帧
+		await execFileAsync('ffmpeg', [
+			'-i', gifPath,
+			'-vf', 'select=eq(n\\,0)',
+			'-vframes', '1',
+			'-y',
+			pngPath
+		]);
+
+		if (fs.existsSync(pngPath)) {
+			return fs.readFileSync(pngPath);
+		}
+		return null;
+	} catch (error) {
+		console.error('[xmsl] TGS 第一帧提取失败:', error);
+		return null;
+	} finally {
+		try { fs.unlinkSync(tgsPath); } catch {}
+		try { fs.unlinkSync(gifPath); } catch {}
+		try { fs.unlinkSync(pngPath); } catch {}
+	}
+}
+
 const SYSTEM_PROMPT = `你的任务是对用户的内容（文字或图片）做出一句"羡慕 + 调侃式的称呼或短语"的回复。
 
 规则（调侃版本）：
@@ -119,8 +203,8 @@ class XMSLPlugin extends Plugin {
 <b>🖼️ 支持的媒体类型</b>
 • 图片 (jpeg/png/gif)
 • 静态贴纸 (webp)
-• 视频贴纸 (webm) - 暂不支持
-• 动态贴纸 (tgs) - 暂不支持
+• 视频贴纸 (webm) - 需要 ffmpeg
+• 动态贴纸 (tgs) - 需要 rlottie-python + ffmpeg
 
 <b>⚙️ 配置项</b>
 • <code>mode</code> - API模式 (openai|gemini)
@@ -223,13 +307,37 @@ class XMSLPlugin extends Plugin {
 					(a: any) => a instanceof Api.DocumentAttributeSticker
 				);
 
-				// tgs 动态贴纸暂不支持
+				// TGS 动态贴纸 - 尝试渲染第一帧
 				if (mimeType === TGS_MIME) {
+					const buffer = await client.downloadMedia(message.media, { workers: 1 });
+					if (buffer && Buffer.isBuffer(buffer)) {
+						const pngBuffer = await extractTgsFirstFrame(buffer);
+						if (pngBuffer) {
+							return {
+								base64: pngBuffer.toString('base64'),
+								mimeType: 'image/png',
+								mediaType: 'sticker',
+								isAnimated: true,
+							};
+						}
+					}
 					return null;
 				}
 
-				// 视频贴纸 (webm) - 暂不支持，缩略图可能不是有效图片
+				// 视频贴纸 (WebM) - 提取第一帧
 				if (mimeType === WEBM_MIME) {
+					const buffer = await client.downloadMedia(message.media, { workers: 1 });
+					if (buffer && Buffer.isBuffer(buffer)) {
+						const pngBuffer = await extractWebmFirstFrame(buffer);
+						if (pngBuffer) {
+							return {
+								base64: pngBuffer.toString('base64'),
+								mimeType: 'image/png',
+								mediaType: 'sticker',
+								isAnimated: true,
+							};
+						}
+					}
 					return null;
 				}
 
@@ -298,20 +406,20 @@ class XMSLPlugin extends Plugin {
 							return;
 						}
 
-						// 检查是否是不支持的贴纸格式
+						// 检查是否是转换失败的贴纸格式
 						if (replyMsg.media instanceof Api.MessageMediaDocument) {
 							const doc = (replyMsg.media as Api.MessageMediaDocument).document;
 							if (doc instanceof Api.Document) {
 								if (doc.mimeType === TGS_MIME) {
 									await msg.edit({
-										text: '❌ 暂不支持 TGS 动态贴纸识别',
+										text: '❌ TGS 贴纸转换失败\n需要安装: <code>pip3 install rlottie-python</code> 和 <code>ffmpeg</code>',
 										parseMode: 'html',
 									});
 									return;
 								}
 								if (doc.mimeType === WEBM_MIME) {
 									await msg.edit({
-										text: '❌ 暂不支持 WebM 视频贴纸识别',
+										text: '❌ WebM 贴纸转换失败\n需要安装: <code>ffmpeg</code>',
 										parseMode: 'html',
 									});
 									return;
