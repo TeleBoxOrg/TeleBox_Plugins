@@ -410,5 +410,9 @@
   "goodnight": {
   "url": "https://github.com/TeleBoxOrg/TeleBox_Plugins/blob/main/goodnight/goodnight.ts?raw=true",
   "desc": "自动统计晚安/早安"
+  },
+  "sum": {
+    "url": "https://github.com/TeleBoxOrg/TeleBox_Plugins/blob/main/sum/sum.ts?raw=true",
+    "desc": "群消息总结"
   }
 }
