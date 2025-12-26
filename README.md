@@ -77,6 +77,7 @@ tpm i <插件名>
 - `ntp` - NTP 时间同步  
 - `openlist` - openlist管理  
 - `oxost` - 回复聊天中的文件与媒体 得到一个临时的下载链接  
+- `pangu` - 消息自动pangu化  
 - `paolu` - 群组一键跑路  
 - `parsehub` - 社交媒体链接解析助手  
 - `pic_to_sticker` - 图片转表情  
