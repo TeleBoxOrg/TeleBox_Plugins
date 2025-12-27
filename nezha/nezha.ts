@@ -1,11 +1,12 @@
 import { Plugin } from "@utils/pluginBase";
 import { Api } from "telegram";
+import { getGlobalClient } from "@utils/globalClient";
 import axios from "axios";
 import * as crypto from "crypto";
 import * as fs from "fs";
 import * as path from "path";
 import * as yaml from "js-yaml";
-import { createDirectoryInAssets } from "@utils/pathHelpers";
+import { createDirectoryInAssets, createDirectoryInTemp } from "@utils/pathHelpers";
 
 interface NeZhaConfig {
   url: string;
@@ -269,6 +270,151 @@ async function fetchServiceMonitor(
   return result;
 }
 
+async function fetchServiceMonitorFull(
+  config: NeZhaConfig,
+  serverId: number
+): Promise<ServiceMonitorItem[]> {
+  try {
+    let secret = config.secret;
+    if (config.configPath) {
+      const fileSecret = readSecretFromConfig(config.configPath);
+      if (fileSecret) secret = fileSecret;
+    }
+    const token = generateJWT(secret);
+    const apiUrl = config.url.replace(/\/$/, "") + `/api/v1/service/${serverId}`;
+    const response = await axios.get<ServiceMonitorData>(apiUrl, {
+      timeout: 10000,
+      headers: {
+        Cookie: `nz-jwt=${token}`,
+        "User-Agent": "TeleBox-NeZha-Plugin/1.0",
+      },
+    });
+    if (response.data.success && response.data.data) {
+      return response.data.data;
+    }
+  } catch (error: any) {
+    console.error(`[NeZha Debug] Service monitor full API error:`, error.message || error);
+  }
+  return [];
+}
+
+function generateChartConfig(monitorData: ServiceMonitorItem[], serverName: string): object {
+  const colors = [
+    "rgb(0, 255, 255)",
+    "rgb(255, 99, 132)",
+    "rgb(50, 205, 50)",
+    "rgb(255, 215, 0)",
+    "rgb(255, 105, 180)",
+    "rgb(255, 165, 0)",
+  ];
+
+  if (!monitorData.length || !monitorData[0]?.created_at?.length) {
+    return { type: "line", data: { labels: [], datasets: [] } };
+  }
+
+  const baseCreatedAt = monitorData[0].created_at;
+  const dataLength = baseCreatedAt.length;
+
+  const maxPoints = 200;
+  const sampleIndices: number[] = [];
+  if (dataLength <= maxPoints) {
+    for (let i = 0; i < dataLength; i++) sampleIndices.push(i);
+  } else {
+    const step = (dataLength - 1) / (maxPoints - 1);
+    for (let j = 0; j < maxPoints; j++) {
+      sampleIndices.push(Math.round(j * step));
+    }
+  }
+
+  const labels = sampleIndices.map((i) => {
+    const ts = baseCreatedAt[i];
+    const date = new Date(ts);
+    return `${date.getHours().toString().padStart(2, "0")}:${date.getMinutes().toString().padStart(2, "0")}`;
+  });
+
+  const datasets = monitorData.map((item, index) => ({
+    label: item.monitor_name,
+    data: sampleIndices.map((i) => item.avg_delay[i] ?? null),
+    borderColor: colors[index % colors.length],
+    fill: false,
+    pointRadius: 0,
+    borderWidth: 1.5,
+  }));
+
+  return {
+    type: "line",
+    data: { labels, datasets },
+    options: {
+      title: {
+        display: true,
+        text: `${serverName} - Service Monitor`,
+        fontColor: "#ffffff",
+      },
+      legend: {
+        position: "bottom",
+        labels: {
+          fontColor: "#ffffff",
+        },
+      },
+      scales: {
+        yAxes: [{
+          scaleLabel: {
+            display: true,
+            labelString: "Delay (ms)",
+            fontColor: "#ffffff",
+          },
+          ticks: {
+            beginAtZero: true,
+            fontColor: "#cccccc",
+          },
+          gridLines: {
+            color: "rgba(255, 255, 255, 0.2)",
+          },
+        }],
+        xAxes: [{
+          scaleLabel: {
+            display: true,
+            labelString: "Time",
+            fontColor: "#ffffff",
+          },
+          ticks: {
+            fontColor: "#cccccc",
+          },
+          gridLines: {
+            color: "rgba(255, 255, 255, 0.2)",
+          },
+        }],
+      },
+    },
+  };
+}
+
+async function downloadChart(chartConfig: object): Promise<Buffer | null> {
+  try {
+    const response = await axios.post(
+      "https://quickchart.io/chart",
+      {
+        chart: chartConfig,
+        width: 800,
+        height: 400,
+        backgroundColor: "black",
+        format: "png",
+      },
+      {
+        responseType: "arraybuffer",
+        timeout: 30000,
+        headers: {
+          "Content-Type": "application/json",
+        },
+      }
+    );
+    return Buffer.from(response.data);
+  } catch (error: any) {
+    console.error("Failed to download chart:", error.message);
+    return null;
+  }
+}
+
 function getCountryFlag(code?: string): string {
   if (!code) return "";
   const flags: Record<string, string> = {
@@ -288,7 +434,7 @@ function formatServerInfo(
   const host = server.host;
   const flag = getCountryFlag(server.geoip?.country_code);
 
-  let title = `${getStatusEmoji(online)} ${flag} <b>${htmlEscape(server.name)}</b>`;
+  let title = `${getStatusEmoji(online)} ${flag} <b>${htmlEscape(server.name)}</b> <code>#${server.id}</code>`;
 
   if (serviceData && serviceData.size > 0) {
     const monitors: string[] = [];
@@ -340,6 +486,108 @@ const nezha = async (msg: Api.Message) => {
   try {
     const args = msg.message.slice(1).split(" ").slice(1);
     const subCmd = args[0]?.toLowerCase();
+
+    if (subCmd === "chart") {
+      const config = loadConfig();
+      if (!config) {
+        await msg.edit({
+          text: "❌ 请先配置哪吒监控",
+          parseMode: "html",
+        });
+        return;
+      }
+
+      await msg.edit({ text: "🔍 正在获取服务器列表..." });
+      const servers = await fetchServers(config);
+      const onlineServers = servers.filter(isServerOnline);
+
+      if (onlineServers.length === 0) {
+        await msg.edit({
+          text: "❌ 没有在线的服务器",
+          parseMode: "html",
+        });
+        return;
+      }
+
+      const serverQuery = args.slice(1).join(" ").toLowerCase();
+      let targetServer: Server | undefined;
+
+      if (serverQuery) {
+        targetServer = onlineServers.find(
+          (s) =>
+            s.name.toLowerCase().includes(serverQuery) ||
+            s.id.toString() === serverQuery
+        );
+        if (!targetServer) {
+          const serverList = onlineServers
+            .map((s) => `• <code>${s.id}</code> - ${htmlEscape(s.name)}`)
+            .join("\n");
+          await msg.edit({
+            text: `❌ 未找到匹配的服务器\n\n<b>在线服务器列表:</b>\n${serverList}\n\n用法: <code>nezha chart [服务器名/ID]</code>`,
+            parseMode: "html",
+          });
+          return;
+        }
+      } else {
+        targetServer = onlineServers[0];
+      }
+
+      await msg.edit({ text: `📊 正在获取 ${targetServer.name} 的监控数据...` });
+      const monitorData = await fetchServiceMonitorFull(config, targetServer.id);
+
+      if (monitorData.length === 0) {
+        await msg.edit({
+          text: `❌ ${htmlEscape(targetServer.name)} 没有服务监控数据`,
+          parseMode: "html",
+        });
+        return;
+      }
+
+      await msg.edit({ text: "📈 正在生成图表..." });
+      
+      console.log("[NeZha Chart Debug] monitorData sample:", JSON.stringify({
+        count: monitorData.length,
+        first: monitorData[0] ? {
+          name: monitorData[0].monitor_name,
+          created_at_len: monitorData[0].created_at?.length,
+          created_at_first5: monitorData[0].created_at?.slice(0, 5),
+          created_at_last5: monitorData[0].created_at?.slice(-5),
+          avg_delay_len: monitorData[0].avg_delay?.length,
+        } : null
+      }, null, 2));
+      
+      const chartConfig = generateChartConfig(monitorData, targetServer.name);
+      const chartBuffer = await downloadChart(chartConfig);
+
+      if (!chartBuffer) {
+        await msg.edit({
+          text: "❌ 生成图表失败",
+          parseMode: "html",
+        });
+        return;
+      }
+
+      const tempDir = createDirectoryInTemp("nezha");
+      const tempFile = path.join(tempDir, `chart_${Date.now()}.png`);
+      fs.writeFileSync(tempFile, chartBuffer);
+
+      try {
+        const client = await getGlobalClient();
+        const caption = `📊 <b>${htmlEscape(targetServer.name)}</b> 服务监控\n\n监控项: ${monitorData.map((m) => m.monitor_name).join(", ")}`;
+
+        await client.sendFile(msg.chatId!, {
+          file: tempFile,
+          caption,
+          parseMode: "html",
+        });
+        await msg.delete({ revoke: true });
+      } finally {
+        if (fs.existsSync(tempFile)) {
+          fs.unlinkSync(tempFile);
+        }
+      }
+      return;
+    }
 
     if (subCmd === "service") {
       const toggle = args[1]?.toLowerCase();
@@ -546,6 +794,7 @@ class NeZhaPlugin extends Plugin {
 - nezha - 查看所有服务器状态
 - nezha set [地址] [Secret/配置文件路径] - 配置哪吒面板
 - nezha service on/off - 开启/关闭服务监控显示
+- nezha chart [服务器名/ID] - 查看服务监控延迟图表
 
 支持直接填写 jwt_secret_key 或 config.yaml 路径自动读取
   `;
