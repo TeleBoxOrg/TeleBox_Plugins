@@ -219,20 +219,20 @@ await msg.reply({ message: \`\${(await formatEntity(msg.sender)).display}, V 我
 
 - id 为 <code>-1000000000000</code> 的群里有人修改消息时自动警告
 
-<pre>${commandName} 你不许修改消息
+<pre>${commandName} add 你不许修改消息
 return msg.chatId.toString() === '-1000000000000' && isEdited
 await msg.reply({ message: \`\${(await formatEntity(msg.sender)).display}, 不许修改!\`, parseMode: 'html' })
 </pre>
 
 - <code>username</code> 为 <code>a</code> 或 <code>b</code> 的用户可使用 <code>${mainPrefix}${mainPrefix}</code> 依次执行命令 一键强制更新并退出重启
 
-<pre>.kitt add 一键强制更新并退出重启
+<pre>${commandName} add 一键强制更新并退出重启
 return !msg.fwdFrom && ['a', 'b'].includes(msg.sender?.username) && msg.text === '${mainPrefix}${mainPrefix}'
 await run('${mainPrefix}update -f', msg); await run('${mainPrefix}dme 1', msg); try { await msg.delete() } catch (e) {}; await run('.exit', msg)</pre>
 
 - <code>username</code> 为 <code>a</code> 或 <code>b</code> 的用户可使用 <code>,,</code> 一键更新已安装的远程插件
 
-<pre>.kitt add 一键更新已安装的远程插件
+<pre>${commandName} add 一键更新已安装的远程插件
 return !msg.fwdFrom && ['a', 'b'].includes(msg.sender?.username) && msg.text === ',,'
 await run('${mainPrefix}tpm update', msg); await run('${mainPrefix}dme 1', msg); try { await msg.delete() } catch (e) {};</pre>
 
