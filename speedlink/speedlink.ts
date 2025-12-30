@@ -1,6 +1,6 @@
 import { Plugin } from "../src/utils/pluginBase";
 import { Api } from "telegram";
-import { exec, execSync } from "child_process";
+import { exec, execSync, ChildProcess } from "child_process";
 import { promisify } from "util";
 import * as path from "path";
 import * as fs from "fs";
@@ -12,6 +12,9 @@ import {
   createDirectoryInTemp,
 } from "../src/utils/pathHelpers";
 
+// --- Global variables for test control ---
+let DEFAULT_TIMEOUT = 300000; // Default 5 minutes, can be customized
+
 async function fillRoundedCorners(
   inputPath: string,
   outPath?: string,
@@ -20,7 +23,6 @@ async function fillRoundedCorners(
 ) {
   const meta = await sharp(inputPath).metadata();
 
-  // Choose an output path if not provided
   const output =
     outPath ??
     (() => {
@@ -37,13 +39,11 @@ async function fillRoundedCorners(
     throw new Error("Unable to read image dimensions");
   }
 
-  // Clamp border so remaining area stays at least 1x1
   const maxInset = Math.floor((Math.min(width, height) - 1) / 2);
   const inset = Math.max(0, Math.min(borderPx, maxInset));
   const cropW = width - inset * 2;
   const cropH = height - inset * 2;
 
-  // Background canvas with original dimensions
   const background = sharp({
     create: {
       width,
@@ -53,18 +53,15 @@ async function fillRoundedCorners(
     },
   });
 
-  // Inner cropped image (removes the outer border)
   const innerBuf = await sharp(inputPath)
     .extract({ left: inset, top: inset, width: cropW, height: cropH })
     .toBuffer();
 
-  // Center the inner image on the background
   const left = Math.floor((width - cropW) / 2);
   const top = Math.floor((height - cropH) / 2);
 
   let composed = background.composite([{ input: innerBuf, left, top }]);
 
-  // Encode based on original format; default to PNG if unknown
   if (meta.format === "jpeg" || meta.format === "jpg") {
     composed = composed.jpeg({ quality: 95 });
   } else if (meta.format === "png" || !meta.format) {
@@ -74,9 +71,47 @@ async function fillRoundedCorners(
   await composed.toFile(output);
   return { output };
 }
+
 const execAsync = promisify(exec);
 
-// --- 接口与类型定义 ---
+// --- Sanitize sensitive information from error messages ---
+function sanitizeErrorMessage(error: string, server?: ServerConfig): string {
+  let sanitized = error;
+  
+  // Remove passwords
+  sanitized = sanitized.replace(/sshpass -p '[^']*'/gi, "sshpass -p '***'");
+  sanitized = sanitized.replace(/password[:\s]+\S+/gi, "password: ***");
+  
+  // Mask IP addresses (full mask)
+  sanitized = sanitized.replace(/\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}/g, '***.***.***.***');
+  
+  // Mask IPv6 addresses (more aggressive)
+  sanitized = sanitized.replace(/([0-9a-fA-F]{1,4}:){2,}[0-9a-fA-F:.]+/g, '***:***:***:***');
+  
+  // Remove SSH key paths
+  sanitized = sanitized.replace(/ssh -i [^\s]+/gi, "ssh -i ***");
+  
+  // Remove usernames in connection strings
+  sanitized = sanitized.replace(/\b[a-zA-Z0-9_-]+@/g, "***@");
+  
+  // If server config is provided, also remove specific server details
+  if (server) {
+    sanitized = sanitized.replace(new RegExp(server.host, 'g'), '***');
+    sanitized = sanitized.replace(new RegExp(server.username, 'g'), '***');
+    if (server.auth_method === 'password') {
+      try {
+        const password = decrypt(server.credentials);
+        sanitized = sanitized.replace(new RegExp(password, 'g'), '***');
+      } catch (e) {
+        // Ignore decryption errors
+      }
+    }
+  }
+  
+  return sanitized;
+}
+
+// --- Interfaces ---
 interface ServerConfig {
   id: number;
   name: string;
@@ -86,6 +121,7 @@ interface ServerConfig {
   auth_method: "password" | "key";
   credentials: string;
 }
+
 interface SpeedtestResult {
   isp: string;
   server: { id: number; name: string; location: string };
@@ -97,7 +133,7 @@ interface SpeedtestResult {
   result: { url: string };
 }
 
-// --- 依赖状态管理 ---
+// --- Dependencies ---
 let dependenciesInstalled = false;
 let isInstalling = false;
 try {
@@ -108,7 +144,6 @@ try {
   dependenciesInstalled = false;
 }
 
-// --- 异步安装函数 ---
 async function installDependencies(msg: Api.Message): Promise<void> {
   isInstalling = true;
   try {
@@ -116,22 +151,16 @@ async function installDependencies(msg: Api.Message): Promise<void> {
     try {
       require.resolve("better-sqlite3");
     } catch (e: any) {
-      console.log(
-        "[INSTALLING] 'better-sqlite3' not found. Installing via npm..."
-      );
+      console.log("[INSTALLING] 'better-sqlite3' not found. Installing via npm...");
       await execAsync("npm install better-sqlite3");
       console.log("[SUCCESS] Installed 'better-sqlite3'.");
     }
     try {
       execSync("command -v sshpass");
     } catch (e: any) {
-      console.log(
-        "[INSTALLING] 'sshpass' not found. Installing via system package manager..."
-      );
+      console.log("[INSTALLING] 'sshpass' not found. Installing via system package manager...");
       if (fs.existsSync("/usr/bin/apt-get"))
-        await execAsync(
-          "sudo apt-get update && sudo apt-get install -y sshpass"
-        );
+        await execAsync("sudo apt-get update && sudo apt-get install -y sshpass");
       else if (fs.existsSync("/usr/bin/yum"))
         await execAsync("sudo yum install -y sshpass");
       else throw new Error("Unsupported package manager.");
@@ -153,20 +182,45 @@ async function installDependencies(msg: Api.Message): Promise<void> {
   }
 }
 
-// --- 依赖加载 ---
 let Database: any = null;
 if (dependenciesInstalled) Database = require("better-sqlite3");
 
-// --- 常量与路径 ---
+// --- Constants ---
 const PLUGIN_NAME = path.basename(__filename, path.extname(__filename));
 const ASSETS_DIR = createDirectoryInAssets(PLUGIN_NAME);
 const TEMP_DIR = createDirectoryInTemp("speedtest");
 const DB_PATH = path.join(ASSETS_DIR, "servers.db");
 const KEY_PATH = path.join(ASSETS_DIR, "secret.key");
+const CONFIG_PATH = path.join(ASSETS_DIR, "config.json");
 const SPEEDTEST_PATH = path.join(ASSETS_DIR, "speedtest");
 const SPEEDTEST_VERSION = "1.2.0";
 
-// --- Speedtest CLI 下载器 ---
+// --- Load/Save configuration ---
+function loadConfig(): { timeout?: number } {
+  try {
+    if (fs.existsSync(CONFIG_PATH)) {
+      return JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf-8'));
+    }
+  } catch (e) {
+    console.error("Failed to load config:", e);
+  }
+  return {};
+}
+
+function saveConfig(config: any): void {
+  try {
+    fs.writeFileSync(CONFIG_PATH, JSON.stringify(config, null, 2), 'utf-8');
+  } catch (e) {
+    console.error("Failed to save config:", e);
+  }
+}
+
+// Load timeout from config
+const config = loadConfig();
+if (config.timeout) {
+  DEFAULT_TIMEOUT = config.timeout;
+}
+
 async function downloadCli(): Promise<void> {
   if (fs.existsSync(SPEEDTEST_PATH)) return;
   console.log("Downloading Speedtest CLI...");
@@ -202,14 +256,11 @@ async function downloadCli(): Promise<void> {
   console.log("Speedtest CLI downloaded and extracted successfully.");
 }
 
-// --- 自动主密钥管理 ---
 function getEncryptionKey(): string {
   if (fs.existsSync(KEY_PATH)) return fs.readFileSync(KEY_PATH, "utf-8");
   const newKey = crypto.randomBytes(16).toString("hex");
   fs.writeFileSync(KEY_PATH, newKey, "utf-8");
-  console.log(
-    `SpeedLink Plugin (${PLUGIN_NAME}): New encryption key generated.`
-  );
+  console.log(`SpeedLink Plugin (${PLUGIN_NAME}): New encryption key generated.`);
   return newKey;
 }
 
@@ -225,11 +276,7 @@ if (Database) {
 
 function encrypt(text: string): string {
   const iv = crypto.randomBytes(IV_LENGTH);
-  const cipher = crypto.createCipheriv(
-    "aes-256-cbc",
-    Buffer.from(ENCRYPTION_KEY),
-    iv
-  );
+  const cipher = crypto.createCipheriv("aes-256-cbc", Buffer.from(ENCRYPTION_KEY), iv);
   const encrypted = Buffer.concat([cipher.update(text), cipher.final()]);
   return iv.toString("hex") + ":" + encrypted.toString("hex");
 }
@@ -239,64 +286,23 @@ function decrypt(text: string): string {
     const textParts = text.split(":");
     const iv = Buffer.from(textParts.shift()!, "hex");
     const encryptedText = Buffer.from(textParts.join(":"), "hex");
-    const decipher = crypto.createDecipheriv(
-      "aes-256-cbc",
-      Buffer.from(ENCRYPTION_KEY),
-      iv
-    );
-    return Buffer.concat([
-      decipher.update(encryptedText),
-      decipher.final(),
-    ]).toString();
+    const decipher = crypto.createDecipheriv("aes-256-cbc", Buffer.from(ENCRYPTION_KEY), iv);
+    return Buffer.concat([decipher.update(encryptedText), decipher.final()]).toString();
   } catch (error: any) {
-    throw new Error(
-      "Failed to decrypt credentials. The key file may have been changed/deleted."
-    );
+    throw new Error("Failed to decrypt credentials. The key file may have been changed/deleted.");
   }
 }
 
-function htmlEscape(text: string): string {
-  return (
-    text?.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;") ||
-    ""
-  );
-}
-
-function sanitizeErrorMessage(errorMsg: string, serverName?: string): string {
-  let sanitized = errorMsg;
-  sanitized = sanitized.replace(/Command failed:.*?sshpass[^\n]*\n?/gi, '');
-  sanitized = sanitized.replace(/^.*sshpass.*$/gim, '');
-  sanitized = sanitized.replace(
-    /\b(?:\d{1,3}\.){3}\d{1,3}\b/g,
-    '[IP已隐藏]'
-  );
-  sanitized = sanitized.replace(
-    /\b(?:[0-9a-fA-F]{1,4}:){7}[0-9a-fA-F]{1,4}\b/g,
-    '[IP已隐藏]'
-  );
-  
-  sanitized = sanitized.replace(
-    /sshpass\s+-p\s+(['"]).*?\1/gi,
-    "sshpass -p '[已隐藏]'"
-  );
-  sanitized = sanitized.replace(
-    /sshpass\s+-p\s+\S+/gi,
-    "sshpass -p '[已隐藏]'"
-  );
-  
-  sanitized = sanitized.replace(/\n\s*\n/g, '\n').trim();
-  
-  if (!sanitized || sanitized.length < 5) {
-    return '连接或执行失败，请检查服务器配置和网络连接';
+// Fixed htmlEscape function
+function htmlEscape(text: any): string {
+  // Ensure text is a string type
+  if (typeof text !== 'string') {
+    return text ? String(text) : "";
   }
-  
-  return sanitized;
+  return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
 
-async function unitConvert(
-  bytes: number,
-  isBytes: boolean = false
-): Promise<string> {
+async function unitConvert(bytes: number, isBytes: boolean = false): Promise<string> {
   const power = 1000;
   let value = bytes;
   let unitIndex = 0;
@@ -313,9 +319,7 @@ async function unitConvert(
 
 async function getIpApi(ip: string) {
   try {
-    const response = await axios.get(
-      `http://ip-api.com/json/${ip}?fields=as,countryCode`
-    );
+    const response = await axios.get(`http://ip-api.com/json/${ip}?fields=as,countryCode`);
     const data = response.data;
     const asInfo = data.as?.split(" ")[0] || "";
     const ccFlag = data.countryCode
@@ -381,6 +385,7 @@ sudo yum install speedtest</code></pre>
 
 - <b>查看服务器列表:</b> <code>sl list</code>
 - <b>删除服务器:</b> <code>sl del &lt;显示序号&gt;</code>
+- <b>🆕 修改别名:</b> <code>sl rename &lt;显示序号&gt; &lt;新别名&gt;</code>
 ---
 <b>执行测速指令:</b>
 
@@ -388,6 +393,14 @@ sudo yum install speedtest</code></pre>
 - <b>本机测速:</b> <code>sl</code>
 - <b>多服务器测速:</b> <code>sl 1 3 5</code>
 - <b>全部测速:</b> <code>sl all</code>
+- <b>🆕 排除测速:</b> <code>sl all no &lt;序号1&gt; &lt;序号2&gt;</code>
+---
+<b>配置指令:</b>
+
+- <b>设置超时时间:</b> <code>sl timeout &lt;秒数&gt;</code>
+  <i>示例:</i> <code>sl timeout 60</code> (设置60秒超时)
+  <i>默认值: 300秒 (5分钟)</i>
+- <b>查看当前超时:</b> <code>sl timeout</code>
 ---
 <b>备份与恢复:</b>
 
@@ -398,7 +411,7 @@ sudo yum install speedtest</code></pre>
   (此操作将覆盖现有数据, 请谨慎使用)
 `;
 
-// --- 主处理函数 ---
+// --- Main handler ---
 const speedtest = async (msg: Api.Message): Promise<void> => {
   if (!dependenciesInstalled) {
     if (isInstalling)
@@ -417,27 +430,45 @@ const speedtest = async (msg: Api.Message): Promise<void> => {
   }
 
   const args = msg.message.slice(2).split(" ").slice(1);
+  const chatId = Number(msg.peerId?.toString());
+  const allServers: ServerConfig[] = db.prepare("SELECT * FROM servers ORDER BY id").all();
 
   try {
     const command = args[0] || "";
-    // --- 服务器管理指令 ---
-    if (
-      command === "add" ||
-      command === "list" ||
-      command === "del" ||
-      command === "backup" ||
-      command === "restore"
-    ) {
+    
+    // --- New: Timeout configuration ---
+    if (command === "timeout") {
+      if (args[1]) {
+        const newTimeout = parseInt(args[1]);
+        if (isNaN(newTimeout) || newTimeout < 10 || newTimeout > 600) {
+          await msg.edit({
+            text: "❌ <b>无效的超时时间</b>\n\n请输入10到600之间的秒数。",
+            parseMode: "html",
+          });
+          return;
+        }
+        DEFAULT_TIMEOUT = newTimeout * 1000;
+        saveConfig({ ...loadConfig(), timeout: DEFAULT_TIMEOUT });
+        await msg.edit({
+          text: `✅ <b>超时时间已设置</b>\n\n新的超时时间: <code>${newTimeout}</code> 秒`,
+          parseMode: "html",
+        });
+      } else {
+        const currentTimeout = DEFAULT_TIMEOUT / 1000;
+        await msg.edit({
+          text: `ℹ️ <b>当前超时设置</b>\n\n超时时间: <code>${currentTimeout}</code> 秒\n\n使用 <code>sl timeout &lt;秒数&gt;</code> 来修改`,
+          parseMode: "html",
+        });
+      }
+      return;
+    }
+    
+    // --- Server management commands ---
+    if (command === "add" || command === "list" || command === "del" || command === "backup" || command === "restore" || command === "rename") {
       if (command === "add") {
         const [name, connection, authMethod, ...creds] = args.slice(1);
         const credential = creds.join(" ");
-        if (
-          !name ||
-          !connection ||
-          !authMethod ||
-          !credential ||
-          !["password", "key"].includes(authMethod)
-        ) {
+        if (!name || !connection || !authMethod || !credential || !["password", "key"].includes(authMethod)) {
           await msg.edit({
             text: `❌ <b>参数错误</b>\n\n${HELP_TEXT}`,
             parseMode: "html",
@@ -446,7 +477,6 @@ const speedtest = async (msg: Api.Message): Promise<void> => {
         }
         const [username, hostWithPort] = connection.split("@");
 
-        // --- START: MODIFIED CODE FOR IPV6 PARSING ---
         if (!hostWithPort) {
           await msg.edit({ text: `❌ <b>连接格式错误</b>`, parseMode: "html" });
           return;
@@ -470,10 +500,8 @@ const speedtest = async (msg: Api.Message): Promise<void> => {
           });
           return;
         }
-        // --- END: MODIFIED CODE FOR IPV6 PARSING ---
 
-        const storedCredential =
-          authMethod === "password" ? encrypt(credential) : credential;
+        const storedCredential = authMethod === "password" ? encrypt(credential) : credential;
         try {
           db.prepare(
             "INSERT INTO servers (name, host, port, username, auth_method, credentials) VALUES (?, ?, ?, ?, ?, ?)"
@@ -489,21 +517,16 @@ const speedtest = async (msg: Api.Message): Promise<void> => {
           });
         }
       } else if (command === "list") {
-        const servers: ServerConfig[] = db
-          .prepare("SELECT * FROM servers ORDER BY id")
-          .all();
-        if (servers.length === 0) {
+        // const servers: ServerConfig[] = db.prepare("SELECT * FROM servers ORDER BY id").all(); // Already fetched
+        if (allServers.length === 0) {
           await msg.edit({
             text: "ℹ️ 未配置任何远程服务器。",
             parseMode: "html",
           });
           return;
         }
-        const serverList = servers
-          .map(
-            (s: ServerConfig, i: number) =>
-              `<code>${i + 1}</code> - <b>${htmlEscape(s.name)}</b>`
-          )
+        const serverList = allServers
+          .map((s: ServerConfig, i: number) => `<code>${i + 1}</code> - <b>${htmlEscape(s.name)}</b>`)
           .join("\n");
         await msg.edit({
           text: `<b>已配置的服务器列表:</b>\n${serverList}`,
@@ -518,10 +541,8 @@ const speedtest = async (msg: Api.Message): Promise<void> => {
           });
           return;
         }
-        const servers: ServerConfig[] = db
-          .prepare("SELECT * FROM servers ORDER BY id")
-          .all();
-        const serverToDelete = servers[displayId - 1];
+        // const servers: ServerConfig[] = db.prepare("SELECT * FROM servers ORDER BY id").all(); // Already fetched
+        const serverToDelete = allServers[displayId - 1];
         if (!serverToDelete) {
           await msg.edit({
             text: `❌ 未找到显示序号为 ${displayId} 的服务器。`,
@@ -529,18 +550,44 @@ const speedtest = async (msg: Api.Message): Promise<void> => {
           });
           return;
         }
-        const info = db
-          .prepare("DELETE FROM servers WHERE id = ?")
-          .run(serverToDelete.id);
+        const info = db.prepare("DELETE FROM servers WHERE id = ?").run(serverToDelete.id);
         await msg.edit({
           text:
             info.changes > 0
-              ? `✅ 服务器 <b>${htmlEscape(
-                  serverToDelete.name
-                )}</b> (显示序号 ${displayId}) 已删除。`
+              ? `✅ 服务器 <b>${htmlEscape(serverToDelete.name)}</b> (显示序号 ${displayId}) 已删除。`
               : `❌ 删除失败。`,
           parseMode: "html",
         });
+      } else if (command === "rename") { // --- New: Rename command
+        const displayId = parseInt(args[1]);
+        const newName = args.slice(2).join(" ");
+        if (isNaN(displayId) || displayId < 1 || !newName) {
+          await msg.edit({
+            text: "❌ <b>参数错误</b>\n\n请使用: <code>sl rename &lt;显示序号&gt; &lt;新别名&gt;</code>",
+            parseMode: "html",
+          });
+          return;
+        }
+        const serverToRename = allServers[displayId - 1];
+        if (!serverToRename) {
+          await msg.edit({
+            text: `❌ 未找到显示序号为 ${displayId} 的服务器。`,
+            parseMode: "html",
+          });
+          return;
+        }
+        try {
+          db.prepare("UPDATE servers SET name = ? WHERE id = ?").run(newName, serverToRename.id);
+          await msg.edit({
+            text: `✅ <b>重命名成功</b>\n\n原别名 <b>${htmlEscape(serverToRename.name)}</b> 已修改为 <b>${htmlEscape(newName)}</b>`,
+            parseMode: "html",
+          });
+        } catch (err: any) {
+          await msg.edit({
+            text: `❌ 重命名失败: <code>${htmlEscape(err.message)}</code>`,
+            parseMode: "html",
+          });
+        }
       } else if (command === "backup") {
         if (!fs.existsSync(DB_PATH)) {
           await msg.edit({
@@ -555,9 +602,7 @@ const speedtest = async (msg: Api.Message): Promise<void> => {
         await msg.client?.sendFile("me", {
           file: DB_PATH,
           caption: `SpeedLink 插件服务器数据备份\n日期: ${date}`,
-          attributes: [
-            new Api.DocumentAttributeFilename({ fileName: backupFilename }),
-          ],
+          attributes: [new Api.DocumentAttributeFilename({ fileName: backupFilename })],
         });
         await msg.edit({
           text: `✅ 备份成功！\n\n文件已发送至您的<b>收藏夹 (Saved Messages)</b>。`,
@@ -614,20 +659,20 @@ const speedtest = async (msg: Api.Message): Promise<void> => {
     }
 
     // --- Speed Test Execution Logic ---
-    const allServers: ServerConfig[] = db
-      .prepare("SELECT * FROM servers ORDER BY id")
-      .all();
-    let targetServers: (ServerConfig | null)[] = []; // null represents local test
+    // const allServers: ServerConfig[] = db.prepare("SELECT * FROM servers ORDER BY id").all(); // Already fetched
+    let targetServers: (ServerConfig | null)[] = [];
 
-    // Case 1: `sl all` or `sl 1 2 3 ...` (Multi-server test)
-    const isAllTest = command === "all";
-    const isMultiTest =
-      args.length > 0 && args.every((arg) => !isNaN(parseInt(arg)));
+    const isAllTest = command === "all" && args[1] !== "no";
+    const isExcludeTest = command === "all" && args[1] === "no" && args.length > 2;
+    const isMultiTest = !isAllTest && !isExcludeTest && args.length > 0 && args.every((arg) => !isNaN(parseInt(arg)));
 
-    if (isAllTest || isMultiTest) {
+    if (isAllTest || isMultiTest || isExcludeTest) {
       if (isAllTest) {
         targetServers = allServers;
-      } else {
+      } else if (isExcludeTest) {
+        const excludeDisplayIds = args.slice(2).map(id => parseInt(id));
+        targetServers = allServers.filter((s, i) => !excludeDisplayIds.includes(i + 1));
+      } else { // isMultiTest
         targetServers = args
           .map((arg) => {
             const displayId = parseInt(arg);
@@ -644,11 +689,10 @@ const speedtest = async (msg: Api.Message): Promise<void> => {
         return;
       }
 
-      // Immediately delete the command message
       await msg.delete();
 
       for (const server of targetServers) {
-        if (!server) continue; // Should not happen with the filter, but for type safety
+        if (!server) continue;
 
         const statusMsg = await msg.client?.sendMessage(msg.peerId, {
           message: `⚡️ [${targetServers.indexOf(server) + 1}/${
@@ -664,31 +708,36 @@ const speedtest = async (msg: Api.Message): Promise<void> => {
 
           if (server.auth_method === "password") {
             const password = decrypt(server.credentials);
-            finalCommand = `sshpass -p '${password.replace(
-              /'/g,
-              "'\\''"
-            )}' ssh -p ${
+            finalCommand = `sshpass -p '${password.replace(/'/g, "'\\''")}' ssh -p ${
               server.port
-            } -o StrictHostKeyChecking=no -o ConnectTimeout=10 ${
-              server.username
-            }@${server.host} '${remoteSpeedtestCmd}'`;
+            } -o StrictHostKeyChecking=no -o ConnectTimeout=10 ${server.username}@${
+              server.host
+            } '${remoteSpeedtestCmd}'`;
           } else {
             finalCommand = `ssh -i ${server.credentials} -p ${server.port} -o StrictHostKeyChecking=no -o ConnectTimeout=10 ${server.username}@${server.host} '${remoteSpeedtestCmd}'`;
           }
 
-          const { stdout } = await execAsync(finalCommand, {
-            timeout: 300000,
-          });
+          const startTime = Date.now();
+          const { stdout } = await execAsync(
+            finalCommand,
+            {
+              timeout: DEFAULT_TIMEOUT,
+              killSignal: 'SIGKILL' // Force kill on timeout
+            }
+          );
+          const endTime = Date.now();
+          const duration = ((endTime - startTime) / 1000).toFixed(2);
+          
           const jsonStartIndex = stdout.indexOf("{");
-          if (jsonStartIndex === -1)
-            throw new Error("Speedtest did not return valid JSON.");
-          const result: SpeedtestResult = JSON.parse(
-            stdout.substring(jsonStartIndex)
-          );
+          if (jsonStartIndex === -1) throw new Error("Speedtest did not return valid JSON.");
+          const result: SpeedtestResult = JSON.parse(stdout.substring(jsonStartIndex));
 
-          const { asInfo, ccFlag } = await getIpApi(
-            result.interface.externalIp
-          );
+          const { asInfo, ccFlag } = await getIpApi(result.interface.externalIp);
+          
+          // Convert timestamp to Beijing Time (UTC+8)
+          const resultDate = new Date(result.timestamp);
+          const beijingTime = new Date(resultDate.getTime() + 8 * 60 * 60 * 1000);
+          const beijingTimeString = beijingTime.toISOString().replace('T', ' ').substring(0, 19);
 
           const caption = [
             `<b>${htmlEscape(server.name)}</b> ${ccFlag}`,
@@ -699,9 +748,9 @@ const speedtest = async (msg: Api.Message): Promise<void> => {
             `<code>Conn</code>  <code>Multi - IPv${
               result.interface.externalIp.includes(":") ? "6" : "4"
             } - ${htmlEscape(result.interface.name)}</code>`,
-            `<code>Ping</code>  <code>⇔${result.ping.latency.toFixed(
+            `<code>Ping</code>  <code>⇔${result.ping.latency.toFixed(3)}ms ±${result.ping.jitter.toFixed(
               3
-            )}ms ±${result.ping.jitter.toFixed(3)}ms</code>`,
+            )}ms</code>`,
             `<code>Rate</code>  <code>↓${await unitConvert(
               result.download.bandwidth
             )} ↑${await unitConvert(result.upload.bandwidth)}</code>`,
@@ -709,9 +758,9 @@ const speedtest = async (msg: Api.Message): Promise<void> => {
               result.download.bytes,
               true
             )} ↑${await unitConvert(result.upload.bytes, true)}</code>`,
-            `<code>Time</code>  <code>${result.timestamp
-              .replace("T", " ")
-              .replace("Z", "")}</code>`,
+            `<code>Time</code>  <code>${beijingTimeString} (UTC+8)</code>`,
+            `<code>Used</code>  <code>${duration}s</code>`,
+            `<code>Link</code>  ${htmlEscape(result.result.url)}`,
           ].join("\n");
 
           const imagePath = await saveSpeedtestImage(result.result.url);
@@ -731,13 +780,15 @@ const speedtest = async (msg: Api.Message): Promise<void> => {
             await statusMsg.delete();
           }
         } catch (error: any) {
+          // Sanitize error message before displaying
           let errorMsg = String(error.stderr || error.message || error);
-          errorMsg = sanitizeErrorMessage(errorMsg, server.name);
+          errorMsg = sanitizeErrorMessage(errorMsg, server);
+          
           if (statusMsg) {
             await statusMsg.edit({
-              text: `❌ <b>${htmlEscape(
-                server.name
-              )}</b> 测速失败\n\n<code>${htmlEscape(errorMsg)}</code>`,
+              text: `❌ <b>${htmlEscape(server.name)}</b> 测速失败\n\n<code>${htmlEscape(
+                errorMsg
+              )}</code>`,
               parseMode: "html",
             });
           }
@@ -746,14 +797,14 @@ const speedtest = async (msg: Api.Message): Promise<void> => {
       return;
     }
 
-    // Case 2: `sl` (local test) or `sl 1` (single server test)
+    // Single test (local or single server)
     let isRemote = false;
     let serverConfig: ServerConfig | null = null;
     let initialText: string;
 
     if (command === "") {
       isRemote = false;
-      initialText = "⚡️ 正在进行<b>本机</b>速度测试...";
+      initialText = `⚡️ 正在进行<b>本机</b>速度测试...`;
     } else if (!isNaN(parseInt(command))) {
       isRemote = true;
       const displayId = parseInt(command);
@@ -778,24 +829,18 @@ const speedtest = async (msg: Api.Message): Promise<void> => {
 
     let statusMsg: Api.Message | undefined;
     try {
-      // Send the status message and immediately delete the original command.
       statusMsg = await msg.client?.sendMessage(msg.peerId, {
         message: initialText,
         parseMode: "html",
       });
       await msg.delete();
     } catch (e) {
-      // Fallback: If sending a new message or deleting fails, edit the original.
-      console.error(
-        "Failed to send/delete, falling back to editing original message:",
-        e
-      );
+      console.error("Failed to send/delete, falling back to editing original message:", e);
       try {
         await msg.edit({ text: initialText, parseMode: "html" });
         statusMsg = msg;
       } catch (editError) {
         console.error("Critical: Fallback edit also failed.", editError);
-        // Can't do anything with messages, just proceed with the test.
       }
     }
 
@@ -807,37 +852,46 @@ const speedtest = async (msg: Api.Message): Promise<void> => {
         const remoteSpeedtestCmd = `speedtest ${speedtestCmdBase}`;
         if (serverConfig.auth_method === "password") {
           const password = decrypt(serverConfig.credentials);
-          finalCommand = `sshpass -p '${password.replace(
-            /'/g,
-            "'\\''"
-          )}' ssh -p ${
+          finalCommand = `sshpass -p '${password.replace(/'/g, "'\\''")}' ssh -p ${
             serverConfig.port
-          } -o StrictHostKeyChecking=no -o ConnectTimeout=10 ${
-            serverConfig.username
-          }@${serverConfig.host} '${remoteSpeedtestCmd}'`;
+          } -o StrictHostKeyChecking=no -o ConnectTimeout=10 ${serverConfig.username}@${
+            serverConfig.host
+          } '${remoteSpeedtestCmd}'`;
         } else {
-          finalCommand = `ssh -i ${serverConfig.credentials} -p ${serverConfig.port} -o StrictHostKeyChecking=no -o ConnectTimeout=10 ${serverConfig.username}@${serverConfig.host} '${remoteSpeedtestCmd}'`;
+          finalCommand = `ssh -i ${serverConfig.credentials} -p ${serverConfig.port} -o StrictHostKeyChecking=no -o ConnectTimeout=1to ${serverConfig.username}@${serverConfig.host} '${remoteSpeedtestCmd}'`;
         }
       } else {
         if (!fs.existsSync(SPEEDTEST_PATH)) {
           const downloadingMsg = "本地 Speedtest CLI 不存在，正在为您下载...";
-          if (statusMsg)
-            await statusMsg.edit({ text: downloadingMsg, parseMode: "html" });
+          if (statusMsg) await statusMsg.edit({ text: downloadingMsg, parseMode: "html" });
           else await msg.edit({ text: downloadingMsg, parseMode: "html" });
           await downloadCli();
         }
         finalCommand = `"${SPEEDTEST_PATH}" ${speedtestCmdBase}`;
       }
 
-      const { stdout } = await execAsync(finalCommand, { timeout: 300000 });
-      const jsonStartIndex = stdout.indexOf("{");
-      if (jsonStartIndex === -1)
-        throw new Error("Speedtest did not return valid JSON.");
-      const result: SpeedtestResult = JSON.parse(
-        stdout.substring(jsonStartIndex)
+      const startTime = Date.now();
+      const { stdout } = await execAsync(
+        finalCommand,
+        {
+          timeout: DEFAULT_TIMEOUT,
+          killSignal: 'SIGKILL' // Force kill on timeout
+        }
       );
+      const endTime = Date.now();
+      const duration = ((endTime - startTime) / 1000).toFixed(2);
+      
+      const jsonStartIndex = stdout.indexOf("{");
+      if (jsonStartIndex === -1) throw new Error("Speedtest did not return valid JSON.");
+      const result: SpeedtestResult = JSON.parse(stdout.substring(jsonStartIndex));
 
       const { asInfo, ccFlag } = await getIpApi(result.interface.externalIp);
+      
+      // Convert timestamp to Beijing Time (UTC+8)
+      const resultDate = new Date(result.timestamp);
+      const beijingTime = new Date(resultDate.getTime() + 8 * 60 * 60 * 1000);
+      const beijingTimeString = beijingTime.toISOString().replace('T', ' ').substring(0, 19);
+
       const caption = [
         `<b>⚡️SPEEDTEST by OOKLA</b> ${ccFlag}`,
         `<code>Name</code>  <code>${htmlEscape(result.isp)} ${asInfo}</code>`,
@@ -847,9 +901,9 @@ const speedtest = async (msg: Api.Message): Promise<void> => {
         `<code>Conn</code>  <code>Multi - IPv${
           result.interface.externalIp.includes(":") ? "6" : "4"
         } - ${htmlEscape(result.interface.name)}</code>`,
-        `<code>Ping</code>  <code>⇔${result.ping.latency.toFixed(
+        `<code>Ping</code>  <code>⇔${result.ping.latency.toFixed(3)}ms ±${result.ping.jitter.toFixed(
           3
-        )}ms ±${result.ping.jitter.toFixed(3)}ms</code>`,
+        )}ms</code>`,
         `<code>Rate</code>  <code>↓${await unitConvert(
           result.download.bandwidth
         )} ↑${await unitConvert(result.upload.bandwidth)}</code>`,
@@ -857,9 +911,9 @@ const speedtest = async (msg: Api.Message): Promise<void> => {
           result.download.bytes,
           true
         )} ↑${await unitConvert(result.upload.bytes, true)}</code>`,
-        `<code>Time</code>  <code>${result.timestamp
-          .replace("T", " ")
-          .replace("Z", "")}</code>`,
+        `<code>Time</code>  <code>${beijingTimeString} (UTC+8)</code>`,
+        `<code>Used</code>  <code>${duration}s</code>`,
+        `<code>Link</code>  ${htmlEscape(result.result.url)}`,
       ].join("\n");
 
       const imagePath = await saveSpeedtestImage(result.result.url);
@@ -876,30 +930,29 @@ const speedtest = async (msg: Api.Message): Promise<void> => {
           parseMode: "html",
         });
       }
-      // Cleanup on success
       if (statusMsg) await statusMsg.delete();
     } catch (error: any) {
+      // Sanitize error message before displaying
       let errorMsg = String(error.stderr || error.message || error);
-      errorMsg = sanitizeErrorMessage(errorMsg, serverConfig?.name);
-      const errorText = `❌ <b>速度测试失败</b>\n\n<code>${htmlEscape(
-        errorMsg
-      )}</code>`;
+      errorMsg = sanitizeErrorMessage(errorMsg, serverConfig || undefined);
+      
+      const errorText = `❌ <b>速度测试失败</b>\n\n<code>${htmlEscape(errorMsg)}</code>`;
       if (statusMsg) {
         await statusMsg.edit({ text: errorText, parseMode: "html" });
       }
     }
   } catch (error: any) {
     console.error(`SpeedLink Plugin (${PLUGIN_NAME}) critical error:`, error);
+    // Sanitize any critical errors as well
+    const sanitizedError = sanitizeErrorMessage(String(error));
     await msg.edit({
-      text: `❌ <b>插件发生严重错误</b>\n\n<code>${htmlEscape(
-        String(error)
-      )}</code>`,
+      text: `❌ <b>插件发生严重错误</b>\n\n<code>${htmlEscape(sanitizedError)}</code>`,
       parseMode: "html",
     });
   }
 };
 
-// --- 插件类定义 ---
+// --- Plugin class ---
 class SpeedlinkPlugin extends Plugin {
   description: string = `⚡️ 网络速度测试工具 (多服务器)\n\n${HELP_TEXT}`;
   cmdHandlers: Record<string, (msg: Api.Message) => Promise<void>> = {
