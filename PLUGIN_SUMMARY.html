@@ -22,27 +22,27 @@
             margin: 0 auto;
             padding: 20px;
             line-height: 1.6;
-            color: #333;
-            background: #fff;
+            color: #e0e0e0;
+            background: #1a1a1a;
         }
         h1 {
             font-size: 2em;
             margin-bottom: 0.5em;
-            color: #000;
+            color: #fff;
         }
         h3 {
             font-size: 1.3em;
             margin-top: 1.5em;
             margin-bottom: 0.5em;
-            color: #000;
+            color: #fff;
         }
         address {
             font-style: normal;
-            color: #999;
+            color: #888;
             margin-bottom: 2em;
         }
         address a {
-            color: #5e9bc9;
+            color: #6cb6ff;
             text-decoration: none;
         }
         address a:hover {
@@ -50,37 +50,39 @@
         }
         p {
             margin: 0.5em 0;
-            color: #333;
+            color: #e0e0e0;
         }
         blockquote {
             margin: 0.5em 0;
             padding: 0.5em 1em;
-            background: #f5f5f5;
-            border-left: 3px solid #ccc;
+            background: #2d2d2d;
+            border-left: 3px solid #4a4a4a;
             font-family: Consolas, Monaco, 'Courier New', monospace;
             font-size: 0.9em;
-            color: #666;
+            color: #aaa;
         }
         hr {
             border: none;
-            border-top: 1px solid #e5e5e5;
+            border-top: 1px solid #333;
             margin: 1.5em 0;
         }
         code {
-            background: #f4f4f4;
-            padding: 0.1em 0.4em;
-            border-radius: 3px;
+            background: #2d2d2d;
+            padding: 0.2em 0.5em;
+            border-radius: 4px;
             font-family: Consolas, Monaco, 'Courier New', monospace;
             font-size: 0.9em;
+            color: #f8c555;
         }
         .toc {
-            background: #f9f9f9;
+            background: #252525;
             padding: 1em;
             margin-bottom: 2em;
             border-radius: 4px;
         }
         .toc h4 {
             margin: 0 0 0.5em 0;
+            color: #fff;
         }
         .toc-list {
             column-count: 3;
@@ -88,17 +90,96 @@
         }
         .toc-list a {
             display: block;
-            color: #5e9bc9;
+            color: #6cb6ff;
             text-decoration: none;
             font-size: 0.9em;
             padding: 0.1em 0;
         }
         .toc-list a:hover {
             text-decoration: underline;
+            color: #8ed4ff;
         }
         @media (max-width: 600px) {
             .toc-list {
                 column-count: 2;
+            }
+        }
+        .sidebar {
+            position: fixed;
+            top: 20px;
+            left: 20px;
+            width: 180px;
+            max-height: calc(100vh - 40px);
+            overflow-y: auto;
+            background: #252525;
+            border-radius: 6px;
+            padding: 12px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.3);
+            z-index: 1000;
+        }
+        .sidebar h5 {
+            margin: 0 0 8px 0;
+            color: #fff;
+            font-size: 0.85em;
+            border-bottom: 1px solid #333;
+            padding-bottom: 6px;
+        }
+        .sidebar a {
+            display: block;
+            color: #6cb6ff;
+            text-decoration: none;
+            font-size: 0.75em;
+            padding: 2px 0;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        .sidebar a:hover {
+            color: #8ed4ff;
+        }
+        .sidebar a.active {
+            color: #f8c555;
+            font-weight: bold;
+        }
+        .letter-nav {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 4px;
+            margin-bottom: 10px;
+            padding-bottom: 8px;
+            border-bottom: 1px solid #333;
+        }
+        .letter-nav .letter {
+            width: 22px;
+            height: 22px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: #333;
+            border-radius: 3px;
+            font-size: 0.75em;
+            padding: 0;
+        }
+        .letter-nav .letter:hover {
+            background: #444;
+        }
+        .letter-nav .letter.active {
+            background: #f8c555;
+            color: #1a1a1a;
+        }
+        .plugin-list a {
+            padding: 3px 0;
+        }
+        .sidebar::-webkit-scrollbar {
+            width: 4px;
+        }
+        .sidebar::-webkit-scrollbar-thumb {
+            background: #444;
+            border-radius: 2px;
+        }
+        @media (max-width: 1100px) {
+            .sidebar {
+                display: none;
             }
         }
     </style>
@@ -664,5 +745,50 @@
 <hr>
 
     </article>
+    <nav class="sidebar" id="sidebar"></nav>
+    <script>
+    (function() {
+        const sidebar = document.getElementById('sidebar');
+        const headings = document.querySelectorAll('h3[id]');
+        const groups = {};
+        headings.forEach(h => {
+            const letter = h.id[0].toUpperCase();
+            if (!groups[letter]) groups[letter] = [];
+            groups[letter].push(h.id);
+        });
+        let html = '<h5>快速导航</h5><div class="letter-nav">';
+        Object.keys(groups).sort().forEach(letter => {
+            html += `<a href="#" class="letter" data-letter="${letter}">${letter}</a>`;
+        });
+        html += '</div><div class="plugin-list" id="pluginList"></div>';
+        sidebar.innerHTML = html;
+        const pluginList = document.getElementById('pluginList');
+        const letterLinks = sidebar.querySelectorAll('.letter');
+        function showLetter(letter) {
+            letterLinks.forEach(l => l.classList.toggle('active', l.dataset.letter === letter));
+            let listHtml = '';
+            groups[letter].forEach(name => {
+                listHtml += `<a href="#${name}">${name}</a>`;
+            });
+            pluginList.innerHTML = listHtml;
+        }
+        letterLinks.forEach(link => {
+            link.addEventListener('click', e => {
+                e.preventDefault();
+                showLetter(link.dataset.letter);
+            });
+        });
+        const observer = new IntersectionObserver(entries => {
+            entries.forEach(entry => {
+                if (entry.isIntersecting) {
+                    const letter = entry.target.id[0].toUpperCase();
+                    showLetter(letter);
+                }
+            });
+        }, { rootMargin: '-20% 0px -70% 0px' });
+        headings.forEach(h => observer.observe(h));
+        showLetter(Object.keys(groups).sort()[0]);
+    })();
+    </script>
 </body>
 </html>
