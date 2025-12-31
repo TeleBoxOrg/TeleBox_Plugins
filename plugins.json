@@ -163,6 +163,10 @@
     "url": "https://github.com/TeleBoxOrg/TeleBox_Plugins/blob/main/goodnight/goodnight.ts?raw=true",
     "desc": "自动统计晚安/早安"
   },
+  "gpt": {
+    "url": "https://github.com/TeleBoxOrg/TeleBox_Plugins/blob/main/gpt/gpt.ts?raw=true",
+    "desc": "GPT智能助手"
+  },
   "gt": {
     "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/gt/gt.ts?raw=true",
     "desc": "谷歌中英文互译"
