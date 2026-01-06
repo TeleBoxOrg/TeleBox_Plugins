@@ -250,6 +250,20 @@
         "mask": "eat/masksj.png"
       }
     },
+    "sm": {
+      "name": "sm",
+      "url": "eat/eatsm.png",
+      "me": {
+        "x": 344,
+        "y": 238,
+        "mask": "eat/masksm2.png"
+      },
+      "you": {
+        "x": 108,
+        "y": 196,
+        "mask": "eat/masksm1.png"
+      }
+    },
     "tc": {
       "name": "老汉推车",
       "url": "https://github.com/FoKit/PagerMaid_Plugins/raw/modify/eat/eattc.png",
