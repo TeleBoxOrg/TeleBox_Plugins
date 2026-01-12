@@ -102,7 +102,6 @@ tpm i <插件名>
 - `sub` - substore简单管理  
 - `subinfo` - 订阅链接信息查询  
 - `sum` - 群消息总结  
-- `stat` - Telegram账号统计  
 - `t` - 文字转语音  
 - `teletype` - 打字机效果  
 - `trace` - 全局追踪点赞  
