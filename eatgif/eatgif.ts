@@ -72,7 +72,12 @@ const help_text = `🧩 <b>头像动图表情</b>
 <b>用法：</b>
 <code>${commandName} [list|ls|clear|名称]</code>
 • <b>空/ list</b>：查看表情列表
-• <b>生成</b>：回复目标并输入名称`;
+• <b>生成</b>：回复目标并输入名称
+
+<b>指定用户：</b>
+• <code>${commandName} 名称 @A @B</code> - A 对 B
+• <code>${commandName} 名称 @B</code> (回复A) - A 对 B
+• <code>${commandName} 名称</code> (回复B) - 自己对 B`;
 
 const htmlEscape = (text: string): string =>
   String(text || "").replace(
@@ -130,6 +135,9 @@ class EatGifPlugin extends Plugin {
     const [, ...args] = parts;
     const sub = (args[0] || "").toLowerCase();
 
+    // 提取 @用户名参数
+    const mentionedUsers = args.slice(1).filter((arg) => arg.startsWith("@"));
+
     try {
       await ensureConfig();
 
@@ -156,9 +164,19 @@ class EatGifPlugin extends Plugin {
         return;
       }
 
-      if (!msg.isReply && !trigger?.isReply) {
+      // 检查是否有足够的用户信息
+      const hasReply = msg.isReply || trigger?.isReply;
+      const hasTwoMentions = mentionedUsers.length >= 2;
+      const hasOneMention = mentionedUsers.length === 1;
+
+      if (!hasReply && !hasTwoMentions) {
         await msg.edit({
-          text: `💡 请先回复一个用户的消息再执行\n\n使用：<code>${commandName} list</code> 查看表情列表`,
+          text: `💡 请指定两个用户或回复一个用户的消息
+
+<b>用法：</b>
+• <code>${commandName} ${sub} @A @B</code> - A 对 B
+• <code>${commandName} ${sub} @B</code> (回复A) - A 对 B
+• <code>${commandName} ${sub}</code> (回复B) - 自己对 B`,
           parseMode: "html",
         });
         return;
@@ -168,7 +186,7 @@ class EatGifPlugin extends Plugin {
         text: `⏳ 正在生成 <b>${htmlEscape(config[sub].desc)}</b>...`,
         parseMode: "html",
       });
-      await this.generateGif(sub, { msg, trigger });
+      await this.generateGif(sub, { msg, trigger, mentionedUsers });
     } catch (e: any) {
       await msg.edit({
         text: `❌ 失败：${htmlEscape(e?.message || String(e))}`,
@@ -200,21 +218,40 @@ class EatGifPlugin extends Plugin {
 
   private async generateGif(
     gifName: string,
-    params: { msg: Api.Message; trigger?: Api.Message }
+    params: { msg: Api.Message; trigger?: Api.Message; mentionedUsers?: string[] }
   ) {
-    const { msg, trigger } = params;
+    const { msg, trigger, mentionedUsers = [] } = params;
     const gifConfig = await loadGifDetailConfig(config[gifName].url);
 
-    // 由于要生成很多张图片，最好就是保存 self.avatar 以及 you.avatar 不断调用
-    const meAvatarBuffer = await this.getSelfAvatarBuffer(msg, trigger);
+    // 获取头像的逻辑：
+    // 1. .eatgif kiss @A @B -> A 对 B
+    // 2. 回复A + .eatgif kiss @B -> A 对 B
+    // 3. 回复B + .eatgif kiss -> 自己对 B
+
+    let meAvatarBuffer: Buffer | undefined;
+    let youAvatarBuffer: Buffer | undefined;
+
+    if (mentionedUsers.length >= 2) {
+      // 情况1: 指定了两个用户 @A @B
+      meAvatarBuffer = await this.getAvatarByUsername(msg, mentionedUsers[0]);
+      youAvatarBuffer = await this.getAvatarByUsername(msg, mentionedUsers[1]);
+    } else if (mentionedUsers.length === 1) {
+      // 情况2: 回复A + 指定@B
+      meAvatarBuffer = await this.getReplyUserAvatarBuffer(msg, trigger);
+      youAvatarBuffer = await this.getAvatarByUsername(msg, mentionedUsers[0]);
+    } else {
+      // 情况3: 回复B（原有逻辑）
+      meAvatarBuffer = await this.getSelfAvatarBuffer(msg, trigger);
+      youAvatarBuffer = await this.getReplyUserAvatarBuffer(msg, trigger);
+    }
+
     if (!meAvatarBuffer) {
-      await msg.edit({ text: "无法获取自己的头像" });
+      await msg.edit({ text: "❌ 无法获取用户A的头像", parseMode: "html" });
       await msg.deleteWithDelay(2000);
       return;
     }
-    const youAvatarBuffer = await this.getYouAvatarBuffer(msg, trigger);
     if (!youAvatarBuffer) {
-      await msg.edit({ text: "无法获取对方的头像" });
+      await msg.edit({ text: "❌ 无法获取用户B的头像", parseMode: "html" });
       await msg.deleteWithDelay(2000);
       return;
     }
@@ -373,7 +410,7 @@ class EatGifPlugin extends Plugin {
       left: role.x,
     };
   }
-  // 获取头像等数据
+  // 获取自己的头像
   private async getSelfAvatarBuffer(
     msg: Api.Message,
     trigger?: Api.Message
@@ -385,10 +422,15 @@ class EatGifPlugin extends Plugin {
     const meAvatarBuffer = (await msg.client?.downloadProfilePhoto(meId, {
       isBig: false,
     })) as Buffer | undefined;
+    // 检查 buffer 是否有效
+    if (!meAvatarBuffer || meAvatarBuffer.length === 0) {
+      return await this.generateDefaultAvatar("Me");
+    }
     return meAvatarBuffer;
   }
 
-  private async getYouAvatarBuffer(
+  // 获取被回复用户的头像
+  private async getReplyUserAvatarBuffer(
     msg: Api.Message,
     trigger?: Api.Message
   ): Promise<Buffer | undefined> {
@@ -397,13 +439,77 @@ class EatGifPlugin extends Plugin {
       replyTo = await trigger?.getReplyMessage();
     }
     if (!replyTo?.senderId) return;
-    const youAvatarBuffer = await msg.client?.downloadProfilePhoto(
+    const avatarBuffer = await msg.client?.downloadProfilePhoto(
       replyTo?.senderId,
       {
         isBig: false,
       }
     );
-    return youAvatarBuffer as Buffer | undefined;
+    // 检查 buffer 是否有效
+    if (!avatarBuffer || (avatarBuffer as Buffer).length === 0) {
+      // 尝试获取用户名生成默认头像
+      const sender = replyTo.sender as any;
+      const name = sender?.firstName || sender?.username || "User";
+      return await this.generateDefaultAvatar(name);
+    }
+    return avatarBuffer as Buffer | undefined;
+  }
+
+  // 通过用户名获取头像
+  private async getAvatarByUsername(
+    msg: Api.Message,
+    username: string
+  ): Promise<Buffer | undefined> {
+    try {
+      // 移除 @ 前缀
+      const cleanUsername = username.startsWith("@") ? username.slice(1) : username;
+      const entity = await msg.client?.getEntity(cleanUsername);
+      if (!entity) return;
+      const avatarBuffer = await msg.client?.downloadProfilePhoto(entity, {
+        isBig: false,
+      });
+      // 检查 buffer 是否有效
+      if (!avatarBuffer || (avatarBuffer as Buffer).length === 0) {
+        // 用户没有头像，生成默认头像
+        return await this.generateDefaultAvatar(cleanUsername);
+      }
+      return avatarBuffer as Buffer | undefined;
+    } catch (e) {
+      console.log(`获取用户 ${username} 头像失败:`, e);
+      return;
+    }
+  }
+
+  // 生成默认头像（当用户没有设置头像时）
+  private async generateDefaultAvatar(name: string): Promise<Buffer> {
+    // 根据名字生成一个颜色
+    const colors = [
+      "#FF6B6B", "#4ECDC4", "#45B7D1", "#96CEB4",
+      "#FFEAA7", "#DDA0DD", "#98D8C8", "#F7DC6F",
+      "#BB8FCE", "#85C1E9", "#F8B500", "#00CED1"
+    ];
+    const colorIndex = name.charCodeAt(0) % colors.length;
+    const bgColor = colors[colorIndex];
+
+    // 获取首字母
+    const initial = name.charAt(0).toUpperCase();
+
+    // 使用 sharp 生成一个带首字母的圆形头像
+    const size = 200;
+    const svg = `
+      <svg width="${size}" height="${size}" xmlns="http://www.w3.org/2000/svg">
+        <rect width="100%" height="100%" fill="${bgColor}"/>
+        <text x="50%" y="50%" font-size="80" font-family="Arial, sans-serif"
+              fill="white" text-anchor="middle" dominant-baseline="central">
+          ${initial}
+        </text>
+      </svg>
+    `;
+
+    return await sharp(Buffer.from(svg))
+      .resize(size, size)
+      .png()
+      .toBuffer();
   }
 
   private async getMediaAvatarBuffer(
