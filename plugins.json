@@ -371,6 +371,10 @@
     "url": "https://github.com/TeleBoxOrg/TeleBox_Plugins/blob/main/sum/sum.ts?raw=true",
     "desc": "群消息总结"
   },
+  "stat": {
+    "url": "https://github.com/TeleBoxOrg/TeleBox_Plugins/blob/main/stat/stat.ts?raw=true",
+    "desc": "Telegram账号统计"
+  },
   "t": {
     "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/t/t.ts?raw=true",
     "desc": "文字转语音"
