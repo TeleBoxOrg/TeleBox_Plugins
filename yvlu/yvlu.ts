@@ -234,9 +234,17 @@ const resolveForwardSenderFromHeader = async (
 ) => {
   if (!forwardHeader) return undefined;
 
+  const displayName =
+    forwardHeader.fromName ||
+    forwardHeader.savedFromName ||
+    forwardHeader.postAuthor ||
+    "";
+  const fallbackName = displayName || "未知来源";
+
   const peerCandidates = [
     forwardHeader.fromId,
     forwardHeader.savedFromPeer,
+    forwardHeader.savedFromId,
   ].filter(Boolean);
 
   for (const peer of peerCandidates) {
@@ -246,23 +254,26 @@ const resolveForwardSenderFromHeader = async (
         return entity;
       }
     } catch (error) {
-      console.warn("解析转发发送者失败", error);
+      const errMsg = (error?.errorMessage || error?.message || "").toString();
+      if (!errMsg.includes("CHANNEL_PRIVATE")) {
+        console.warn("解析转发发送者失败", error);
+      }
     }
   }
 
-  const displayName = forwardHeader.fromName || forwardHeader.postAuthor || "";
-  if (displayName) {
-    return {
-      id: getPeerNumericId(forwardHeader.fromId) || hashCode(displayName),
-      firstName: displayName,
-      lastName: "",
-      username: forwardHeader.postAuthor || undefined,
-      title: displayName,
-      name: displayName,
-    };
-  }
-
-  return undefined;
+  return {
+    id:
+      getPeerNumericId(
+        forwardHeader.fromId ||
+          forwardHeader.savedFromId ||
+          forwardHeader.savedFromPeer
+      ) || hashCode(fallbackName),
+    firstName: fallbackName,
+    lastName: "",
+    username: forwardHeader.postAuthor || undefined,
+    title: fallbackName,
+    name: fallbackName,
+  };
 };
 
 const prefixes = getPrefixes();
@@ -564,11 +575,15 @@ class YvluPlugin extends Plugin {
             }
 
             if (message.fwdFrom) {
-              let forwardedSender = undefined;
-              try {
-                forwardedSender = await message.forward?.getSender();
-              } catch (error) {
-                console.warn("获取转发发送者失败", error);
+              let forwardedSender =
+                message.forward?.sender || message.forward?.chat;
+
+              if (!forwardedSender) {
+                try {
+                  forwardedSender = await message.forward?.getSender();
+                } catch (error) {
+                  console.warn("获取转发发送者失败", error);
+                }
               }
 
               if (!forwardedSender) {
@@ -579,8 +594,14 @@ class YvluPlugin extends Plugin {
               }
 
               if (!forwardedSender) {
-                await msg.edit({ text: "无法获取被转发消息的发送者信息" });
-                return;
+                const fallbackName = "未知来源";
+                forwardedSender = {
+                  id: hashCode(fallbackName),
+                  firstName: fallbackName,
+                  lastName: "",
+                  title: fallbackName,
+                  name: fallbackName,
+                };
               }
               sender = forwardedSender;
             }
