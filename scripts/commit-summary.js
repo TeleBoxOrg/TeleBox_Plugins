@@ -7,7 +7,37 @@ const { UPDATE_TEMPLATE, ENHANCED_PROMPT, callGeminiAPI, generatePrompt } = requ
 const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const CHAT_ID = process.env.TELEGRAM_CHAT_ID;
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
-const TARGET_DATE = process.env.TARGET_DATE || new Date().toISOString().split('T')[0];
+const LOCAL_TZ = 'Asia/Shanghai';
+const LOCAL_TZ_OFFSET = '+08:00';
+const LOCAL_TZ_OFFSET_MINUTES = 8 * 60;
+const formatDateInTimeZone = (date, timeZone) =>
+  new Intl.DateTimeFormat('en-CA', { timeZone }).format(date);
+const formatDateTimeWithOffset = (date, offsetMinutes) => {
+  const pad = (value) => String(value).padStart(2, '0');
+  const adjusted = new Date(date.getTime() + offsetMinutes * 60 * 1000);
+  const yyyy = adjusted.getUTCFullYear();
+  const MM = pad(adjusted.getUTCMonth() + 1);
+  const dd = pad(adjusted.getUTCDate());
+  const hh = pad(adjusted.getUTCHours());
+  const mm = pad(adjusted.getUTCMinutes());
+  const ss = pad(adjusted.getUTCSeconds());
+  const sign = offsetMinutes >= 0 ? '+' : '-';
+  const abs = Math.abs(offsetMinutes);
+  const offH = pad(Math.floor(abs / 60));
+  const offM = pad(abs % 60);
+
+  return `${yyyy}-${MM}-${dd}T${hh}:${mm}:${ss}${sign}${offH}:${offM}`;
+};
+const getCommitWindow = (date) => {
+  const end = new Date(`${date}T23:00:00${LOCAL_TZ_OFFSET}`);
+  const start = new Date(end.getTime() - 24 * 60 * 60 * 1000);
+
+  return {
+    since: formatDateTimeWithOffset(start, LOCAL_TZ_OFFSET_MINUTES),
+    until: formatDateTimeWithOffset(end, LOCAL_TZ_OFFSET_MINUTES)
+  };
+};
+const TARGET_DATE = process.env.TARGET_DATE || formatDateInTimeZone(new Date(), LOCAL_TZ);
 const CHECKOUT_SUCCESS = process.env.CHECKOUT_SUCCESS === 'true';
 
 // 验证环境变量
@@ -39,7 +69,7 @@ async function summarizeWithGemini(commits) {
     ).join('\n');
     
     // 获取实际日期和版本号
-    const currentDate = TARGET_DATE || new Date().toISOString().split('T')[0];
+    const currentDate = TARGET_DATE || formatDateInTimeZone(new Date(), LOCAL_TZ);
     const version = `0.${new Date().getMonth() + 1}.${new Date().getDate()}`; // 动态生成版本号
     
     // 使用更新的提示词生成函数
@@ -79,8 +109,7 @@ async function summarizeWithGemini(commits) {
 // 获取指定日期的提交
 function getCommitsForDate(repoPath, repoName, date) {
   try {
-    const since = `${date} 00:00:00`;
-    const until = `${date} 23:59:59`;
+    const { since, until } = getCommitWindow(date);
     
     const gitLog = execSync(
       `cd ${repoPath} && git log --since="${since}" --until="${until}" --pretty=format:"%h|%s|%an|%ad" --date=format:"%H:%M" --name-only`,
