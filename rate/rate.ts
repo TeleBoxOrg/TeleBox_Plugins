@@ -247,16 +247,6 @@ class RatePlugin extends Plugin {
   // 法币汇率缓存（按基准币种缓存一篮子）
   private fiatRatesCache: Record<string, { rates: Record<string, number>, ts: number }> = {};
   
-  // API健康监控和熔断器
-  private apiHealthStatus: Record<string, {
-    failures: number;
-    lastFailure: number;
-    circuitOpen: boolean;
-    nextRetry: number;
-    successCount: number;
-    totalRequests: number;
-  }> = {};
-  
   
   cmdHandlers: Record<string, (msg: Api.Message) => Promise<void>> = {
     rate: async (msg: Api.Message) => {
@@ -267,6 +257,10 @@ class RatePlugin extends Plugin {
   // 规范化货币代码（别名归一）
   private normalizeCode(s: string | undefined): string {
     const k = (s || '').toLowerCase();
+
+    if (k === 'rm') {
+      return 'myr';
+    }
     
     // 检查法币别名
     for (const [code, info] of Object.entries(FIAT_CURRENCIES)) {
@@ -285,132 +279,42 @@ class RatePlugin extends Plugin {
     return k;
   }
 
-  // 获取法币汇率（自动fallback轮询 + 5分钟缓存）
+  // 获取法币汇率（带多源回退与5分钟缓存）
   private async fetchFiatRates(base: string): Promise<Record<string, number>> {
     const key = base.toLowerCase();
     const now = Date.now();
     const cached = this.fiatRatesCache[key];
     if (cached && now - cached.ts < 5 * 60 * 1000) return cached.rates;
-    
     const endpoints = [
-      {
-        name: 'ExchangeRate-API',
-        url: `https://api.exchangerate.host/latest?base=${encodeURIComponent(key)}`,
-        parser: (data: any) => {
-          if (data?.rates) return data.rates;
-          if (data?.result === 'success' && data?.rates) return data.rates;
-          return null;
-        }
-      },
-      {
-        name: 'Open Exchange Rates',
-        url: `https://open.er-api.com/v6/latest/${encodeURIComponent(key)}`,
-        parser: (data: any) => {
-          if (data?.rates) return data.rates;
-          if (data?.result === 'success' && data?.rates) return data.rates;
-          return null;
-        }
-      },
-      {
-        name: 'Frankfurter',
-        url: `https://api.frankfurter.app/latest?from=${encodeURIComponent(key)}`,
-        parser: (data: any) => data?.rates || null
-      },
-      {
-        name: 'Coinbase Exchange',
-        url: `https://api.coinbase.com/v2/exchange-rates?currency=${encodeURIComponent(key.toUpperCase())}`,
-        parser: (data: any) => data?.data?.rates || null
-      },
-      {
-        name: 'Fawaz Currency API',
-        url: `https://cdn.jsdelivr.net/gh/fawazahmed0/currency-api@1/latest/currencies/${encodeURIComponent(key.toLowerCase())}.json`,
-        parser: (data: any) => {
-          if (typeof data === 'object' && data && data[key]) return data[key];
-          return null;
-        }
-      },
-      {
-        name: 'CurrencyAPI',
-        url: `https://api.currencyapi.com/v3/latest?apikey=cur_live_free&base_currency=${encodeURIComponent(key.toUpperCase())}`,
-        parser: (data: any) => {
-          if (data?.data) {
-            const rates: Record<string, number> = {};
-            Object.entries(data.data).forEach(([currency, info]: [string, any]) => {
-              if (info?.value) rates[currency.toLowerCase()] = info.value;
-            });
-            return Object.keys(rates).length > 0 ? rates : null;
-          }
-          return null;
-        }
-      }
+      `https://api.exchangerate.host/latest?base=${encodeURIComponent(key)}`,
+      `https://open.er-api.com/v6/latest/${encodeURIComponent(key)}`,
+      `https://api.frankfurter.app/latest?from=${encodeURIComponent(key)}`,
+      // Coinbase 公共汇率（含法币与加密货币）
+      `https://api.coinbase.com/v2/exchange-rates?currency=${encodeURIComponent(key.toUpperCase())}`,
+      // jsDelivr 镜像的每日更新静态汇率（无钥，稳定）
+      `https://cdn.jsdelivr.net/gh/fawazahmed0/currency-api@1/latest/currencies/${encodeURIComponent(key.toLowerCase())}.json`
     ];
-
-    return await this.fiatAutoFallback(endpoints, key);
-  }
-
-  // 法币汇率专用自动fallback系统
-  private async fiatAutoFallback(
-    endpoints: Array<{name: string, url: string, parser: (data: any) => Record<string, number> | null}>, 
-    baseCurrency: string,
-    maxRetries: number = 2
-  ): Promise<Record<string, number>> {
-    let lastError: string = '';
-    
-    for (const endpoint of endpoints) {
-      for (let retry = 0; retry < maxRetries; retry++) {
-        try {
-          console.log(`[RatePlugin] 尝试 ${endpoint.name} 法币API (重试 ${retry + 1}/${maxRetries}): ${baseCurrency.toUpperCase()}`);
-          
-          const { data } = await axios.get(endpoint.url, { 
-            timeout: 8000 + (retry * 3000), // 递增超时时间
-            headers: {
-              'User-Agent': 'TeleBox-Rate-Plugin/1.0',
-              'Accept': 'application/json'
-            }
-          });
-          
-          const rates = endpoint.parser(data);
-          if (rates && Object.keys(rates).length > 0) {
-            const normalized = Object.fromEntries(
-              Object.entries(rates).map(([k, v]) => [k.toLowerCase(), Number(v)])
-            );
-            
-            // 缓存结果
-            const now = Date.now();
-            this.fiatRatesCache[baseCurrency] = { rates: normalized, ts: now };
-            
-            console.log(`[RatePlugin] ${endpoint.name} 成功获取 ${baseCurrency.toUpperCase()} 汇率，包含 ${Object.keys(normalized).length} 种货币`);
-            return normalized;
-          }
-        } catch (error: any) {
-          const delay = Math.min(1500 * Math.pow(2, retry), 6000); // 指数退避，最大6秒
-          
-          if (axios.isAxiosError(error)) {
-            if (error.response?.status === 400 || error.response?.status === 404) {
-              lastError = `${endpoint.name}: 不支持基准货币 ${baseCurrency.toUpperCase()}`;
-              console.warn(`[RatePlugin] ${lastError}`);
-              break;
-            } else if (error.response?.status === 429) {
-              lastError = `${endpoint.name}: API限流`;
-              console.warn(`[RatePlugin] ${lastError}, 等待 ${delay}ms 后重试`);
-            } else {
-              lastError = `${endpoint.name}: ${error.message}`;
-              console.warn(`[RatePlugin] ${lastError}`);
-            }
-          } else {
-            lastError = `${endpoint.name}: ${error.message || '未知错误'}`;
-            console.warn(`[RatePlugin] ${lastError}`);
-          }
-          
-          // 如果不是最后一次重试，等待后重试
-          if (retry < maxRetries - 1) {
-            await new Promise(resolve => setTimeout(resolve, delay));
-          }
+    for (const url of endpoints) {
+      try {
+        const { data } = await axios.get(url, { timeout: 8000 });
+        let rates: Record<string, number> | null = null;
+        // 标准结构与 open.er-api、frankfurter
+        if (data?.rates) rates = data.rates;
+        if (data?.result === 'success' && data?.rates) rates = data.rates;
+        // Coinbase 结构: { data: { rates: { USD: "1", ... } } }
+        if (!rates && data?.data?.rates) rates = data.data.rates;
+        // Fawaz Ahmed currency API: { date: '...', usd: { eur: 0.93, ... } }
+        if (!rates && typeof data === 'object' && data && data[key]) rates = data[key];
+        if (rates) {
+          const normalized = Object.fromEntries(
+            Object.entries(rates).map(([k, v]) => [k.toLowerCase(), Number(v)])
+          );
+          this.fiatRatesCache[key] = { rates: normalized, ts: now };
+          return normalized;
         }
-      }
+      } catch {}
     }
-    
-    throw new Error(`所有法币汇率API均失败，基准货币: ${baseCurrency.toUpperCase()}。最后错误: ${lastError}`);
+    throw new Error('法币汇率服务不可用');
   }
 
   // 智能解析参数：抓取两种货币与数量（数量可在任意位置）
@@ -427,186 +331,22 @@ class RatePlugin extends Plugin {
     return { base, quote, amount };
   }
 
-  // 自动fallback轮询 - 获取加密货币价格（多API源）
-  private async fetchCryptoPrice(symbol: string): Promise<number> {
-    const endpoints = [
-      // Binance API (主要)
-      {
-        name: 'Binance',
-        url: `https://api.binance.com/api/v3/ticker/price?symbol=${symbol.toUpperCase()}`,
-        parser: (data: any) => data?.price ? parseFloat(data.price) : null
-      },
-      // Binance 备用域名
-      {
-        name: 'Binance US',
-        url: `https://api.binance.us/api/v3/ticker/price?symbol=${symbol.toUpperCase()}`,
-        parser: (data: any) => data?.price ? parseFloat(data.price) : null
-      },
-      // CoinGecko (备用)
-      {
-        name: 'CoinGecko',
-        url: `https://api.coingecko.com/api/v3/simple/price?ids=${symbol.toLowerCase()}&vs_currencies=usd`,
-        parser: (data: any) => {
-          const coinId = symbol.toLowerCase();
-          return data?.[coinId]?.usd ? parseFloat(data[coinId].usd) : null;
-        }
-      },
-      // Coinbase (备用)
-      {
-        name: 'Coinbase',
-        url: `https://api.coinbase.com/v2/exchange-rates?currency=${symbol.toUpperCase()}`,
-        parser: (data: any) => data?.data?.rates?.USD ? parseFloat(data.data.rates.USD) : null
-      },
-      // CryptoCompare (备用)
-      {
-        name: 'CryptoCompare',
-        url: `https://min-api.cryptocompare.com/data/price?fsym=${symbol.toUpperCase()}&tsyms=USD`,
-        parser: (data: any) => data?.USD ? parseFloat(data.USD) : null
-      }
-    ];
-
-    return await this.apiAutoFallback(endpoints, symbol);
-  }
-
-  // API健康状态检查和熔断器逻辑
-  private isApiHealthy(apiName: string): boolean {
-    const health = this.apiHealthStatus[apiName];
-    if (!health) return true;
-    
-    const now = Date.now();
-    const circuitBreakerTimeout = 60000; // 1分钟熔断时间
-    const failureThreshold = 3; // 连续失败3次触发熔断
-    
-    // 如果熔断器开启，检查是否到了重试时间
-    if (health.circuitOpen) {
-      if (now >= health.nextRetry) {
-        console.log(`[RatePlugin] ${apiName} 熔断器半开状态，尝试恢复`);
-        health.circuitOpen = false;
-        health.failures = 0;
-        return true;
-      }
-      console.log(`[RatePlugin] ${apiName} 熔断器开启中，跳过 (${Math.ceil((health.nextRetry - now) / 1000)}s后重试)`);
-      return false;
-    }
-    
-    // 检查失败率
-    if (health.failures >= failureThreshold) {
-      console.log(`[RatePlugin] ${apiName} 连续失败${health.failures}次，触发熔断器`);
-      health.circuitOpen = true;
-      health.nextRetry = now + circuitBreakerTimeout;
-      return false;
-    }
-    
-    return true;
-  }
-  
-  // 记录API调用成功
-  private recordApiSuccess(apiName: string): void {
-    if (!this.apiHealthStatus[apiName]) {
-      this.apiHealthStatus[apiName] = {
-        failures: 0,
-        lastFailure: 0,
-        circuitOpen: false,
-        nextRetry: 0,
-        successCount: 0,
-        totalRequests: 0
-      };
-    }
-    
-    const health = this.apiHealthStatus[apiName];
-    health.successCount++;
-    health.totalRequests++;
-    health.failures = 0; // 重置失败计数
-    health.circuitOpen = false; // 关闭熔断器
-    
-    console.log(`[RatePlugin] ${apiName} 调用成功 (成功率: ${(health.successCount / health.totalRequests * 100).toFixed(1)}%)`);
-  }
-  
-  // 记录API调用失败
-  private recordApiFailure(apiName: string, error: any): void {
-    if (!this.apiHealthStatus[apiName]) {
-      this.apiHealthStatus[apiName] = {
-        failures: 0,
-        lastFailure: 0,
-        circuitOpen: false,
-        nextRetry: 0,
-        successCount: 0,
-        totalRequests: 0
-      };
-    }
-    
-    const health = this.apiHealthStatus[apiName];
-    health.failures++;
-    health.totalRequests++;
-    health.lastFailure = Date.now();
-    
-    console.log(`[RatePlugin] ${apiName} 调用失败 (连续失败: ${health.failures}次, 成功率: ${(health.successCount / health.totalRequests * 100).toFixed(1)}%)`);
-  }
-
-  // 通用API自动fallback轮询系统（带熔断器）
-  private async apiAutoFallback(
-    endpoints: Array<{name: string, url: string, parser: (data: any) => number | null}>, 
-    symbol: string,
-    maxRetries: number = 3
-  ): Promise<number> {
-    let lastError: string = '';
-    
-    for (const endpoint of endpoints) {
-      // 检查API健康状态
-      if (!this.isApiHealthy(endpoint.name)) {
-        continue;
-      }
-      
-      for (let retry = 0; retry < maxRetries; retry++) {
-        try {
-          console.log(`[RatePlugin] 尝试 ${endpoint.name} API (重试 ${retry + 1}/${maxRetries}): ${symbol}`);
-          
-          const { data } = await axios.get(endpoint.url, { 
-            timeout: 5000 + (retry * 2000), // 递增超时时间
-            headers: {
-              'User-Agent': 'TeleBox-Rate-Plugin/1.0'
-            }
-          });
-          
-          const price = endpoint.parser(data);
-          if (price && price > 0) {
-            this.recordApiSuccess(endpoint.name);
-            console.log(`[RatePlugin] ${endpoint.name} 成功获取 ${symbol} 价格: ${price}`);
-            return price;
-          }
-        } catch (error: any) {
-          this.recordApiFailure(endpoint.name, error);
-          const delay = Math.min(1000 * Math.pow(2, retry), 5000); // 指数退避，最大5秒
-          
-          if (axios.isAxiosError(error)) {
-            if (error.response?.status === 400 || error.response?.status === 404) {
-              // 交易对不存在，跳过重试
-              lastError = `${endpoint.name}: 交易对 ${symbol} 不存在`;
-              console.warn(`[RatePlugin] ${lastError}`);
-              break;
-            } else {
-              lastError = `${endpoint.name}: ${error.message}`;
-              console.warn(`[RatePlugin] ${lastError}, ${retry + 1}/${maxRetries} 次重试后等待 ${delay}ms`);
-            }
-          } else {
-            lastError = `${endpoint.name}: ${error.message || '未知错误'}`;
-            console.warn(`[RatePlugin] ${lastError}`);
-          }
-          
-          // 如果不是最后一次重试，等待后重试
-          if (retry < maxRetries - 1) {
-            await new Promise(resolve => setTimeout(resolve, delay));
-          }
-        }
-      }
-    }
-    
-    throw new Error(`所有API源均失败，无法获取 ${symbol} 价格。最后错误: ${lastError}`);
-  }
-
-  // 保持向后兼容的 fetchBinancePrice 方法
+  // (新) 获取币安价格
   private async fetchBinancePrice(symbol: string): Promise<number> {
-    return await this.fetchCryptoPrice(symbol);
+    try {
+      const url = `https://api.binance.com/api/v3/ticker/price?symbol=${symbol.toUpperCase()}`;
+      const { data } = await axios.get(url, { timeout: 5000 });
+      if (data && data.price) {
+        return parseFloat(data.price);
+      }
+    } catch (error) {
+      if (axios.isAxiosError(error) && error.response?.status === 400) {
+        // 交易对不存在，这不是一个严重错误，静默处理
+      } else {
+        console.warn(`[RatePlugin] Binance API for ${symbol} failed:`, error);
+      }
+    }
+    throw new Error(`Binance pair not found for ${symbol}`);
   }
 
   // (全智能) 获取任意两种货币之间的汇率
@@ -673,12 +413,6 @@ class RatePlugin extends Plugin {
 
   // 加密货币对法币
   private async getCryptoFiatPrice(crypto: string, fiat: string): Promise<{ price: number, lastUpdated: Date }> {
-    // 特殊处理：强制 1 USDT = 1 USD
-    if (crypto.toUpperCase() === 'USDT' && fiat.toUpperCase() === 'USD') {
-      console.log(`[RatePlugin] 强制设置 USDT = 1 USD`);
-      return { price: 1, lastUpdated: new Date() };
-    }
-    
     const bridges = ['USDT', 'BUSD', 'USDC'];
     let lastError: string = '';
     
@@ -763,6 +497,12 @@ class RatePlugin extends Plugin {
   // (优化) 搜索货币 - 使用内置映射优先识别
   private async searchCurrency(query: string): Promise<{id: string, symbol: string, name: string, type: 'crypto' | 'fiat'} | null> {
     const qLower = query.toLowerCase();
+
+    if (qLower === 'rm') {
+      const result = { id: 'myr', symbol: 'MYR', name: 'Malaysian Ringgit', type: 'fiat' as const };
+      this.currencyCache[qLower] = result;
+      return result;
+    }
     
     if (this.currencyCache[qLower]) {
       return this.currencyCache[qLower];
@@ -909,6 +649,8 @@ class RatePlugin extends Plugin {
       const input1 = parsed.base;
       const input2 = parsed.quote;
       const amount = parsed.amount;
+      const googleQueryFallback = encodeURIComponent(`${amount} ${String(input1 || '').toUpperCase()} to ${String(input2 || '').toUpperCase()}`);
+      const googleUrlFallback = `https://www.google.com/search?q=${googleQueryFallback}`;
 
       // 智能识别货币类型
       await msg.edit({
@@ -919,7 +661,7 @@ class RatePlugin extends Plugin {
       const currency1 = await this.searchCurrency(input1!);
       if (!currency1) {
         await msg.edit({
-          text: `❌ <b>货币未找到:</b> "${htmlEscape(input1!)}"\n\n💡 请检查拼写或使用标准代码`,
+          text: `❌ <b>货币未找到:</b> "${htmlEscape(input1!)}"\n\n💡 请检查拼写或使用标准代码\n\n🔎 <b>谷歌兜底:</b> <a href="${googleUrlFallback}">点击查看</a>`,
           parseMode: "html"
         });
         return;
@@ -930,7 +672,7 @@ class RatePlugin extends Plugin {
         const searchResult = await this.searchCurrency(input2);
         if (!searchResult) {
           await msg.edit({
-            text: `❌ <b>货币未找到:</b> "${htmlEscape(input2)}"\n\n💡 请检查拼写或使用标准代码`,
+            text: `❌ <b>货币未找到:</b> "${htmlEscape(input2)}"\n\n💡 请检查拼写或使用标准代码\n\n🔎 <b>谷歌兜底:</b> <a href="${googleUrlFallback}">点击查看</a>`,
             parseMode: "html"
           });
           return;
@@ -1026,6 +768,12 @@ class RatePlugin extends Plugin {
       
       // 提供更友好的错误提示
       let userMessage = `❌ <b>操作失败</b>\n\n`;
+      const rawText = msg.text?.trim() || '';
+      const rawParts = rawText.split(/\s+/) || [];
+      const [, ...rawArgs] = rawParts;
+      const rawParsed = this.parseArgs(rawArgs as string[]);
+      const fallbackQuery = encodeURIComponent(`${rawParsed.amount} ${String(rawParsed.base || '').toUpperCase()} to ${String(rawParsed.quote || '').toUpperCase()}`);
+      const fallbackUrl = `https://www.google.com/search?q=${fallbackQuery}`;
       
       // 检查网络不可达错误
       if (errorCode === 'ENOTFOUND' || errorCode === 'ECONNREFUSED' || errorCode === 'ENETUNREACH') {
@@ -1035,20 +783,20 @@ class RatePlugin extends Plugin {
         userMessage += `• 网络连接中断\n`;
         userMessage += `• 防火墙阻止访问\n`;
         userMessage += `• 需要配置代理\n\n`;
-        userMessage += `💡 请检查网络设置后重试`;
+        userMessage += `💡 请检查网络设置后重试\n\n🔎 <b>谷歌兜底:</b> <a href="${fallbackUrl}">点击查看</a>`;
       } else if (errorCode === 'ECONNABORTED' || errorMessage.includes('超时') || errorMessage.includes('timeout')) {
         userMessage += `⏱ <b>请求超时</b>\n\n`;
         userMessage += `网络延迟过高或服务器响应缓慢\n\n`;
-        userMessage += `💡 请稍后重试`;
+        userMessage += `💡 请稍后重试\n\n🔎 <b>谷歌兜底:</b> <a href="${fallbackUrl}">点击查看</a>`;
       } else if (errorMessage.includes('限流') || errorMessage.includes('429')) {
         userMessage += `⏱ <b>API请求过于频繁</b>\n\n`;
-        userMessage += `请等待几分钟后再试`;
+        userMessage += `请等待几分钟后再试\n\n🔎 <b>谷歌兜底:</b> <a href="${fallbackUrl}">点击查看</a>`;
       } else if (errorMessage.includes('网络')) {
         userMessage += `🌐 <b>网络连接问题</b>\n\n`;
-        userMessage += `请检查网络连接是否正常`;
+        userMessage += `请检查网络连接是否正常\n\n🔎 <b>谷歌兜底:</b> <a href="${fallbackUrl}">点击查看</a>`;
       } else {
         userMessage += `错误详情: ${errorMessage}\n\n`;
-        userMessage += `💡 如果问题持续，请联系管理员`;
+        userMessage += `💡 如果问题持续，请联系管理员\n\n🔎 <b>谷歌兜底:</b> <a href="${fallbackUrl}">点击查看</a>`;
       }
       
       await msg.edit({ 
