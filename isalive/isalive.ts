@@ -142,6 +142,128 @@ function getStatusIcon(user: Api.User): string {
   return "⚫";
 }
 
+// 生成趣味评语
+function generateComment(
+  user: Api.User,
+  lastOnlineDays: number | null,
+  lastMessageDate: Date | null
+): string {
+  const comments: string[] = [];
+
+  // 特殊账号状态优先
+  if (user.deleted) {
+    const deletedComments = [
+      "这号已经凉透了 💀",
+      "人走茶凉，账号注销",
+      "RIP，已销号",
+      "曾经来过，如今已去",
+      "已成为历史的尘埃...",
+      "永别了，朋友",
+    ];
+    comments.push(deletedComments[Math.floor(Math.random() * deletedComments.length)]);
+    return comments.join("\n├ ");
+  }
+
+  if (user.bot) {
+    const botComments = [
+      "我是机器人，不需要睡觉 🤖",
+      "24小时待命中~",
+      "机器人永不下线！",
+      "人工智能，永远在线",
+    ];
+    comments.push(botComments[Math.floor(Math.random() * botComments.length)]);
+    return comments.join("\n├ ");
+  }
+
+  // 根据在线状态生成评语
+  if (lastOnlineDays !== null) {
+    if (lastOnlineDays === 0) {
+      const onlineComments = [
+        "这货还活着！🎉",
+        "活蹦乱跳的呢~",
+        "生龙活虎！",
+        "还在线上浪呢~",
+        "正在摸鱼中...",
+        "还没睡觉呢？",
+      ];
+      comments.push(onlineComments[Math.floor(Math.random() * onlineComments.length)]);
+    } else if (lastOnlineDays <= 1) {
+      const recentComments = [
+        "昨天还在呢",
+        "刚刚还活着",
+        "应该还行吧~",
+        "还热乎着呢",
+      ];
+      comments.push(recentComments[Math.floor(Math.random() * recentComments.length)]);
+    } else if (lastOnlineDays <= 3) {
+      const fewDaysComments = [
+        "这几天有点安静...",
+        "可能去忙别的了",
+        "摸了几天鱼了",
+        "暂时失踪中~",
+      ];
+      comments.push(fewDaysComments[Math.floor(Math.random() * fewDaysComments.length)]);
+    } else if (lastOnlineDays <= 7) {
+      const weekComments = [
+        "一周没冒泡了",
+        "该不会是触电了？",
+        "是不是去旅游了",
+        "有点危险的信号...",
+      ];
+      comments.push(weekComments[Math.floor(Math.random() * weekComments.length)]);
+    } else if (lastOnlineDays <= 30) {
+      const monthComments = [
+        "这货很久没出现了...",
+        "人呢？？？",
+        "建议去看看急诊",
+        "怕不是注销了吧",
+        "快派人找找！",
+      ];
+      comments.push(monthComments[Math.floor(Math.random() * monthComments.length)]);
+    } else {
+      const longTimeComments = [
+        "已经凉凉了 💀",
+        "建议报警寻人",
+        "这号估计废了",
+        "默哀三秒钟...",
+        "永远怀念 TA",
+        "化石级选手！",
+      ];
+      comments.push(longTimeComments[Math.floor(Math.random() * longTimeComments.length)]);
+    }
+  } else {
+    comments.push("神秘人物，行踪成谜 🕵️");
+  }
+
+  // 根据最后发言时间补充评语
+  if (lastMessageDate) {
+    const daysSinceMessage = Math.floor(
+      (Date.now() - lastMessageDate.getTime()) / (1000 * 60 * 60 * 24)
+    );
+
+    if (daysSinceMessage === 0) {
+      const talkingComments = [
+        "话唠本唠",
+        "刚刚还在唠嗑",
+        "活跃分子！",
+      ];
+      comments.push(talkingComments[Math.floor(Math.random() * talkingComments.length)]);
+    } else if (daysSinceMessage <= 3) {
+      // 最近发过言，不添加额外评语
+    } else if (daysSinceMessage <= 7) {
+      comments.push("潜水一周了...");
+    } else if (daysSinceMessage <= 30) {
+      comments.push("本群潜水员认证 🤿");
+    } else if (daysSinceMessage <= 90) {
+      comments.push("三个月没说话，是不是屏蔽群了？");
+    } else {
+      comments.push("化石级潜水员！上次发言都不知道啥时候了");
+    }
+  }
+
+  return comments.length > 0 ? comments.join("\n├ ") : "";
+}
+
 // 从群组成员中查找用户
 async function findUserFromGroups(
   client: any,
@@ -262,6 +384,7 @@ class IsAlivePlugin extends Plugin {
 
         // 获取当前对话的最后发言时间
         let lastMessageTime: string | null = null;
+        let lastMessageDate: Date | null = null;
         try {
           const chatId = msg.chatId;
           if (chatId) {
@@ -271,6 +394,7 @@ class IsAlivePlugin extends Plugin {
             });
             if (messages && messages.length > 0 && messages[0].date) {
               const date = new Date(messages[0].date * 1000);
+              lastMessageDate = date;
               lastMessageTime = date.toLocaleString("zh-CN", {
                 timeZone: "Asia/Shanghai",
                 year: "numeric",
@@ -285,7 +409,11 @@ class IsAlivePlugin extends Plugin {
           }
         } catch {
           lastMessageTime = null;
+          lastMessageDate = null;
         }
+
+        // 生成趣味评语
+        const comment = generateComment(user, lastOnlineDays, lastMessageDate);
 
         // 构建输出
         const lines: string[] = [
@@ -320,6 +448,13 @@ class IsAlivePlugin extends Plugin {
           const prefix = i === attrs.length - 1 ? "└" : "├";
           lines.push(`${prefix} ${attr}`);
         });
+
+        // 添加趣味评语
+        if (comment) {
+          lines.push("");
+          lines.push(`<b>📝 评语</b>`);
+          lines.push(`└ ${comment}`);
+        }
 
         await msg.edit({
           text: lines.join("\n"),
