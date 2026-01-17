@@ -108,7 +108,10 @@ class PremiumPlugin extends Plugin {
 
         // 处理不同类型的participant
         if (participant instanceof Api.ChannelParticipant) {
-          user = participant.user as Api.User;
+          if ((participant as any).user) {
+            user = (participant as any).user as Api.User;
+          }
+          continue;
         } else if (participant instanceof Api.ChatParticipant) {
           user = participant.userId as unknown as Api.User;
         } else if (participant instanceof Api.User) {

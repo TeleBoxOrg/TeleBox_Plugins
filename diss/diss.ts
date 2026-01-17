@@ -42,7 +42,8 @@ class DissPlugin extends Plugin {
             }
           }
         } catch (error) {
-          console.warn(`[diss] 第${attempt}次尝试失败:`, error.message);
+          const errorMessage = error instanceof Error ? error.message : String(error);
+          console.warn(`[diss] 第${attempt}次尝试失败:`, errorMessage);
           
           // 如果不是最后一次尝试，等待一下再重试
           if (attempt < 5) {

@@ -41,7 +41,7 @@ class ListUsernamesPlugin extends Plugin {
 
         // 调用Telegram API获取公开频道
         const result = await client.invoke(
-          new Api.channels.GetAdminedPublicChannels()
+          new Api.channels.GetAdminedPublicChannels({})
         );
 
         if (!result.chats || result.chats.length === 0) {
