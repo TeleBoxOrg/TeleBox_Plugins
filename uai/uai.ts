@@ -76,28 +76,6 @@ function markdownToHtml(text: string): string {
         .replace(/~~(.+?)~~/g, "<s>$1</s>");
 }
 
-// 生成 blockquote 折叠块
-function createCollapsibleBlockquote(content: string, title: string = "AI 分析结果", collapsed: boolean = true): string {
-    const escapedContent = htmlEscape(content);
-    const hashedTitle = `analysis_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-    
-    // 使用 Telegram 的 details/summary 标签实现折叠效果
-    // 注意：Telegram 不完全支持标准的 details/summary，但可以使用类似的结构
-    return `
-<blockquote expandable>
-<details ${collapsed ? '' : 'open'}>
-<summary><b>${title} (点击展开/折叠)</b></summary>
-${escapedContent}
-</details>
-</blockquote>`;
-}
-
-// 生成简单的 blockquote（无折叠）
-function createSimpleBlockquote(content: string): string {
-    const escapedContent = htmlEscape(content).replace(/\n/g, '<br>');
-    return `<blockquote>${escapedContent}</blockquote>`;
-}
-
 function trimBase(url: string): string {
     return url.replace(/\/$/, "");
 }
@@ -514,14 +492,7 @@ class UAIPlugin extends Plugin {
 
                         const userInfo = `来源: ${channelName}${channelUsername ? ` (@${channelUsername})` : ""}`;
                         const result = await callAI(provider, prompt, `${userInfo}\n\n${content}`, db.data.timeout);
-                        
-                        // 使用 blockquote 折叠块显示结果
-                        const resultBlockquote = createCollapsibleBlockquote(
-                            result, 
-                            promptKey === "zj" ? "总结结果" : "分析结果"
-                        );
-                        
-                        const resultText = `📊 <b>${promptKey === "zj" ? "总结" : "分析"}结果</b>（${displayName}，${messages.length} 条）\n\n${resultBlockquote}`;
+                        const resultText = `📊 <b>${promptKey === "zj" ? "总结" : "分析"}结果</b>（${displayName}，${messages.length} 条）\n\n${markdownToHtml(result)}`;
                         await msg.delete({ revoke: true });
                         await client.sendMessage(chatPeerId, { message: resultText, parseMode: "html" });
                         return;
@@ -566,14 +537,7 @@ class UAIPlugin extends Plugin {
 
                 const provider = db.data.providers[db.data.default_provider!];
                 const result = await callAI(provider, prompt, `${userInfo}\n\n${content}`, db.data.timeout);
-                
-                // 使用 blockquote 折叠块显示结果
-                const resultBlockquote = createCollapsibleBlockquote(
-                    result, 
-                    promptKey === "zj" ? "总结结果" : "分析结果"
-                );
-                
-                const resultText = `📊 <b>${promptKey === "zj" ? "总结" : "分析"}结果</b>（${displayName}，${messages.length} 条）\n\n${resultBlockquote}`;
+                const resultText = `📊 <b>${promptKey === "zj" ? "总结" : "分析"}结果</b>（${displayName}，${messages.length} 条）\n\n${markdownToHtml(result)}`;
                 await msg.delete({ revoke: true });
                 await client.sendMessage(chatPeerId, { message: resultText, parseMode: "html" });
 
