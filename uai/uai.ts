@@ -195,9 +195,23 @@ async function callAI(provider: Provider, prompt: string, content: string, timeo
 // ========== 消息收集 ==========
 type MessageData = { time: string; sender: string; text: string };
 
+// 将各种 ID 类型统一转换为字符串进行比较
+function normalizeId(id: any): string {
+    if (id === null || id === undefined) return "";
+    // 处理 BigInt
+    if (typeof id === "bigint") return id.toString();
+    // 处理对象（可能是 Api.PeerUser 等）
+    if (typeof id === "object") {
+        // 尝试获取 userId、channelId 或 value
+        const val = id.userId || id.channelId || id.chatId || id.value || id;
+        return normalizeId(val);
+    }
+    return String(id);
+}
+
 async function collectMessages(
     chatPeerId: any,  // msg.peerId
-    filterSenderId: string | null,  // senderId.toString() 用于手动过滤
+    filterSenderId: string | null,  // senderId 用于过滤（数字形式的 userId）
     limit: { type: "count"; value: number } | { type: "time"; seconds: number } | { type: "today" }
 ): Promise<MessageData[]> {
     const client = await getGlobalClient();
@@ -208,23 +222,39 @@ async function collectMessages(
         limit.type === "time" ? Math.floor(Date.now() / 1000) - limit.seconds : 0;
     const maxCount = limit.type === "count" ? limit.value : 10000;
 
-    // 获取消息（不使用 fromUser，因为不可靠）
-    // 使用更大的 limit 来确保能获取到足够的目标用户消息
-    const fetchLimit = filterSenderId ? maxCount * 10 : maxCount;
-    const messageIterator = client.iterMessages(chatPeerId, { limit: Math.min(fetchLimit, 10000) });
+    // 构建迭代器参数
+    const iterParams: any = { limit: maxCount };
+
+    // 如果需要按用户过滤，使用 fromUser 参数（直接让 API 过滤，避免 flood wait）
+    if (filterSenderId) {
+        try {
+            // 尝试获取用户实体
+            const userEntity = await client.getEntity(filterSenderId);
+            iterParams.fromUser = userEntity;
+            console.log(`[UAI] Using fromUser filter: ${filterSenderId}`);
+        } catch (e) {
+            console.log(`[UAI] Failed to get entity for ${filterSenderId}, falling back to manual filter`);
+            // 如果获取实体失败，使用较小的扫描范围避免 flood
+            iterParams.limit = Math.min(maxCount * 20, 3000);
+        }
+    }
+
+    const messageIterator = client.iterMessages(chatPeerId, iterParams);
+    const normalizedFilterId = filterSenderId ? normalizeId(filterSenderId) : null;
+    const needManualFilter = filterSenderId && !iterParams.fromUser;
 
     for await (const msg of messageIterator) {
         const m = msg as any;
 
-        // 时间检查
+        // 时间检查 - 按数量获取时不检查时间
         if (limit.type !== "count" && m.date < startTime) {
             break;
         }
 
-        // 手动过滤发送者
-        if (filterSenderId) {
-            const msgSenderId = m.senderId?.toString();
-            if (msgSenderId !== filterSenderId) continue;
+        // 手动过滤发送者（仅当 fromUser 不可用时）
+        if (needManualFilter && normalizedFilterId) {
+            const msgSenderId = normalizeId(m.senderId);
+            if (msgSenderId !== normalizedFilterId) continue;
         }
 
         if (!m.message) continue;
@@ -242,6 +272,7 @@ async function collectMessages(
         if (messages.length >= maxCount) break;
     }
 
+    console.log(`[UAI] Collected ${messages.length} messages`);
     return messages.reverse();
 }
 
@@ -250,29 +281,33 @@ function formatMessagesForAI(messages: MessageData[]): string {
 }
 
 // ========== 帮助文本 ==========
-const getHelpText = () => `📊 <b>UAI - 引用消息 AI 分析</b>
+const getHelpText = () => `⚙️ <b>UAI</b>
 
-<b>使用方法:</b>
-引用某用户/频道消息，回复:
+<b>📝 功能描述:</b>
+• 引用消息，AI 自动收集并分析/总结目标用户的历史消息
+
+<b>🔧 使用方法:</b>
 • <code>${mainPrefix}uai zj</code> - 总结（当天消息）
 • <code>${mainPrefix}uai fx</code> - 分析（当天消息）
 • <code>${mainPrefix}uai zj 50</code> - 总结最近 50 条
 • <code>${mainPrefix}uai fx 2h</code> - 分析最近 2 小时
 • <code>${mainPrefix}uai 自定义名</code> - 使用自定义提示词
 
-<b>供应商配置:</b>
-• <code>${mainPrefix}uai add &lt;名称&gt; &lt;url&gt; &lt;key&gt; &lt;type&gt;</code>
-• <code>${mainPrefix}uai set/del &lt;名称&gt;</code>
-• <code>${mainPrefix}uai list</code>
-• <code>${mainPrefix}uai model &lt;名称&gt; &lt;模型&gt;</code>
+<b>🔌 供应商配置:</b>
+• <code>${mainPrefix}uai add &lt;名称&gt; &lt;url&gt; &lt;key&gt; &lt;type&gt;</code> - 添加供应商
+• <code>${mainPrefix}uai set &lt;名称&gt;</code> - 设置默认供应商
+• <code>${mainPrefix}uai del &lt;名称&gt;</code> - 删除供应商
+• <code>${mainPrefix}uai list</code> - 列出所有供应商
+• <code>${mainPrefix}uai model &lt;名称&gt; &lt;模型&gt;</code> - 修改模型
 
-<b>提示词配置:</b>
-• <code>${mainPrefix}uai prompt add &lt;名称&gt; &lt;内容&gt;</code>
-• <code>${mainPrefix}uai prompt del &lt;名称&gt;</code>
-• <code>${mainPrefix}uai prompt list</code>
+<b>📝 提示词配置:</b>
+• <code>${mainPrefix}uai prompt add &lt;名称&gt; &lt;内容&gt;</code> - 添加
+• <code>${mainPrefix}uai prompt del &lt;名称&gt;</code> - 删除
+• <code>${mainPrefix}uai prompt list</code> - 列表
 
-<b>type:</b> openai / gemini
-<b>内置提示词:</b> zj(总结) fx(分析)`;
+<b>💡 参数说明:</b>
+• type: openai / gemini
+• 内置提示词: zj(总结) fx(分析)`;
 
 // ========== 插件类 ==========
 class UAIPlugin extends Plugin {
