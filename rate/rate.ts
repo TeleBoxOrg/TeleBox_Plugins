@@ -257,6 +257,10 @@ class RatePlugin extends Plugin {
   // 规范化货币代码（别名归一）
   private normalizeCode(s: string | undefined): string {
     const k = (s || '').toLowerCase();
+
+    if (k === 'rm') {
+      return 'myr';
+    }
     
     // 检查法币别名
     for (const [code, info] of Object.entries(FIAT_CURRENCIES)) {
@@ -493,6 +497,12 @@ class RatePlugin extends Plugin {
   // (优化) 搜索货币 - 使用内置映射优先识别
   private async searchCurrency(query: string): Promise<{id: string, symbol: string, name: string, type: 'crypto' | 'fiat'} | null> {
     const qLower = query.toLowerCase();
+
+    if (qLower === 'rm') {
+      const result = { id: 'myr', symbol: 'MYR', name: 'Malaysian Ringgit', type: 'fiat' as const };
+      this.currencyCache[qLower] = result;
+      return result;
+    }
     
     if (this.currencyCache[qLower]) {
       return this.currencyCache[qLower];
@@ -639,6 +649,8 @@ class RatePlugin extends Plugin {
       const input1 = parsed.base;
       const input2 = parsed.quote;
       const amount = parsed.amount;
+      const googleQueryFallback = encodeURIComponent(`${amount} ${String(input1 || '').toUpperCase()} to ${String(input2 || '').toUpperCase()}`);
+      const googleUrlFallback = `https://www.google.com/search?q=${googleQueryFallback}`;
 
       // 智能识别货币类型
       await msg.edit({
@@ -649,7 +661,7 @@ class RatePlugin extends Plugin {
       const currency1 = await this.searchCurrency(input1!);
       if (!currency1) {
         await msg.edit({
-          text: `❌ <b>货币未找到:</b> "${htmlEscape(input1!)}"\n\n💡 请检查拼写或使用标准代码`,
+          text: `❌ <b>货币未找到:</b> "${htmlEscape(input1!)}"\n\n💡 请检查拼写或使用标准代码\n\n🔎 <b>谷歌兜底:</b> <a href="${googleUrlFallback}">点击查看</a>`,
           parseMode: "html"
         });
         return;
@@ -660,7 +672,7 @@ class RatePlugin extends Plugin {
         const searchResult = await this.searchCurrency(input2);
         if (!searchResult) {
           await msg.edit({
-            text: `❌ <b>货币未找到:</b> "${htmlEscape(input2)}"\n\n💡 请检查拼写或使用标准代码`,
+            text: `❌ <b>货币未找到:</b> "${htmlEscape(input2)}"\n\n💡 请检查拼写或使用标准代码\n\n🔎 <b>谷歌兜底:</b> <a href="${googleUrlFallback}">点击查看</a>`,
             parseMode: "html"
           });
           return;
@@ -756,6 +768,12 @@ class RatePlugin extends Plugin {
       
       // 提供更友好的错误提示
       let userMessage = `❌ <b>操作失败</b>\n\n`;
+      const rawText = msg.text?.trim() || '';
+      const rawParts = rawText.split(/\s+/) || [];
+      const [, ...rawArgs] = rawParts;
+      const rawParsed = this.parseArgs(rawArgs as string[]);
+      const fallbackQuery = encodeURIComponent(`${rawParsed.amount} ${String(rawParsed.base || '').toUpperCase()} to ${String(rawParsed.quote || '').toUpperCase()}`);
+      const fallbackUrl = `https://www.google.com/search?q=${fallbackQuery}`;
       
       // 检查网络不可达错误
       if (errorCode === 'ENOTFOUND' || errorCode === 'ECONNREFUSED' || errorCode === 'ENETUNREACH') {
@@ -765,20 +783,20 @@ class RatePlugin extends Plugin {
         userMessage += `• 网络连接中断\n`;
         userMessage += `• 防火墙阻止访问\n`;
         userMessage += `• 需要配置代理\n\n`;
-        userMessage += `💡 请检查网络设置后重试`;
+        userMessage += `💡 请检查网络设置后重试\n\n🔎 <b>谷歌兜底:</b> <a href="${fallbackUrl}">点击查看</a>`;
       } else if (errorCode === 'ECONNABORTED' || errorMessage.includes('超时') || errorMessage.includes('timeout')) {
         userMessage += `⏱ <b>请求超时</b>\n\n`;
         userMessage += `网络延迟过高或服务器响应缓慢\n\n`;
-        userMessage += `💡 请稍后重试`;
+        userMessage += `💡 请稍后重试\n\n🔎 <b>谷歌兜底:</b> <a href="${fallbackUrl}">点击查看</a>`;
       } else if (errorMessage.includes('限流') || errorMessage.includes('429')) {
         userMessage += `⏱ <b>API请求过于频繁</b>\n\n`;
-        userMessage += `请等待几分钟后再试`;
+        userMessage += `请等待几分钟后再试\n\n🔎 <b>谷歌兜底:</b> <a href="${fallbackUrl}">点击查看</a>`;
       } else if (errorMessage.includes('网络')) {
         userMessage += `🌐 <b>网络连接问题</b>\n\n`;
-        userMessage += `请检查网络连接是否正常`;
+        userMessage += `请检查网络连接是否正常\n\n🔎 <b>谷歌兜底:</b> <a href="${fallbackUrl}">点击查看</a>`;
       } else {
         userMessage += `错误详情: ${errorMessage}\n\n`;
-        userMessage += `💡 如果问题持续，请联系管理员`;
+        userMessage += `💡 如果问题持续，请联系管理员\n\n🔎 <b>谷歌兜底:</b> <a href="${fallbackUrl}">点击查看</a>`;
       }
       
       await msg.edit({ 

@@ -50,18 +50,55 @@ const MAX_MSG = 4096;
 const PAGE_EXTRA = 48;
 const WRAP_EXTRA_COLLAPSED = 64;
 const GEMINI_VOICES = [
-  "Zephyr", "Puck", "Charon", "Kore", "Fenrir", "Leda", "Orus", "Aoede",
-  "Callirhoe", "Autonoe", "Enceladus", "Iapetus", "Umbriel", "Algieba",
-  "Despina", "Erinome", "Algenib", "Rasalgethi", "Laomedeia", "Achernar",
-  "Alnilam", "Schedar", "Gacrux", "Pulcherrima", "Achird", "Zubenelgenubi",
-  "Vindemiatrix", "Sadachbia", "Sadaltager", "Sulafar"
+  "Zephyr",
+  "Puck",
+  "Charon",
+  "Kore",
+  "Fenrir",
+  "Leda",
+  "Orus",
+  "Aoede",
+  "Callirhoe",
+  "Autonoe",
+  "Enceladus",
+  "Iapetus",
+  "Umbriel",
+  "Algieba",
+  "Despina",
+  "Erinome",
+  "Algenib",
+  "Rasalgethi",
+  "Laomedeia",
+  "Achernar",
+  "Alnilam",
+  "Schedar",
+  "Gacrux",
+  "Pulcherrima",
+  "Achird",
+  "Zubenelgenubi",
+  "Vindemiatrix",
+  "Sadachbia",
+  "Sadaltager",
+  "Sulafar",
 ] as const;
-const OPENAI_VOICES = ["alloy", "echo", "fable", "onyx", "nova", "shimmer"] as const;
+const OPENAI_VOICES = [
+  "alloy",
+  "echo",
+  "fable",
+  "onyx",
+  "nova",
+  "shimmer",
+] as const;
 
 /* ---------- 工具函数 ---------- */
 const trimBase = (u: string) => u.replace(/\/$/, "");
 const html = (t: string) =>
-  t.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+  t
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
 const escapeRegExp = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 const shortenUrlForDisplay = (u: string) => {
   try {
@@ -76,13 +113,19 @@ const shortenUrlForDisplay = (u: string) => {
   }
 };
 const nowISO = () => new Date().toISOString();
-const sleep = (ms: number) => new Promise<void>(res => setTimeout(res, ms));
+const sleep = (ms: number) => new Promise<void>((res) => setTimeout(res, ms));
 const shouldRetry = (err: any): boolean => {
   const s = err?.response?.status;
   const code = err?.code;
   return (
-    s === 429 || s === 500 || s === 502 || s === 503 || s === 504 ||
-    code === "ECONNRESET" || code === "ETIMEDOUT" || code === "ENOTFOUND" ||
+    s === 429 ||
+    s === 500 ||
+    s === 502 ||
+    s === 503 ||
+    s === 504 ||
+    code === "ECONNRESET" ||
+    code === "ETIMEDOUT" ||
+    code === "ENOTFOUND" ||
     !!(err?.isAxiosError && !err?.response)
   );
 };
@@ -124,7 +167,7 @@ enum AuthMethod {
   API_KEY_HEADER = "api_key_header",
   QUERY_PARAM = "query_param",
   BASIC_AUTH = "basic_auth",
-  CUSTOM_HEADER = "custom_header"
+  CUSTOM_HEADER = "custom_header",
 }
 interface AuthConfig {
   method: AuthMethod;
@@ -164,7 +207,11 @@ class UniversalAuthHandler {
   }
   static detectAuthMethod(baseUrl: string): AuthMethod {
     const url = baseUrl.toLowerCase();
-    if (url.includes("generativelanguage.googleapis.com") || url.includes("aiplatform.googleapis.com"))
+    if (
+      url.includes("generativelanguage.googleapis.com") ||
+      url.includes("aiplatform.googleapis.com") ||
+      url.endsWith("/google-ai-studio")
+    )
       return AuthMethod.QUERY_PARAM;
     if (url.includes("anthropic.com")) return AuthMethod.API_KEY_HEADER;
     if (url.includes("aip.baidubce.com")) return AuthMethod.QUERY_PARAM;
@@ -173,9 +220,15 @@ class UniversalAuthHandler {
 }
 
 /* ---------- 统一鉴权构建 ---------- */
-const buildAuthAttempts = (p: Provider, extraHeaders: Record<string, string> = {}) => {
+const buildAuthAttempts = (
+  p: Provider,
+  extraHeaders: Record<string, string> = {}
+) => {
   if (p.authConfig) {
-    const headers = { ...UniversalAuthHandler.buildAuthHeaders(p.authConfig), ...extraHeaders };
+    const headers = {
+      ...UniversalAuthHandler.buildAuthHeaders(p.authConfig),
+      ...extraHeaders,
+    };
     const params = { ...UniversalAuthHandler.buildAuthParams(p.authConfig) };
     return [{ headers, params }];
   }
@@ -183,18 +236,31 @@ const buildAuthAttempts = (p: Provider, extraHeaders: Record<string, string> = {
   const cfg: AuthConfig = {
     method: detected,
     apiKey: p.apiKey,
-    headerName: detected === AuthMethod.API_KEY_HEADER ? "x-api-key" : undefined,
-    paramName: detected === AuthMethod.QUERY_PARAM ? "key" : undefined
+    headerName:
+      detected === AuthMethod.API_KEY_HEADER ? "x-api-key" : undefined,
+    paramName: detected === AuthMethod.QUERY_PARAM ? "key" : undefined,
   };
-  const headers = { ...UniversalAuthHandler.buildAuthHeaders(cfg), ...extraHeaders };
+  const headers = {
+    ...UniversalAuthHandler.buildAuthHeaders(cfg),
+    ...extraHeaders,
+  };
   const params = { ...UniversalAuthHandler.buildAuthParams(cfg) };
   return [{ headers, params }];
 };
-const tryPostJSON = async (url: string, body: any, attempts: Array<{ headers?: any; params?: any }>) => {
+const tryPostJSON = async (
+  url: string,
+  body: any,
+  attempts: Array<{ headers?: any; params?: any }>
+) => {
   let lastErr: any;
   for (const a of attempts) {
     try {
-      const r = await axiosWithRetry({ method: "POST", url, data: body, ...(a || {}) });
+      const r = await axiosWithRetry({
+        method: "POST",
+        url,
+        data: body,
+        ...(a || {}),
+      });
       return r.data;
     } catch (err) {
       lastErr = err;
@@ -214,7 +280,7 @@ class Store {
     telegraph: { enabled: false, limit: 0, token: "", posts: [] },
     voices: { gemini: "Kore", openai: "alloy" },
     histories: {},
-    presetPrompt: ""
+    presetPrompt: "",
   };
   static baseDir = "";
   static file = "";
@@ -233,27 +299,42 @@ class Store {
     if (!d.models) d.models = { chat: "", search: "", image: "", tts: "" };
     if (typeof d.contextEnabled !== "boolean") d.contextEnabled = false;
     if (typeof d.collapse !== "boolean") d.collapse = false;
-    if (!d.telegraph) d.telegraph = { enabled: false, limit: 0, token: "", posts: [] };
+    if (!d.telegraph)
+      d.telegraph = { enabled: false, limit: 0, token: "", posts: [] };
     if (!d.voices) d.voices = { gemini: "Kore", openai: "alloy" };
     if (!d.histories) d.histories = {};
     if (!d.histMeta) d.histMeta = {};
     if (typeof d.presetPrompt !== "string") d.presetPrompt = "";
     if (d.dataVersion < 2) d.dataVersion = 2;
     if (d.dataVersion < 3) {
-      try { await refreshModelCatalog(true); } catch {}
+      try {
+        await refreshModelCatalog(true);
+      } catch {}
       d.dataVersion = 3;
     }
-    if (d.dataVersion < 4) { if (!d.voices) d.voices = { gemini: "Kore", openai: "alloy" }; d.dataVersion = 4; }
-    if (d.dataVersion < 5) { if (typeof d.presetPrompt !== "string") d.presetPrompt = ""; d.dataVersion = 5; }
+    if (d.dataVersion < 4) {
+      if (!d.voices) d.voices = { gemini: "Kore", openai: "alloy" };
+      d.dataVersion = 4;
+    }
+    if (d.dataVersion < 5) {
+      if (typeof d.presetPrompt !== "string") d.presetPrompt = "";
+      d.dataVersion = 5;
+    }
     await this.writeSoon();
   }
-  static async write() { await atomicWriteJSON(this.file, this.data); }
+  static async write() {
+    await atomicWriteJSON(this.file, this.data);
+  }
   static writeSoonDelay = 300;
   static _writeTimer: NodeJS.Timeout | null = null;
   static async writeSoon(): Promise<void> {
     if (this._writeTimer) clearTimeout(this._writeTimer);
     this._writeTimer = setTimeout(async () => {
-      try { await atomicWriteJSON(this.file, this.data); } finally { this._writeTimer = null; }
+      try {
+        await atomicWriteJSON(this.file, this.data);
+      } finally {
+        this._writeTimer = null;
+      }
     }, this.writeSoonDelay);
     return Promise.resolve();
   }
@@ -269,40 +350,65 @@ const buildChunks = (text: string, collapse?: boolean, postfix?: string) => {
   const WRAP_EXTRA = collapse ? WRAP_EXTRA_COLLAPSED : 0;
   const parts = splitMessage(text, PAGE_EXTRA + WRAP_EXTRA);
   if (parts.length === 0) return [];
-  if (parts.length === 1) return [applyWrap(parts[0], collapse) + (postfix || "")];
+  if (parts.length === 1)
+    return [applyWrap(parts[0], collapse) + (postfix || "")];
   const total = parts.length;
   const chunks: string[] = [];
   for (let i = 0; i < total; i++) {
     const isLast = i === total - 1;
     const header = `📄 (${i + 1}/${total})\n\n`;
     const body = header + parts[i];
-    const wrapped = applyWrap(body, collapse) + (isLast ? (postfix || "") : "");
+    const wrapped = applyWrap(body, collapse) + (isLast ? postfix || "" : "");
     chunks.push(wrapped);
   }
   return chunks;
 };
-const sendLong = async (msg: Api.Message, text: string, opts?: { collapse?: boolean }, postfix?: string) => {
+const sendLong = async (
+  msg: Api.Message,
+  text: string,
+  opts?: { collapse?: boolean },
+  postfix?: string
+) => {
   const chunks = buildChunks(text, opts?.collapse, postfix);
   if (chunks.length === 0) return;
-  if (chunks.length === 1) { await msg.edit({ text: chunks[0], parseMode: "html" }); return; }
+  if (chunks.length === 1) {
+    await msg.edit({ text: chunks[0], parseMode: "html" });
+    return;
+  }
   await msg.edit({ text: chunks[0], parseMode: "html" });
   if (msg.client) {
     const peer = msg.peerId;
-    for (let i = 1; i < chunks.length; i++) await msg.client.sendMessage(peer, { message: chunks[i], parseMode: "html" });
+    for (let i = 1; i < chunks.length; i++)
+      await msg.client.sendMessage(peer, {
+        message: chunks[i],
+        parseMode: "html",
+      });
   } else {
-    for (let i = 1; i < chunks.length; i++) await msg.reply({ message: chunks[i], parseMode: "html" });
+    for (let i = 1; i < chunks.length; i++)
+      await msg.reply({ message: chunks[i], parseMode: "html" });
   }
 };
-const sendLongReply = async (msg: Api.Message, replyToId: number, text: string, opts?: { collapse?: boolean }, postfix?: string) => {
+const sendLongReply = async (
+  msg: Api.Message,
+  replyToId: number,
+  text: string,
+  opts?: { collapse?: boolean },
+  postfix?: string
+) => {
   const chunks = buildChunks(text, opts?.collapse, postfix);
   if (!msg.client) return;
   const peer = msg.peerId;
-  for (const chunk of chunks) await msg.client.sendMessage(peer, { message: chunk, parseMode: "html", replyTo: replyToId });
+  for (const chunk of chunks)
+    await msg.client.sendMessage(peer, {
+      message: chunk,
+      parseMode: "html",
+      replyTo: replyToId,
+    });
 };
 const extractText = (m: Api.Message | null | undefined) => {
   if (!m) return "";
   const anyM: any = m;
-  return (anyM.message || anyM.text || anyM.caption || "");
+  return anyM.message || anyM.text || anyM.caption || "";
 };
 const splitMessage = (text: string, reserve = 0) => {
   const limit = Math.max(1, MAX_MSG - Math.max(0, reserve));
@@ -311,19 +417,32 @@ const splitMessage = (text: string, reserve = 0) => {
   let cur = "";
   for (const line of text.split("\n")) {
     if (line.length > limit) {
-      if (cur) { parts.push(cur); cur = ""; }
-      for (let i = 0; i < line.length; i += limit) parts.push(line.slice(i, i + limit));
+      if (cur) {
+        parts.push(cur);
+        cur = "";
+      }
+      for (let i = 0; i < line.length; i += limit)
+        parts.push(line.slice(i, i + limit));
       continue;
     }
     const next = cur ? cur + "\n" + line : line;
-    if (next.length > limit) { parts.push(cur); cur = line; } else { cur = next; }
+    if (next.length > limit) {
+      parts.push(cur);
+      cur = line;
+    } else {
+      cur = next;
+    }
   }
   if (cur) parts.push(cur);
   return parts;
 };
 
 /* ---------- 兼容类型检测 ---------- */
-const detectCompat = (_name: string, model: string, _baseUrl: string): Compat => {
+const detectCompat = (
+  _name: string,
+  model: string,
+  _baseUrl: string
+): Compat => {
   const m = (model || "").toLowerCase();
   if (/\bclaude\b|anthropic/.test(m)) return "claude";
   if (/\bgemini\b|(^gemini-)|image-generation/.test(m)) return "gemini";
@@ -332,7 +451,10 @@ const detectCompat = (_name: string, model: string, _baseUrl: string): Compat =>
 };
 
 /* ---------- 模型目录 ---------- */
-const catalogInflight: { refreshing: boolean; lastPromise: Promise<void> | null } = { refreshing: false, lastPromise: null };
+const catalogInflight: {
+  refreshing: boolean;
+  lastPromise: Promise<void> | null;
+} = { refreshing: false, lastPromise: null };
 const getCompatFromCatalog = (model: string): Compat | null => {
   const ml = String(model || "").toLowerCase();
   const map = Store.data.modelCatalog?.map || ({} as Record<string, Compat>);
@@ -340,7 +462,8 @@ const getCompatFromCatalog = (model: string): Compat | null => {
   return v ?? null;
 };
 const refreshModelCatalog = async (force = false): Promise<void> => {
-  if (!force && catalogInflight.refreshing) return catalogInflight.lastPromise || Promise.resolve();
+  if (!force && catalogInflight.refreshing)
+    return catalogInflight.lastPromise || Promise.resolve();
   catalogInflight.refreshing = true;
   const work = (async () => {
     try {
@@ -349,11 +472,15 @@ const refreshModelCatalog = async (force = false): Promise<void> => {
       for (const [, p] of entries) {
         try {
           const res = await listModelsByAnyCompat(p);
-          const mp: Record<string, Compat> = (((res as any).modelMap) || {}) as Record<string, Compat>;
+          const mp: Record<string, Compat> = ((res as any).modelMap ||
+            {}) as Record<string, Compat>;
           for (const [k, v] of Object.entries(mp)) merged[k] = v;
         } catch {}
       }
-      const catalog = (Store.data.modelCatalog ??= { map: {}, updatedAt: undefined } as any);
+      const catalog = (Store.data.modelCatalog ??= {
+        map: {},
+        updatedAt: undefined,
+      } as any);
       (catalog as any).map = merged as any;
       (catalog as any).updatedAt = nowISO();
       await Store.writeSoon();
@@ -366,33 +493,55 @@ const refreshModelCatalog = async (force = false): Promise<void> => {
   return work;
 };
 const compatResolving = new Map<string, Promise<Compat>>();
-const resolveCompat = async (name: string, model: string, p: Provider): Promise<Compat> => {
+const resolveCompat = async (
+  name: string,
+  model: string,
+  p: Provider
+): Promise<Compat> => {
   const ml = String(model || "").toLowerCase();
   const cat = getCompatFromCatalog(ml);
   if (cat) return cat;
-  const mc = (Store.data.modelCompat && (Store.data.modelCompat as any)[name]) ? (Store.data.modelCompat as any)[name][ml] as Compat | undefined : undefined;
+  const mc =
+    Store.data.modelCompat && (Store.data.modelCompat as any)[name]
+      ? ((Store.data.modelCompat as any)[name][ml] as Compat | undefined)
+      : undefined;
   const byName = detectCompat(name, model, p.baseUrl);
   if (mc) return mc;
-  setTimeout(() => { void refreshModelCatalog(false).catch(() => {}); }, 0);
-  const pending = compatResolving.get(name + "::" + ml) || compatResolving.get(name);
+  setTimeout(() => {
+    void refreshModelCatalog(false).catch(() => {});
+  }, 0);
+  const pending =
+    compatResolving.get(name + "::" + ml) || compatResolving.get(name);
   if (pending) return await pending;
   const task = (async () => {
     try {
       const res = await listModelsByAnyCompat(p);
       const primary: Compat | null = (res.compat as Compat) || null;
-      const map: Record<string, Compat> = (((res as any).modelMap) || {}) as Record<string, Compat>;
+      const map: Record<string, Compat> = ((res as any).modelMap ||
+        {}) as Record<string, Compat>;
       if (!Store.data.modelCompat) Store.data.modelCompat = {} as any;
-      if (!(Store.data.modelCompat as any)[name]) (Store.data.modelCompat as any)[name] = {} as any;
+      if (!(Store.data.modelCompat as any)[name])
+        (Store.data.modelCompat as any)[name] = {} as any;
       for (const [k, v] of Object.entries(map)) {
-        const cur = (Store.data.modelCompat as any)[name][k] as Compat | undefined;
+        const cur = (Store.data.modelCompat as any)[name][k] as
+          | Compat
+          | undefined;
         if (cur !== v) (Store.data.modelCompat as any)[name][k] = v;
       }
       let comp: Compat = (Store.data.modelCompat as any)[name][ml] as Compat;
       if (!comp) comp = (primary as Compat) || byName;
-      if (((Store.data.modelCompat as any)[name][ml] as Compat | undefined) !== comp) (Store.data.modelCompat as any)[name][ml] = comp;
-      const cat = (Store.data.modelCatalog ??= { map: {}, updatedAt: undefined } as any);
+      if (
+        ((Store.data.modelCompat as any)[name][ml] as Compat | undefined) !==
+        comp
+      )
+        (Store.data.modelCompat as any)[name][ml] = comp;
+      const cat = (Store.data.modelCatalog ??= {
+        map: {},
+        updatedAt: undefined,
+      } as any);
       const catMap = (cat as any).map as Record<string, Compat>;
-      for (const [k, v] of Object.entries(map)) if ((catMap as any)[k] !== v) (catMap as any)[k] = v as Compat;
+      for (const [k, v] of Object.entries(map))
+        if ((catMap as any)[k] !== v) (catMap as any)[k] = v as Compat;
       if ((catMap as any)[ml] !== comp) (catMap as any)[ml] = comp;
       (cat as any).updatedAt = nowISO();
       if (primary && p) if (p.compatauth !== primary) p.compatauth = primary;
@@ -401,10 +550,16 @@ const resolveCompat = async (name: string, model: string, p: Provider): Promise<
     } catch {
       const comp: Compat = byName;
       if (!Store.data.modelCompat) Store.data.modelCompat = {} as any;
-      if (!(Store.data.modelCompat as any)[name]) (Store.data.modelCompat as any)[name] = {} as any;
-      if (!(Store.data.modelCompat as any)[name][ml]) (Store.data.modelCompat as any)[name][ml] = comp;
-      try { await Store.writeSoon(); } catch {}
-      setTimeout(() => { void refreshModelCatalog(false).catch(() => {}); }, 0);
+      if (!(Store.data.modelCompat as any)[name])
+        (Store.data.modelCompat as any)[name] = {} as any;
+      if (!(Store.data.modelCompat as any)[name][ml])
+        (Store.data.modelCompat as any)[name][ml] = comp;
+      try {
+        await Store.writeSoon();
+      } catch {}
+      setTimeout(() => {
+        void refreshModelCatalog(false).catch(() => {});
+      }, 0);
       return comp;
     } finally {
       compatResolving.delete(name + "::" + ml);
@@ -419,12 +574,15 @@ const resolveCompat = async (name: string, model: string, p: Provider): Promise<
 const mapError = (err: any, ctx?: string): string => {
   const s = err?.response?.status as number | undefined;
   const body = err?.response?.data;
-  const raw = body?.error?.message || body?.message || err?.message || String(err);
+  const raw =
+    body?.error?.message || body?.message || err?.message || String(err);
   let hint = "";
-  if (s === 401 || s === 403) hint = "认证失败，请检查 API Key 是否正确、是否有对应权限";
+  if (s === 401 || s === 403)
+    hint = "认证失败，请检查 API Key 是否正确、是否有对应权限";
   else if (s === 404) hint = "接口不存在，请检查 BaseURL/兼容类型或服务商路由";
   else if (s === 429) hint = "请求过于频繁或额度受限，请稍后重试或调整速率";
-  else if (typeof s === "number" && s >= 500) hint = "服务端异常，请稍后重试或更换服务商";
+  else if (typeof s === "number" && s >= 500)
+    hint = "服务端异常，请稍后重试或更换服务商";
   else if (!s) hint = "网络异常，请检查网络或 BaseURL";
   const where = ctx ? `（${ctx}）` : "";
   return `${raw}${hint ? "｜" + hint : ""}${s ? `｜HTTP ${s}` : ""}${where}`;
@@ -443,7 +601,9 @@ const normalizeModelName = (x: any): string => {
 };
 
 /* ---------- 快捷选取 ---------- */
-const pick = (kind: keyof Models): { provider: string; model: string } | null => {
+const pick = (
+  kind: keyof Models
+): { provider: string; model: string } | null => {
   const s = Store.data.models[kind];
   if (!s) return null;
   const i = s.indexOf(" ");
@@ -452,34 +612,59 @@ const pick = (kind: keyof Models): { provider: string; model: string } | null =>
   const model = s.slice(i + 1);
   return { provider, model };
 };
-const providerOf = (name: string): Provider | null => Store.data.providers[name] || null;
+const providerOf = (name: string): Provider | null =>
+  Store.data.providers[name] || null;
 const footer = (model: string, extra?: string) => {
-  const src = model.toLowerCase().includes("claude") ? "Anthropic Claude" : model.toLowerCase().includes("gemini") ? "Google Gemini" : "OpenAI";
+  const src = model.toLowerCase().includes("claude")
+    ? "Anthropic Claude"
+    : model.toLowerCase().includes("gemini")
+    ? "Google Gemini"
+    : "OpenAI";
   return `\n\n<i>Powered by ${src}${extra ? " " + extra : ""}</i>`;
 };
 const ensureDir = () => {
-  if (!fs.existsSync(Store.baseDir)) fs.mkdirSync(Store.baseDir, { recursive: true });
+  if (!fs.existsSync(Store.baseDir))
+    fs.mkdirSync(Store.baseDir, { recursive: true });
 };
 const chatIdStr = (msg: Api.Message) =>
-  String((msg.peerId as any)?.channelId || (msg.peerId as any)?.userId || (msg.peerId as any)?.chatId || "global");
+  String(
+    (msg.peerId as any)?.channelId ||
+      (msg.peerId as any)?.userId ||
+      (msg.peerId as any)?.chatId ||
+      "global"
+  );
 const histFor = (id: string) => Store.data.histories[id] || [];
 const HISTORY_GLOBAL_MAX_SESSIONS = 200;
 const HISTORY_GLOBAL_MAX_BYTES = 2 * 1024 * 1024;
 const pruneGlobalHistories = () => {
   const ids = Object.keys(Store.data.histories || {});
   if (!ids.length) return;
-  const meta = (Store.data.histMeta || {}) as Record<string, { lastAt: string }>;
-  const sizeOfItem = (x: { role: string; content: string }) => Buffer.byteLength(`${x.role}:${x.content}`);
-  const sizeOfHist = (arr: { role: string; content: string }[]) => arr.reduce((t, x) => t + sizeOfItem(x), 0);
+  const meta = (Store.data.histMeta || {}) as Record<
+    string,
+    { lastAt: string }
+  >;
+  const sizeOfItem = (x: { role: string; content: string }) =>
+    Buffer.byteLength(`${x.role}:${x.content}`);
+  const sizeOfHist = (arr: { role: string; content: string }[]) =>
+    arr.reduce((t, x) => t + sizeOfItem(x), 0);
   let totalBytes = 0;
-  for (const id of ids) totalBytes += sizeOfHist(Store.data.histories[id] || []);
-  if (ids.length <= HISTORY_GLOBAL_MAX_SESSIONS && totalBytes <= HISTORY_GLOBAL_MAX_BYTES) return;
+  for (const id of ids)
+    totalBytes += sizeOfHist(Store.data.histories[id] || []);
+  if (
+    ids.length <= HISTORY_GLOBAL_MAX_SESSIONS &&
+    totalBytes <= HISTORY_GLOBAL_MAX_BYTES
+  )
+    return;
   const sorted = ids.sort((a, b) => {
-    const ta = Date.parse((meta[a]?.lastAt) || "1970-01-01T00:00:00.000Z");
-    const tb = Date.parse((meta[b]?.lastAt) || "1970-01-01T00:00:00.000Z");
+    const ta = Date.parse(meta[a]?.lastAt || "1970-01-01T00:00:00.000Z");
+    const tb = Date.parse(meta[b]?.lastAt || "1970-01-01T00:00:00.000Z");
     return ta - tb;
   });
-  while ((sorted.length > HISTORY_GLOBAL_MAX_SESSIONS || totalBytes > HISTORY_GLOBAL_MAX_BYTES) && sorted.length) {
+  while (
+    (sorted.length > HISTORY_GLOBAL_MAX_SESSIONS ||
+      totalBytes > HISTORY_GLOBAL_MAX_BYTES) &&
+    sorted.length
+  ) {
     const victim = sorted.shift()!;
     const arr = Store.data.histories[victim] || [];
     totalBytes -= sizeOfHist(arr);
@@ -494,10 +679,14 @@ const pushHist = (id: string, role: string, content: string) => {
   const MAX_ITEMS = 50;
   while (h.length > MAX_ITEMS) h.shift();
   const MAX_BYTES = 64 * 1024;
-  const sizeOf = (x: { role: string; content: string }) => Buffer.byteLength(`${x.role}:${x.content}`);
+  const sizeOf = (x: { role: string; content: string }) =>
+    Buffer.byteLength(`${x.role}:${x.content}`);
   let total = 0;
   for (const x of h) total += sizeOf(x);
-  while (total > MAX_BYTES && h.length > 1) { const first = h.shift()!; total -= sizeOf(first); }
+  while (total > MAX_BYTES && h.length > 1) {
+    const first = h.shift()!;
+    total -= sizeOf(first);
+  }
   if (!Store.data.histMeta) Store.data.histMeta = {} as any;
   (Store.data.histMeta as any)[id] = { lastAt: new Date().toISOString() };
   pruneGlobalHistories();
@@ -517,17 +706,23 @@ const escapeAndFormatForTelegram = (raw: string): string => {
   let escaped = html(cleaned);
   escaped = escaped.replace(/\*\*([^*]+)\*\*/g, "<b>$1</b>");
   escaped = escaped.replace(/\*\*\s*\[?引用来源]?\s*\*\*/g, "<b>引用来源</b>");
-  escaped = escaped.replace(/^\s*-\s*\[([^]]+)]\((https?:\/\/[^\s)]+)\)\s*$/gm, (_m, title: string, url: string) => {
-    const href = html(String(url));
-    return `• <a href="${href}">${title}</a>`;
-  });
+  escaped = escaped.replace(
+    /^\s*-\s*\[([^]]+)]\((https?:\/\/[^\s)]+)\)\s*$/gm,
+    (_m, title: string, url: string) => {
+      const href = html(String(url));
+      return `• <a href="${href}">${title}</a>`;
+    }
+  );
   const urlRegex = /\bhttps?:\/\/[^\s<>"')}\x5D]+/g;
   const urls = cleaned.match(urlRegex) || [];
   for (const u of urls) {
     const display = shortenUrlForDisplay(u);
     const escapedUrl = html(u);
     const anchor = `<a href="${html(u)}">${html(display)}</a>`;
-    escaped = escaped.replace(new RegExp(escapeRegExp(escapedUrl), "g"), anchor);
+    escaped = escaped.replace(
+      new RegExp(escapeRegExp(escapedUrl), "g"),
+      anchor
+    );
   }
   escaped = escaped.replace(/^&gt;\s?(.+)$/gm, "<blockquote>$1</blockquote>");
   return escaped;
@@ -537,24 +732,50 @@ const escapeAndFormatForTelegram = (raw: string): string => {
 const isRouteError = (err: any): boolean => {
   const s = err?.response?.status;
   const txt = String(err?.response?.data || err?.message || "").toLowerCase();
-  return s === 404 || s === 405 || (s === 400 && /(unknown|not found|invalid path|no route)/.test(txt));
+  return (
+    s === 404 ||
+    s === 405 ||
+    (s === 400 && /(unknown|not found|invalid path|no route)/.test(txt))
+  );
 };
-const geminiRequestWithFallback = async (p: Provider, path: string, axiosConfig: any): Promise<any> => {
+const geminiRequestWithFallback = async (
+  p: Provider,
+  path: string,
+  axiosConfig: any
+): Promise<any> => {
   const base = trimBase(p.baseUrl);
   const mkConfigs = () => {
     const baseCfg = { ...axiosConfig };
     const headersBase = { ...(baseCfg.headers || {}) };
     const paramsBase = { ...(baseCfg.params || {}) };
-    const cfgKey = { ...baseCfg, headers: { ...headersBase }, params: { ...paramsBase, key: p.apiKey } };
-    const cfgXGoog = { ...baseCfg, headers: { ...headersBase, "x-goog-api-key": p.apiKey }, params: { ...paramsBase } };
-    const cfgAuth = { ...baseCfg, headers: { ...headersBase, Authorization: `Bearer ${p.apiKey}` }, params: { ...paramsBase } };
+    const cfgKey = {
+      ...baseCfg,
+      headers: { ...headersBase },
+      params: { ...paramsBase, key: p.apiKey },
+    };
+    const cfgXGoog = {
+      ...baseCfg,
+      headers: { ...headersBase, "x-goog-api-key": p.apiKey },
+      params: { ...paramsBase },
+    };
+    const cfgAuth = {
+      ...baseCfg,
+      headers: { ...headersBase, Authorization: `Bearer ${p.apiKey}` },
+      params: { ...paramsBase },
+    };
     const pref = p.compatauth;
-    const ordered = (pref === "openai" || pref === "claude") ? [cfgAuth, cfgXGoog, cfgKey] : [cfgKey, cfgXGoog, cfgAuth];
+    const ordered =
+      pref === "openai" || pref === "claude"
+        ? [cfgAuth, cfgXGoog, cfgKey]
+        : [cfgKey, cfgXGoog, cfgAuth];
     const seen = new Set<string>();
     const out: any[] = [];
     for (const c of ordered) {
       const sig = JSON.stringify({ h: c.headers || {}, p: c.params || {} });
-      if (!seen.has(sig)) { seen.add(sig); out.push(c); }
+      if (!seen.has(sig)) {
+        seen.add(sig);
+        out.push(c);
+      }
     }
     return out;
   };
@@ -584,7 +805,11 @@ const getAnthropicVersion = async (p: Provider): Promise<string> => {
   let ver = "2023-06-01";
   const base = trimBase(p.baseUrl);
   try {
-    await axiosWithRetry({ method: "GET", url: base + "/v1/models", headers: { "x-api-key": p.apiKey } });
+    await axiosWithRetry({
+      method: "GET",
+      url: base + "/v1/models",
+      headers: { "x-api-key": p.apiKey },
+    });
   } catch (err: any) {
     const txt = JSON.stringify(err?.response?.data || err?.message || "");
     const matches = txt.match(/\b20\d{2}-\d{2}-\d{2}\b/g);
@@ -599,7 +824,7 @@ const getAnthropicVersion = async (p: Provider): Promise<string> => {
 
 /* ---------- 格式化 Q&A ---------- */
 const formatQA = (qRaw: string, aRaw: string) => {
-  const expandAttr = Store.data.collapse ? ' expandable' : "";
+  const expandAttr = Store.data.collapse ? " expandable" : "";
   const qEsc = escapeAndFormatForTelegram(qRaw);
   const aEsc = escapeAndFormatForTelegram(aRaw);
   const Q = `<b>Q:</b>\n<blockquote${expandAttr}>${qEsc}</blockquote>`;
@@ -608,52 +833,78 @@ const formatQA = (qRaw: string, aRaw: string) => {
 };
 
 /* ---------- Telegraph 工具 ---------- */
-const toNodes = (text: string) => JSON.stringify(text.split("\n\n").map(p => ({ tag: "p", children: [p] })));
+const toNodes = (text: string) =>
+  JSON.stringify(text.split("\n\n").map((p) => ({ tag: "p", children: [p] })));
 const ensureTGToken = async (): Promise<string> => {
   if (Store.data.telegraph.token) return Store.data.telegraph.token;
   const resp = await axiosWithRetry({
     method: "POST",
     url: "https://api.telegra.ph/createAccount",
-    params: { short_name: "TeleBoxAI", author_name: "TeleBox" }
+    params: { short_name: "TeleBoxAI", author_name: "TeleBox" },
   });
   const t = resp.data?.result?.access_token || "";
   Store.data.telegraph.token = t;
   await Store.writeSoon();
   return t;
 };
-const createTGPage = async (title: string, text: string): Promise<string | null> => {
+const createTGPage = async (
+  title: string,
+  text: string
+): Promise<string | null> => {
   try {
     const token = await ensureTGToken();
     if (!token) return null;
     const resp = await axiosWithRetry({
       method: "POST",
       url: "https://api.telegra.ph/createPage",
-      params: { access_token: token, title, content: toNodes(text), return_content: false }
+      params: {
+        access_token: token,
+        title,
+        content: toNodes(text),
+        return_content: false,
+      },
     });
     return resp.data?.result?.url || null;
-  } catch { return null; }
+  } catch {
+    return null;
+  }
 };
 
 /* ---------- 聊天适配 ---------- */
-const chatOpenAI = async (p: Provider, model: string, msgs: { role: string; content: string }[], maxTokens?: number, useSearch?: boolean) => {
+const chatOpenAI = async (
+  p: Provider,
+  model: string,
+  msgs: { role: string; content: string }[],
+  maxTokens?: number,
+  useSearch?: boolean
+) => {
   const url = trimBase(p.baseUrl) + "/v1/chat/completions";
   const body: any = { model, messages: msgs, max_tokens: maxTokens || 1024 };
   if (useSearch && p.baseUrl?.includes("api.openai.com")) {
-    body.tools = [{
-      type: "function",
-      function: {
-        name: "web_search",
-        description: "Search the web for current information and return relevant results",
-        parameters: {
-          type: "object",
-          properties: { query: { type: "string", description: "The search query to execute" } },
-          required: ["query"]
-        }
-      }
-    }];
+    body.tools = [
+      {
+        type: "function",
+        function: {
+          name: "web_search",
+          description:
+            "Search the web for current information and return relevant results",
+          parameters: {
+            type: "object",
+            properties: {
+              query: {
+                type: "string",
+                description: "The search query to execute",
+              },
+            },
+            required: ["query"],
+          },
+        },
+      },
+    ];
   } else if (useSearch) {
     const searchPrompt = "请基于你的知识回答以下问题，如果需要最新信息请说明。";
-    msgs[msgs.length - 1].content = searchPrompt + "\n\n" + msgs[msgs.length - 1].content;
+    msgs[msgs.length - 1].content =
+      searchPrompt + "\n\n" + msgs[msgs.length - 1].content;
   }
   const attempts = buildAuthAttempts(p);
   try {
@@ -662,15 +913,38 @@ const chatOpenAI = async (p: Provider, model: string, msgs: { role: string; cont
   } catch (lastErr: any) {
     const status = lastErr?.response?.status;
     const bodyErr = lastErr?.response?.data;
-    const msg = bodyErr?.error?.message || bodyErr?.message || lastErr?.message || String(lastErr);
-    throw new Error(`[chatOpenAI] adapter=openai model=${html(model)} status=${status || "network"} message=${msg}`);
+    const msg =
+      bodyErr?.error?.message ||
+      bodyErr?.message ||
+      lastErr?.message ||
+      String(lastErr);
+    throw new Error(
+      `[chatOpenAI] adapter=openai model=${html(model)} status=${
+        status || "network"
+      } message=${msg}`
+    );
   }
 };
-const chatClaude = async (p: Provider, model: string, msgs: { role: string; content: string }[], maxTokens?: number, useSearch?: boolean) => {
+const chatClaude = async (
+  p: Provider,
+  model: string,
+  msgs: { role: string; content: string }[],
+  maxTokens?: number,
+  useSearch?: boolean
+) => {
   const url = trimBase(p.baseUrl) + "/v1/messages";
-  const body: any = { model, max_tokens: maxTokens || 1024, messages: msgs.map(m => ({ role: m.role === "assistant" ? "assistant" : "user", content: m.content })) };
+  const body: any = {
+    model,
+    max_tokens: maxTokens || 1024,
+    messages: msgs.map((m) => ({
+      role: m.role === "assistant" ? "assistant" : "user",
+      content: m.content,
+    })),
+  };
   if (useSearch && p.baseUrl?.includes("api.anthropic.com")) {
-    body.tools = [{ type: "web_search_20241220", name: "web_search", max_uses: 3 }];
+    body.tools = [
+      { type: "web_search_20241220", name: "web_search", max_uses: 3 },
+    ];
   }
   const v = await getAnthropicVersion(p);
   const attempts = buildAuthAttempts(p, { "anthropic-version": v });
@@ -691,36 +965,66 @@ const chatClaude = async (p: Provider, model: string, msgs: { role: string; cont
       data?.text,
       data?.content,
       data?.message?.content,
-      data?.output
+      data?.output,
     ];
-    for (const text of possibleTexts) if (typeof text === "string" && text.trim()) return text.trim();
+    for (const text of possibleTexts)
+      if (typeof text === "string" && text.trim()) return text.trim();
     return "";
   } catch (lastErr: any) {
     const status = lastErr?.response?.status;
     const bodyErr = lastErr?.response?.data;
-    const msg = bodyErr?.error?.message || bodyErr?.message || lastErr?.message || String(lastErr);
-    throw new Error(`[chatClaude] adapter=claude model=${html(model)} status=${status || "network"} message=${msg}`);
+    const msg =
+      bodyErr?.error?.message ||
+      bodyErr?.message ||
+      lastErr?.message ||
+      String(lastErr);
+    throw new Error(
+      `[chatClaude] adapter=claude model=${html(model)} status=${
+        status || "network"
+      } message=${msg}`
+    );
   }
 };
-const chatGemini = async (p: Provider, model: string, msgs: { role: string; content: string }[], useSearch: boolean = false) => {
+const chatGemini = async (
+  p: Provider,
+  model: string,
+  msgs: { role: string; content: string }[],
+  useSearch: boolean = false
+) => {
   const path = `/models/${encodeURIComponent(model)}:generateContent`;
-  const requestData: any = { contents: [{ parts: msgs.map(m => ({ text: (m.role === "user" ? "" : "") + m.content })) }] };
+  const requestData: any = {
+    contents: [
+      {
+        parts: msgs.map((m) => ({
+          text: (m.role === "user" ? "" : "") + m.content,
+        })),
+      },
+    ],
+  };
   if (useSearch) requestData.tools = [{ googleSearch: {} }];
   const data = await geminiRequestWithFallback(p, path, {
     method: "POST",
     data: requestData,
-    params: { key: p.apiKey }
+    params: { key: p.apiKey },
   });
   const parts = data?.candidates?.[0]?.content?.parts || [];
   return parts.map((x: any) => x.text || "").join("");
 };
 
 /* ---------- 视觉对话 ---------- */
-const chatVisionOpenAI = async (p: Provider, model: string, imageB64: string, prompt?: string) => {
+const chatVisionOpenAI = async (
+  p: Provider,
+  model: string,
+  imageB64: string,
+  prompt?: string
+) => {
   const url = trimBase(p.baseUrl) + "/v1/chat/completions";
   const content = [
     { type: "text", text: prompt || "用中文描述此图片" },
-    { type: "image_url", image_url: { url: `data:image/png;base64,${imageB64}` } }
+    {
+      type: "image_url",
+      image_url: { url: `data:image/png;base64,${imageB64}` },
+    },
   ];
   const body = { model, messages: [{ role: "user", content }] };
   const attempts = buildAuthAttempts(p);
@@ -730,11 +1034,24 @@ const chatVisionOpenAI = async (p: Provider, model: string, imageB64: string, pr
   } catch (lastErr: any) {
     const status = lastErr?.response?.status;
     const bodyErr = lastErr?.response?.data;
-    const msg = bodyErr?.error?.message || bodyErr?.message || lastErr?.message || String(lastErr);
-    throw new Error(`[chatVisionOpenAI] adapter=openai model=${html(model)} status=${status || "network"} message=${msg}`);
+    const msg =
+      bodyErr?.error?.message ||
+      bodyErr?.message ||
+      lastErr?.message ||
+      String(lastErr);
+    throw new Error(
+      `[chatVisionOpenAI] adapter=openai model=${html(model)} status=${
+        status || "network"
+      } message=${msg}`
+    );
   }
 };
-const chatVisionGemini = async (p: Provider, model: string, imageB64: string, prompt?: string) => {
+const chatVisionGemini = async (
+  p: Provider,
+  model: string,
+  imageB64: string,
+  prompt?: string
+) => {
   const path = `/models/${encodeURIComponent(model)}:generateContent`;
   try {
     const data = await geminiRequestWithFallback(p, path, {
@@ -745,23 +1062,33 @@ const chatVisionGemini = async (p: Provider, model: string, imageB64: string, pr
             role: "user",
             parts: [
               { inlineData: { mimeType: "image/png", data: imageB64 } },
-              { text: prompt || "用中文描述此图片" }
-            ]
-          }
-        ]
+              { text: prompt || "用中文描述此图片" },
+            ],
+          },
+        ],
       },
-      params: { key: p.apiKey }
+      params: { key: p.apiKey },
     });
     const parts = data?.candidates?.[0]?.content?.parts || [];
     return parts.map((x: any) => x.text || "").join("");
   } catch (err: any) {
     const status = err?.response?.status;
     const body = err?.response?.data;
-    const msg = body?.error?.message || body?.message || err?.message || String(err);
-    throw new Error(`[chatVisionGemini] adapter=gemini model=${html(model)} status=${status || "network"} message=${msg}`);
+    const msg =
+      body?.error?.message || body?.message || err?.message || String(err);
+    throw new Error(
+      `[chatVisionGemini] adapter=gemini model=${html(model)} status=${
+        status || "network"
+      } message=${msg}`
+    );
   }
 };
-const chatVisionClaude = async (p: Provider, model: string, imageB64: string, prompt?: string) => {
+const chatVisionClaude = async (
+  p: Provider,
+  model: string,
+  imageB64: string,
+  prompt?: string
+) => {
   const url = trimBase(p.baseUrl) + "/v1/messages";
   const v = await getAnthropicVersion(p);
   const body = {
@@ -772,34 +1099,65 @@ const chatVisionClaude = async (p: Provider, model: string, imageB64: string, pr
         role: "user",
         content: [
           { type: "text", text: prompt || "用中文描述此图片" },
-          { type: "image", source: { type: "base64", media_type: "image/png", data: imageB64 } }
-        ]
-      }
-    ]
+          {
+            type: "image",
+            source: { type: "base64", media_type: "image/png", data: imageB64 },
+          },
+        ],
+      },
+    ],
   };
   const attempts = buildAuthAttempts(p, { "anthropic-version": v });
   try {
     const data: any = await tryPostJSON(url, body, attempts);
     const blocks = data?.content || data?.message?.content || [];
-    return Array.isArray(blocks) ? blocks.map((b: any) => b?.text || b?.content?.[0]?.text || "").join("") : "";
+    return Array.isArray(blocks)
+      ? blocks.map((b: any) => b?.text || b?.content?.[0]?.text || "").join("")
+      : "";
   } catch (lastErr: any) {
     const status = lastErr?.response?.status;
     const bodyErr = lastErr?.response?.data;
-    const msg = bodyErr?.error?.message || bodyErr?.message || lastErr?.message || String(lastErr);
-    throw new Error(`[chatVisionClaude] adapter=claude model=${html(model)} status=${status || "network"} message=${msg}`);
+    const msg =
+      bodyErr?.error?.message ||
+      bodyErr?.message ||
+      lastErr?.message ||
+      String(lastErr);
+    throw new Error(
+      `[chatVisionClaude] adapter=claude model=${html(model)} status=${
+        status || "network"
+      } message=${msg}`
+    );
   }
 };
-const chatVision = async (p: Provider, compat: string, model: string, imageB64: string, prompt?: string): Promise<string> => {
+const chatVision = async (
+  p: Provider,
+  compat: string,
+  model: string,
+  imageB64: string,
+  prompt?: string
+): Promise<string> => {
   if (compat === "openai") return chatVisionOpenAI(p, model, imageB64, prompt);
   if (compat === "gemini") return chatVisionGemini(p, model, imageB64, prompt);
   if (compat === "claude") return chatVisionClaude(p, model, imageB64, prompt);
-  return chatOpenAI(p, model, [{ role: "user", content: prompt || "描述这张图片" } as any] as any);
+  return chatOpenAI(p, model, [
+    { role: "user", content: prompt || "描述这张图片" } as any,
+  ] as any);
 };
 
 /* ---------- 生图 ---------- */
-const imageOpenAI = async (p: Provider, model: string, prompt: string): Promise<string> => {
+const imageOpenAI = async (
+  p: Provider,
+  model: string,
+  prompt: string
+): Promise<string> => {
   const url = trimBase(p.baseUrl) + "/v1/images/generations";
-  const body = { model, prompt, n: 1, response_format: "b64_json", size: "1024x1024" };
+  const body = {
+    model,
+    prompt,
+    n: 1,
+    response_format: "b64_json",
+    size: "1024x1024",
+  };
   const attempts = buildAuthAttempts(p, { "Content-Type": "application/json" });
   const data = await tryPostJSON(url, body, attempts);
   const first = data?.data?.[0] || {};
@@ -808,7 +1166,11 @@ const imageOpenAI = async (p: Provider, model: string, prompt: string): Promise<
   const urlOut = first?.url || first?.image_url;
   if (urlOut) {
     try {
-      const r = await axiosWithRetry({ method: "GET", url: String(urlOut), responseType: "arraybuffer" });
+      const r = await axiosWithRetry({
+        method: "GET",
+        url: String(urlOut),
+        responseType: "arraybuffer",
+      });
       const buf: any = r.data;
       const b: Buffer = Buffer.isBuffer(buf) ? buf : Buffer.from(buf);
       if (b && b.length > 0) return b.toString("base64");
@@ -816,9 +1178,17 @@ const imageOpenAI = async (p: Provider, model: string, prompt: string): Promise<
   }
   return "";
 };
-const imageGemini = async (p: Provider, model: string, prompt: string): Promise<{ image?: Buffer; text?: string; mime?: string }> => {
+const imageGemini = async (
+  p: Provider,
+  model: string,
+  prompt: string
+): Promise<{ image?: Buffer; text?: string; mime?: string }> => {
   let imageModel = model;
-  if (!model.includes("image") && !model.includes("2.5-flash") && !model.includes("2.0-flash")) {
+  if (
+    !model.includes("image") &&
+    !model.includes("2.5-flash") &&
+    !model.includes("2.0-flash")
+  ) {
     imageModel = "gemini-2.5-flash-image-preview";
   }
   const path = `/models/${encodeURIComponent(imageModel)}:generateContent`;
@@ -827,9 +1197,13 @@ const imageGemini = async (p: Provider, model: string, prompt: string): Promise<
       method: "POST",
       data: {
         contents: [{ role: "user", parts: [{ text: prompt }] }],
-        generationConfig: { responseModalities: ["TEXT", "IMAGE"], temperature: 0.7, maxOutputTokens: 2048 }
+        generationConfig: {
+          responseModalities: ["TEXT", "IMAGE"],
+          temperature: 0.7,
+          maxOutputTokens: 2048,
+        },
       },
-      params: { key: p.apiKey }
+      params: { key: p.apiKey },
     });
     const parts = data?.candidates?.[0]?.content?.parts || [];
     let text: string | undefined;
@@ -853,14 +1227,24 @@ const imageGemini = async (p: Provider, model: string, prompt: string): Promise<
   } catch (err: any) {
     const status = err?.response?.status;
     const body = err?.response?.data;
-    const msg = body?.error?.message || body?.message || err?.message || String(err);
-    console.error(`[imageGemini] 图片生成失败: model=${imageModel} status=${status || "network"} message=${msg}`);
+    const msg =
+      body?.error?.message || body?.message || err?.message || String(err);
+    console.error(
+      `[imageGemini] 图片生成失败: model=${imageModel} status=${
+        status || "network"
+      } message=${msg}`
+    );
     throw new Error(`图片生成失败：${msg}`);
   }
 };
 
 /* ---------- TTS ---------- */
-const ttsGemini = async (p: Provider, model: string, input: string, voiceName?: string): Promise<{ audio?: Buffer; mime?: string }> => {
+const ttsGemini = async (
+  p: Provider,
+  model: string,
+  input: string,
+  voiceName?: string
+): Promise<{ audio?: Buffer; mime?: string }> => {
   const path = `/models/${encodeURIComponent(model)}:generateContent`;
   const voice = voiceName || "Kore";
   const buildPayloads = () => [
@@ -868,13 +1252,15 @@ const ttsGemini = async (p: Provider, model: string, input: string, voiceName?: 
       contents: [{ role: "user", parts: [{ text: input }] }],
       generationConfig: {
         responseModalities: ["AUDIO"],
-        speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: voice } } }
-      }
+        speechConfig: {
+          voiceConfig: { prebuiltVoiceConfig: { voiceName: voice } },
+        },
+      },
     },
     {
       contents: [{ role: "user", parts: [{ text: input }] }],
-      generationConfig: { responseModalities: ["AUDIO"] }
-    }
+      generationConfig: { responseModalities: ["AUDIO"] },
+    },
   ];
   try {
     for (let i = 0; i < buildPayloads().length; i++) {
@@ -884,7 +1270,7 @@ const ttsGemini = async (p: Provider, model: string, input: string, voiceName?: 
           method: "POST",
           data: payload,
           params: { key: p.apiKey },
-          timeout: 60000
+          timeout: 60000,
         });
         const parts = data?.candidates?.[0]?.content?.parts || [];
         for (const part of parts) {
@@ -909,7 +1295,12 @@ const ttsGemini = async (p: Provider, model: string, input: string, voiceName?: 
     return {};
   }
 };
-const ttsOpenAI = async (p: Provider, model: string, input: string, voiceName?: string): Promise<Buffer> => {
+const ttsOpenAI = async (
+  p: Provider,
+  model: string,
+  input: string,
+  voiceName?: string
+): Promise<Buffer> => {
   const base = trimBase(p.baseUrl);
   const paths = ["/v1/audio/speech", "/v1/audio/tts", "/audio/speech"];
   const payload = { model, input, voice: voiceName || "alloy", format: "opus" };
@@ -919,7 +1310,14 @@ const ttsOpenAI = async (p: Provider, model: string, input: string, voiceName?: 
     const url = base + pth;
     for (const a of attempts) {
       try {
-        const r = await axiosWithRetry({ method: "POST", url, data: payload, responseType: "arraybuffer", ...(a || {}), timeout: 60000 });
+        const r = await axiosWithRetry({
+          method: "POST",
+          url,
+          data: payload,
+          responseType: "arraybuffer",
+          ...(a || {}),
+          timeout: 60000,
+        });
         const data: any = r.data;
         const buf: Buffer = Buffer.isBuffer(data) ? data : Buffer.from(data);
         if (buf && buf.length > 0) return buf;
@@ -930,35 +1328,56 @@ const ttsOpenAI = async (p: Provider, model: string, input: string, voiceName?: 
   }
   const status = lastErr?.response?.status;
   const bodyErr = lastErr?.response?.data;
-  const msg = bodyErr?.error?.message || bodyErr?.message || lastErr?.message || String(lastErr);
-  throw new Error(`[ttsOpenAI] adapter=openai model=${html(model)} status=${status || "network"} message=${msg}`);
+  const msg =
+    bodyErr?.error?.message ||
+    bodyErr?.message ||
+    lastErr?.message ||
+    String(lastErr);
+  throw new Error(
+    `[ttsOpenAI] adapter=openai model=${html(model)} status=${
+      status || "network"
+    } message=${msg}`
+  );
 };
 
 /* ---------- PCM -> WAV ---------- */
-const convertPcmL16ToWavIfNeeded = (raw: Buffer, mime?: string): { buf: Buffer; mime: string } => {
+const convertPcmL16ToWavIfNeeded = (
+  raw: Buffer,
+  mime?: string
+): { buf: Buffer; mime: string } => {
   let buf = raw;
   let outMime = mime || "audio/ogg";
   const lm = outMime.toLowerCase();
   if (lm.includes("l16") && lm.includes("pcm")) {
     try {
       const parse = (mt: string) => {
-        const [fileType, ...params] = mt.split(";").map(s => s.trim());
+        const [fileType, ...params] = mt.split(";").map((s) => s.trim());
         const [, format] = (fileType || "").split("/");
-        const opts: any = { numChannels: 1, sampleRate: 24000, bitsPerSample: 16 };
+        const opts: any = {
+          numChannels: 1,
+          sampleRate: 24000,
+          bitsPerSample: 16,
+        };
         if (format && format.toUpperCase().startsWith("L")) {
           const bits = parseInt(format.slice(1), 10);
           if (!isNaN(bits)) opts.bitsPerSample = bits;
         }
         for (const param of params) {
-          const [k, v] = param.split("=").map(s => s.trim());
-          if (k === "rate") { const r = parseInt(v, 10); if (!isNaN(r)) opts.sampleRate = r; }
-          if (k === "channels") { const c = parseInt(v, 10); if (!isNaN(c)) opts.numChannels = c; }
+          const [k, v] = param.split("=").map((s) => s.trim());
+          if (k === "rate") {
+            const r = parseInt(v, 10);
+            if (!isNaN(r)) opts.sampleRate = r;
+          }
+          if (k === "channels") {
+            const c = parseInt(v, 10);
+            if (!isNaN(c)) opts.numChannels = c;
+          }
         }
         return opts;
       };
       const createHeader = (len: number, o: any) => {
-        const byteRate = o.sampleRate * o.numChannels * o.bitsPerSample / 8;
-        const blockAlign = o.numChannels * o.bitsPerSample / 8;
+        const byteRate = (o.sampleRate * o.numChannels * o.bitsPerSample) / 8;
+        const blockAlign = (o.numChannels * o.bitsPerSample) / 8;
         const b = Buffer.alloc(44);
         b.write("RIFF", 0);
         b.writeUInt32LE(36 + len, 4);
@@ -985,7 +1404,12 @@ const convertPcmL16ToWavIfNeeded = (raw: Buffer, mime?: string): { buf: Buffer; 
 };
 
 /* ---------- 语音发送 ---------- */
-const sendVoiceWithCaption = async (msg: Api.Message, fileBuf: Buffer, caption: string, replyToId?: number): Promise<void> => {
+const sendVoiceWithCaption = async (
+  msg: Api.Message,
+  fileBuf: Buffer,
+  caption: string,
+  replyToId?: number
+): Promise<void> => {
   try {
     const file: any = Object.assign(fileBuf, { name: "ai.ogg" });
     await msg.client?.sendFile(msg.peerId, {
@@ -993,27 +1417,43 @@ const sendVoiceWithCaption = async (msg: Api.Message, fileBuf: Buffer, caption: 
       caption,
       parseMode: "html",
       replyTo: replyToId || undefined,
-      attributes: [new Api.DocumentAttributeAudio({ duration: 0, voice: true })]
+      attributes: [
+        new Api.DocumentAttributeAudio({ duration: 0, voice: true }),
+      ],
     });
   } catch (error: any) {
-    if (error?.message?.includes("CHAT_SEND_VOICES_FORBIDDEN") || error?.message?.includes("VOICES_FORBIDDEN")) {
-      console.warn("[AI] Voice sending forbidden, retrying as regular audio/document");
+    if (
+      error?.message?.includes("CHAT_SEND_VOICES_FORBIDDEN") ||
+      error?.message?.includes("VOICES_FORBIDDEN")
+    ) {
+      console.warn(
+        "[AI] Voice sending forbidden, retrying as regular audio/document"
+      );
       try {
         const altFile: any = Object.assign(fileBuf, { name: "ai.wav" });
         await msg.client?.sendFile(msg.peerId, {
           file: altFile,
           caption,
           parseMode: "html",
-          replyTo: replyToId || undefined
+          replyTo: replyToId || undefined,
         });
         return;
       } catch (e2: any) {
-        console.warn("[AI] Fallback to regular audio/document failed, falling back to text");
+        console.warn(
+          "[AI] Fallback to regular audio/document failed, falling back to text"
+        );
         const fallbackText = caption + "\n\n⚠️ 语音发送被禁止，已转为文本消息";
         if (replyToId) {
-          await msg.client?.sendMessage(msg.peerId, { message: fallbackText, parseMode: "html", replyTo: replyToId });
+          await msg.client?.sendMessage(msg.peerId, {
+            message: fallbackText,
+            parseMode: "html",
+            replyTo: replyToId,
+          });
         } else {
-          await msg.client?.sendMessage(msg.peerId, { message: fallbackText, parseMode: "html" });
+          await msg.client?.sendMessage(msg.peerId, {
+            message: fallbackText,
+            parseMode: "html",
+          });
         }
       }
     } else {
@@ -1023,14 +1463,35 @@ const sendVoiceWithCaption = async (msg: Api.Message, fileBuf: Buffer, caption: 
 };
 
 /* ---------- 图片发送 ---------- */
-const sendImageFile = async (msg: Api.Message, buf: Buffer, caption: string, replyToId?: number, mimeHint?: string): Promise<void> => {
-  const ext = (mimeHint || "image/png").includes("png") ? "png" : (mimeHint || "").includes("jpeg") ? "jpg" : "png";
+const sendImageFile = async (
+  msg: Api.Message,
+  buf: Buffer,
+  caption: string,
+  replyToId?: number,
+  mimeHint?: string
+): Promise<void> => {
+  const ext = (mimeHint || "image/png").includes("png")
+    ? "png"
+    : (mimeHint || "").includes("jpeg")
+    ? "jpg"
+    : "png";
   const file: any = Object.assign(buf, { name: `ai.${ext}` });
-  await msg.client?.sendFile(msg.peerId, { file, caption, parseMode: "html", replyTo: replyToId || undefined });
+  await msg.client?.sendFile(msg.peerId, {
+    file,
+    caption,
+    parseMode: "html",
+    replyTo: replyToId || undefined,
+  });
 };
 
 /* ---------- 长文自动选择 ---------- */
-const sendLongAuto = async (msg: Api.Message, text: string, replyToId?: number, opts?: { collapse?: boolean }, postfix?: string): Promise<void> => {
+const sendLongAuto = async (
+  msg: Api.Message,
+  text: string,
+  replyToId?: number,
+  opts?: { collapse?: boolean },
+  postfix?: string
+): Promise<void> => {
   if (replyToId) {
     await sendLongReply(msg, replyToId, text, opts, postfix);
   } else {
@@ -1047,8 +1508,15 @@ const parseModelListFromResponse = (data: any): string[] => {
 /* ---------- 按兼容类型枚举模型 ---------- */
 const listModels = async (p: Provider, compat: Compat): Promise<string[]> => {
   const base = trimBase(p.baseUrl);
-  const tryGet = async (url: string, headers: Record<string, string> = {}, prefer?: Compat) => {
-    const attempts = buildAuthAttempts({ ...p, compatauth: prefer || p.compatauth } as Provider, headers);
+  const tryGet = async (
+    url: string,
+    headers: Record<string, string> = {},
+    prefer?: Compat
+  ) => {
+    const attempts = buildAuthAttempts(
+      { ...p, compatauth: prefer || p.compatauth } as Provider,
+      headers
+    );
     let lastErr: any;
     for (const a of attempts) {
       try {
@@ -1130,7 +1598,14 @@ const listModels = async (p: Provider, compat: Compat): Promise<string[]> => {
   if (lastErr) throw lastErr;
   throw new Error("无法获取模型列表：服务无有效输出");
 };
-const listModelsByAnyCompat = async (p: Provider): Promise<{ models: string[]; compat: Compat | null; compats: Compat[]; modelMap?: Record<string, Compat> }> => {
+const listModelsByAnyCompat = async (
+  p: Provider
+): Promise<{
+  models: string[];
+  compat: Compat | null;
+  compats: Compat[];
+  modelMap?: Record<string, Compat>;
+}> => {
   const order: Compat[] = ["openai", "gemini", "claude"];
   const merged = new Map<string, string>();
   const compats: Compat[] = [];
@@ -1152,9 +1627,15 @@ const listModelsByAnyCompat = async (p: Provider): Promise<{ models: string[]; c
   }
   for (const k of Object.keys(modelMap)) {
     const g = detectCompat("", k, "");
-    if ((g === "gemini" || g === "claude") && modelMap[k] !== g) modelMap[k] = g;
+    if ((g === "gemini" || g === "claude") && modelMap[k] !== g)
+      modelMap[k] = g;
   }
-  return { models: Array.from(merged.values()), compat: primary, compats, modelMap };
+  return {
+    models: Array.from(merged.values()),
+    compat: primary,
+    compats,
+    modelMap,
+  };
 };
 
 /* ---------- 预设 Prompt 应用 ---------- */
@@ -1165,7 +1646,11 @@ const applyPresetPrompt = (userInput: string): string => {
 };
 
 /* ---------- 统一聊天调用 ---------- */
-const callChat = async (kind: "chat" | "search", text: string, msg: Api.Message): Promise<{ content: string; model: string }> => {
+const callChat = async (
+  kind: "chat" | "search",
+  text: string,
+  msg: Api.Message
+): Promise<{ content: string; model: string }> => {
   const m = pick(kind);
   if (!m) throw new Error(`未设置${kind}模型，请先配置`);
   const p = providerOf(m.provider);
@@ -1178,12 +1663,18 @@ const callChat = async (kind: "chat" | "search", text: string, msg: Api.Message)
   let out = "";
   try {
     const isSearch = kind === "search";
-    if (compat === "openai") out = await chatOpenAI(p, m.model, msgs, undefined, isSearch);
-    else if (compat === "claude") out = await chatClaude(p, m.model, msgs, undefined, isSearch);
+    if (compat === "openai")
+      out = await chatOpenAI(p, m.model, msgs, undefined, isSearch);
+    else if (compat === "claude")
+      out = await chatClaude(p, m.model, msgs, undefined, isSearch);
     else out = await chatGemini(p, m.model, msgs, isSearch);
   } catch (e: any) {
     const em = e?.message || String(e);
-    throw new Error(`[${kind}] provider=${m.provider} compat=${compat} model=${html(m.model)} :: ${em}`);
+    throw new Error(
+      `[${kind}] provider=${m.provider} compat=${compat} model=${html(
+        m.model
+      )} :: ${em}`
+    );
   }
   if (Store.data.contextEnabled) {
     pushHist(id, "user", text);
@@ -1311,21 +1802,53 @@ class AiPlugin extends Plugin {
         fold: "collapse",
         cfg: "config",
         c: "config",
-        m: "model"
+        m: "model",
       };
       const subn = aliasMap[subl] || subl;
       const knownSubs = [
-        "config","model","context","collapse","telegraph","voice","prompt",
-        "chat","search","image","tts","audio","searchaudio"
+        "config",
+        "model",
+        "context",
+        "collapse",
+        "telegraph",
+        "voice",
+        "prompt",
+        "chat",
+        "search",
+        "image",
+        "tts",
+        "audio",
+        "searchaudio",
       ];
       const isUnknownBareQuery = !!subn && !knownSubs.includes(subn);
       try {
-        const preflight = async (kind: keyof Models): Promise<{ m: { provider: string; model: string }; p: Provider; compat: Compat } | null> => {
+        const preflight = async (
+          kind: keyof Models
+        ): Promise<{
+          m: { provider: string; model: string };
+          p: Provider;
+          compat: Compat;
+        } | null> => {
           const m = pick(kind);
-          if (!m) { await msg.edit({ text: `❌ 未设置 ${kind} 模型`, parseMode: "html" }); return null; }
+          if (!m) {
+            await msg.edit({
+              text: `❌ 未设置 ${kind} 模型`,
+              parseMode: "html",
+            });
+            return null;
+          }
           const p = providerOf(m.provider);
-          if (!p) { await msg.edit({ text: "❌ 服务商未配置", parseMode: "html" }); return null; }
-          if (!p.apiKey) { await msg.edit({ text: "❌ 未提供令牌，请先配置 API Key（ai config add/update）", parseMode: "html" }); return null; }
+          if (!p) {
+            await msg.edit({ text: "❌ 服务商未配置", parseMode: "html" });
+            return null;
+          }
+          if (!p.apiKey) {
+            await msg.edit({
+              text: "❌ 未提供令牌，请先配置 API Key（ai config add/update）",
+              parseMode: "html",
+            });
+            return null;
+          }
           const compat = await resolveCompat(m.provider, m.model, p);
           return { m, p, compat };
         };
@@ -1336,37 +1859,62 @@ class AiPlugin extends Plugin {
           if (a0 === "set") {
             const promptContent = args.slice(1).join(" ").trim();
             if (!promptContent) {
-              await msg.edit({ text: "❌ 请提供预设Prompt内容", parseMode: "html" });
+              await msg.edit({
+                text: "❌ 请提供预设Prompt内容",
+                parseMode: "html",
+              });
               return;
             }
             Store.data.presetPrompt = promptContent;
             await Store.writeSoon();
-            await msg.edit({ text: `✅ 已设置全局Prompt预设\n\n<blockquote expandable>${html(promptContent)}</blockquote>`, parseMode: "html" });
+            await msg.edit({
+              text: `✅ 已设置全局Prompt预设\n\n<blockquote expandable>${html(
+                promptContent
+              )}</blockquote>`,
+              parseMode: "html",
+            });
             return;
           }
           if (a0 === "clear") {
             Store.data.presetPrompt = "";
             await Store.writeSoon();
-            await msg.edit({ text: "✅ 已清除全局Prompt预设", parseMode: "html" });
+            await msg.edit({
+              text: "✅ 已清除全局Prompt预设",
+              parseMode: "html",
+            });
             return;
           }
           if (a0 === "show") {
             const currentPrompt = Store.data.presetPrompt || "";
             if (!currentPrompt) {
-              await msg.edit({ text: "📝 当前未设置全局Prompt预设", parseMode: "html" });
+              await msg.edit({
+                text: "📝 当前未设置全局Prompt预设",
+                parseMode: "html",
+              });
               return;
             }
-            await sendLong(msg, `📝 <b>当前全局Prompt预设</b>\n\n<blockquote expandable>${html(currentPrompt)}</blockquote>`);
+            await sendLong(
+              msg,
+              `📝 <b>当前全局Prompt预设</b>\n\n<blockquote expandable>${html(
+                currentPrompt
+              )}</blockquote>`
+            );
             return;
           }
-          await msg.edit({ text: "❌ 未知 prompt 子命令\n支持: set|clear|show", parseMode: "html" });
+          await msg.edit({
+            text: "❌ 未知 prompt 子命令\n支持: set|clear|show",
+            parseMode: "html",
+          });
           return;
         }
 
         /* ---------- 配置管理 ---------- */
         if (subn === "config") {
           if ((msg as any).isGroup || (msg as any).isChannel) {
-            await msg.edit({ text: "❌ 为保护用户隐私，禁止在公共对话环境使用ai config所有子命令", parseMode: "html" });
+            await msg.edit({
+              text: "❌ 为保护用户隐私，禁止在公共对话环境使用ai config所有子命令",
+              parseMode: "html",
+            });
             return;
           }
           const a0 = (args[0] || "").toLowerCase();
@@ -1375,16 +1923,33 @@ class AiPlugin extends Plugin {
             const flags = [
               `• 上下文: ${Store.data.contextEnabled ? "开启" : "关闭"}`,
               `• 折叠: ${Store.data.collapse ? "开启" : "关闭"}`,
-              `• Telegraph: ${Store.data.telegraph.enabled ? "开启" : "关闭"}${Store.data.telegraph.enabled && Store.data.telegraph.limit ? `（阈值 ${Store.data.telegraph.limit}）` : ""}`,
-              `• Prompt预设: ${Store.data.presetPrompt ? "✅ 已设置" : "❌ 未设置"}`
+              `• Telegraph: ${Store.data.telegraph.enabled ? "开启" : "关闭"}${
+                Store.data.telegraph.enabled && Store.data.telegraph.limit
+                  ? `（阈值 ${Store.data.telegraph.limit}）`
+                  : ""
+              }`,
+              `• Prompt预设: ${
+                Store.data.presetPrompt ? "✅ 已设置" : "❌ 未设置"
+              }`,
             ].join("\n");
-            const provList = Object.entries(Store.data.providers)
-              .map(([n, v]) => {
-                const display = shortenUrlForDisplay(v.baseUrl);
-                return `• <b>${html(n)}</b> - key:${v.apiKey ? "✅" : "❌"} base:<a href="${html(v.baseUrl)}">${html(display)}</a>`;
-              })
-              .join("\n") || "(空)";
-            const txt = `⚙️ <b>AI 配置概览</b>\n\n<b>功能模型</b>\n<b>chat:</b> <code>${html(cur.chat) || "(未设)"}</code>\n<b>search:</b> <code>${html(cur.search) || "(未设)"}</code>\n<b>image:</b> <code>${html(cur.image) || "(未设)"}</code>\n<b>tts:</b> <code>${html(cur.tts) || "(未设)"}</code>\n\n<b>功能开关</b>\n${flags}\n\n<b>服务商</b>\n${provList}`;
+            const provList =
+              Object.entries(Store.data.providers)
+                .map(([n, v]) => {
+                  const display = shortenUrlForDisplay(v.baseUrl);
+                  return `• <b>${html(n)}</b> - key:${
+                    v.apiKey ? "✅" : "❌"
+                  } base:<a href="${html(v.baseUrl)}">${html(display)}</a>`;
+                })
+                .join("\n") || "(空)";
+            const txt = `⚙️ <b>AI 配置概览</b>\n\n<b>功能模型</b>\n<b>chat:</b> <code>${
+              html(cur.chat) || "(未设)"
+            }</code>\n<b>search:</b> <code>${
+              html(cur.search) || "(未设)"
+            }</code>\n<b>image:</b> <code>${
+              html(cur.image) || "(未设)"
+            }</code>\n<b>tts:</b> <code>${
+              html(cur.tts) || "(未设)"
+            }</code>\n\n<b>功能开关</b>\n${flags}\n\n<b>服务商</b>\n${provList}`;
             await sendLong(msg, txt);
             return;
           }
@@ -1397,19 +1962,31 @@ class AiPlugin extends Plugin {
             try {
               const u = new URL(baseUrl);
               if (u.protocol !== "http:" && u.protocol !== "https:") {
-                await msg.edit({ text: "❌ baseUrl 无效，请使用 http/https 协议", parseMode: "html" });
+                await msg.edit({
+                  text: "❌ baseUrl 无效，请使用 http/https 协议",
+                  parseMode: "html",
+                });
                 return;
               }
             } catch {
-              await msg.edit({ text: "❌ baseUrl 无效，请检查是否为合法 URL", parseMode: "html" });
+              await msg.edit({
+                text: "❌ baseUrl 无效，请检查是否为合法 URL",
+                parseMode: "html",
+              });
               return;
             }
-            Store.data.providers[name] = { apiKey: key, baseUrl: trimBase(baseUrl.trim()) };
+            Store.data.providers[name] = {
+              apiKey: key,
+              baseUrl: trimBase(baseUrl.trim()),
+            };
             if (Store.data.modelCompat) delete Store.data.modelCompat[name];
             compatResolving.delete(name);
             await Store.writeSoon();
             await refreshModelCatalog(true).catch(() => {});
-            await msg.edit({ text: `✅ 已添加 <b>${html(name)}</b>`, parseMode: "html" });
+            await msg.edit({
+              text: `✅ 已添加 <b>${html(name)}</b>`,
+              parseMode: "html",
+            });
             return;
           }
           if (a0 === "update") {
@@ -1431,36 +2008,56 @@ class AiPlugin extends Plugin {
               try {
                 const u = new URL(value);
                 if (u.protocol !== "http:" && u.protocol !== "https:") {
-                  await msg.edit({ text: "❌ baseUrl 无效，请使用 http/https 协议", parseMode: "html" });
+                  await msg.edit({
+                    text: "❌ baseUrl 无效，请使用 http/https 协议",
+                    parseMode: "html",
+                  });
                   return;
                 }
               } catch {
-                await msg.edit({ text: "❌ baseUrl 无效，请检查是否为合法 URL", parseMode: "html" });
+                await msg.edit({
+                  text: "❌ baseUrl 无效，请检查是否为合法 URL",
+                  parseMode: "html",
+                });
                 return;
               }
               p.baseUrl = trimBase(value.trim());
               delete (p as any).compatauth;
             } else {
-              await msg.edit({ text: "❌ 字段仅支持 apikey|baseurl", parseMode: "html" });
+              await msg.edit({
+                text: "❌ 字段仅支持 apikey|baseurl",
+                parseMode: "html",
+              });
               return;
             }
             if (Store.data.modelCompat) delete Store.data.modelCompat[name];
             compatResolving.delete(name);
             await Store.writeSoon();
             await refreshModelCatalog(true).catch(() => {});
-            await msg.edit({ text: `✅ 已更新 <b>${html(name)}</b> 的 <code>${html(field)}</code>`, parseMode: "html" });
+            await msg.edit({
+              text: `✅ 已更新 <b>${html(name)}</b> 的 <code>${html(
+                field
+              )}</code>`,
+              parseMode: "html",
+            });
             return;
           }
           if (a0 === "remove") {
             const target = (args[1] || "").toLowerCase();
             if (!target) {
-              await msg.edit({ text: "❌ 请输入服务商名称或 all", parseMode: "html" });
+              await msg.edit({
+                text: "❌ 请输入服务商名称或 all",
+                parseMode: "html",
+              });
               return;
             }
             if (target === "all") {
               Store.data.providers = {};
               Store.data.modelCompat = {};
-              Store.data.modelCatalog = { map: {}, updatedAt: undefined } as any;
+              Store.data.modelCatalog = {
+                map: {},
+                updatedAt: undefined,
+              } as any;
               compatResolving.clear();
             } else {
               if (!Store.data.providers[target]) {
@@ -1469,7 +2066,12 @@ class AiPlugin extends Plugin {
               }
               delete Store.data.providers[target];
               if (Store.data.modelCompat) delete Store.data.modelCompat[target];
-              const kinds: (keyof Models)[] = ["chat", "search", "image", "tts"];
+              const kinds: (keyof Models)[] = [
+                "chat",
+                "search",
+                "image",
+                "tts",
+              ];
               for (const k of kinds) {
                 const v = Store.data.models[k];
                 if (v && v.startsWith(target + " ")) Store.data.models[k] = "";
@@ -1481,12 +2083,15 @@ class AiPlugin extends Plugin {
             return;
           }
           if (a0 === "list") {
-            const list = Object.entries(Store.data.providers)
-              .map(([n, v]) => {
-                const display = shortenUrlForDisplay(v.baseUrl);
-                return `• <b>${html(n)}</b> - key:${v.apiKey ? "✅" : "❌"} base:<a href="${html(v.baseUrl)}">${html(display)}</a>`;
-              })
-              .join("\n") || "(空)";
+            const list =
+              Object.entries(Store.data.providers)
+                .map(([n, v]) => {
+                  const display = shortenUrlForDisplay(v.baseUrl);
+                  return `• <b>${html(n)}</b> - key:${
+                    v.apiKey ? "✅" : "❌"
+                  } base:<a href="${html(v.baseUrl)}">${html(display)}</a>`;
+                })
+                .join("\n") || "(空)";
             await sendLong(msg, `📦 <b>已配置服务商</b>\n\n${list}`);
             return;
           }
@@ -1505,20 +2110,43 @@ class AiPlugin extends Plugin {
               selected = res.compat;
             } catch {}
             if (!models.length || !selected) {
-              await msg.edit({ text: "❌ 该服务商的权鉴方式未使用OpenAI、Google Gemini、Claude的标准接口，不做兼容。", parseMode: "html" });
+              await msg.edit({
+                text: "❌ 该服务商的权鉴方式未使用OpenAI、Google Gemini、Claude的标准接口，不做兼容。",
+                parseMode: "html",
+              });
               return;
             }
-            const buckets = { chat: [] as string[], search: [] as string[], image: [] as string[], tts: [] as string[] };
+            const buckets = {
+              chat: [] as string[],
+              search: [] as string[],
+              image: [] as string[],
+              tts: [] as string[],
+            };
             for (const m of models) {
               const ml = String(m).toLowerCase();
               if (/image|dall|sd|gpt-image/.test(ml)) buckets.image.push(m);
-              else if (/tts|voice|audio\.speech|gpt-4o.*-tts|\b-tts\b/.test(ml)) buckets.tts.push(m);
+              else if (/tts|voice|audio\.speech|gpt-4o.*-tts|\b-tts\b/.test(ml))
+                buckets.tts.push(m);
               else {
                 buckets.chat.push(m);
                 buckets.search.push(m);
               }
             }
-            const txt = `🧾 <b>${html(name!)}</b> 可用模型\n\n<b>chat/search</b>:\n${buckets.chat.length ? buckets.chat.map(x => "• " + html(x)).join("\n") : "(空)"}\n\n<b>image</b>:\n${buckets.image.length ? buckets.image.map(x => "• " + html(x)).join("\n") : "(空)"}\n\n<b>tts</b>:\n${buckets.tts.length ? buckets.tts.map(x => "• " + html(x)).join("\n") : "(空)"}`;
+            const txt = `🧾 <b>${html(
+              name!
+            )}</b> 可用模型\n\n<b>chat/search</b>:\n${
+              buckets.chat.length
+                ? buckets.chat.map((x) => "• " + html(x)).join("\n")
+                : "(空)"
+            }\n\n<b>image</b>:\n${
+              buckets.image.length
+                ? buckets.image.map((x) => "• " + html(x)).join("\n")
+                : "(空)"
+            }\n\n<b>tts</b>:\n${
+              buckets.tts.length
+                ? buckets.tts.map((x) => "• " + html(x)).join("\n")
+                : "(空)"
+            }`;
             await sendLong(msg, txt);
             return;
           }
@@ -1531,20 +2159,32 @@ class AiPlugin extends Plugin {
           const a0 = (args[0] || "").toLowerCase();
           if (a0 === "list") {
             const cur = Store.data.models;
-            const txt = `⚙️ <b>当前模型配置</b>\n\n<b>chat:</b> <code>${html(cur.chat) || "(未设)"}</code>\n<b>search:</b> <code>${html(cur.search) || "(未设)"}</code>\n<b>image:</b> <code>${html(cur.image) || "(未设)"}</code>\n<b>tts:</b> <code>${html(cur.tts) || "(未设)"}</code>`;
+            const txt = `⚙️ <b>当前模型配置</b>\n\n<b>chat:</b> <code>${
+              html(cur.chat) || "(未设)"
+            }</code>\n<b>search:</b> <code>${
+              html(cur.search) || "(未设)"
+            }</code>\n<b>image:</b> <code>${
+              html(cur.image) || "(未设)"
+            }</code>\n<b>tts:</b> <code>${html(cur.tts) || "(未设)"}</code>`;
             await sendLong(msg, txt);
             return;
           }
           if (a0 === "default") {
             Store.data.models = { chat: "", search: "", image: "", tts: "" };
             await Store.writeSoon();
-            await msg.edit({ text: "✅ 已清空所有功能模型设置", parseMode: "html" });
+            await msg.edit({
+              text: "✅ 已清空所有功能模型设置",
+              parseMode: "html",
+            });
             return;
           }
           if (a0 === "auto") {
             const entries = Object.entries(Store.data.providers);
             if (!entries.length) {
-              await msg.edit({ text: "❌ 请先使用 ai config add 添加服务商", parseMode: "html" });
+              await msg.edit({
+                text: "❌ 请先使用 ai config add 添加服务商",
+                parseMode: "html",
+              });
               return;
             }
             const modelsBy: Record<string, string[]> = {};
@@ -1560,13 +2200,29 @@ class AiPlugin extends Plugin {
                 modelsBy[n] = [];
               }
             }
-            const bucketsBy: Record<string, { chat: string[]; search: string[]; image: string[]; tts: string[] }> = {};
+            const bucketsBy: Record<
+              string,
+              {
+                chat: string[];
+                search: string[];
+                image: string[];
+                tts: string[];
+              }
+            > = {};
             for (const [n, list] of Object.entries(modelsBy)) {
-              const buckets = { chat: [] as string[], search: [] as string[], image: [] as string[], tts: [] as string[] };
+              const buckets = {
+                chat: [] as string[],
+                search: [] as string[],
+                image: [] as string[],
+                tts: [] as string[],
+              };
               for (const m of list) {
                 const ml = String(m).toLowerCase();
                 if (/image|dall|sd|gpt-image/.test(ml)) buckets.image.push(m);
-                else if (/tts|voice|audio\.speech|gpt-4o.*-tts|\b-tts\b/.test(ml)) buckets.tts.push(m);
+                else if (
+                  /tts|voice|audio\.speech|gpt-4o.*-tts|\b-tts\b/.test(ml)
+                )
+                  buckets.tts.push(m);
                 else {
                   buckets.chat.push(m);
                   buckets.search.push(m);
@@ -1574,17 +2230,27 @@ class AiPlugin extends Plugin {
               }
               bucketsBy[n] = buckets;
             }
-            const orders: Array<Compat | "other"> = ["openai", "gemini", "claude", "other"];
+            const orders: Array<Compat | "other"> = [
+              "openai",
+              "gemini",
+              "claude",
+              "other",
+            ];
             const modelFamilyOf = (m: string): Compat | "other" => {
               const s = String(m).toLowerCase();
-              if (/(gpt-|dall-e|gpt-image|tts-1|gpt-4o|\bo[134](?:-|\b))/.test(s)) return "openai";
+              if (
+                /(gpt-|dall-e|gpt-image|tts-1|gpt-4o|\bo[134](?:-|\b))/.test(s)
+              )
+                return "openai";
               if (/gemini/.test(s)) return "gemini";
               if (/claude/.test(s)) return "claude";
               return "other";
             };
             const isStable = (m: string) => {
               const s = String(m).toLowerCase();
-              return !/(preview|experimental|beta|dev|test|sandbox|staging)/.test(s);
+              return !/(preview|experimental|beta|dev|test|sandbox|staging)/.test(
+                s
+              );
             };
             const labelWeight = (s: string) => {
               let w = 0;
@@ -1599,32 +2265,82 @@ class AiPlugin extends Plugin {
             };
             const popularPatterns: Record<Compat | "other", RegExp[]> = {
               openai: [
-                /\bgpt-4o\b/i, /\bgpt-4o-mini\b/i, /\bgpt-4\.1\b/i, /\bgpt-4\.1-mini\b/i, /\bgpt-4-turbo\b/i, /\bgpt-4\b/i, /\bgpt-3\.5-turbo\b/i,
-                /\bgpt-image-1\b/i, /\btts-1\b/i, /\btts-1-hd\b/i, /\bo3\b/i, /\bo4-mini\b/i, /\bo3-mini\b/i, /\bo1\b/i
+                /\bgpt-4o\b/i,
+                /\bgpt-4o-mini\b/i,
+                /\bgpt-4\.1\b/i,
+                /\bgpt-4\.1-mini\b/i,
+                /\bgpt-4-turbo\b/i,
+                /\bgpt-4\b/i,
+                /\bgpt-3\.5-turbo\b/i,
+                /\bgpt-image-1\b/i,
+                /\btts-1\b/i,
+                /\btts-1-hd\b/i,
+                /\bo3\b/i,
+                /\bo4-mini\b/i,
+                /\bo3-mini\b/i,
+                /\bo1\b/i,
               ],
               claude: [
-                /\bclaude-3\.7-sonnet\b/i, /\bclaude-3-7-sonnet\b/i, /\bclaude-3\.5-sonnet\b/i, /\bclaude-3-5-sonnet\b/i, /\bclaude-3\.5-haiku\b/i,
-                /\bclaude-3-5-haiku\b/i, /\bclaude-3-opus\b/i, /\bclaude-3-sonnet\b/i, /\bclaude-3-haiku\b/i, /\bclaude-2\.1\b/i, /\bclaude-2\b/i
+                /\bclaude-3\.7-sonnet\b/i,
+                /\bclaude-3-7-sonnet\b/i,
+                /\bclaude-3\.5-sonnet\b/i,
+                /\bclaude-3-5-sonnet\b/i,
+                /\bclaude-3\.5-haiku\b/i,
+                /\bclaude-3-5-haiku\b/i,
+                /\bclaude-3-opus\b/i,
+                /\bclaude-3-sonnet\b/i,
+                /\bclaude-3-haiku\b/i,
+                /\bclaude-2\.1\b/i,
+                /\bclaude-2\b/i,
               ],
               gemini: [
-                /\bgemini-2\.5-pro\b/i, /\bgemini-2\.5-flash\b/i, /\bgemini-2\.5-flash-lite\b/i, /\bgemini-2\.0-flash\b/i, /\bgemini-1\.5-pro\b/i,
-                /\bgemini-1\.5-flash\b/i, /\bgemini-1\.5-flash-8b\b/i, /\bgemini-1\.0-pro\b/i, /\bgemini-1\.0-pro-vision\b/i
+                /\bgemini-2\.5-pro\b/i,
+                /\bgemini-2\.5-flash\b/i,
+                /\bgemini-2\.5-flash-lite\b/i,
+                /\bgemini-2\.0-flash\b/i,
+                /\bgemini-1\.5-pro\b/i,
+                /\bgemini-1\.5-flash\b/i,
+                /\bgemini-1\.5-flash-8b\b/i,
+                /\bgemini-1\.0-pro\b/i,
+                /\bgemini-1\.0-pro-vision\b/i,
               ],
               other: [
-                /\bdeepseek-chat\b/i, /\bdeepseek-reasoner\b/i, /\bdeepseek-v3\b/i, /\bdeepseek-v3\.1\b/i, /\bdeepseek-r1\b/i,
-                /\bgrok-2\b/i, /\bgrok-2-1212\b/i, /\bgrok-2-vision-1212\b/i, /\bgrok-1\b/i, /\bllama-3\.1-405b-instruct\b/i,
-                /\bllama-3\.1-70b-instruct\b/i, /\bllama-3-70b-instruct\b/i, /\bllama-3\.1-8b-instruct\b/i, /\bllama-3-8b-instruct\b/i,
-                /\bllama-3\.3-70b-instruct\b/i, /\bmistral-large\b/i, /\bmistral-large-2\b/i, /\bmixtral-8x22b-instruct\b/i,
-                /\bmixtral-8x7b-instruct\b/i, /\bqwen2\.5-72b-instruct\b/i, /\bqwen2-72b-instruct\b/i, /\bqwen2\.5-32b-instruct\b/i,
-                /\bqwen2\.5-7b-instruct\b/i, /\bqwen2-7b-instruct\b/i, /\bcommand-r\+\b/i, /\bcommand-r-plus\b/i, /\bcommand-r\b/i
-              ]
+                /\bdeepseek-chat\b/i,
+                /\bdeepseek-reasoner\b/i,
+                /\bdeepseek-v3\b/i,
+                /\bdeepseek-v3\.1\b/i,
+                /\bdeepseek-r1\b/i,
+                /\bgrok-2\b/i,
+                /\bgrok-2-1212\b/i,
+                /\bgrok-2-vision-1212\b/i,
+                /\bgrok-1\b/i,
+                /\bllama-3\.1-405b-instruct\b/i,
+                /\bllama-3\.1-70b-instruct\b/i,
+                /\bllama-3-70b-instruct\b/i,
+                /\bllama-3\.1-8b-instruct\b/i,
+                /\bllama-3-8b-instruct\b/i,
+                /\bllama-3\.3-70b-instruct\b/i,
+                /\bmistral-large\b/i,
+                /\bmistral-large-2\b/i,
+                /\bmixtral-8x22b-instruct\b/i,
+                /\bmixtral-8x7b-instruct\b/i,
+                /\bqwen2\.5-72b-instruct\b/i,
+                /\bqwen2-72b-instruct\b/i,
+                /\bqwen2\.5-32b-instruct\b/i,
+                /\bqwen2\.5-7b-instruct\b/i,
+                /\bqwen2-7b-instruct\b/i,
+                /\bcommand-r\+\b/i,
+                /\bcommand-r-plus\b/i,
+                /\bcommand-r\b/i,
+              ],
             };
             const isPopularByFamily = (m: string, family: Compat | "other") => {
               const s = String(m).toLowerCase();
               const pats = popularPatterns[family] || [];
-              return pats.some(re => re.test(s));
+              return pats.some((re) => re.test(s));
             };
-            const popularityWeight = (m: string, family: Compat | "other") => isPopularByFamily(m, family) ? 0.5 : 0;
+            const popularityWeight = (m: string, family: Compat | "other") =>
+              isPopularByFamily(m, family) ? 0.5 : 0;
             const versionScore = (m: string, family: Compat | "other") => {
               const s = String(m).toLowerCase();
               const numMatch = s.match(/(\d+(?:\.\d+)?)/);
@@ -1633,21 +2349,31 @@ class AiPlugin extends Plugin {
               if (/tts-1/.test(s)) base = Math.max(base, 1.0);
               return base + labelWeight(s) + popularityWeight(m, family);
             };
-            const sortCandidates = (_kind: "chat" | "search" | "image" | "tts", family: Compat | "other", list: string[]) => {
-              const preferred = list.filter(m => isPopularByFamily(m, family));
+            const sortCandidates = (
+              _kind: "chat" | "search" | "image" | "tts",
+              family: Compat | "other",
+              list: string[]
+            ) => {
+              const preferred = list.filter((m) =>
+                isPopularByFamily(m, family)
+              );
               const useList = preferred.length ? preferred : list;
-              const stable = useList.filter(m => isStable(m));
-              const unstable = useList.filter(m => !isStable(m));
-              const cmp = (a: string, b: string) => versionScore(b, family) - versionScore(a, family);
+              const stable = useList.filter((m) => isStable(m));
+              const unstable = useList.filter((m) => !isStable(m));
+              const cmp = (a: string, b: string) =>
+                versionScore(b, family) - versionScore(a, family);
               stable.sort(cmp);
               unstable.sort(cmp);
               return [...stable, ...unstable];
             };
-            const pickAcrossKind = (kind: "chat" | "search" | "image" | "tts", preferredProvider?: string) => {
+            const pickAcrossKind = (
+              kind: "chat" | "search" | "image" | "tts",
+              preferredProvider?: string
+            ) => {
               const providerOrder = (() => {
                 const names = entries.map(([n]) => n);
                 if (preferredProvider && names.includes(preferredProvider)) {
-                  const rest = names.filter(n => n !== preferredProvider);
+                  const rest = names.filter((n) => n !== preferredProvider);
                   return [preferredProvider, ...rest];
                 }
                 return names;
@@ -1656,7 +2382,9 @@ class AiPlugin extends Plugin {
                 for (const n of providerOrder) {
                   const bucket = bucketsBy[n]?.[kind] || [];
                   if (!bucket.length) continue;
-                  const candidates = bucket.filter(m => modelFamilyOf(m) === fam);
+                  const candidates = bucket.filter(
+                    (m) => modelFamilyOf(m) === fam
+                  );
                   if (!candidates.length) continue;
                   const sorted = sortCandidates(kind, fam, candidates);
                   const m = sorted[0];
@@ -1676,23 +2404,39 @@ class AiPlugin extends Plugin {
             const searchPref = pick("search")?.provider || undefined;
             const imagePref = pick("image")?.provider || undefined;
             const ttsPref = pick("tts")?.provider || undefined;
-            const anchorProvider = chatPref || searchPref || imagePref || ttsPref || undefined;
+            const anchorProvider =
+              chatPref || searchPref || imagePref || ttsPref || undefined;
             const chatSel = pickAcrossKind("chat", anchorProvider);
             const searchSel = pickAcrossKind("search", anchorProvider);
             const imageSel = pickAcrossKind("image", anchorProvider);
             const ttsSel = pickAcrossKind("tts", anchorProvider);
             if (!chatSel) {
-              await msg.edit({ text: "❌ 未在任何已配置服务商中找到可用 chat 模型", parseMode: "html" });
+              await msg.edit({
+                text: "❌ 未在任何已配置服务商中找到可用 chat 模型",
+                parseMode: "html",
+              });
               return;
             }
             const prev = { ...Store.data.models };
             Store.data.models.chat = `${chatSel.n} ${chatSel.m}`;
-            Store.data.models.search = searchSel ? `${searchSel.n} ${searchSel.m}` : prev.search;
-            Store.data.models.image = imageSel ? `${imageSel.n} ${imageSel.m}` : prev.image;
-            Store.data.models.tts = ttsSel ? `${ttsSel.n} ${ttsSel.m}` : prev.tts;
+            Store.data.models.search = searchSel
+              ? `${searchSel.n} ${searchSel.m}`
+              : prev.search;
+            Store.data.models.image = imageSel
+              ? `${imageSel.n} ${imageSel.m}`
+              : prev.image;
+            Store.data.models.tts = ttsSel
+              ? `${ttsSel.n} ${ttsSel.m}`
+              : prev.tts;
             await Store.writeSoon();
             const cur = Store.data.models;
-            const detail = `✅ 已智能分配 chat/search/image/tts\n\n<b>chat:</b> <code>${html(cur.chat) || "(未设)"}</code>\n<b>search:</b> <code>${html(cur.search) || "(未设)"}</code>\n<b>image:</b> <code>${html(cur.image) || "(未设)"}</code>\n<b>tts:</b> <code>${html(cur.tts) || "(未设)"}</code>`;
+            const detail = `✅ 已智能分配 chat/search/image/tts\n\n<b>chat:</b> <code>${
+              html(cur.chat) || "(未设)"
+            }</code>\n<b>search:</b> <code>${
+              html(cur.search) || "(未设)"
+            }</code>\n<b>image:</b> <code>${
+              html(cur.image) || "(未设)"
+            }</code>\n<b>tts:</b> <code>${html(cur.tts) || "(未设)"}</code>`;
             await msg.edit({ text: detail, parseMode: "html" });
             return;
           }
@@ -1710,7 +2454,12 @@ class AiPlugin extends Plugin {
             }
             Store.data.models[kind] = `${provider} ${model}`;
             await Store.writeSoon();
-            await msg.edit({ text: `✅ 已设置 ${kind}: <code>${html(Store.data.models[kind])}</code>`, parseMode: "html" });
+            await msg.edit({
+              text: `✅ 已设置 ${kind}: <code>${html(
+                Store.data.models[kind]
+              )}</code>`,
+              parseMode: "html",
+            });
             return;
           }
           await msg.edit({ text: "❌ 未知 model 子命令", parseMode: "html" });
@@ -1735,7 +2484,9 @@ class AiPlugin extends Plugin {
           }
           if (a0 === "show") {
             const items = histFor(id);
-            const t = items.map(x => `${x.role}: ${html(x.content)}`).join("\n");
+            const t = items
+              .map((x) => `${x.role}: ${html(x.content)}`)
+              .join("\n");
             await sendLong(msg, t || "(空)");
             return;
           }
@@ -1743,10 +2494,16 @@ class AiPlugin extends Plugin {
             delete Store.data.histories[id];
             if (Store.data.histMeta) delete Store.data.histMeta[id];
             await Store.writeSoon();
-            await msg.edit({ text: "✅ 已清空本会话上下文", parseMode: "html" });
+            await msg.edit({
+              text: "✅ 已清空本会话上下文",
+              parseMode: "html",
+            });
             return;
           }
-          await msg.edit({ text: "❌ 未知 context 子命令\n支持: on|off|show|del", parseMode: "html" });
+          await msg.edit({
+            text: "❌ 未知 context 子命令\n支持: on|off|show|del",
+            parseMode: "html",
+          });
           return;
         }
 
@@ -1755,7 +2512,10 @@ class AiPlugin extends Plugin {
           const a0 = (args[0] || "").toLowerCase();
           Store.data.collapse = a0 === "on";
           await Store.writeSoon();
-          await msg.edit({ text: `✅ 消息折叠: ${Store.data.collapse ? "开启" : "关闭"}`, parseMode: "html" });
+          await msg.edit({
+            text: `✅ 消息折叠: ${Store.data.collapse ? "开启" : "关闭"}`,
+            parseMode: "html",
+          });
           return;
         }
 
@@ -1778,11 +2538,22 @@ class AiPlugin extends Plugin {
             const n = parseInt(args[1] || "0");
             Store.data.telegraph.limit = isFinite(n) ? n : 0;
             await Store.writeSoon();
-            await msg.edit({ text: `✅ 阈值: ${Store.data.telegraph.limit}`, parseMode: "html" });
+            await msg.edit({
+              text: `✅ 阈值: ${Store.data.telegraph.limit}`,
+              parseMode: "html",
+            });
             return;
           }
           if (a0 === "list") {
-            const list = Store.data.telegraph.posts.map((p, i) => `${i + 1}. <a href="${p.url}">${html(p.title)}</a> ${p.createdAt}`).join("\n") || "(空)";
+            const list =
+              Store.data.telegraph.posts
+                .map(
+                  (p, i) =>
+                    `${i + 1}. <a href="${p.url}">${html(p.title)}</a> ${
+                      p.createdAt
+                    }`
+                )
+                .join("\n") || "(空)";
             await sendLong(msg, `🧾 <b>Telegraph 列表</b>\n\n${list}`);
             return;
           }
@@ -1797,20 +2568,30 @@ class AiPlugin extends Plugin {
             await msg.edit({ text: "✅ 操作完成", parseMode: "html" });
             return;
           }
-          await msg.edit({ text: "❌ 未知 telegraph 子命令", parseMode: "html" });
+          await msg.edit({
+            text: "❌ 未知 telegraph 子命令",
+            parseMode: "html",
+          });
           return;
         }
 
         /* ---------- 音色管理 ---------- */
         if (subn === "voice") {
           const a0 = (args[0] || "").toLowerCase();
-          if (!Store.data.voices) Store.data.voices = { gemini: "Kore", openai: "alloy" };
+          if (!Store.data.voices)
+            Store.data.voices = { gemini: "Kore", openai: "alloy" };
           if (a0 === "list") {
-            const geminiList = GEMINI_VOICES.map((v, i) => `${i + 1}. ${v}`).join("\n");
-            const openaiList = OPENAI_VOICES.map((v, i) => `${i + 1}. ${v}`).join("\n");
+            const geminiList = GEMINI_VOICES.map(
+              (v, i) => `${i + 1}. ${v}`
+            ).join("\n");
+            const openaiList = OPENAI_VOICES.map(
+              (v, i) => `${i + 1}. ${v}`
+            ).join("\n");
             const header = `🎤 <b>可用音色列表</b>\n\n<b>当前配置:</b>\nGemini: <code>${Store.data.voices.gemini}</code>\nOpenAI: <code>${Store.data.voices.openai}</code>\n\n`;
             const collapsedContent = `<b>Gemini (${GEMINI_VOICES.length}种):</b>\n${geminiList}\n\n<b>OpenAI (${OPENAI_VOICES.length}种):</b>\n${openaiList}`;
-            const txt = header + `<blockquote expandable>${collapsedContent}</blockquote>`;
+            const txt =
+              header +
+              `<blockquote expandable>${collapsedContent}</blockquote>`;
             await sendLong(msg, txt);
             return;
           }
@@ -1822,47 +2603,82 @@ class AiPlugin extends Plugin {
           if (a0 === "gemini") {
             const voiceName = args[1];
             if (!voiceName) {
-              await msg.edit({ text: `❌ 请指定音色名称\n当前: <code>${Store.data.voices.gemini}</code>`, parseMode: "html" });
+              await msg.edit({
+                text: `❌ 请指定音色名称\n当前: <code>${Store.data.voices.gemini}</code>`,
+                parseMode: "html",
+              });
               return;
             }
             if (!GEMINI_VOICES.includes(voiceName as any)) {
-              await msg.edit({ text: `❌ 未知音色: ${html(voiceName)}\n使用 <code>ai voice list</code> 查看可用音色`, parseMode: "html" });
+              await msg.edit({
+                text: `❌ 未知音色: ${html(
+                  voiceName
+                )}\n使用 <code>ai voice list</code> 查看可用音色`,
+                parseMode: "html",
+              });
               return;
             }
             Store.data.voices.gemini = voiceName;
             await Store.writeSoon();
-            await msg.edit({ text: `✅ 已设置 Gemini 音色: <code>${html(voiceName)}</code>`, parseMode: "html" });
+            await msg.edit({
+              text: `✅ 已设置 Gemini 音色: <code>${html(voiceName)}</code>`,
+              parseMode: "html",
+            });
             return;
           }
           if (a0 === "openai") {
             const voiceName = args[1];
             if (!voiceName) {
-              await msg.edit({ text: `❌ 请指定音色名称\n当前: <code>${Store.data.voices.openai}</code>`, parseMode: "html" });
+              await msg.edit({
+                text: `❌ 请指定音色名称\n当前: <code>${Store.data.voices.openai}</code>`,
+                parseMode: "html",
+              });
               return;
             }
             if (!OPENAI_VOICES.includes(voiceName as any)) {
-              await msg.edit({ text: `❌ 未知音色: ${html(voiceName)}\n使用 <code>ai voice list</code> 查看可用音色`, parseMode: "html" });
+              await msg.edit({
+                text: `❌ 未知音色: ${html(
+                  voiceName
+                )}\n使用 <code>ai voice list</code> 查看可用音色`,
+                parseMode: "html",
+              });
               return;
             }
             Store.data.voices.openai = voiceName;
             await Store.writeSoon();
-            await msg.edit({ text: `✅ 已设置 OpenAI 音色: <code>${html(voiceName)}</code>`, parseMode: "html" });
+            await msg.edit({
+              text: `✅ 已设置 OpenAI 音色: <code>${html(voiceName)}</code>`,
+              parseMode: "html",
+            });
             return;
           }
-          await msg.edit({ text: "❌ 未知 voice 子命令\n支持: list|show|gemini <音色>|openai <音色>", parseMode: "html" });
+          await msg.edit({
+            text: "❌ 未知 voice 子命令\n支持: list|show|gemini <音色>|openai <音色>",
+            parseMode: "html",
+          });
           return;
         }
 
         /* ---------- 对话 / 搜索 ---------- */
-        if (subn === "chat" || subn === "search" || !subn || isUnknownBareQuery) {
+        if (
+          subn === "chat" ||
+          subn === "search" ||
+          !subn ||
+          isUnknownBareQuery
+        ) {
           const replyMsg = await msg.getReplyMessage();
           const isSearch = subn === "search";
-          const plain = (((isUnknownBareQuery ? [sub, ...args] : args).join(" ") || "").trim());
+          const plain = (
+            (isUnknownBareQuery ? [sub, ...args] : args).join(" ") || ""
+          ).trim();
           const repliedText = extractText(replyMsg).trim();
           const q = (plain || repliedText).trim();
           const hasImage = !!(replyMsg && (replyMsg as any).media);
           if (!q && !hasImage) {
-            await msg.edit({ text: "❌ 请输入内容或回复一条消息", parseMode: "html" });
+            await msg.edit({
+              text: "❌ 请输入内容或回复一条消息",
+              parseMode: "html",
+            });
             return;
           }
           await msg.edit({ text: "🔄 处理中...", parseMode: "html" });
@@ -1875,16 +2691,32 @@ class AiPlugin extends Plugin {
           if (hasImage) {
             try {
               const raw = await msg.client?.downloadMedia(replyMsg as any);
-              const buf: Buffer | undefined = Buffer.isBuffer(raw) ? raw as Buffer : raw != null ? Buffer.from(String(raw)) : undefined;
+              const buf: Buffer | undefined = Buffer.isBuffer(raw)
+                ? (raw as Buffer)
+                : raw != null
+                ? Buffer.from(String(raw))
+                : undefined;
               if (!buf || !buf.length) {
-                await msg.edit({ text: "❌ 无法下载被回复的媒体", parseMode: "html" });
+                await msg.edit({
+                  text: "❌ 无法下载被回复的媒体",
+                  parseMode: "html",
+                });
                 return;
               }
               const b64 = buf.toString("base64");
               const processedPrompt = applyPresetPrompt(q || "描述这张图片");
-              content = await chatVision(p, compat, m.model, b64, processedPrompt);
+              content = await chatVision(
+                p,
+                compat,
+                m.model,
+                b64,
+                processedPrompt
+              );
             } catch (e: any) {
-              await msg.edit({ text: `❌ 处理图片失败：${html(mapError(e, "vision"))}`, parseMode: "html" });
+              await msg.edit({
+                text: `❌ 处理图片失败：${html(mapError(e, "vision"))}`,
+                parseMode: "html",
+              });
               return;
             }
           } else {
@@ -1896,22 +2728,49 @@ class AiPlugin extends Plugin {
           const footTxt = footer(usedModel, isSearch ? "with Search" : "");
           const full = formatQA(q || "(图片)", content);
           const replyToId = replyMsg?.id || 0;
-          if (Store.data.telegraph.enabled && Store.data.telegraph.limit > 0 && full.length > Store.data.telegraph.limit) {
+          if (
+            Store.data.telegraph.enabled &&
+            Store.data.telegraph.limit > 0 &&
+            full.length > Store.data.telegraph.limit
+          ) {
             const url = await createTGPage("TeleBox AI", content);
             if (url) {
-              Store.data.telegraph.posts.unshift({ title: (q || "图片").slice(0, 30) || "AI", url, createdAt: nowISO() });
-              Store.data.telegraph.posts = Store.data.telegraph.posts.slice(0, 10);
+              Store.data.telegraph.posts.unshift({
+                title: (q || "图片").slice(0, 30) || "AI",
+                url,
+                createdAt: nowISO(),
+              });
+              Store.data.telegraph.posts = Store.data.telegraph.posts.slice(
+                0,
+                10
+              );
               await Store.writeSoon();
-              await sendLongAuto(msg, `📰 <a href="${url}">内容较长，已创建 Telegraph</a>`, replyToId, { collapse: Store.data.collapse }, footTxt);
+              await sendLongAuto(
+                msg,
+                `📰 <a href="${url}">内容较长，已创建 Telegraph</a>`,
+                replyToId,
+                { collapse: Store.data.collapse },
+                footTxt
+              );
               if (replyToId) {
-                try { await msg.delete(); } catch {}
+                try {
+                  await msg.delete();
+                } catch {}
               }
               return;
             }
           }
-          await sendLongAuto(msg, full, replyToId, { collapse: Store.data.collapse }, footTxt);
+          await sendLongAuto(
+            msg,
+            full,
+            replyToId,
+            { collapse: Store.data.collapse },
+            footTxt
+          );
           if (replyToId) {
-            try { await msg.delete(); } catch {}
+            try {
+              await msg.delete();
+            } catch {}
           }
           return;
         }
@@ -1919,7 +2778,8 @@ class AiPlugin extends Plugin {
         /* ---------- 生图 ---------- */
         if (subn === "image") {
           const replyMsg = await msg.getReplyMessage();
-          const prm = (args.join(" ") || "").trim() || extractText(replyMsg).trim();
+          const prm =
+            (args.join(" ") || "").trim() || extractText(replyMsg).trim();
           if (!prm) {
             await msg.edit({ text: "❌ 请输入提示词", parseMode: "html" });
             return;
@@ -1932,35 +2792,64 @@ class AiPlugin extends Plugin {
           if (compat === "openai") {
             const b64 = await imageOpenAI(p, m.model, prm);
             if (!b64) {
-              await msg.edit({ text: "❌ 图片生成失败：服务无有效输出", parseMode: "html" });
+              await msg.edit({
+                text: "❌ 图片生成失败：服务无有效输出",
+                parseMode: "html",
+              });
               return;
             }
             const buf = Buffer.from(b64, "base64");
-            await sendImageFile(msg, buf, `🖼️ ${html(prm)}` + footer(m.model), replyToId);
+            await sendImageFile(
+              msg,
+              buf,
+              `🖼️ ${html(prm)}` + footer(m.model),
+              replyToId
+            );
             await msg.delete();
             return;
           } else if (compat === "gemini") {
             try {
               const { image, text, mime } = await imageGemini(p, m.model, prm);
               if (image) {
-                await sendImageFile(msg, image, `🖼️ ${html(prm)}` + footer(m.model), replyToId, mime);
+                await sendImageFile(
+                  msg,
+                  image,
+                  `🖼️ ${html(prm)}` + footer(m.model),
+                  replyToId,
+                  mime
+                );
                 await msg.delete();
                 return;
               }
               if (text) {
                 const textOut = formatQA(prm, text);
-                await sendLongAuto(msg, textOut, replyToId, { collapse: Store.data.collapse }, footer(m.model));
+                await sendLongAuto(
+                  msg,
+                  textOut,
+                  replyToId,
+                  { collapse: Store.data.collapse },
+                  footer(m.model)
+                );
                 await msg.delete();
                 return;
               }
-              await msg.edit({ text: "❌ 图片生成失败：服务无有效输出", parseMode: "html" });
+              await msg.edit({
+                text: "❌ 图片生成失败：服务无有效输出",
+                parseMode: "html",
+              });
               return;
             } catch (e: any) {
-              await msg.edit({ text: `❌ 图片生成失败：${html(mapError(e, "image"))}`, parseMode: "html" });
+              await msg.edit({
+                text: `❌ 图片生成失败：${html(mapError(e, "image"))}`,
+                parseMode: "html",
+              });
               return;
             }
           } else {
-            await msg.edit({ text: "❌ 当前服务商不支持图片生成功能", parseMode: "html" });
+            await msg.edit({
+              text: "❌ 当前服务商不支持图片生成功能",
+              parseMode: "html",
+            });
             return;
           }
         }
@@ -1972,7 +2861,10 @@ class AiPlugin extends Plugin {
           const repliedText = extractText(replyMsg).trim();
           const q = (plain || repliedText).trim();
           if (!q) {
-            await msg.edit({ text: "❌ 请输入内容或回复一条消息", parseMode: "html" });
+            await msg.edit({
+              text: "❌ 请输入内容或回复一条消息",
+              parseMode: "html",
+            });
             return;
           }
           await msg.edit({ text: "🔄 处理中...", parseMode: "html" });
@@ -1990,12 +2882,19 @@ class AiPlugin extends Plugin {
             return;
           }
           if (!ptts.apiKey) {
-            await msg.edit({ text: "❌ 未提供令牌，请先配置 API Key（ai config add/update）", parseMode: "html" });
+            await msg.edit({
+              text: "❌ 未提供令牌，请先配置 API Key（ai config add/update）",
+              parseMode: "html",
+            });
             return;
           }
           const compat = await resolveCompat(mtts.provider, mtts.model, ptts);
-          if (!Store.data.voices) Store.data.voices = { gemini: "Kore", openai: "alloy" };
-          const voice = compat === "gemini" ? Store.data.voices.gemini : Store.data.voices.openai;
+          if (!Store.data.voices)
+            Store.data.voices = { gemini: "Kore", openai: "alloy" };
+          const voice =
+            compat === "gemini"
+              ? Store.data.voices.gemini
+              : Store.data.voices.openai;
           await msg.edit({ text: "🔊 合成中...", parseMode: "html" });
           const replyToId = replyMsg?.id || 0;
           if (compat === "openai") {
@@ -2004,18 +2903,29 @@ class AiPlugin extends Plugin {
             await msg.delete();
             return;
           } else if (compat === "gemini") {
-            const { audio, mime } = await ttsGemini(ptts, mtts.model, content, voice);
+            const { audio, mime } = await ttsGemini(
+              ptts,
+              mtts.model,
+              content,
+              voice
+            );
             if (audio) {
               const { buf: outBuf } = convertPcmL16ToWavIfNeeded(audio, mime);
               await sendVoiceWithCaption(msg, outBuf, "", replyToId);
               await msg.delete();
               return;
             } else {
-              await msg.edit({ text: "❌ 语音合成失败：服务无有效输出", parseMode: "html" });
+              await msg.edit({
+                text: "❌ 语音合成失败：服务无有效输出",
+                parseMode: "html",
+              });
               return;
             }
           } else {
-            await msg.edit({ text: "❌ 当前服务商不支持语音合成功能", parseMode: "html" });
+            await msg.edit({
+              text: "❌ 当前服务商不支持语音合成功能",
+              parseMode: "html",
+            });
             return;
           }
         }
@@ -2023,7 +2933,8 @@ class AiPlugin extends Plugin {
         /* ---------- TTS ---------- */
         if (subn === "tts") {
           const replyMsg = await msg.getReplyMessage();
-          const t = (args.join(" ") || "").trim() || extractText(replyMsg).trim();
+          const t =
+            (args.join(" ") || "").trim() || extractText(replyMsg).trim();
           if (!t) {
             await msg.edit({ text: "❌ 请输入文本", parseMode: "html" });
             return;
@@ -2035,12 +2946,19 @@ class AiPlugin extends Plugin {
           }
           const p = providerOf(m.provider)!;
           if (!p.apiKey) {
-            await msg.edit({ text: "❌ 未提供令牌，请先配置 API Key（ai config add/update）", parseMode: "html" });
+            await msg.edit({
+              text: "❌ 未提供令牌，请先配置 API Key（ai config add/update）",
+              parseMode: "html",
+            });
             return;
           }
           const compat = await resolveCompat(m.provider, m.model, p);
-          if (!Store.data.voices) Store.data.voices = { gemini: "Kore", openai: "alloy" };
-          const voice = compat === "gemini" ? Store.data.voices.gemini : Store.data.voices.openai;
+          if (!Store.data.voices)
+            Store.data.voices = { gemini: "Kore", openai: "alloy" };
+          const voice =
+            compat === "gemini"
+              ? Store.data.voices.gemini
+              : Store.data.voices.openai;
           await msg.edit({ text: "🔊 合成中...", parseMode: "html" });
           const replyToId = replyMsg?.id || 0;
           if (compat === "openai") {
@@ -2056,11 +2974,17 @@ class AiPlugin extends Plugin {
               await msg.delete();
               return;
             } else {
-              await msg.edit({ text: "❌ 语音合成失败：服务无有效输出", parseMode: "html" });
+              await msg.edit({
+                text: "❌ 语音合成失败：服务无有效输出",
+                parseMode: "html",
+              });
               return;
             }
           } else {
-            await msg.edit({ text: "❌ 当前服务商不支持语音合成功能", parseMode: "html" });
+            await msg.edit({
+              text: "❌ 当前服务商不支持语音合成功能",
+              parseMode: "html",
+            });
             return;
           }
         }
@@ -2069,10 +2993,13 @@ class AiPlugin extends Plugin {
         await msg.edit({ text: "❌ 未知子命令", parseMode: "html" });
         return;
       } catch (e: any) {
-        await msg.edit({ text: `❌ 出错：${html(mapError(e, subn))}`, parseMode: "html" });
+        await msg.edit({
+          text: `❌ 出错：${html(mapError(e, subn))}`,
+          parseMode: "html",
+        });
         return;
       }
-    }
+    },
   };
 }
 

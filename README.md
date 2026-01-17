@@ -56,6 +56,7 @@ tpm i <插件名>
 - `httpcat` - 发送一张http状态码主题的猫猫图片  
 - `ids` - 用户信息显示以及跳转链接  
 - `ip` - IP 地址查询  
+- `isalive` - 活了么  
 - `javdb` - 寻找番号封面  
 - `jupai` - 举牌小人  
 - `keep_online` - 保活自动重启(测试版) 请查看说明操作  
@@ -105,6 +106,7 @@ tpm i <插件名>
 - `t` - 文字转语音  
 - `teletype` - 打字机效果  
 - `trace` - 全局追踪点赞  
+- `uai` - 引用消息 AI 分析  
 - `warp` - warp管理  
 - `weather` - 天气查询  
 - `whois` - 域名查询  

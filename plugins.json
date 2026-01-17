@@ -191,6 +191,10 @@
     "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/ip/ip.ts?raw=true",
     "desc": "IP 地址查询"
   },
+  "isalive": {
+    "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/isalive/isalive.ts?raw=true",
+    "desc": "活了么"
+  },
   "javdb": {
     "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/javdb/javdb.ts?raw=true",
     "desc": "寻找番号封面"
@@ -386,6 +390,10 @@
   "trace": {
     "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/trace/trace.ts?raw=true",
     "desc": "全局追踪点赞"
+  },
+  "uai": {
+    "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/uai/uai.ts?raw=true",
+    "desc": "引用消息 AI 分析"
   },
   "warp": {
     "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/warp/warp.ts?raw=true",
