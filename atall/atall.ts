@@ -122,7 +122,7 @@ class AtAllPlugin extends Plugin {
             } else if ("title" in participant && participant.title) {
               displayName = participant.title;
             } else {
-              displayName = "";
+              continue;
             }
             
             // 使用Telegram mention链接
