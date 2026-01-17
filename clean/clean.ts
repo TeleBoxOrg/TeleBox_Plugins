@@ -61,10 +61,14 @@ class CleanPlugin extends Plugin {
   // 插件配置
   private readonly PLUGIN_NAME = "clean";
   private readonly PLUGIN_VERSION = "2.0.0";
+  public description: string = "";
   
   // 清理进度状态
   private cleanupStartTime: number = 0;
   private blockedCleanupStartTime: number = 0;
+  
+  // 命令处理器
+  private cmdHandlers: { [key: string]: (msg: Api.Message) => Promise<void> };
 
   constructor() {
     super();
@@ -410,7 +414,7 @@ class CleanPlugin extends Plugin {
     
     let bannedUsers = await getBannedUsers(client, chatEntity);
     if (!includeAll) {
-      bannedUsers = bannedUsers.filter(u => u.kickedBy === myId);
+      bannedUsers = bannedUsers.filter((u: any) => u.kickedBy === myId);
     }
     
     if (bannedUsers.length === 0) {
@@ -423,7 +427,7 @@ class CleanPlugin extends Plugin {
     await this.editMessage(msg, `⚡ 正在解封 ${bannedUsers.length} 个实体...`);
     
     const entityStats = { users: 0, channels: 0, chats: 0 };
-    bannedUsers.forEach(entity => {
+    bannedUsers.forEach((entity: any) => {
       if (entity.type === 'user') entityStats.users++;
       else if (entity.type === 'channel') entityStats.channels++;
       else if (entity.type === 'chat') entityStats.chats++;

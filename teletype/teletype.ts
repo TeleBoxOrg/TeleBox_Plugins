@@ -199,12 +199,7 @@ class TeletypePlugin extends Plugin {
   }
   
   private async getPrefixes(): Promise<string[]> {
-    try {
-      const { getPrefixes } = await import("@utils/pluginManager");
-      return getPrefixes();
-    } catch (error) {
-      return [".", "。", "!"];
-    }
+    return [".", "。", "!"];
   }
   
   private async executeTeletype(msg: Api.Message, text: string): Promise<void> {
@@ -217,6 +212,8 @@ class TeletypePlugin extends Plugin {
       parseMode: "html"
     });
     
+    if (!currentMsg) return;
+    
     await this.sleep(interval);
     
     for (const character of text) {
@@ -224,18 +221,22 @@ class TeletypePlugin extends Plugin {
       const bufferWithCursor = `${htmlEscape(buffer)}${cursor}`;
       
       try {
-        currentMsg = await currentMsg.edit({
+        currentMsg = await currentMsg?.edit({
           text: bufferWithCursor,
           parseMode: "html"
         });
         
+        if (!currentMsg) return;
+        
         await this.sleep(interval);
         
-        if (buffer.length > 0) {
+        if (buffer.length > 0 && currentMsg) {
           currentMsg = await currentMsg.edit({
             text: htmlEscape(buffer),
             parseMode: "html"
           });
+          
+          if (!currentMsg) return;
         }
         
       } catch (error: any) {
@@ -250,10 +251,12 @@ class TeletypePlugin extends Plugin {
     
     const finalText = htmlEscape(text);
     try {
-      await currentMsg.edit({
-        text: finalText,
-        parseMode: "html"
-      });
+      if (currentMsg) {
+        await currentMsg.edit({
+          text: finalText,
+          parseMode: "html"
+        });
+      }
     } catch (error: any) {
       if (!error.message?.includes("MESSAGE_NOT_MODIFIED")) {
         throw error;

@@ -170,7 +170,7 @@ async function getNodeInfo(url: string): Promise<{ node_count: number | string, 
       let identified = 0;
       const protocols = ['vmess://', 'trojan://', 'ss://', 'ssr://', 'vless://', 'hy2://', 'hysteria://', 'hy://', 'tuic://', 'wireguard://', 'socks5://', 'http://', 'https://', 'shadowtls://', 'naive://'];
       
-      decoded.split('\n').forEach(line => {
+      decoded.split('\n').forEach((line: string) => {
         if (!line.trim()) return;
         for (const pattern of protocols) {
           if (line.startsWith(pattern)) {
@@ -373,7 +373,7 @@ class SubinfoPlugin extends Plugin {
     expireTs: number; 
     startTs: number; 
     websiteInfo: { website: string | null; websiteName: string | null };
-    nodeInfo: Awaited<ReturnType<typeof getNodeInfo>> | null;
+    nodeInfo: { node_count: string | number; type_count: Record<string, number>; regions: Record<string, number> } | null;
     errorMessage: string | null;
   }> {
     const websiteInfo = await getWebsiteInfo(url);
@@ -382,12 +382,12 @@ class SubinfoPlugin extends Plugin {
         configName: '未知',
         status: '失败',
         statusEmoji: '❓',
-        profileUrl: null,
+        profileUrl: null as string | null,
         used: 0, upload: 0, download: 0, total: 0, remain: 0, percent: 0,
         expireTs: 0, startTs: 0,
         websiteInfo,
-        nodeInfo: null,
-        errorMessage: null,
+        nodeInfo: null as { node_count: string | number; type_count: Record<string, number>; regions: Record<string, number> } | null,
+        errorMessage: null as string | null,
     };
 
     try {
@@ -414,7 +414,7 @@ class SubinfoPlugin extends Plugin {
         result.configName = configName || '未知';
 
         const userInfoHeader = response.headers['subscription-userinfo'];
-        result.profileUrl = response.headers['profile-web-page-url'] as string || null;
+        result.profileUrl = (response.headers['profile-web-page-url'] as string | null) || null;
 
         if (!userInfoHeader) {
             result.errorMessage = "无流量统计信息";
@@ -423,7 +423,7 @@ class SubinfoPlugin extends Plugin {
         
         // 解析用户信息
         const userInfoParts: Record<string, string> = {};
-        userInfoHeader.split(';').forEach(part => {
+        userInfoHeader.split(';').forEach((part: string) => {
             const equalsIndex = part.indexOf('=');
             if (equalsIndex > 0) userInfoParts[part.substring(0, equalsIndex).trim().toLowerCase()] = part.substring(equalsIndex + 1).trim();
         });

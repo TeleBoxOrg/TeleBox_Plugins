@@ -1,6 +1,7 @@
 /**
  * UAI 插件 - 引用消息 AI 分析
  * 引用某用户/频道的消息，回复 .uai zj/fx 进行总结/分析
+ * 支持消息折叠显示，保持AI回答中的HTML格式
  */
 import { Plugin } from "@utils/pluginBase";
 import { getPrefixes } from "@utils/pluginManager";
@@ -32,6 +33,7 @@ type UAIConfig = {
     default_provider?: string;
     prompts: Record<string, string>;
     timeout: number;
+    collapse: boolean; // 新增：折叠开关
 };
 
 // ========== 常量 ==========
@@ -48,7 +50,8 @@ const DEFAULT_CONFIG: UAIConfig = {
     providers: {},
     default_provider: undefined,
     prompts: {},
-    timeout: DEFAULT_TIMEOUT
+    timeout: DEFAULT_TIMEOUT,
+    collapse: true // 默认折叠
 };
 
 // ========== 工具函数 ==========
@@ -61,7 +64,22 @@ function htmlEscape(t: string): string {
         .replace(/'/g, "&#39;");
 }
 
-// Markdown 转 Telegram HTML
+// HTML转义函数（确保用户输入安全）
+const escapeHtml = (text: string): string => 
+    text.replace(/[&<>"']/g, m => ({ 
+        '&': '&amp;', '<': '&lt;', '>': '&gt;', 
+        '"': '&quot;', "'": '&#x27;' 
+    }[m] || m));
+
+// 应用折叠功能
+const applyWrap = (s: string, collapse?: boolean): string => {
+    if (!collapse) return s;
+    // 检查是否已经是块引用
+    if (/<blockquote(?:\s|>|\/)\/?>/i.test(s)) return s;
+    return `<blockquote expandable>${s}</blockquote>`;
+};
+
+// Markdown 转 Telegram HTML，保留特殊格式
 function markdownToHtml(text: string): string {
     return text
         // 粗体 **text** 或 __text__
@@ -73,7 +91,11 @@ function markdownToHtml(text: string): string {
         // 代码 `code`
         .replace(/`([^`]+)`/g, "<code>$1</code>")
         // 删除线 ~~text~~
-        .replace(/~~(.+?)~~/g, "<s>$1</s>");
+        .replace(/~~(.+?)~~/g, "<s>$1</s>")
+        // 保留已有的HTML标签
+        .replace(/&lt;(.+?)&gt;/g, "<$1>")
+        // 处理块引用 > text
+        .replace(/^&gt;\s?(.+)$/gm, "<blockquote>$1</blockquote>");
 }
 
 function trimBase(url: string): string {
@@ -109,9 +131,11 @@ function parseTimeLimit(s: string): number | null {
 // ========== 数据库 ==========
 async function getDB() {
     const db = await JSONFilePreset<UAIConfig>(DB_PATH, DEFAULT_CONFIG);
+    // 确保所有字段都存在
     if (!db.data.providers) db.data.providers = {};
     if (!db.data.prompts) db.data.prompts = {};
     if (!db.data.timeout) db.data.timeout = DEFAULT_TIMEOUT;
+    if (typeof db.data.collapse !== "boolean") db.data.collapse = false;
     return db;
 }
 
@@ -281,17 +305,22 @@ function formatMessagesForAI(messages: MessageData[]): string {
 }
 
 // ========== 帮助文本 ==========
-const getHelpText = () => `⚙️ <b>UAI</b>
+const getHelpText = () => `⚙️ <b>UAI - 用户消息AI分析</b>
 
 <b>📝 功能描述:</b>
-• 引用消息，AI 自动收集并分析/总结目标用户的历史消息
+• 引用用户消息，AI自动收集并分析/总结目标用户的历史消息
+• 支持折叠显示AI回答，保持格式完整
 
-<b>🔧 使用方法:</b>
+<b>🔧 核心功能:</b>
 • <code>${mainPrefix}uai zj</code> - 总结（当天消息）
 • <code>${mainPrefix}uai fx</code> - 分析（当天消息）
-• <code>${mainPrefix}uai zj 50</code> - 总结最近 50 条
-• <code>${mainPrefix}uai fx 2h</code> - 分析最近 2 小时
+• <code>${mainPrefix}uai zj 50</code> - 总结最近50条
+• <code>${mainPrefix}uai fx 2h</code> - 分析最近2小时
 • <code>${mainPrefix}uai 自定义名</code> - 使用自定义提示词
+
+<b>⚙️ 折叠显示:</b>
+• <code>${mainPrefix}uai collapse on</code> - 开启AI回答折叠
+• <code>${mainPrefix}uai collapse off</code> - 关闭AI回答折叠
 
 <b>🔌 供应商配置:</b>
 • <code>${mainPrefix}uai add &lt;名称&gt; &lt;url&gt; &lt;key&gt; &lt;type&gt;</code> - 添加供应商
@@ -301,13 +330,23 @@ const getHelpText = () => `⚙️ <b>UAI</b>
 • <code>${mainPrefix}uai model &lt;名称&gt; &lt;模型&gt;</code> - 修改模型
 
 <b>📝 提示词配置:</b>
-• <code>${mainPrefix}uai prompt add &lt;名称&gt; &lt;内容&gt;</code> - 添加
-• <code>${mainPrefix}uai prompt del &lt;名称&gt;</code> - 删除
-• <code>${mainPrefix}uai prompt list</code> - 列表
+• <code>${mainPrefix}uai prompt add &lt;名称&gt; &lt;内容&gt;</code> - 添加自定义提示词
+• <code>${mainPrefix}uai prompt del &lt;名称&gt;</code> - 删除自定义提示词
+• <code>${mainPrefix}uai prompt list</code> - 列出所有提示词
 
-<b>💡 参数说明:</b>
+<b>💡 内置提示词:</b>
+• <code>zj</code> - 总结（提取关键信息）
+• <code>fx</code> - 分析（观点、态度分析）
+
+<b>📋 参数说明:</b>
 • type: openai / gemini
-• 内置提示词: zj(总结) fx(分析)`;
+• 时间格式: 2h(2小时), 30m(30分钟)
+• 数量格式: 50(最近50条)
+
+<b>🔍 使用示例:</b>
+1. 引用用户消息，回复: <code>.uai zj</code> - 总结当天消息
+2. 引用用户消息，回复: <code>.uai fx 100</code> - 分析最近100条
+3. 引用频道消息，回复: <code>.uai zj</code> - 总结频道消息`;
 
 // ========== 插件类 ==========
 class UAIPlugin extends Plugin {
@@ -326,6 +365,34 @@ class UAIPlugin extends Plugin {
             if (!subCmd || subCmd === "help") {
                 await msg.edit({ text: getHelpText(), parseMode: "html" });
                 return;
+            }
+
+            // 折叠开关配置
+            if (subCmd === "collapse") {
+                const action = parts[1]?.toLowerCase();
+                if (action === "on") {
+                    db.data.collapse = true;
+                    await db.write();
+                    await msg.edit({ 
+                        text: "✅ 已开启AI回答折叠显示\n\nAI回答将显示在可折叠的块引用中",
+                        parseMode: "html" 
+                    });
+                    return;
+                } else if (action === "off") {
+                    db.data.collapse = false;
+                    await db.write();
+                    await msg.edit({ 
+                        text: "✅ 已关闭AI回答折叠显示\n\nAI回答将正常显示",
+                        parseMode: "html" 
+                    });
+                    return;
+                } else {
+                    await msg.edit({ 
+                        text: `📊 当前折叠状态: <b>${db.data.collapse ? "开启" : "关闭"}</b>\n\n使用: <code>${mainPrefix}uai collapse on/off</code>`,
+                        parseMode: "html" 
+                    });
+                    return;
+                }
             }
 
             // 配置命令
@@ -382,7 +449,11 @@ class UAIPlugin extends Plugin {
                     const isDefault = db.data.default_provider === p.name ? " ⭐" : "";
                     return `• <code>${htmlEscape(p.name)}</code>${isDefault} (${p.type}, ${p.model})`;
                 }).join("\n");
-                await msg.edit({ text: `📋 <b>供应商列表</b>\n\n${list}`, parseMode: "html" });
+                const collapseStatus = `折叠显示: ${db.data.collapse ? "✅ 开启" : "❌ 关闭"}`;
+                await msg.edit({ 
+                    text: `📋 <b>供应商列表</b>\n\n${list}\n\n${collapseStatus}`, 
+                    parseMode: "html" 
+                });
                 return;
             }
 
@@ -527,7 +598,13 @@ class UAIPlugin extends Plugin {
 
                         const userInfo = `来源: ${channelName}${channelUsername ? ` (@${channelUsername})` : ""}`;
                         const result = await callAI(provider, prompt, `${userInfo}\n\n${content}`, db.data.timeout);
-                        const resultText = `📊 <b>${promptKey === "zj" ? "总结" : "分析"}结果</b>（${displayName}，${messages.length} 条）\n\n${markdownToHtml(result)}`;
+                        
+                        // 处理AI回答，保留格式并应用折叠
+                        const aiContent = markdownToHtml(result);
+                        const foldedContent = applyWrap(aiContent, db.data.collapse);
+                        
+                        const resultText = `📊 <b>${promptKey === "zj" ? "总结" : "分析"}结果</b>（${displayName}，${messages.length} 条）\n\n${foldedContent}`;
+                        
                         await msg.delete({ revoke: true });
                         await client.sendMessage(chatPeerId, { message: resultText, parseMode: "html" });
                         return;
@@ -572,7 +649,13 @@ class UAIPlugin extends Plugin {
 
                 const provider = db.data.providers[db.data.default_provider!];
                 const result = await callAI(provider, prompt, `${userInfo}\n\n${content}`, db.data.timeout);
-                const resultText = `📊 <b>${promptKey === "zj" ? "总结" : "分析"}结果</b>（${displayName}，${messages.length} 条）\n\n${markdownToHtml(result)}`;
+                
+                // 处理AI回答，保留格式并应用折叠
+                const aiContent = markdownToHtml(result);
+                const foldedContent = applyWrap(aiContent, db.data.collapse);
+                
+                const resultText = `📊 <b>${promptKey === "zj" ? "总结" : "分析"}结果</b>（${displayName}，${messages.length} 条）\n\n${foldedContent}`;
+                
                 await msg.delete({ revoke: true });
                 await client.sendMessage(chatPeerId, { message: resultText, parseMode: "html" });
 

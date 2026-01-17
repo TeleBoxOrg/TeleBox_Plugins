@@ -575,6 +575,7 @@ async function handleKomariRequest(msg: Api.Message): Promise<void> {
         return;
       }
 
+      displayName = "Komari URL";
       ConfigManager.set(CONFIG_KEYS.KOMARI_URL, configValue);
       const displayValue = configValue;
 
