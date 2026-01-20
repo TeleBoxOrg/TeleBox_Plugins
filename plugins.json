@@ -119,6 +119,10 @@
     "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/dc/dc.ts?raw=true",
     "desc": "获取实体DC"
   },
+  "deepwiki": {
+    "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/deepwiki/deepwiki.ts?raw=true",
+    "desc": "DeepWiki多项目聚合"
+  },
   "dig": {
     "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/dig/dig.ts?raw=true",
     "desc": "DNS 查询"
