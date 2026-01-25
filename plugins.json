@@ -387,6 +387,10 @@
     "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/trace/trace.ts?raw=true",
     "desc": "全局追踪点赞"
   },
+  "tts": {
+    "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/tts/tts.ts?raw=true",
+    "desc": "Azure文字转语音"
+  },
   "uai": {
     "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/uai/uai.ts?raw=true",
     "desc": "引用消息 AI 分析"
