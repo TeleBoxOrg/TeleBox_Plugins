@@ -23,6 +23,10 @@
     "url": "https://github.com/TeleBoxOrg/TeleBox_Plugins/blob/main/annualreport/annualreport.ts?raw=true",
     "desc": "年度报告"
   },
+  "atall": {
+    "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/atall/atall.ts?raw=true",
+    "desc": "一键艾特全部成员"
+  },
   "atadmins": {
     "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/atadmins/atadmins.ts?raw=true",
     "desc": "一键艾特全部管理员"

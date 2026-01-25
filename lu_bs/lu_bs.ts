@@ -154,8 +154,8 @@ class LuBsPlugin extends Plugin {
         console.error(`[${this.PLUGIN_NAME}] 发送失败到 ${chatId}:`, error);
         
         // 如果发送失败，可能是聊天不存在或没有权限，移除订阅
-        if (error.message?.includes("CHAT_WRITE_FORBIDDEN") || 
-            error.message?.includes("CHAT_NOT_FOUND")) {
+        if ((error as any).message?.includes("CHAT_WRITE_FORBIDDEN") || 
+            (error as any).message?.includes("CHAT_NOT_FOUND")) {
           this.db.data.subscriptions = this.db.data.subscriptions.filter((id: string) => id !== chatId);
           delete this.db.data.lastMessages[chatId];
           await this.db.write();
@@ -173,6 +173,9 @@ class LuBsPlugin extends Plugin {
 
       const chat = await msg.getChat();
       const sender = await msg.getSender();
+      
+      // 检查chat和sender是否存在
+      if (!chat || !sender) return false;
       
       // 私聊总是允许
       if (chat.className === "User") {

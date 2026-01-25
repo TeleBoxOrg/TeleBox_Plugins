@@ -1,5 +1,5 @@
 import { Plugin } from "@utils/pluginBase";
-import { Api } from "telegram";
+import { Api, types } from "telegram";
 import { getGlobalClient } from "@utils/globalClient";
 
 // HTML转义函数（必需）
@@ -41,8 +41,8 @@ class RestorePinPlugin extends Plugin {
       new Api.channels.GetAdminLog({
         channel: chatId,
         q: "",
-        maxId: BigInt(0),
-        minId: BigInt(0),
+        maxId: 0,
+        minId: 0,
         limit: 100,
         eventsFilter: new Api.ChannelAdminLogEventsFilter({
           pinned: true
@@ -62,7 +62,7 @@ class RestorePinPlugin extends Plugin {
     for (const event of events.events) {
       // 检查是否为取消置顶事件
       if (event.action instanceof Api.ChannelAdminLogEventActionUpdatePinned) {
-        if (!event.action.message.pinned) { // 取消置顶
+        if (!(event.action.message instanceof Api.MessageEmpty) && !event.action.message.pinned) { // 取消置顶
           const messageId = event.action.message.id;
           messageIds.push(messageId);
         }
@@ -173,10 +173,16 @@ class RestorePinPlugin extends Plugin {
       }
 
       // 检查管理员权限
+      const sender = await msg.getSender();
+      if (!sender) {
+        await msg.edit({ text: "❌ 无法获取发送者信息", parseMode: "html" });
+        return;
+      }
+
       const participant = await client.invoke(
         new Api.channels.GetParticipant({
           channel: chat.id,
-          participant: await msg.getSender() as Api.InputUser
+          participant: sender as unknown as Api.InputUser
         })
       );
 

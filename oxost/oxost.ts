@@ -5,6 +5,7 @@ import { getPrefixes } from "@utils/pluginManager";
 import { Plugin } from "@utils/pluginBase";
 import { Api } from "telegram";
 import { getGlobalClient } from "@utils/globalClient";
+import { Buffer } from "buffer";
 
 // HTML转义
 const htmlEscape = (text: string): string =>
@@ -141,7 +142,7 @@ class Ox0Plugin extends Plugin {
 
         // 使用 Node.js 原生 FormData（无需 form-data 依赖）
         const form = new globalThis.FormData();
-  form.append("file", new Blob([buffer], { type: "application/octet-stream" }), filename);
+  form.append("file", new Blob([new Uint8Array(buffer)], { type: "application/octet-stream" }), filename);
         if (expires) form.append("expires", expires);
         if (secret) form.append("secret", "1");
   const headers = { 'User-Agent': 'curl/8.0.1' };
