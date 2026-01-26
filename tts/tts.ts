@@ -8,7 +8,7 @@ import { Api } from "telegram";
 import axios from "axios";
 import { JSONFilePreset } from "lowdb/node";
 import * as path from "path";
-import { createDirectoryInAssets } from "@utils/pathHelpers";
+import { createDirectoryInAssets, createDirectoryInTemp } from "@utils/pathHelpers";
 import { getGlobalClient } from "@utils/globalClient";
 import * as fs from "fs";
 
@@ -59,6 +59,16 @@ function cleanTextForTTS(text: string): string {
     cleanedText = cleanedText.replace(/\[([^\]]+)\]\([^\)]+\)/g, "$1");
 
     return cleanedText.trim();
+}
+
+/** 转义 SSML 特殊字符 */
+function escapeSsmlText(text: string): string {
+    return text
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&apos;");
 }
 
 // ========== 类型定义 ==========
@@ -185,8 +195,8 @@ class TTSPlugin extends Plugin {
             if (subCmd === "rate") {
                 const rateStr = parts[1];
                 const rate = parseFloat(rateStr);
-                if (isNaN(rate) || rate < 0.1 || rate > 3.0) {
-                    await msg.edit({ text: `❌ 语速必须在 0.1 到 3.0 之间`, parseMode: "html" });
+                if (isNaN(rate) || rate < 0.5 || rate > 2.0) {
+                    await msg.edit({ text: `❌ 语速必须在 0.5 到 2.0 之间`, parseMode: "html" });
                     return;
                 }
                 db.data.rate = rateStr;
@@ -241,15 +251,17 @@ class TTSPlugin extends Plugin {
                     if (resultText.length > 4000) {
                         const buffer = Buffer.from(lines.join("\n"));
                         const client = await getGlobalClient();
-                        if (client) {
-                            await client.sendFile(msg.peerId, {
-                                file: buffer,
-                                attributes: [new Api.DocumentAttributeFilename({ fileName: `voices_${filter}.txt` })],
-                                caption: `📋 <b>可用音色列表</b> (${filter}) - 共 ${voices.length} 个`,
-                                parseMode: "html"
-                            });
-                            await msg.delete({ revoke: true });
+                        if (!client) {
+                            await msg.edit({ text: "❌ 客户端不可用", parseMode: "html" });
+                            return;
                         }
+                        await client.sendFile(msg.peerId, {
+                            file: buffer,
+                            attributes: [new Api.DocumentAttributeFilename({ fileName: `voices_${filter}.txt` })],
+                            caption: `📋 <b>可用音色列表</b> (${filter}) - 共 ${voices.length} 个`,
+                            parseMode: "html"
+                        });
+                        await deleteCommandMessage(msg);
                     } else {
                         await msg.edit({ text: resultText, parseMode: "html" });
                     }
@@ -273,9 +285,11 @@ class TTSPlugin extends Plugin {
                 const client = await getGlobalClient();
                 if (client) {
                     const replyToId = (msg.replyTo as any)?.replyToMsgId;
-                    const [repliedMsg] = await client.getMessages(msg.peerId, { ids: [replyToId] });
-                    if (repliedMsg && repliedMsg.message) {
-                        textToSynthesize = repliedMsg.message;
+                    if (replyToId) {
+                        const [repliedMsg] = await client.getMessages(msg.peerId, { ids: [replyToId] });
+                        if (repliedMsg && repliedMsg.message) {
+                            textToSynthesize = repliedMsg.message;
+                        }
                     }
                 }
             }
@@ -305,14 +319,12 @@ class TTSPlugin extends Plugin {
 
                 // 限制文本长度 (Azure TTS 有限制，且过长的语音消息不实用)
                 const MAX_TEXT_LENGTH = 3000;
-                let wasTruncated = false;
                 if (cleanText.length > MAX_TEXT_LENGTH) {
                     cleanText = cleanText.substring(0, MAX_TEXT_LENGTH);
-                    wasTruncated = true;
                 }
 
                 // 构建 SSML
-                let content = cleanText;
+                let content = escapeSsmlText(cleanText);
 
                 // 添加语速控制
                 if (rate && rate !== "1.0") {
@@ -336,7 +348,7 @@ class TTSPlugin extends Plugin {
                         "User-Agent": "TeleBox-TTS"
                     },
                     responseType: "arraybuffer", // 获取二进制数据
-                    timeout: 300000
+                    timeout: 3600000
                 });
 
                 if (response.status === 200 && response.data) {
@@ -347,11 +359,7 @@ class TTSPlugin extends Plugin {
 
                     const buffer = Buffer.from(response.data);
 
-                    // 使用临时文件确保正确识别
-                    const tempDir = path.join(process.cwd(), "temp", "tts");
-                    if (!fs.existsSync(tempDir)) {
-                        fs.mkdirSync(tempDir, { recursive: true });
-                    }
+                    const tempDir = createDirectoryInTemp("tts");
 
                     const tempFilePath = path.join(tempDir, `tts_${Date.now()}.mp3`);
                     fs.writeFileSync(tempFilePath, buffer);
@@ -378,11 +386,6 @@ class TTSPlugin extends Plugin {
                             fs.unlinkSync(tempFilePath);
                         }
                     }
-
-                    // 删除进度消息 (Result message is technically the audio, so we delete the "Uploading..." status)
-                    // But if we deleteRequestMessage, we might have deleted the prompt. 
-                    // Let's just catch any error if message is already deleted.
-                    try { await msg.delete({ revoke: true }); } catch { }
                 } else {
                     throw new Error(`API returned status ${response.status}`);
                 }
