@@ -63,6 +63,30 @@ const getMessageText = (m?: Api.Message | null): string => {
   return typeof text === "string" ? text : "";
 };
 
+const getRepliedMessageText = async (msg: Api.Message): Promise<string> => {
+  try {
+    const getter = (msg as any).getReplyMessage;
+    if (typeof getter === "function") {
+      const replied = await getter.call(msg);
+      return getMessageText(replied).trim();
+    }
+  } catch {}
+
+  try {
+    const replyToMsgId =
+      (msg as any)?.replyTo?.replyToMsgId ??
+      (msg as any)?.replyToMsgId ??
+      (msg as any)?.replyTo?.replyToMsg?.id;
+    if (!replyToMsgId) return "";
+    const peer = (msg.chatId || msg.peerId) as any;
+    const res = await (msg.client as any).getMessages(peer, { ids: [replyToMsgId] });
+    const replied = Array.isArray(res) ? res[0] : res;
+    return getMessageText(replied).trim();
+  } catch {}
+
+  return "";
+};
+
 class UserError extends Error {
   constructor(message: string) {
     super(message);
@@ -103,6 +127,12 @@ class DeepWikiStore {
   private dbMain!: Low<MainDB>;
   private dbCtx!: Low<CtxDB>;
 
+  private static readonly GLOBAL_CHAT_KEY = "__global__";
+
+  private gk(_: string): string {
+    return DeepWikiStore.GLOBAL_CHAT_KEY;
+  }
+
   async init(): Promise<void> {
     const baseDir = createDirectoryInAssets("deepwiki");
     const mainFile = path.join(baseDir, "config.json");
@@ -113,12 +143,20 @@ class DeepWikiStore {
     this.dbMain.data ||= { chats: {}, telegraphToken: "" };
     this.dbMain.data.chats ||= {};
     this.dbMain.data.telegraphToken ||= "";
+
+    if (!this.dbMain.data.chats[DeepWikiStore.GLOBAL_CHAT_KEY]) {
+      this.dbMain.data.chats[DeepWikiStore.GLOBAL_CHAT_KEY] = { currentTag: "", repos: {} };
+    }
     await this.dbMain.write();
 
     this.dbCtx = await JSONFilePreset<CtxDB>(ctxFile, { chats: {} });
     await this.dbCtx.read();
     this.dbCtx.data ||= { chats: {} };
     this.dbCtx.data.chats ||= {};
+
+    if (!this.dbCtx.data.chats[DeepWikiStore.GLOBAL_CHAT_KEY]) {
+      this.dbCtx.data.chats[DeepWikiStore.GLOBAL_CHAT_KEY] = { contextEnabled: false, contextTurns: {} };
+    }
     await this.dbCtx.write();
   }
 
@@ -140,31 +178,37 @@ class DeepWikiStore {
 
   private async ensureMainChat(chatKey: string): Promise<MainChatState> {
     this.ensureReady();
+    const key = this.gk(chatKey);
+
     await this.dbMain.read();
     this.dbMain.data ||= { chats: {}, telegraphToken: "" };
     this.dbMain.data.chats ||= {};
     this.dbMain.data.telegraphToken ||= "";
-    if (!this.dbMain.data.chats[chatKey]) {
-      this.dbMain.data.chats[chatKey] = this.normalizeMainState({ currentTag: "", repos: {} });
+
+    if (!this.dbMain.data.chats[key]) {
+      this.dbMain.data.chats[key] = this.normalizeMainState({ currentTag: "", repos: {} });
       await this.dbMain.write();
     } else {
-      this.dbMain.data.chats[chatKey] = this.normalizeMainState(this.dbMain.data.chats[chatKey]);
+      this.dbMain.data.chats[key] = this.normalizeMainState(this.dbMain.data.chats[key]);
     }
-    return this.dbMain.data.chats[chatKey];
+    return this.dbMain.data.chats[key];
   }
 
   private async ensureCtxChat(chatKey: string): Promise<CtxChatState> {
     this.ensureReady();
+    const key = this.gk(chatKey);
+
     await this.dbCtx.read();
     this.dbCtx.data ||= { chats: {} };
     this.dbCtx.data.chats ||= {};
-    if (!this.dbCtx.data.chats[chatKey]) {
-      this.dbCtx.data.chats[chatKey] = this.normalizeCtxState({ contextEnabled: false, contextTurns: {} });
+
+    if (!this.dbCtx.data.chats[key]) {
+      this.dbCtx.data.chats[key] = this.normalizeCtxState({ contextEnabled: false, contextTurns: {} });
       await this.dbCtx.write();
     } else {
-      this.dbCtx.data.chats[chatKey] = this.normalizeCtxState(this.dbCtx.data.chats[chatKey]);
+      this.dbCtx.data.chats[key] = this.normalizeCtxState(this.dbCtx.data.chats[key]);
     }
-    return this.dbCtx.data.chats[chatKey];
+    return this.dbCtx.data.chats[key];
   }
 
   async getChatState(chatKey: string): Promise<ChatState> {
@@ -187,7 +231,9 @@ class DeepWikiStore {
     state.repos ||= {};
     state.repos[entry.tag] = entry;
     if (makeCurrent) state.currentTag = entry.tag;
-    this.dbMain.data!.chats[chatKey] = state;
+
+    const key = this.gk(chatKey);
+    this.dbMain.data!.chats[key] = state;
     await this.dbMain.write();
   }
 
@@ -198,13 +244,15 @@ class DeepWikiStore {
 
     delete main.repos[tag];
     if (main.currentTag === tag) main.currentTag = "";
-    this.dbMain.data!.chats[chatKey] = main;
+
+    const key = this.gk(chatKey);
+    this.dbMain.data!.chats[key] = main;
     await this.dbMain.write();
 
     const ctx = await this.ensureCtxChat(chatKey);
     if (ctx.contextTurns?.[tag]) {
       delete ctx.contextTurns[tag];
-      this.dbCtx.data!.chats[chatKey] = ctx;
+      this.dbCtx.data!.chats[key] = ctx;
       await this.dbCtx.write();
     }
 
@@ -216,7 +264,9 @@ class DeepWikiStore {
     const state = await this.ensureMainChat(chatKey);
     requireUser(!!state.repos?.[tag], `项目不存在：<code>${escapeHtml(tag)}</code>`);
     state.currentTag = tag;
-    this.dbMain.data!.chats[chatKey] = state;
+
+    const key = this.gk(chatKey);
+    this.dbMain.data!.chats[key] = state;
     await this.dbMain.write();
   }
 
@@ -224,7 +274,9 @@ class DeepWikiStore {
     this.ensureReady();
     const ctx = await this.ensureCtxChat(chatKey);
     ctx.contextEnabled = !!enabled;
-    this.dbCtx.data!.chats[chatKey] = ctx;
+
+    const key = this.gk(chatKey);
+    this.dbCtx.data!.chats[key] = ctx;
     await this.dbCtx.write();
   }
 
@@ -237,7 +289,9 @@ class DeepWikiStore {
     } else {
       ctx.contextTurns = {};
     }
-    this.dbCtx.data!.chats[chatKey] = ctx;
+
+    const key = this.gk(chatKey);
+    this.dbCtx.data!.chats[key] = ctx;
     await this.dbCtx.write();
   }
 
@@ -248,7 +302,9 @@ class DeepWikiStore {
     const turns = ctx.contextTurns[tag] || [];
     turns.push({ q, a, at: new Date().toISOString() });
     ctx.contextTurns[tag] = turns.slice(-MAX_TURNS_PER_TAG);
-    this.dbCtx.data!.chats[chatKey] = ctx;
+
+    const key = this.gk(chatKey);
+    this.dbCtx.data!.chats[key] = ctx;
     await this.dbCtx.write();
   }
 
@@ -296,6 +352,14 @@ class DeepWikiMcp {
       })
       .filter(Boolean);
     return texts.join("\n").trim();
+  }
+
+  private stripWikiExploreTail(text: string): string {
+    if (!text) return text;
+    const marker = "Wiki pages you might want to explore:";
+    const idx = text.indexOf(marker);
+    if (idx === -1) return text;
+    return text.slice(0, idx).trimEnd();
   }
 
   private async ensureConnected(): Promise<void> {
@@ -354,7 +418,8 @@ class DeepWikiMcp {
     };
     const res = await this.client.callTool({ name: "ask_question", arguments: args });
     const text = this.extractText(res);
-    return text || "DeepWiki 未返回可用文本结果（可能项目未被索引或暂时不可用）";
+    const cleaned = this.stripWikiExploreTail(text);
+    return cleaned || "DeepWiki 未返回可用文本结果（可能项目未被索引或暂时不可用）";
   }
 
   async close(): Promise<void> {
@@ -443,6 +508,23 @@ const buildQAHtml = (headerLines: string[], question: string, answerMarkdown: st
   return header ? `${header}\n\n${qBlock}${aBlock}` : `${qBlock}${aBlock}`;
 };
 
+const toIdString = (v: any): string => {
+  try {
+    if (v === null || v === undefined) return "";
+    if (typeof v === "string") return v;
+    if (typeof v === "number" || typeof v === "bigint") return String(v);
+    if (typeof v === "object") {
+      if (v.channelId !== undefined) return String(v.channelId);
+      if (v.chatId !== undefined) return String(v.chatId);
+      if (v.userId !== undefined) return String(v.userId);
+      if (v.id !== undefined) return String(v.id);
+    }
+    return String(v);
+  } catch {
+    return "";
+  }
+};
+
 class DeepWikiPlugin extends Plugin {
   name = "deepwiki";
 
@@ -467,8 +549,10 @@ class DeepWikiPlugin extends Plugin {
   }
 
   private getChatKey(msg: Api.Message): string {
-    const key = (msg.chatId || msg.peerId) as any;
-    return String(key ?? "unknown");
+    const chatId = (msg as any).chatId;
+    const peerId = (msg as any).peerId;
+    const key = toIdString(chatId) || toIdString(peerId);
+    return key || "unknown";
   }
 
   private helpText(): string {
@@ -590,8 +674,11 @@ class DeepWikiPlugin extends Plugin {
       const raw = getMessageText(msg).trim();
       const args = raw.split(/\s+/).slice(1);
       const original = trigger || msg;
+
+      const repliedText = await getRepliedMessageText(msg);
+
       try {
-        if (args.length === 0) {
+        if (args.length === 0 && !repliedText) {
           await MessageSender.sendOrEdit(original, "🚫 至少需要一个问题", "html");
           return;
         }
@@ -718,18 +805,27 @@ class DeepWikiPlugin extends Plugin {
           return;
         }
 
-        const maybeTag = normalizeTag(args[0]);
+        const maybeTag = normalizeTag(args[0] || "");
         const hasTag = !!state.repos?.[maybeTag];
+
         let tagToUse = "";
         let question = "";
-        if (hasTag && args.length >= 2) {
+
+        const treatFirstAsTag = hasTag && (args.length >= 2 || !!repliedText);
+
+        if (treatFirstAsTag) {
           tagToUse = maybeTag;
           question = args.slice(1).join(" ").trim();
         } else {
           tagToUse = state.currentTag;
           question = args.join(" ").trim();
         }
-        requireUser(!!question, "请输入问题内容");
+
+        const combinedQuestion = repliedText
+          ? `${repliedText}${question ? `\n\n${question}` : ""}`.trim()
+          : question.trim();
+
+        requireUser(!!combinedQuestion, "请输入问题内容");
         requireUser(!!tagToUse, "尚未设置默认项目，请先添加项目");
         const entry = state.repos?.[tagToUse];
         requireUser(!!entry, "项目不存在，请检查 <tag>");
@@ -737,18 +833,18 @@ class DeepWikiPlugin extends Plugin {
         await MessageSender.sendOrEdit(original, "💬 <b>DeepWiki 正在处理</b>", "html");
 
         const ctxEnabled = !!state.contextEnabled;
-        let finalQuestion = question;
+        let finalQuestion = combinedQuestion;
         let droppedTurns = 0;
         if (ctxEnabled) {
           const turns = await this.store.getTurns(chatKey, tagToUse);
-          const built = buildQuestionWithContext(turns, question);
+          const built = buildQuestionWithContext(turns, combinedQuestion);
           finalQuestion = built.finalQuestion;
           droppedTurns = built.dropped;
         }
 
         const answer = await this.mcp.ask(entry.repo, finalQuestion);
         if (ctxEnabled) {
-          await this.store.appendTurn(chatKey, tagToUse, question, answer);
+          await this.store.appendTurn(chatKey, tagToUse, combinedQuestion, answer);
         }
 
         const ctxLine =
@@ -760,7 +856,7 @@ class DeepWikiPlugin extends Plugin {
 
         const headerLines = [`<b>项目:</b> <code>${escapeHtml(entry.repo)}</code>`, ctxLine];
 
-        await this.sendAnswerOrTelegraph(msg, (original as any).id, headerLines, question, answer, true);
+        await this.sendAnswerOrTelegraph(msg, (original as any).id, headerLines, combinedQuestion, answer, true);
 
         try {
           await original.delete();
