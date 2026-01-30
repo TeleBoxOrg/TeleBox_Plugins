@@ -365,14 +365,17 @@ async function handleImageEdit(
         parts: [
           { text: prompt },
           {
-            inlineData: {
-              mimeType,
+            inline_data: {
+              mime_type: mimeType,
               data: mediaBuffer.toString("base64"),
             },
           },
         ],
       },
     ],
+    generationConfig: {
+      responseModalities: ["TEXT", "IMAGE"],
+    },
   };
 
   await msg.edit({ text: "🤖 正在调用 Gemini Nano-Banana 生成..." });
@@ -398,7 +401,18 @@ async function handleImageEdit(
 
   const candidates: any[] = responseData?.candidates || [];
   if (!candidates.length) {
-    await msg.edit({ text: "❌ 未收到模型返回结果" });
+    const blockReason = responseData?.promptFeedback?.blockReason;
+    if (blockReason) {
+      await msg.edit({ text: `❌ 请求被阻止: ${blockReason}` });
+    } else {
+      await msg.edit({ text: "❌ 未收到模型返回结果" });
+    }
+    return;
+  }
+
+  const finishReason = candidates[0]?.finishReason;
+  if (finishReason && finishReason !== "STOP" && finishReason !== "MAX_TOKENS") {
+    await msg.edit({ text: `❌ 生成被中断: ${finishReason}` });
     return;
   }
 
@@ -408,8 +422,10 @@ async function handleImageEdit(
   for (const candidate of candidates) {
     const parts: any[] = candidate?.content?.parts || [];
     for (const part of parts) {
-      if (part?.inlineData?.data) {
-        inlineParts.push(part.inlineData);
+      // Support both snake_case and camelCase responses
+      const inlineData = part?.inline_data || part?.inlineData;
+      if (inlineData?.data) {
+        inlineParts.push(inlineData);
       }
       if (typeof part?.text === "string" && part.text.trim()) {
         textParts.push(part.text.trim());
@@ -418,7 +434,7 @@ async function handleImageEdit(
   }
 
   if (!inlineParts.length && !textParts.length) {
-    await msg.edit({ text: "❌ 模型未返回可用的图像或文本" });
+    await msg.edit({ text: `❌ 模型未返回可用的图像或文本 (finishReason: ${finishReason || "unknown"})` });
     return;
   }
 
@@ -433,6 +449,7 @@ async function handleImageEdit(
     const part = inlineParts[index];
     const data = part.data as string;
     const mime =
+      typeof part.mime_type === "string" ? part.mime_type :
       typeof part.mimeType === "string" ? part.mimeType : "image/png";
     const buffer = Buffer.from(data, "base64");
     if (!buffer.length) continue;
