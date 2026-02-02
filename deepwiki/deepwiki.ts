@@ -367,12 +367,13 @@ class DeepWikiMcp {
     if (this.connecting) return await this.connecting;
     this.connecting = (async () => {
       let ClientCtor: any;
-      let SSEClientTransportCtor: any;
+      let StreamableHTTPClientTransportCtor: any;
+
       try {
         const clientMod: any = await import("@modelcontextprotocol/sdk/client/index.js");
-        const sseMod: any = await import("@modelcontextprotocol/sdk/client/sse.js");
+        const httpMod: any = await import("@modelcontextprotocol/sdk/client/streamableHttp.js");
         ClientCtor = clientMod?.Client;
-        SSEClientTransportCtor = sseMod?.SSEClientTransport;
+        StreamableHTTPClientTransportCtor = httpMod?.StreamableHTTPClientTransport;
       } catch {
         throw new UserError(
           "缺少环境依赖，择需安装：\n" +
@@ -381,7 +382,9 @@ class DeepWikiMcp {
         );
       }
 
-      const transport = new SSEClientTransportCtor(new URL("https://mcp.deepwiki.com/sse"));
+      const transport = new StreamableHTTPClientTransportCtor(
+        new URL("https://mcp.deepwiki.com/mcp")
+      );
       const client = new ClientCtor({ name: "telebox-deepwiki", version: "0.5.1" }, { capabilities: {} });
       await client.connect(transport);
       this.client = client;
