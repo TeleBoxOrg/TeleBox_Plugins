@@ -30,6 +30,7 @@ import { promisify } from "util";
 const execFileAsync = promisify(execFile);
 
 const timeout = 60000; // 超时
+const PYTHON_PATH = "python3"; // Python 路径，可修改为 venv 中的路径，如："/path/to/venv/bin/python"
 
 const hashCode = (s: any) => {
   const l = s.length;
@@ -68,7 +69,7 @@ async function checkTgsDependencies(): Promise<{
   message: string;
 }> {
   try {
-    await execFileAsync("python3", [
+    await execFileAsync(PYTHON_PATH, [
       "-c",
       "from rlottie_python import LottieAnimation",
     ]);
@@ -110,7 +111,7 @@ anim = LottieAnimation.from_tgs(sys.argv[1])
 anim.save_animation(sys.argv[2])
 `;
 
-    await execFileAsync("python3", ["-c", pythonScript, tgsPath, gifPath]);
+    await execFileAsync(PYTHON_PATH, ["-c", pythonScript, tgsPath, gifPath]);
 
     await execFileAsync("ffmpeg", [
       "-i",
@@ -162,6 +163,53 @@ function isAnimatedWebP(buffer: Buffer): boolean {
     }
   }
   return false;
+}
+// 检测是否为 MP4 格式
+function isMp4Format(buffer: Buffer): boolean {
+  if (!buffer || buffer.length < 12) return false;
+  // MP4 魔数: ftyp 在偏移 4-8
+  const ftyp = buffer.toString("ascii", 4, 8);
+  return ftyp === "ftyp";
+}
+
+// MP4 转 WebM (使用 ffmpeg)
+async function convertMp4ToWebm(mp4Buffer: Buffer): Promise<Buffer> {
+  const os = await import("os");
+  const tmpDir = os.tmpdir();
+  const uniqueId =
+    Date.now().toString() + "_" + Math.random().toString(36).slice(2);
+  const mp4Path = path.join(tmpDir, `video_${uniqueId}.mp4`);
+  const webmPath = path.join(tmpDir, `video_${uniqueId}.webm`);
+
+  try {
+    fs.writeFileSync(mp4Path, mp4Buffer);
+
+    await execFileAsync("ffmpeg", [
+      "-i",
+      mp4Path,
+      "-c:v",
+      "libvpx-vp9",
+      "-pix_fmt",
+      "yuva420p",
+      "-b:v",
+      "400k",
+      "-auto-alt-ref",
+      "0",
+      "-an",
+      "-y",
+      webmPath,
+    ]);
+
+    const webmBuffer = fs.readFileSync(webmPath);
+    return webmBuffer;
+  } finally {
+    try {
+      fs.unlinkSync(mp4Path);
+    } catch (e) {}
+    try {
+      fs.unlinkSync(webmPath);
+    } catch (e) {}
+  }
 }
 
 // 读取WebP图片尺寸的辅助函数
@@ -230,7 +278,7 @@ const getPeerNumericId = (peer?: Api.TypePeer): number | undefined => {
 
 const resolveForwardSenderFromHeader = async (
   forwardHeader: Api.MessageFwdHeader,
-  client: any
+  client: any,
 ) => {
   if (!forwardHeader) return undefined;
 
@@ -266,7 +314,7 @@ const resolveForwardSenderFromHeader = async (
       getPeerNumericId(
         forwardHeader.fromId ||
           forwardHeader.savedFromId ||
-          forwardHeader.savedFromPeer
+          forwardHeader.savedFromPeer,
       ) || hashCode(fallbackName),
     firstName: fallbackName,
     lastName: "",
@@ -367,7 +415,7 @@ function convertEntities(entities: Api.TypeMessageEntity[]): any[] {
 
 // 调用quote-api生成语录
 async function generateQuote(
-  quoteData: any
+  quoteData: any,
 ): Promise<{ buffer: Buffer; ext: string }> {
   try {
     const response = await axios({
@@ -378,8 +426,8 @@ async function generateQuote(
       ...JSON.parse(
         Buffer.from(
           "eyJ1cmwiOiJodHRwczovL3F1b3RlLWFwaS1lbmhhbmNlZC56aGV0ZW5nc2hhLmV1Lm9yZy9nZW5lcmF0ZS53ZWJwIiwiaGVhZGVycyI6eyJDb250ZW50LVR5cGUiOiJhcHBsaWNhdGlvbi9qc29uIiwiVXNlci1BZ2VudCI6IlRlbGVCb3gvMC4yLjEifX0=",
-          "base64"
-        ).toString("utf-8")
+          "base64",
+        ).toString("utf-8"),
       ),
     });
 
@@ -459,7 +507,7 @@ class YvluPlugin extends Plugin {
       fs.writeFileSync(
         this.configPath,
         JSON.stringify(defaultConfig, null, 2),
-        "utf-8"
+        "utf-8",
       );
       console.log(`已创建默认配置文件: ${this.configPath}`);
     }
@@ -589,7 +637,7 @@ class YvluPlugin extends Plugin {
               if (!forwardedSender) {
                 forwardedSender = await resolveForwardSenderFromHeader(
                   message.fwdFrom,
-                  client
+                  client,
                 );
               }
 
@@ -625,7 +673,7 @@ class YvluPlugin extends Plugin {
             const currentUserIdentifier =
               userId ||
               hashCode(
-                name || `${firstName}|${lastName}` || `user_${i}`
+                name || `${firstName}|${lastName}` || `user_${i}`,
               ).toString();
 
             // 判断是否应该显示头像：只有当前用户与上一条消息的用户不同时才显示
@@ -640,7 +688,7 @@ class YvluPlugin extends Plugin {
                   sender as any,
                   {
                     isBig: false,
-                  }
+                  },
                 );
                 if (Buffer.isBuffer(buffer) && buffer.length > 0) {
                   const base64 = buffer.toString("base64");
@@ -732,7 +780,7 @@ class YvluPlugin extends Plugin {
                       // 使用被回复消息的文本 + 实体
                       const replyText = repliedMsg.message || "";
                       const replyEntities = convertEntities(
-                        repliedMsg.entities || []
+                        repliedMsg.entities || [],
                       );
 
                       if (replyText) {
@@ -763,7 +811,7 @@ class YvluPlugin extends Plugin {
                   (
                     (message.media as Api.MessageMediaDocument).document as any
                   ).attributes?.some(
-                    (a: any) => a instanceof Api.DocumentAttributeSticker
+                    (a: any) => a instanceof Api.DocumentAttributeSticker,
                   );
 
                 if (isSticker) {
@@ -778,16 +826,21 @@ class YvluPlugin extends Plugin {
                 const isTgsSticker =
                   isSticker && mimeType === "application/x-tgsticker";
 
-                // 检测是否为动态贴纸（需要下载原文件，不用缩略图）
-                const isAnimatedSticker =
-                  isSticker &&
-                  (mimeType === "video/webm" || // 视频贴纸
-                    mimeType === "image/webp" || // 可能是动态WebP
-                    isTgsSticker); // TGS 动态贴纸
+                // 检测是否为 GIF/MP4 (Telegram 的 GIF 实际是 mp4)
+                const isGifOrMp4 =
+                  mimeType === "video/mp4" || mimeType === "image/gif";
+
+                // 检测是否为动态内容（需要下载原文件，不用缩略图）
+                const isAnimatedContent =
+                  (isSticker &&
+                    (mimeType === "video/webm" || // 视频贴纸
+                      mimeType === "image/webp" || // 可能是动态WebP
+                      isTgsSticker)) || // TGS 动态贴纸
+                  isGifOrMp4; // GIF/MP4
 
                 const buffer = await (message as any).downloadMedia({
-                  // 动态贴纸不使用缩略图，下载原始文件
-                  ...(isAnimatedSticker ? {} : { thumb: 1 }),
+                  // 动态内容不使用缩略图，下载原始文件
+                  ...(isAnimatedContent ? {} : { thumb: 1 }),
                 });
                 if (Buffer.isBuffer(buffer)) {
                   let finalBuffer = buffer;
@@ -801,16 +854,30 @@ class YvluPlugin extends Plugin {
                         console.error(`[yvlu] ${depCheck.message}`);
                       } else {
                         console.log(
-                          `[yvlu] 检测到 TGS 贴纸，开始转换为 WebM...`
+                          `[yvlu] 检测到 TGS 贴纸，开始转换为 WebM...`,
                         );
                         finalBuffer = await convertTgsToWebm(buffer);
                         finalMime = "video/webm";
                         console.log(
-                          `[yvlu] TGS -> WebM 转换成功，大小: ${finalBuffer.length}`
+                          `[yvlu] TGS -> WebM 转换成功，大小: ${finalBuffer.length}`,
                         );
                       }
                     } catch (convertError) {
                       console.error(`[yvlu] TGS 转换失败:`, convertError);
+                    }
+                  }
+                  // 如果是 MP4/GIF，转换为 WebM
+                  else if (isGifOrMp4 || isMp4Format(buffer)) {
+                    try {
+                      console.log(`[yvlu] 检测到 GIF/MP4，开始转换为 WebM...`);
+                      finalBuffer = await convertMp4ToWebm(buffer);
+                      finalMime = "video/webm";
+                      console.log(
+                        `[yvlu] MP4 -> WebM 转换成功，大小: ${finalBuffer.length}`,
+                      );
+                    } catch (convertError) {
+                      console.error(`[yvlu] MP4 转换失败:`, convertError);
+                      // 转换失败时保持原格式
                     }
                   }
 
@@ -823,7 +890,7 @@ class YvluPlugin extends Plugin {
                   const base64 = finalBuffer.toString("base64");
                   media = { url: `data:${mime};base64,${base64}` };
                   console.log(
-                    `媒体下载: mimeType=${mimeType}, isAnimated=${isAnimatedSticker}, isTgs=${isTgsSticker}, size=${finalBuffer.length}`
+                    `媒体下载: mimeType=${mimeType}, isAnimated=${isAnimatedContent}, isTgs=${isTgsSticker}, isGif=${isGifOrMp4}, size=${finalBuffer.length}`,
                   );
                 }
               }
@@ -878,12 +945,12 @@ class YvluPlugin extends Plugin {
           }
 
           console.log(
-            `[yvlu] API返回: buffer长度=${imageBuffer?.length}, ext=${imageExt}`
+            `[yvlu] API返回: buffer长度=${imageBuffer?.length}, ext=${imageExt}`,
           );
           console.log(
             `[yvlu] buffer前20字节: ${imageBuffer
               ?.slice(0, 20)
-              .toString("hex")}`
+              .toString("hex")}`,
           );
 
           try {
@@ -899,7 +966,7 @@ class YvluPlugin extends Plugin {
                 dimensions.height
               }, 格式: ${isWebm ? "webm" : "webp"}, 动态: ${
                 isWebm || isAnimated
-              }`
+              }`,
             );
 
             if (isWebm) {
@@ -935,7 +1002,7 @@ class YvluPlugin extends Plugin {
                 `sticker.${imageExt}`,
                 imageBuffer.length,
                 "",
-                imageBuffer
+                imageBuffer,
               );
 
               const stickerAttr = new Api.DocumentAttributeSticker({
@@ -1060,7 +1127,7 @@ ${
           fs.writeFileSync(
             this.configPath,
             JSON.stringify(newConfig, null, 2),
-            "utf-8"
+            "utf-8",
           );
 
           // 重新加载配置
@@ -1104,7 +1171,7 @@ ${
           fs.writeFileSync(
             this.configPath,
             JSON.stringify(defaultConfig, null, 2),
-            "utf-8"
+            "utf-8",
           );
           console.log(`已创建默认配置文件: ${this.configPath}`);
         }
@@ -1149,7 +1216,7 @@ ${
         const doc = replied.media.document as any;
         if (doc && doc.attributes) {
           isSticker = doc.attributes.some(
-            (a: any) => a instanceof Api.DocumentAttributeSticker
+            (a: any) => a instanceof Api.DocumentAttributeSticker,
           );
         }
         if (isSticker && doc.id && doc.accessHash) {
@@ -1177,7 +1244,7 @@ ${
               shortName: this.config.stickerSetShortName,
             }),
             hash: 0,
-          })
+          }),
         );
         stickerSetExists = stickerSet instanceof Api.messages.StickerSet;
       } catch (error: any) {
@@ -1207,7 +1274,7 @@ ${
                 document: documentToAdd,
                 emoji: "📝",
               }),
-            })
+            }),
           );
 
           await msg.edit({
@@ -1258,7 +1325,7 @@ ${
                 document: file as any,
                 emoji: "📝",
               }),
-            })
+            }),
           );
 
           await msg.edit({
@@ -1285,7 +1352,7 @@ ${
     msg: Api.Message,
     replied: Api.Message,
     isSticker: boolean,
-    isPhoto: boolean
+    isPhoto: boolean,
   ) {
     try {
       // 准备第一个贴纸
@@ -1335,7 +1402,7 @@ ${
               emoji: "📝",
             }),
           ],
-        })
+        }),
       );
 
       await msg.edit({
