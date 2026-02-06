@@ -87,6 +87,26 @@ const getRepliedMessageText = async (msg: Api.Message): Promise<string> => {
   return "";
 };
 
+const getRepliedMessageId = async (msg: Api.Message): Promise<number | undefined> => {
+  try {
+    const id =
+      (msg as any)?.replyTo?.replyToMsgId ??
+      (msg as any)?.replyToMsgId ??
+      (msg as any)?.replyTo?.replyToMsg?.id;
+
+    if (typeof id === "number") return id;
+
+    const getter = (msg as any).getReplyMessage;
+    if (typeof getter === "function") {
+      const replied = await getter.call(msg);
+      const rid = (replied as any)?.id;
+      if (typeof rid === "number") return rid;
+    }
+  } catch {}
+
+  return undefined;
+};
+
 class UserError extends Error {
   constructor(message: string) {
     super(message);
@@ -382,9 +402,7 @@ class DeepWikiMcp {
         );
       }
 
-      const transport = new StreamableHTTPClientTransportCtor(
-        new URL("https://mcp.deepwiki.com/mcp")
-      );
+      const transport = new StreamableHTTPClientTransportCtor(new URL("https://mcp.deepwiki.com/mcp"));
       const client = new ClientCtor({ name: "telebox-deepwiki", version: "0.5.1" }, { capabilities: {} });
       await client.connect(transport);
       this.client = client;
@@ -467,8 +485,7 @@ const parseRepoFromUrl = (url: string): { repo: string; canonicalUrl: string } |
 };
 
 const buildQuestionWithContext = (turns: ContextTurn[], question: string): { finalQuestion: string; dropped: number } => {
-  const header =
-    "以下是我们的历史问答上下文，请在回答时参考；若上下文与仓库事实冲突，以仓库内容为准。\n\n";
+  const header = "以下是我们的历史问答上下文，请在回答时参考；若上下文与仓库事实冲突，以仓库内容为准。\n\n";
   const tail = `现在的问题：\nQ: ${question}\n`;
   let safeTail = tail;
   if (header.length + safeTail.length > MAX_DEEPWIKI_LEN) {
@@ -505,10 +522,10 @@ const buildQAHtml = (headerLines: string[], question: string, answerMarkdown: st
   const safeQ = escapeHtml(question);
   const htmlA = TelegramFormatter.markdownToHtml(answerMarkdown, { collapseSafe });
 
-  const qBlock = collapseSafe ? `Q:\n<blockquote expandable>${safeQ}</blockquote>\n\n` : `Q:\n${safeQ}\n\n`;
+  const qBlock = collapseSafe ? `Q:\n<blockquote expandable>${safeQ}</blockquote>\n` : `Q:\n${safeQ}\n`;
   const aBlock = collapseSafe ? `A:\n<blockquote expandable>${htmlA}</blockquote>` : `A:\n${htmlA}`;
 
-  return header ? `${header}\n\n${qBlock}${aBlock}` : `${qBlock}${aBlock}`;
+  return header ? `${header}\n${qBlock}${aBlock}` : `${qBlock}${aBlock}`;
 };
 
 const toIdString = (v: any): string => {
@@ -637,7 +654,7 @@ class DeepWikiPlugin extends Plugin {
   ): Promise<void> {
     const signature = `<i>🍀Powered by DeepWiki</i>`;
     const html = buildQAHtml(headerLines, question, answerMarkdown, collapseSafe);
-    const finalHtml = html.length + (`\n\n${signature}`).length <= MAX_TG_LEN ? `${html}\n\n${signature}` : `${html}`;
+    const finalHtml = html.length + `\n${signature}`.length <= MAX_TG_LEN ? `${html}\n${signature}` : `${html}`;
 
     if (finalHtml.length <= MAX_TG_LEN) {
       await MessageSender.sendNew(msg, finalHtml, "html", replyToId, false);
@@ -648,22 +665,17 @@ class DeepWikiPlugin extends Plugin {
       .filter(Boolean)
       .map((l) => l.replace(/<[^>]+>/g, ""))
       .join("\n");
-    const telegraphMarkdown =
-      (headerText ? `${headerText}\n\n` : "") + `**Q:**\n${question}\n\n**A:**\n${answerMarkdown}\n`;
+    const telegraphMarkdown = (headerText ? `${headerText}\n` : "") + `**Q:**\n${question}\n**A:**\n${answerMarkdown}\n`;
     const telegraphResult = await this.createTelegraphPage(telegraphMarkdown, question);
 
-    const qBlock = collapseSafe
-      ? `Q:\n<blockquote expandable>${escapeHtml(question)}</blockquote>\n\n`
-      : `Q:\n${escapeHtml(question)}\n\n`;
+    const qBlock = collapseSafe ? `Q:\n<blockquote expandable>${escapeHtml(question)}</blockquote>\n` : `Q:\n${escapeHtml(question)}\n`;
 
-    const linkHtml = `📰内容比较长，Telegraph观感更好喔:\n\n🔗 <a href="${telegraphResult.url}">点我阅读内容</a>`;
-    const aBlock = collapseSafe
-      ? `A:\n<blockquote expandable>${linkHtml}</blockquote>`
-      : `A:\n${linkHtml}`;
+    const linkHtml = `📰内容比较长，Telegraph观感更好喔:\n🔗 <a href="${telegraphResult.url}">点我阅读内容</a>`;
+    const aBlock = collapseSafe ? `A:\n<blockquote expandable>${linkHtml}</blockquote>` : `A:\n${linkHtml}`;
 
     const header = headerLines.filter(Boolean).join("\n");
-    const body = header ? `${header}\n\n${qBlock}${aBlock}` : `${qBlock}${aBlock}`;
-    const withSig = body.length + (`\n\n${signature}`).length <= MAX_TG_LEN ? `${body}\n\n${signature}` : body;
+    const body = header ? `${header}\n${qBlock}${aBlock}` : `${qBlock}${aBlock}`;
+    const withSig = body.length + `\n${signature}`.length <= MAX_TG_LEN ? `${body}\n${signature}` : body;
 
     await MessageSender.sendNew(msg, withSig, "html", replyToId, false);
   }
@@ -679,6 +691,7 @@ class DeepWikiPlugin extends Plugin {
       const original = trigger || msg;
 
       const repliedText = await getRepliedMessageText(msg);
+      const repliedMsgId = await getRepliedMessageId(msg);
 
       try {
         if (args.length === 0 && !repliedText) {
@@ -783,11 +796,7 @@ class DeepWikiPlugin extends Plugin {
               requireUser(!!state.repos?.[tagArg], `项目不存在：<code>${escapeHtml(tagArg)}</code>`);
             }
             await this.store.clearContext(chatKey, tagToClear);
-            await MessageSender.sendOrEdit(
-              original,
-              `✅ 已清空项目上下文：<code>${escapeHtml(tagToClear)}</code>`,
-              "html"
-            );
+            await MessageSender.sendOrEdit(original, `✅ 已清空项目上下文：<code>${escapeHtml(tagToClear)}</code>`, "html");
             return;
           }
 
@@ -824,9 +833,7 @@ class DeepWikiPlugin extends Plugin {
           question = args.join(" ").trim();
         }
 
-        const combinedQuestion = repliedText
-          ? `${repliedText}${question ? `\n\n${question}` : ""}`.trim()
-          : question.trim();
+        const combinedQuestion = repliedText ? `${repliedText}${question ? `\n\n${question}` : ""}`.trim() : question.trim();
 
         requireUser(!!combinedQuestion, "请输入问题内容");
         requireUser(!!tagToUse, "尚未设置默认项目，请先添加项目");
@@ -859,7 +866,8 @@ class DeepWikiPlugin extends Plugin {
 
         const headerLines = [`<b>项目:</b> <code>${escapeHtml(entry.repo)}</code>`, ctxLine];
 
-        await this.sendAnswerOrTelegraph(msg, (original as any).id, headerLines, combinedQuestion, answer, true);
+        const replyToId = repliedMsgId ?? (original as any).id;
+        await this.sendAnswerOrTelegraph(msg, replyToId, headerLines, combinedQuestion, answer, true);
 
         try {
           await original.delete();
