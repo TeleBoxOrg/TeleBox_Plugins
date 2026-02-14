@@ -361,7 +361,7 @@
     },
     "tuzai": {
       "name": "屠宰",
-      "url": "eat/tuzai.png",
+      "url": "eat/eattuzai.png",
       "stamp": {
         "size": 512,
         "scale": 0.9,
