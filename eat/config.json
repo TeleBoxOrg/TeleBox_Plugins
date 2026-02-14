@@ -358,6 +358,16 @@
         "y": 52,
         "mask": "eat/maskyuyu.png"
       }
+    },
+    "tuzai": {
+      "name": "屠宰",
+      "url": "eat/eattuzai.png",
+      "stamp": {
+        "size": 512,
+        "scale": 0.9,
+        "rotate": -12,
+        "opacity": 0.6
+      }
     }
   }
 }
