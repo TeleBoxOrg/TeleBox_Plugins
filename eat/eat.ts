@@ -7,7 +7,6 @@ import { getPrefixes } from "@utils/pluginManager";
 
 const prefixes = getPrefixes();
 const mainPrefix = prefixes[0];
-// 使用内存缓存，避免任何文件写入
 const assetBufferCache = new Map<string, Buffer>();
 
 interface RoleConfig {
@@ -18,11 +17,19 @@ interface RoleConfig {
   rotate?: number;
 }
 
+interface StampConfig {
+  size?: number;
+  scale?: number;
+  rotate?: number;
+  opacity?: number;
+}
+
 interface EntryConfig {
   name: string;
   url: string;
-  me?: RoleConfig; // 少部分有两人互动，比如 tc
+  me?: RoleConfig;
   you?: RoleConfig;
+  stamp?: StampConfig;
 }
 
 interface EatConfig {
@@ -30,20 +37,17 @@ interface EatConfig {
 }
 
 let config: EatConfig = {};
-
-// + 新增此行：用于存储根据meta配置拼接好的资源基础URL
 let resourceBaseUrl = "";
 
-// + 修改此行：请将URL替换为您新配置文件的【实际Raw地址】
 let baseConfigURL =
   "https://raw.githubusercontent.com/TeleBoxOrg/TeleBox_Plugins/refs/heads/main/eat/config.json";
+
 function resolveResourceUrl(path: string): string {
   if (path.startsWith("http://") || path.startsWith("https://")) {
     return path;
   }
   return `${resourceBaseUrl}/${path}`;
 }
-// eat.ts (用这个版本替换整个 loadConfigResource 函数)
 
 async function loadConfigResource(url: string, forceUpdate = false) {
   const parseAndSetConfig = (content: string) => {
@@ -51,20 +55,17 @@ async function loadConfigResource(url: string, forceUpdate = false) {
     if (!fullConfig.resources) {
       throw new Error("配置文件格式错误，缺少resources 字段");
     }
-// "https://raw.githubusercontent.com/TeleBoxOrg/TeleBox_Plugins/refs/heads/main/eat/config.json";
-    //放弃meta配置，改为直接从url中解析出owner, repo, branch,等信息
-    const regex = /^https:\/\/raw\.githubusercontent\.com\/([^\/]+)\/([^\/]+)\/refs\/heads\/([^\/]+)\/(.+)$/;
+    const regex =
+      /^https:\/\/raw\.githubusercontent\.com\/([^\/]+)\/([^\/]+)\/refs\/heads\/([^\/]+)\/(.+)$/;
     const match = url.match(regex);
     if (!match) throw new Error("URL格式不正确");
     const [, repo_owner, repo_name, branch] = match;
-    const base_url_template ="https://github.com/${repo_owner}/${repo_name}/raw/${branch}"
+    const base_url_template =
+      "https://github.com/${repo_owner}/${repo_name}/raw/${branch}";
     if (!repo_owner || !repo_name || !branch) {
-      throw new Error(
-        "URL格式不正确, 缺少 repo_owner, repo_name, branch等信息"
-      );
+      throw new Error("URL格式不正确, 缺少 repo_owner, repo_name, branch等信息");
     }
 
-    // 动态替换模板中的占位符
     resourceBaseUrl = base_url_template
       .replace("${repo_owner}", repo_owner)
       .replace("${repo_name}", repo_name)
@@ -76,23 +77,19 @@ async function loadConfigResource(url: string, forceUpdate = false) {
     );
   };
 
-  // 若已有配置且不强制更新，直接使用内存中的配置
   if (!forceUpdate && Object.keys(config || {}).length > 0) {
     return;
   }
 
-  // 下载最新配置（仅内存，不落地）
   const response = await axios.get(url, { responseType: "arraybuffer" });
   const content = Buffer.from(response.data).toString("utf-8");
   parseAndSetConfig(content);
 }
 
-// 初始加载（使用缓存优先）
 loadConfigResource(baseConfigURL).catch(() => {
   console.log("初始配置加载失败，将在首次使用时重试");
 });
 
-// 取出表情包列表
 async function sendStickerList(msg: Api.Message) {
   const stickerList = Object.keys(config)
     .sort((a, b) => a.localeCompare(b))
@@ -103,9 +100,8 @@ async function sendStickerList(msg: Api.Message) {
   });
 }
 
-// 随机从 config 中抽取一个 EntryConfig
 function getRandomEntry(): EntryConfig {
-  const values = Object.values(config); // 取出所有 EntryConfig
+  const values = Object.values(config);
   const randomIndex = Math.floor(Math.random() * values.length);
   return values[randomIndex];
 }
@@ -163,7 +159,7 @@ async function iconMaskedFor(params: {
     .composite([
       {
         input: maskBuffer,
-        blend: "dest-in", // 保留 mask 区域
+        blend: "dest-in",
       },
     ])
     .png()
@@ -224,10 +220,68 @@ async function compositeWithEntryConfig(parmas: {
 }): Promise<void> {
   const { entry, msg, isEat2, trigger } = parmas;
 
-  const baseBuffer = await getAssetBuffer(entry.url);
-
   const youAvatarBuffer = await downloadAvatar(msg, isEat2);
   if (!youAvatarBuffer) return;
+
+  if (entry.stamp) {
+    const stampCfg = entry.stamp || {};
+    const size = stampCfg.size ?? 512;
+    const scale = stampCfg.scale ?? 0.9;
+    const rotate = stampCfg.rotate ?? -12;
+    const opacity = stampCfg.opacity ?? 0.6;
+
+    const stampBuf = await getAssetBuffer(entry.url);
+
+    const base = await sharp(youAvatarBuffer)
+      .resize(size, size, { fit: "cover" })
+      .png()
+      .toBuffer();
+
+    const stampRotated = await sharp(stampBuf)
+      .resize({ width: Math.round(size * scale) })
+      .rotate(rotate, { background: { r: 0, g: 0, b: 0, alpha: 0 } })
+      .ensureAlpha()
+      .linear([1, 1, 1, opacity], [0, 0, 0, 0])
+      .png()
+      .toBuffer();
+
+    const stampFinal = await sharp(stampRotated)
+      .resize({ width: size, height: size, fit: "inside" })
+      .png()
+      .toBuffer();
+
+    const outBuffer = await sharp(base)
+      .composite([{ input: stampFinal, gravity: "center" }])
+      .webp({ lossless: true })
+      .toBuffer();
+
+    const file = new CustomFile("output.webp", outBuffer.length, "", outBuffer);
+    const { width = size, height = size } = await sharp(outBuffer).metadata();
+
+    const stickerAttr = new Api.DocumentAttributeSticker({
+      alt: entry.name,
+      stickerset: new Api.InputStickerSetEmpty(),
+    });
+
+    const imageSizeAttr = new Api.DocumentAttributeImageSize({
+      w: width,
+      h: height,
+    });
+
+    const filenameAttr = new Api.DocumentAttributeFilename({
+      fileName: "output.webp",
+    });
+
+    await msg.client?.sendFile(msg.peerId, {
+      file,
+      forceDocument: false,
+      attributes: [stickerAttr, imageSizeAttr, filenameAttr],
+      replyTo: await msg.getReplyMessage(),
+    });
+    return;
+  }
+
+  const baseBuffer = await getAssetBuffer(entry.url);
 
   let composite: sharp.OverlayOptions[] = [];
   if (entry.you) {
@@ -238,7 +292,6 @@ async function compositeWithEntryConfig(parmas: {
     composite.push(iconMasked);
   }
 
-  // 如果有两人互动
   if (entry.me) {
     const meId = trigger?.fromId || msg.fromId;
     if (!meId) {
@@ -264,7 +317,6 @@ async function compositeWithEntryConfig(parmas: {
     .webp({ quality: 100 })
     .toBuffer();
 
-  // 使用 CustomFile 指定文件名与大小，避免落地
   const file = new CustomFile("output.webp", outBuffer.length, "", outBuffer);
   const { width = 512, height = 512 } = await sharp(outBuffer).metadata();
 
@@ -284,9 +336,7 @@ async function compositeWithEntryConfig(parmas: {
 
   await msg.client?.sendFile(msg.peerId, {
     file,
-    // 贴纸通常不带 caption，这里留空
     forceDocument: false,
-    // 包含所有必要的属性以确保正确识别为贴纸
     attributes: [stickerAttr, imageSizeAttr, filenameAttr],
     replyTo: await msg.getReplyMessage(),
   });
@@ -346,17 +396,14 @@ const fn = async (
       return;
     }
 
-    // 确保配置已加载（优先使用缓存）
     await ensureConfigLoaded(msg);
     await sendStickerList(msg);
     return;
   }
 
-  // 确保配置已加载（优先使用缓存）
   await ensureConfigLoaded(msg);
 
   if (args.length == 0) {
-    // 说明随机情况
     const entry = getRandomEntry();
     await sendSticker({ entry, msg, trigger, isEat2 });
   } else {
@@ -383,11 +430,11 @@ const help_text =
   `• eat set [url] - 强制更新配置（覆盖缓存）\n` +
   `• 回复消息 + eat <名称> - 发送指定表情包\n` +
   `• 回复消息 + eat - 随机发送表情包\n\n` +
-  `若想实现定时更新表情包配置, 可安装并使用 <code>${mainPrefix}tpm i acron</code>
-每天2点自动更新 <code>eat</code> 的表情包配置(调用 <code>${mainPrefix}eat set</code> 命令)
+  `若想实现定时更新表情包配置, 可安装并使用 <code>${mainPrefix}tpm i acron</code>  
+每天2点自动更新 <code>eat</code> 的表情包配置(调用 <code>${mainPrefix}eat set</code> 命令)  
 
-<pre>${mainPrefix}acron cmd 0 0 2 * * * me 定时更新表情包
-${mainPrefix}eat set</pre>
+<pre>${mainPrefix}acron cmd 0 0 2 * * * me 定时更新表情包  
+${mainPrefix}eat set</pre>  
 `;
 
 class EatPlugin extends Plugin {
