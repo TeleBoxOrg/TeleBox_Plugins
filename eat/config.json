@@ -24,6 +24,16 @@
         "mask": "eat/maskat.png"
       }
     },
+    "az": {
+      "name": "按住",
+      "url": "eat/eataz.png",
+      "you": {
+        "x": -17,
+        "y": 250,
+        "rotate": -90,
+        "mask": "eat/maskaz.png"
+      }
+    },
     "bc": {
       "name": "鞭笞",
       "url": "eat/eatbc.png",
@@ -148,6 +158,15 @@
         "x": 770,
         "y": 100,
         "mask": "eat/maskhy2.png"
+      }
+    },
+    "jgw": {
+      "name": "凭什么就你们有龟壳",
+      "url": "eat/eatjgw.png",
+      "you": {
+        "x": 237,
+        "y": 69,
+        "mask": "eat/maskjgw.png"
       }
     },
     "kf": {
