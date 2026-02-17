@@ -413,7 +413,7 @@ class WhoisPlugin extends Plugin {
     // 添加原始数据（折叠显示）
     if (record.rawData) {
       formattedOutput += `\n<b>📄 原始 WHOIS 数据：</b>\n`;
-      formattedOutput += `<pre>${htmlEscape(record.rawData.substring(0, 3000))}</pre>`;
+      formattedOutput += `<blockquote expandable>${htmlEscape(record.rawData.substring(0, 3000))}</blockquote>`;
       
       if (record.rawData.length > 3000) {
         formattedOutput += `\n<i>（数据已截断，仅显示前 3000 字符）</i>`;
