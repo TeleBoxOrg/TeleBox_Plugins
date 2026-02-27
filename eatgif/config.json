@@ -31,6 +31,10 @@
     "url": "j/j.json",
     "desc": "撅"
   },
+  "jbff": {
+    "url": "jbff/jbff.json",
+    "desc": "此乃旧病复发也"
+  },
   "jj": {
     "url": "jj/jj.json",
     "desc": "来击剑吧"
