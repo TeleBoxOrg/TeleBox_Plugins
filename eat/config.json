@@ -382,13 +382,13 @@
       "name": "搬史大王",
       "url": "eat/eatbsdw.png",
       "me": {
-        "x": 150,
-        "y": 200,
+        "x": 200,
+        "y": 180,
         "mask": "eat/maskbsdw.png"
       },
       "you": {
-        "x": 30,
-        "y": 150,
+        "x": 55,
+        "y": 240,
         "mask": "eat/maskbsdw.png"
       }
     },
