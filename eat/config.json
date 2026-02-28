@@ -382,8 +382,8 @@
       "name": "搬史大王",
       "url": "eat/eatbsdw.png",
       "me": {
-        "x": 280,
-        "y": 190,
+        "x": 270,
+        "y": 200,
         "mask": "eat/maskbsdw.png"
       },
       "you": {
