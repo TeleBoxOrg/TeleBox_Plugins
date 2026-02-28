@@ -383,7 +383,7 @@
       "url": "eat/eatbsdw.png",
       "you": {
         "x": 100,
-        "y": 200,
+        "y": 150,
         "mask": "eat/maskbsdw.png"
       }
     },
