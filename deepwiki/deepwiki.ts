@@ -5,6 +5,8 @@ import { JSONFilePreset, Low } from "lowdb/node";
 import { createDirectoryInAssets } from "@utils/pathHelpers";
 import { TelegramFormatter } from "@utils/telegramFormatter";
 import { TelegraphFormatter } from "@utils/telegraphFormatter";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import path from "path";
 import axios from "axios";
 import http from "http";
@@ -386,24 +388,8 @@ class DeepWikiMcp {
     if (this.client) return;
     if (this.connecting) return await this.connecting;
     this.connecting = (async () => {
-      let ClientCtor: any;
-      let StreamableHTTPClientTransportCtor: any;
-
-      try {
-        const clientMod: any = await import("@modelcontextprotocol/sdk/client/index.js");
-        const httpMod: any = await import("@modelcontextprotocol/sdk/client/streamableHttp.js");
-        ClientCtor = clientMod?.Client;
-        StreamableHTTPClientTransportCtor = httpMod?.StreamableHTTPClientTransport;
-      } catch {
-        throw new UserError(
-          "缺少环境依赖，择需安装：\n" +
-            "<code>npm install @modelcontextprotocol/sdk</code>\n" +
-            "<code>pnpm add @modelcontextprotocol/sdk</code>"
-        );
-      }
-
-      const transport = new StreamableHTTPClientTransportCtor(new URL("https://mcp.deepwiki.com/mcp"));
-      const client = new ClientCtor({ name: "telebox-deepwiki", version: "0.5.1" }, { capabilities: {} });
+      const transport = new StreamableHTTPClientTransport(new URL("https://mcp.deepwiki.com/mcp"));
+      const client = new Client({ name: "telebox-deepwiki", version: "0.5.1" }, { capabilities: {} });
       await client.connect(transport);
       this.client = client;
       const tools = await client.listTools();
