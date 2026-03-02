@@ -5,7 +5,7 @@ import { createDirectoryInAssets } from "@utils/pathHelpers";
 import { Plugin } from "@utils/pluginBase";
 import { getPrefixes } from "@utils/pluginManager";
 
-const PLUGIN_VERSION = "4.0.0";
+const PLUGIN_VERSION = "4.1.0";
 
 enum LogLevel {
   INFO = 1,
@@ -127,8 +127,55 @@ const dbHelpers = {
       dbHelpers.setSetting(CONFIG_KEYS.WHITELIST, filtered);
       log(LogLevel.INFO, `Removed user ${userId} from whitelist`);
     }
+  },
+
+  clearWhitelist: () => {
+    dbHelpers.setSetting(CONFIG_KEYS.WHITELIST, []);
+    log(LogLevel.INFO, "Cleared entire whitelist");
   }
 };
+
+const userInfoCache = new Map<number, { firstName: string; lastName?: string }>();
+
+async function getUserInfo(client: TelegramClient, userId: number): Promise<{ firstName: string; lastName?: string } | null> {
+  if (userInfoCache.has(userId)) {
+    return userInfoCache.get(userId)!;
+  }
+  try {
+    const entity = await client.getEntity(userId);
+    if (entity && 'firstName' in entity) {
+      const info = {
+        firstName: entity.firstName || '',
+        lastName: entity.lastName
+      };
+      userInfoCache.set(userId, info);
+      return info;
+    }
+    return null;
+  } catch (error) {
+    log(LogLevel.ERROR, `Failed to get user info for ${userId}`, error);
+    return null;
+  }
+}
+
+async function getUserDisplayName(client: TelegramClient, userId: number): Promise<string> {
+  const info = await getUserInfo(client, userId);
+  if (info) {
+    const fullName = info.lastName ? `${info.firstName} ${info.lastName}`.trim() : info.firstName;
+    return fullName || 'Unknown';
+  }
+  return 'Unknown';
+}
+
+async function isUserBot(client: TelegramClient, userId: number): Promise<boolean> {
+  try {
+    const entity = await client.getEntity(userId);
+    return !!(entity as any).bot;
+  } catch (error) {
+    log(LogLevel.ERROR, `Failed to check if user ${userId} is bot`, error);
+    return false;
+  }
+}
 
 async function setFolder(client: TelegramClient, userId: number, folderId: number): Promise<boolean> {
   try {
@@ -215,8 +262,13 @@ async function pmcaptchaMessageListener(message: Api.Message) {
     if (message.out) {
       const recipientId = Number((message.peerId as any)?.userId);
       if (recipientId && recipientId > 0 && !dbHelpers.isWhitelisted(recipientId)) {
-        dbHelpers.addToWhitelist(recipientId);
-        log(LogLevel.INFO, `Auto-whitelisted recipient ${recipientId}`);
+        const isBot = await isUserBot(client, recipientId);
+        if (!isBot) {
+          dbHelpers.addToWhitelist(recipientId);
+          log(LogLevel.INFO, `Auto-whitelisted recipient ${recipientId}`);
+        } else {
+          log(LogLevel.INFO, `Skipped auto-whitelist for bot ${recipientId}`);
+        }
       }
       return;
     }
@@ -229,8 +281,13 @@ async function pmcaptchaMessageListener(message: Api.Message) {
 
     const hasHistory = await hasChatHistory(client, userId, Number(message.id));
     if (hasHistory) {
-      dbHelpers.addToWhitelist(userId);
-      log(LogLevel.INFO, `Auto-whitelisted user ${userId} (has chat history)`);
+      const isBot = await isUserBot(client, userId);
+      if (!isBot) {
+        dbHelpers.addToWhitelist(userId);
+        log(LogLevel.INFO, `Auto-whitelisted user ${userId} (has chat history)`);
+      } else {
+        log(LogLevel.INFO, `Skipped auto-whitelist for bot ${userId} (has chat history)`);
+      }
       return;
     }
 
@@ -256,13 +313,14 @@ const help_text = `🔒 <b>PMCaptcha v${PLUGIN_VERSION}</b>
 • <code>${mainPrefix}pmc help</code> - 显示帮助
 
 <b>白名单管理：</b>
-• <code>${mainPrefix}pmc add [用户ID]</code> - 添加到白名单
-• <code>${mainPrefix}pmc del [用户ID]</code> - 从白名单移除
-• <code>${mainPrefix}pmc list</code> - 查看白名单
+• <code>${mainPrefix}pmc add [用户ID/用户名]</code> - 添加到白名单（支持回复消息或直接输入ID/用户名，机器人不可添加）
+• <code>${mainPrefix}pmc del [用户ID/用户名]</code> - 从白名单移除
+• <code>${mainPrefix}pmc del all</code> - 删除所有白名单
+• <code>${mainPrefix}pmc list</code> - 查看白名单（显示完整名字，点击可跳转）
 
 <b>说明：</b>
-• 已有聊天记录的用户会自动加入白名单
-• 你主动发起的对话会自动加入白名单
+• 已有聊天记录的用户会自动加入白名单（机器人除外）
+• 你主动发起的对话会自动加入白名单（机器人除外）
 • 白名单用户的消息不会被归档静音`;
 
 const pmc = async (message: Api.Message) => {
@@ -306,6 +364,24 @@ const pmc = async (message: Api.Message) => {
   return pmcaptcha(message);
 };
 
+/**
+ * 辅助函数：根据用户名解析用户ID
+ * 支持 @username 或 username 格式
+ */
+async function resolveUsernameToId(client: TelegramClient, username: string): Promise<number | null> {
+  try {
+    const cleanUsername = username.replace(/^@/, '');
+    const entity = await client.getEntity(cleanUsername);
+    if (entity && 'id' in entity) {
+      return Number(entity.id);
+    }
+    return null;
+  } catch (error) {
+    log(LogLevel.ERROR, `Failed to resolve username ${username}`, error);
+    return null;
+  }
+}
+
 const pmcaptcha = async (message: Api.Message) => {
   if (!(await waitForConfigDb())) {
     console.error("[PMCaptcha] Config DB not ready, skipping command.");
@@ -347,9 +423,11 @@ const pmcaptcha = async (message: Api.Message) => {
         }
 
         if (!targetUserId && args[1]) {
-          const userId = parseInt(args[1]);
-          if (userId > 0) {
-            targetUserId = userId;
+          const arg = args[1];
+          if (/^\d+$/.test(arg)) {
+            targetUserId = parseInt(arg);
+          } else {
+            targetUserId = await resolveUsernameToId(client, arg);
           }
         }
 
@@ -360,7 +438,17 @@ const pmcaptcha = async (message: Api.Message) => {
         if (!targetUserId || targetUserId <= 0) {
           await client.editMessage(message.peerId, {
             message: message.id,
-            text: "❌ 请提供有效的用户ID或回复要添加的用户消息",
+            text: "❌ 无法解析目标用户，请提供有效的用户ID、用户名或回复用户消息",
+            parseMode: "html",
+          });
+          break;
+        }
+
+        const isBot = await isUserBot(client, targetUserId);
+        if (isBot) {
+          await client.editMessage(message.peerId, {
+            message: message.id,
+            text: `❌ 无法添加机器人到白名单：<a href="tg://user?id=${targetUserId}">${targetUserId}</a>`,
             parseMode: "html",
           });
           break;
@@ -368,9 +456,10 @@ const pmcaptcha = async (message: Api.Message) => {
 
         dbHelpers.addToWhitelist(targetUserId);
 
+        const displayName = await getUserDisplayName(client, targetUserId);
         await client.editMessage(message.peerId, {
           message: message.id,
-          text: `✅ 用户 <code>${targetUserId}</code> 已添加到白名单`,
+          text: `✅ 用户 <a href="tg://user?id=${targetUserId}">${displayName} (${targetUserId})</a> 已添加到白名单`,
           parseMode: "html",
         });
         break;
@@ -379,20 +468,38 @@ const pmcaptcha = async (message: Api.Message) => {
       case "remove":
       case "rm":
       case "-":
-        if (!args[1]) {
+        if (args[1] && args[1].toLowerCase() === "all") {
+          dbHelpers.clearWhitelist();
           await client.editMessage(message.peerId, {
             message: message.id,
-            text: "❌ 请提供要移除的用户ID",
+            text: "✅ 所有白名单已清空",
             parseMode: "html",
           });
           break;
         }
 
-        const delUserId = parseInt(args[1]);
+        if (!args[1]) {
+          await client.editMessage(message.peerId, {
+            message: message.id,
+            text: "❌ 请提供要移除的用户ID或用户名，或使用 `del all` 清空白名单",
+            parseMode: "html",
+          });
+          break;
+        }
+
+        let delUserId: number | null = null;
+        const delArg = args[1];
+
+        if (/^\d+$/.test(delArg)) {
+          delUserId = parseInt(delArg);
+        } else {
+          delUserId = await resolveUsernameToId(client, delArg);
+        }
+
         if (!delUserId || delUserId <= 0) {
           await client.editMessage(message.peerId, {
             message: message.id,
-            text: "❌ 请提供有效的用户ID",
+            text: "❌ 无法解析目标用户，请提供有效的用户ID或用户名",
             parseMode: "html",
           });
           break;
@@ -402,7 +509,7 @@ const pmcaptcha = async (message: Api.Message) => {
 
         await client.editMessage(message.peerId, {
           message: message.id,
-          text: `✅ 用户 <code>${delUserId}</code> 已从白名单移除`,
+          text: `✅ 用户 <a href="tg://user?id=${delUserId}">${delUserId}</a> 已从白名单移除`,
           parseMode: "html",
         });
         break;
@@ -420,11 +527,16 @@ const pmcaptcha = async (message: Api.Message) => {
           break;
         }
 
-        const listText = whitelist.map((id, idx) => `${idx + 1}. <code>${id}</code>`).join("\n");
+        const listItems = await Promise.all(
+          whitelist.map(async (id) => {
+            const displayName = await getUserDisplayName(client, id);
+            return `• <a href="tg://user?id=${id}">${displayName} (${id})</a>`;
+          })
+        );
         
         await client.editMessage(message.peerId, {
           message: message.id,
-          text: `📋 <b>白名单用户 (${whitelist.length})</b>\n\n${listText}`,
+          text: `📋 <b>白名单用户 (${whitelist.length})</b>\n\n${listItems.join("\n")}`,
           parseMode: "html",
         });
         break;
