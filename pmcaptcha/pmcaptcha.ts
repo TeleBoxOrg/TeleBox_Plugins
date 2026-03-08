@@ -8,7 +8,7 @@ import { createDirectoryInAssets } from "@utils/pathHelpers";
 import { Plugin } from "@utils/pluginBase";
 import { getPrefixes } from "@utils/pluginManager";
 
-const PLUGIN_VERSION = "5.0.0";
+const PLUGIN_VERSION = "5.0.1";
 
 // ─── 日志 ─────────────────────────────────────────────────────────────────────
 
@@ -924,8 +924,11 @@ async function messageListener(message: Api.Message) {
     const botFlag = sender ? isBotFromSender(sender) : await isBot(client, userId);
     if (botFlag) return;
 
-    // 白名单放行
+    // 白名单放行（仅手动添加）
     if (wl.has(userId)) return;
+
+    // 已通过验证的用户直接放行，不再触发验证流程
+    if (cfg.verified().some(r => r.id === userId)) return;
 
     // 处于验证流程中 → 判断答案
     if (states.has(userId)) {
@@ -1463,7 +1466,7 @@ const pmcaptcha = async (message: Api.Message) => {
         if (sub === "failed") {
           const list = cfg.failed();
           if (!list.length) { await edit("📋 <b>验证失败记录为空</b>"); break; }
-          const items = await Promise.all(list.map(async r => {
+          const items = await Promise.全部(list.map(async r => {
             if (r.username) usernameCache.set(r.id, r.username);
             const name = await getDisplayName(client, r.id).catch(() => r.name);
             return `• ${userLink(r.id, name)} — ${rLbl[r.reason]}\n  <i>${fmtTime(r.time)}</i>`;
