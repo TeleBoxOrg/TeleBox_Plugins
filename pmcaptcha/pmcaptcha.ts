@@ -8,7 +8,7 @@ import { createDirectoryInAssets } from "@utils/pathHelpers";
 import { Plugin } from "@utils/pluginBase";
 import { getPrefixes } from "@utils/pluginManager";
 
-const PLUGIN_VERSION = "5.6.11";
+const PLUGIN_VERSION = "5.0.0";
 
 enum LogLevel { INFO = 1, WARN = 2, ERROR = 3 }
 
