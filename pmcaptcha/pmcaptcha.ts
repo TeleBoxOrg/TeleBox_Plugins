@@ -8,7 +8,7 @@ import { createDirectoryInAssets } from "@utils/pathHelpers";
 import { Plugin } from "@utils/pluginBase";
 import { getPrefixes } from "@utils/pluginManager";
 
-const PLUGIN_VERSION = "5.0.2";
+const PLUGIN_VERSION = "5.0.5";
 
 // ─── 日志 ─────────────────────────────────────────────────────────────────────
 
@@ -29,42 +29,70 @@ enum CaptchaMode {
 }
 
 enum FailAction {
-  BLOCK        = "block",        // 屏蔽用户
-  DELETE       = "delete",       // 删除对话记录
-  REPORT       = "report",       // 举报垃圾信息
-  MUTE         = "mute",         // 永久静音
-  ARCHIVE      = "archive",      // 归档
-  KICK         = "kick",         // 踢出（仅群组，私聊无效）
-  BAN          = "ban",          // 封禁（仅群组）
-  DELETE_REVOKE = "delete_revoke" // 删除对话记录（双方）
+  BLOCK    = "block",    // 屏蔽用户
+  DELETE   = "delete",   // 删除对话记录（双方撤回）
+  REPORT   = "report",   // 举报垃圾信息
+  MUTE     = "mute",     // 永久静音
+  ARCHIVE  = "archive",  // 归档
+  KICK     = "kick",     // 踢出（仅群组，私聊无效）
+  BAN      = "ban",      // 封禁（仅群组）
 }
 
-/** 验证通过后的操作 */
 enum PassAction {
   UNMUTE    = "unmute",    // 取消静音
-  UNARCHIVE = "unarchive"  // 取消归档
+  UNARCHIVE = "unarchive", // 取消归档
+  WL        = "wl",        // 加入白名单
 }
 
-/** 验证失败操作的显示标签（统一来源，全局复用） */
+/** 验证失败操作的显示标签 */
 const FAIL_ACTION_LABEL: Record<string, string> = {
-  block:         "屏蔽",
-  delete:        "删除对话",
-  delete_revoke: "删除对话（双方）",
-  report:        "举报",
-  mute:          "永久静音",
-  archive:       "归档",
-  kick:          "踢出",
-  ban:           "封禁"
+  block:   "屏蔽",
+  delete:  "删除对话（双方）",
+  report:  "举报",
+  mute:    "永久静音",
+  archive: "归档",
+  kick:    "踢出",
+  ban:     "封禁",
 };
 
 const PASS_ACTION_LABEL: Record<string, string> = {
   unmute:    "取消静音",
-  unarchive: "取消归档"
+  unarchive: "取消归档",
+  wl:        "加入白名单",
 };
+
+/** 中文别名 → FailAction（支持中文设置） */
+const FAIL_ACTION_CN_MAP: Record<string, FailAction> = {
+  "屏蔽":   FailAction.BLOCK,
+  "删除":   FailAction.DELETE,
+  "举报":   FailAction.REPORT,
+  "静音":   FailAction.MUTE,
+  "归档":   FailAction.ARCHIVE,
+  "踢出":   FailAction.KICK,
+  "封禁":   FailAction.BAN,
+};
+
+/** 中文别名 → PassAction */
+const PASS_ACTION_CN_MAP: Record<string, PassAction> = {
+  "取消静音": PassAction.UNMUTE,
+  "取消归档": PassAction.UNARCHIVE,
+  "白名单":   PassAction.WL,
+};
+
+function resolveFailAction(s: string): FailAction | null {
+  const lower = s.toLowerCase();
+  if ((Object.values(FailAction) as string[]).includes(lower)) return lower as FailAction;
+  return FAIL_ACTION_CN_MAP[s] ?? null;
+}
+
+function resolvePassAction(s: string): PassAction | null {
+  const lower = s.toLowerCase();
+  if ((Object.values(PassAction) as string[]).includes(lower)) return lower as PassAction;
+  return PASS_ACTION_CN_MAP[s] ?? null;
+}
 
 // ─── 配置键 & 类型 ────────────────────────────────────────────────────────────
 
-/** 插件设置键（存于 pmcaptcha_config.json，随插件更新可重置） */
 const K = {
   ENABLED:          "plugin_enabled",
   CAP_ENABLED:      "captcha_enabled",
@@ -77,7 +105,6 @@ const K = {
   CAP_PASS_ACTIONS: "captcha_pass_actions",
 } as const;
 
-/** 用户数据键（存于 pmcaptcha_data.json，独立持久化，更新不丢失） */
 const D = {
   WHITELIST: "whitelist_user_ids",
   VERIFIED:  "verified_users",
@@ -113,7 +140,6 @@ const prefixes   = getPrefixes();
 const mainPrefix = prefixes[0] || ".";
 const pmcDir     = createDirectoryInAssets("pmcaptcha");
 
-// 用户数据存放在工作目录，与插件 assets 独立，更新不覆盖
 const dataDir = path.join(process.cwd(), "pmcaptcha_userdata");
 if (!fs.existsSync(dataDir)) fs.mkdirSync(dataDir, { recursive: true });
 
@@ -146,7 +172,6 @@ initDb();
 
 function get<T>(key: string, def: T): T {
   if (!dbReady) return def;
-  // 优先从 configDb 读，没有则从 dataDb 读
   const db = (configDb?.data[key] !== undefined) ? configDb : dataDb;
   const v  = db?.data[key];
   return v !== undefined ? v : def;
@@ -154,7 +179,6 @@ function get<T>(key: string, def: T): T {
 
 function set(key: string, value: any) {
   if (!dbReady) return;
-  // 根据键归属写入对应 DB
   if (key in DEFAULT_DATA) {
     if (!dataDb) return;
     dataDb.data[key] = value;
@@ -192,7 +216,11 @@ const wl = {
   has:   (id: number) => cfg.whitelist().includes(id),
   add:   (id: number) => {
     const list = cfg.whitelist();
-    if (!list.includes(id)) { list.push(id); set(D.WHITELIST, list); }
+    if (!list.includes(id)) {
+      list.push(id);
+      set(D.WHITELIST, list);
+      rec.delVerified(id);
+    }
   },
   del:   (id: number) => set(D.WHITELIST, cfg.whitelist().filter(x => x !== id)),
   clear: ()           => set(D.WHITELIST, [])
@@ -225,7 +253,7 @@ const rec = {
 // ─── 用户信息缓存 ─────────────────────────────────────────────────────────────
 
 const nameCache     = new Map<number, string>();
-const usernameCache = new Map<number, string>();  // username（不含 @）
+const usernameCache = new Map<number, string>();
 let _selfId: number | null = null;
 
 async function getSelfId(client: TelegramClient): Promise<number> {
@@ -235,7 +263,6 @@ async function getSelfId(client: TelegramClient): Promise<number> {
   return _selfId!;
 }
 
-/** 从消息 sender 对象直接提取用户信息，写入缓存；不依赖 getEntity */
 function cacheUserFromSender(sender: any): void {
   if (!sender?.id) return;
   const id       = Number(sender.id);
@@ -245,21 +272,13 @@ function cacheUserFromSender(sender: any): void {
   if (username) usernameCache.set(id, username);
 }
 
-/**
- * 通过 MTProto contacts.ResolveUsername 或 users.GetUsers 取用户信息，
- * 写入缓存并返回 User 对象。对纯数字 ID 用 accessHash=0 尝试，
- * 适用于无 DC 信息、未在 gramjs session 中缓存的用户。
- */
 async function fetchUserInfo(client: TelegramClient, userId: number): Promise<any | null> {
-  // 先尝试标准 getEntity（有缓存时最快）
   try {
     const e = await client.getEntity(userId) as any;
     cacheUserFromSender(e);
     return e;
   } catch {}
 
-  // fallback：用 accessHash=0 直接调 users.GetUsers
-  // 对曾经交互过的用户 Telegram 服务端会返回完整信息
   try {
     const res = await client.invoke(new Api.users.GetUsers({
       id: [new Api.InputUser({ userId: BigInt(userId), accessHash: BigInt(0) })]
@@ -284,12 +303,10 @@ async function getDisplayName(client: TelegramClient, userId: number): Promise<s
   return String(userId);
 }
 
-/** 生成可点击用户链接，统一使用 tg://user?id=，显示"名姓 (id)" */
 function userLink(id: number, name: string): string {
   return `<a href="tg://user?id=${id}">${name} (${id})</a>`;
 }
 
-/** 从消息 sender 直接判断是否机器人，避免调用 getEntity */
 function isBotFromSender(sender: any): boolean {
   return !!(sender as any)?.bot;
 }
@@ -366,24 +383,21 @@ async function unarchiveChat(client: TelegramClient, userId: number) {
 }
 
 async function runFailActions(client: TelegramClient, userId: number) {
-  // 始终归档 + 静音（除非用户自行配置了 mute/archive，仍执行保持幂等）
   await archiveChat(client, userId);
   await muteChat(client, userId);
 
   for (const a of cfg.failActions()) {
-    if (a === FailAction.BLOCK)         await blockUser(client, userId);
-    if (a === FailAction.DELETE)        await deleteHistory(client, userId);
-    if (a === FailAction.DELETE_REVOKE) {
+    if (a === FailAction.BLOCK)  await blockUser(client, userId);
+    if (a === FailAction.DELETE) {
       try {
         const peer = await client.getInputEntity(userId);
         await client.invoke(new Api.messages.DeleteHistory({ peer, revoke: true, maxId: 0 }));
-        log(LogLevel.INFO, `Deleted history (revoke) ${userId}`);
-      } catch (e) { log(LogLevel.ERROR, `delete_revoke failed ${userId}`, e); }
+        log(LogLevel.INFO, `Deleted history (revoke both sides) ${userId}`);
+      } catch (e) { log(LogLevel.ERROR, `delete failed ${userId}`, e); }
     }
-    if (a === FailAction.REPORT)        await reportSpam(client, userId);
-    if (a === FailAction.MUTE)          await muteChat(client, userId);    // 已在上方执行，幂等
-    if (a === FailAction.ARCHIVE)       await archiveChat(client, userId); // 同上
-    // KICK / BAN 仅对群组有意义，私聊时忽略
+    if (a === FailAction.REPORT)  await reportSpam(client, userId);
+    if (a === FailAction.MUTE)    await muteChat(client, userId);
+    if (a === FailAction.ARCHIVE) await archiveChat(client, userId);
   }
 }
 
@@ -391,29 +405,24 @@ async function runPassActions(client: TelegramClient, userId: number) {
   for (const a of cfg.passActions()) {
     if (a === PassAction.UNMUTE)    await unmuteChat(client, userId);
     if (a === PassAction.UNARCHIVE) await unarchiveChat(client, userId);
+    if (a === PassAction.WL)        wl.add(userId);
   }
 }
 
 // ─── 图片验证码生成 ───────────────────────────────────────────────────────────
 
-/**
- * 尝试加载 canvas 模块；若未安装则自动执行 npm install canvas 后重新加载。
- * 安装失败时返回 false，调用方负责降级为数学题模式。
- */
 let _canvas: any = null;
 let _canvasInstalling = false;
 
 async function tryGetCanvas(): Promise<any> {
   if (_canvas !== null) return _canvas;
 
-  // 首次尝试直接 import
   try {
     _canvas = await import("canvas");
     log(LogLevel.INFO, "canvas module loaded");
     return _canvas;
-  } catch { /* 未安装，继续自动安装 */ }
+  } catch {}
 
-  // 防止并发重复安装
   if (_canvasInstalling) {
     const deadline = Date.now() + 60_000;
     while (_canvasInstalling && Date.now() < deadline) {
@@ -435,12 +444,10 @@ async function tryGetCanvas(): Promise<any> {
     return false;
   }
 
-  // 安装后动态加载（清除 require 缓存以防万一）
   try {
-    // 清除 Node.js 模块缓存（若存在）
     const canvasId = require.resolve("canvas");
     if (require.cache[canvasId]) delete require.cache[canvasId];
-  } catch { /* ESM 环境无 require，忽略 */ }
+  } catch {}
 
   try {
     _canvas = await import("canvas");
@@ -454,10 +461,6 @@ async function tryGetCanvas(): Promise<any> {
   return _canvas ?? false;
 }
 
-/**
- * 生成图片验证码，返回 PNG Buffer 与正确答案。
- * digitOnly=true 时仅使用数字，否则使用字母+数字混合（去除易混淆字符）。
- */
 async function generateImageCaptcha(
   digitOnly: boolean
 ): Promise<{ buffer: Buffer; answer: string } | null> {
@@ -465,12 +468,11 @@ async function generateImageCaptcha(
   if (!cv) return null;
 
   const CHARSET_DIGIT = "0123456789";
-  const CHARSET_MIXED = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"; // 去除 0/O 1/I
+  const CHARSET_MIXED = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
 
   const charset = digitOnly ? CHARSET_DIGIT : CHARSET_MIXED;
   const LENGTH  = 5;
 
-  // 生成随机验证码字符串
   let answer = "";
   for (let i = 0; i < LENGTH; i++) {
     answer += charset[Math.floor(Math.random() * charset.length)];
@@ -483,13 +485,11 @@ async function generateImageCaptcha(
   const rnd  = () => Math.random();
   const rndI = (min: number, max: number) => Math.floor(rnd() * (max - min + 1)) + min;
 
-  // ── 背景：随机色块平铺 ────────────────────────────────────────────────────
   for (let i = 0; i < 12; i++) {
     ctx.fillStyle = `hsla(${rndI(0,360)},30%,${rndI(85,97)}%,0.9)`;
     ctx.fillRect(rndI(0, W), rndI(0, H), rndI(20, 80), rndI(20, 60));
   }
 
-  // ── 干扰网格 ──────────────────────────────────────────────────────────────
   ctx.strokeStyle = `rgba(180,180,200,0.35)`;
   ctx.lineWidth = 0.8;
   for (let x = 0; x < W; x += rndI(18, 28)) {
@@ -499,21 +499,15 @@ async function generateImageCaptcha(
     ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke();
   }
 
-  // ── 干扰贝塞尔曲线（穿越全图）────────────────────────────────────────────
   for (let i = 0; i < 8; i++) {
     ctx.beginPath();
     ctx.moveTo(0, rnd() * H);
-    ctx.bezierCurveTo(
-      W * 0.25, rnd() * H,
-      W * 0.75, rnd() * H,
-      W,        rnd() * H
-    );
+    ctx.bezierCurveTo(W * 0.25, rnd() * H, W * 0.75, rnd() * H, W, rnd() * H);
     ctx.strokeStyle = `hsla(${rndI(0,360)},55%,45%,${0.3 + rnd() * 0.3})`;
     ctx.lineWidth   = 1 + rnd();
     ctx.stroke();
   }
 
-  // ── 干扰噪点（更密）──────────────────────────────────────────────────────
   for (let i = 0; i < 180; i++) {
     ctx.beginPath();
     ctx.arc(rnd() * W, rnd() * H, 0.8 + rnd() * 1.5, 0, Math.PI * 2);
@@ -521,13 +515,11 @@ async function generateImageCaptcha(
     ctx.fill();
   }
 
-  // ── 干扰小矩形色块 ────────────────────────────────────────────────────────
   for (let i = 0; i < 8; i++) {
     ctx.fillStyle = `hsla(${rndI(0,360)},60%,60%,0.15)`;
     ctx.fillRect(rnd() * W, rnd() * H, rndI(8, 30), rndI(4, 16));
   }
 
-  // ── 字符绘制（随机颜色、旋转、纵向偏移、随机字体大小）──────────────────────
   const STEP = (W - 24) / LENGTH;
   for (let i = 0; i < LENGTH; i++) {
     const ch  = answer[i];
@@ -543,7 +535,6 @@ async function generateImageCaptcha(
     ctx.textAlign    = "center";
     ctx.textBaseline = "middle";
 
-    // 外发光描边
     ctx.shadowColor   = `hsla(${rndI(0,360)},80%,50%,0.6)`;
     ctx.shadowBlur    = 4;
     ctx.strokeStyle   = `hsla(${rndI(0,360)},35%,85%,0.9)`;
@@ -554,7 +545,6 @@ async function generateImageCaptcha(
     ctx.fillStyle   = `hsl(${rndI(0,360)},70%,20%)`;
     ctx.fillText(ch, 0, 0);
 
-    // 随机删除线（50% 概率）
     if (rnd() > 0.5) {
       ctx.strokeStyle = `hsla(${rndI(0,360)},60%,40%,0.5)`;
       ctx.lineWidth   = 1.5;
@@ -574,19 +564,107 @@ async function generateImageCaptcha(
 // ─── 验证状态 ─────────────────────────────────────────────────────────────────
 
 interface CaptchaState {
-  answer:      string;                            // 正确答案
-  tries:       number;                            // 已尝试次数
-  timer:       ReturnType<typeof setTimeout> | null;
-  msgIds:      number[];                          // 所有验证消息 ID（用于事后清理）
-  mode:        CaptchaMode;                       // 当前验证模式（用于答案比对策略）
+  answer:   string;                             // 正确答案
+  question: string;                             // 题目 / 关键词（用于刷新消息）
+  isQA:     boolean;                            // TEXT 模式：是否为随机问答（false = keyword 模式）
+  tries:    number;                             // 已尝试次数
+  timer:    ReturnType<typeof setTimeout> | null;
+  msgIds:   number[];                           // 所有验证消息 ID
+  mode:     CaptchaMode;                        // 当前验证模式
 }
 
 const states = new Map<number, CaptchaState>();
 
-/** 删除验证流程中发送的所有消息 */
 async function cleanupCaptchaMessages(client: TelegramClient, userId: number, state: CaptchaState) {
   for (const id of state.msgIds) {
     try { await client.deleteMessages(userId, [id], { revoke: false }); } catch {}
+  }
+}
+
+// ─── 消息重建（用于实时刷新）─────────────────────────────────────────────────
+
+/** 重建文字类验证消息文本（含最新的 timeout/tries/failActions） */
+function rebuildCaptchaText(state: CaptchaState): string {
+  const timeout    = cfg.timeout();
+  const maxTries   = cfg.maxTries();
+  const actions    = cfg.failActions();
+  const custom     = cfg.prompt();
+  const actionDesc = actions.length
+    ? actions.map(a => FAIL_ACTION_LABEL[a] ?? a).join("、")
+    : "仅归档并静音";
+  const remaining  = maxTries > 0 ? maxTries - state.tries : 0;
+
+  function buildFooter(): string {
+    const lines: string[] = [];
+    if (timeout > 0)  lines.push(`⏱ 验证时间：<b>${timeout}</b> 秒`);
+    if (maxTries > 0) lines.push(`🔢 剩余次数：<b>${remaining > 0 ? remaining : maxTries}</b> 次`);
+    lines.push(`⚠️ 验证失败将会：${actionDesc}`);
+    return lines.length ? "\n\n" + lines.join("\n") : "";
+  }
+
+  switch (state.mode) {
+    case CaptchaMode.MATH: {
+      const footer = buildFooter();
+      return custom
+        ? custom.replace("{question}", state.question)
+        : `🔒 <b>人机验证</b>\n\n请回复以下算式的答案：\n\n<code>${state.question} = ?</code>${footer}`;
+    }
+    case CaptchaMode.TEXT: {
+      const footer = buildFooter();
+      if (state.isQA) {
+        return `🔒 <b>人机验证</b>\n\n请回答以下问题：\n\n<b>${state.question}</b>${footer}`;
+      } else {
+        const kw = state.question;
+        return custom
+          ? custom.replace("{keyword}", kw)
+          : `🔒 <b>人机验证</b>\n\n请回复以下关键词以证明你不是机器人：\n\n<code>${kw}</code>${footer}`;
+      }
+    }
+    default:
+      return "";
+  }
+}
+
+/** 重建图片验证码的 caption 文本 */
+function rebuildImgCaption(state: CaptchaState): string {
+  const timeout    = cfg.timeout();
+  const maxTries   = cfg.maxTries();
+  const actions    = cfg.failActions();
+  const actionDesc = actions.length
+    ? actions.map(a => FAIL_ACTION_LABEL[a] ?? a).join("、")
+    : "仅归档并静音";
+  const digitOnly  = state.mode === CaptchaMode.IMG_DIGIT;
+  const desc       = digitOnly ? "5 位数字验证码" : "5 位验证码（字母与数字均为大写）";
+
+  const lines: string[] = [`🔒 人机验证\n\n请输入图片中的${desc}`];
+  if (timeout  > 0) lines.push(`⏱ 验证时间：${timeout} 秒`);
+  if (maxTries > 0) lines.push(`🔢 剩余次数：${maxTries} 次`);
+  lines.push(`⚠️ 验证失败将会：${actionDesc}`);
+  return lines.join("\n");
+}
+
+/**
+ * 刷新所有正在进行中的验证消息（在超时/次数/失败操作变更后调用）。
+ * 图片模式更新 caption，文字模式更新消息正文。
+ */
+async function refreshActiveCaptchas(client: TelegramClient): Promise<void> {
+  for (const [userId, state] of states.entries()) {
+    const promptMsgId = state.msgIds[0];
+    if (!promptMsgId) continue;
+    try {
+      const isImg = state.mode === CaptchaMode.IMG_DIGIT || state.mode === CaptchaMode.IMG_MIXED;
+      if (isImg) {
+        const newCaption = rebuildImgCaption(state);
+        await client.editMessage(userId, { message: promptMsgId, text: newCaption });
+      } else {
+        const newText = rebuildCaptchaText(state);
+        if (newText) {
+          await client.editMessage(userId, { message: promptMsgId, text: newText, parseMode: "html" });
+        }
+      }
+    } catch (e) {
+      log(LogLevel.WARN, `refreshActiveCaptchas: failed to update msg for ${userId}`, e);
+    }
   }
 }
 
@@ -594,53 +672,42 @@ async function cleanupCaptchaMessages(client: TelegramClient, userId: number, st
 
 function modeLabel(m: CaptchaMode): string {
   return {
-    [CaptchaMode.MATH]:       "数学计算",
-    [CaptchaMode.TEXT]:       "文字关键词",
-    [CaptchaMode.IMG_DIGIT]:  "图片验证码（纯数字）",
-    [CaptchaMode.IMG_MIXED]:  "图片验证码（字母+数字）",
+    [CaptchaMode.MATH]:       "算术验证",
+    [CaptchaMode.TEXT]:       "关键词验证",
+    [CaptchaMode.IMG_DIGIT]:  "图片验证（纯数字）",
+    [CaptchaMode.IMG_MIXED]:  "图片验证（字母+数字）",
   }[m] ?? m;
 }
 
-/**
- * 较难的数学题：四则运算 + 两步混合 + 整除除法 + 幂运算，数值范围更大。
- * 始终保证答案为正整数。
- */
 function mathQuestion(): { question: string; answer: string } {
   const rand  = (min: number, max: number) => Math.floor(Math.random() * (max - min + 1)) + min;
   const type  = rand(0, 5);
 
   if (type === 0) {
-    // 加法：两个两位数
     const a = rand(10, 99), b = rand(10, 99);
     return { question: `${a} + ${b}`, answer: String(a + b) };
   }
   if (type === 1) {
-    // 减法：确保结果为正
     const b = rand(10, 60), a = rand(b + 1, b + 60);
     return { question: `${a} - ${b}`, answer: String(a - b) };
   }
   if (type === 2) {
-    // 乘法：一位 × 两位
     const a = rand(2, 9), b = rand(11, 25);
     return { question: `${a} × ${b}`, answer: String(a * b) };
   }
   if (type === 3) {
-    // 整除除法：先选商和除数，确保整除
     const divisor = rand(2, 12), quotient = rand(3, 15);
     const dividend = divisor * quotient;
     return { question: `${dividend} ÷ ${divisor}`, answer: String(quotient) };
   }
   if (type === 4) {
-    // 两步混合：a × b + c
     const a = rand(2, 9), b = rand(2, 9), c = rand(1, 20);
     return { question: `${a} × ${b} + ${c}`, answer: String(a * b + c) };
   }
-  // 平方：2~12
   const a = rand(2, 12);
   return { question: `${a}²`, answer: String(a * a) };
 }
 
-/** 随机问答题库（answer 全部小写，答题时不区分大小写） */
 const TEXT_QA: { question: string; answer: string }[] = [
   { question: "天空是什么颜色？（中文）",           answer: "蓝色"   },
   { question: "一周有几天？（数字）",               answer: "7"      },
@@ -664,7 +731,6 @@ function textQuestion(): { question: string; answer: string } {
 }
 
 async function sendCaptcha(client: TelegramClient, userId: number): Promise<void> {
-  // 若已有进行中的验证，先清理旧状态和消息，再发新验证
   const existing = states.get(userId);
   if (existing) {
     if (existing.timer) clearTimeout(existing.timer);
@@ -678,12 +744,10 @@ async function sendCaptcha(client: TelegramClient, userId: number): Promise<void
   const actions = cfg.failActions();
   const custom  = cfg.prompt();
 
-  // ── 通用页脚构建器 ──────────────────────────────────────────────────────────
   const actionDesc = actions.length
     ? actions.map(a => FAIL_ACTION_LABEL[a] ?? a).join("、")
     : "仅归档并静音";
 
-  /** 生成标准页脚（用于文字类验证） */
   function buildFooter(): string {
     const lines: string[] = [];
     if (timeout > 0) lines.push(`⏱ 验证时间：<b>${timeout}</b> 秒`);
@@ -692,37 +756,42 @@ async function sendCaptcha(client: TelegramClient, userId: number): Promise<void
     return lines.length ? "\n\n" + lines.join("\n") : "";
   }
 
-  let answer  = "";
+  let answer   = "";
+  let question = "";
+  let isQA     = false;
   const msgIds: number[] = [];
 
   try {
-    // ── 构建并发送验证消息 ────────────────────────────────────────────────────
     switch (mode) {
 
       case CaptchaMode.MATH: {
-        const { question, answer: ans } = mathQuestion();
-        answer = ans;
+        const { question: q, answer: ans } = mathQuestion();
+        answer   = ans;
+        question = q;
         const footer = buildFooter();
         const text = custom
-          ? custom.replace("{question}", question)
-          : `🔒 <b>人机验证</b>\n\n请回复以下算式的答案：\n\n<code>${question} = ?</code>${footer}`;
+          ? custom.replace("{question}", q)
+          : `🔒 <b>人机验证</b>\n\n请回复以下算式的答案：\n\n<code>${q} = ?</code>${footer}`;
         const m = await client.sendMessage(userId, { message: text, parseMode: "html" });
         msgIds.push(m.id);
         break;
       }
 
       case CaptchaMode.TEXT: {
-        const kw = cfg.keyword();
+        const kw     = cfg.keyword();
         const footer = buildFooter();
-        // 关键词为默认值时使用随机问答，否则使用用户自定义关键词
         if (kw === "我同意" && !custom) {
           const qa = textQuestion();
           answer   = qa.answer;
+          question = qa.question;
+          isQA     = true;
           const text = `🔒 <b>人机验证</b>\n\n请回答以下问题：\n\n<b>${qa.question}</b>${footer}`;
           const m = await client.sendMessage(userId, { message: text, parseMode: "html" });
           msgIds.push(m.id);
         } else {
-          answer = kw;
+          answer   = kw;
+          question = kw;
+          isQA     = false;
           const text = custom
             ? custom.replace("{keyword}", kw)
             : `🔒 <b>人机验证</b>\n\n请回复以下关键词以证明你不是机器人：\n\n<code>${kw}</code>${footer}`;
@@ -738,19 +807,17 @@ async function sendCaptcha(client: TelegramClient, userId: number): Promise<void
         const img = await generateImageCaptcha(digitOnly);
 
         if (!img) {
-          log(LogLevel.WARN, `canvas unavailable for user ${userId}, not switching mode`);
+          log(LogLevel.WARN, `canvas unavailable for user ${userId}`);
           try {
-            await client.sendMessage(userId, {
-              message: "❌ 验证服务暂时不可用，请稍后再试。"
-            });
+            await client.sendMessage(userId, { message: "❌ 验证服务暂时不可用，请稍后再试。" });
           } catch {}
           return;
         }
 
-        answer = img.answer;
+        answer   = img.answer;
+        question = img.answer; // 图片模式不展示 question，存答案即可
         const desc = digitOnly ? "5 位数字验证码" : "5 位验证码（字母与数字均为大写）";
 
-        // 构建纯文本 caption（gramjs sendMessage+file 不支持 parseMode，不能含 HTML 标签）
         function buildImgCaption(): string {
           const lines: string[] = [`🔒 人机验证\n\n请输入图片中的${desc}`];
           if (timeout > 0) lines.push(`⏱ 验证时间：${timeout} 秒`);
@@ -759,9 +826,7 @@ async function sendCaptcha(client: TelegramClient, userId: number): Promise<void
           return lines.join("\n");
         }
 
-        // custom prompt 若含 HTML 标签同样无效，故也用 || 兜底纯文本
         const caption = custom || buildImgCaption();
-
         const photoMsg = await client.sendMessage(userId, {
           message: caption,
           file: new CustomFile("captcha.png", img.buffer.length, "", img.buffer)
@@ -769,23 +834,21 @@ async function sendCaptcha(client: TelegramClient, userId: number): Promise<void
         msgIds.push(photoMsg.id);
         break;
       }
-
     }
 
-    // ── 安全防御：若 answer 为空（模式异常），强制降级为数学题 ──────────────────
     if (!answer) {
-      log(LogLevel.WARN, `sendCaptcha: answer empty after switch (mode=${mode}), fallback to MATH`);
-      const { question, answer: ans } = mathQuestion();
-      answer = ans;
+      log(LogLevel.WARN, `sendCaptcha: answer empty (mode=${mode}), fallback to MATH`);
+      const { question: q, answer: ans } = mathQuestion();
+      answer   = ans;
+      question = q;
       const m = await client.sendMessage(userId, {
-        message: `🔒 <b>人机验证</b>（降级）\n\n请回复以下算式的答案：\n\n<code>${question} = ?</code>`,
+        message: `🔒 <b>人机验证</b>（降级）\n\n请回复以下算式的答案：\n\n<code>${q} = ?</code>`,
         parseMode: "html"
       });
       msgIds.push(m.id);
     }
 
-    // ── 注册状态 + 超时 ───────────────────────────────────────────────────────
-    const state: CaptchaState = { answer, tries: 0, timer: null, msgIds, mode };
+    const state: CaptchaState = { answer, question, isQA, tries: 0, timer: null, msgIds, mode };
 
     if (timeout > 0) {
       state.timer = setTimeout(async () => {
@@ -814,10 +877,6 @@ async function sendCaptcha(client: TelegramClient, userId: number): Promise<void
 
 // ─── 处理验证回复 ─────────────────────────────────────────────────────────────
 
-/**
- * 计算两个字符串的 Levenshtein 编辑距离（仅用于图片验证码容错比对）。
- * 时间复杂度 O(m×n)，对短字符串（≤10字符）性能完全可接受。
- */
 function levenshtein(a: string, b: string): number {
   const m = a.length, n = b.length;
   const dp: number[][] = Array.from({ length: m + 1 }, (_, i) => [i, ...new Array(n).fill(0)]);
@@ -832,16 +891,16 @@ function levenshtein(a: string, b: string): number {
   return dp[m][n];
 }
 
-async function handleReply(client: TelegramClient, userId: number, input: string): Promise<void> {
+async function handleReply(client: TelegramClient, userId: number, input: string, incomingMsgId: number): Promise<void> {
   const state = states.get(userId);
   if (!state) return;
 
-  // 非文字消息（贴纸/图片等）：忽略，不计入错误次数
   if (!input.trim()) return;
 
-  // 防御：answer 为空说明出现了异常状态，视为失败保护
+  if (incomingMsgId) state.msgIds.push(incomingMsgId);
+
   if (!state.answer) {
-    log(LogLevel.WARN, `handleReply: empty answer for user ${userId}, treating as fail`);
+    log(LogLevel.WARN, `handleReply: empty answer for user ${userId}`);
     if (state.timer) clearTimeout(state.timer);
     states.delete(userId);
     await cleanupCaptchaMessages(client, userId, state);
@@ -849,9 +908,9 @@ async function handleReply(client: TelegramClient, userId: number, input: string
     return;
   }
 
-  const isImgMode   = state.mode === CaptchaMode.IMG_DIGIT || state.mode === CaptchaMode.IMG_MIXED;
-  const inputNorm   = input.trim().toUpperCase();
-  const answerNorm  = state.answer.trim().toUpperCase();
+  const isImgMode  = state.mode === CaptchaMode.IMG_DIGIT || state.mode === CaptchaMode.IMG_MIXED;
+  const inputNorm  = input.trim().toUpperCase();
+  const answerNorm = state.answer.trim().toUpperCase();
 
   const correct = isImgMode
     ? levenshtein(inputNorm, answerNorm) <= 1
@@ -860,7 +919,6 @@ async function handleReply(client: TelegramClient, userId: number, input: string
   if (correct) {
     if (state.timer) clearTimeout(state.timer);
     states.delete(userId);
-    // 删除验证消息
     await cleanupCaptchaMessages(client, userId, state);
     const name = await getDisplayName(client, userId).catch(() => String(userId));
     rec.addVerified(userId, name, usernameCache.get(userId));
@@ -873,7 +931,6 @@ async function handleReply(client: TelegramClient, userId: number, input: string
     return;
   }
 
-  // 答案错误
   state.tries++;
   const max       = cfg.maxTries();
   const remaining = max > 0 ? max - state.tries : Infinity;
@@ -881,7 +938,6 @@ async function handleReply(client: TelegramClient, userId: number, input: string
   if (max > 0 && state.tries >= max) {
     if (state.timer) clearTimeout(state.timer);
     states.delete(userId);
-    // 删除验证消息
     await cleanupCaptchaMessages(client, userId, state);
     const name = await getDisplayName(client, userId).catch(() => String(userId));
     rec.addFailed(userId, name, "max_tries", usernameCache.get(userId));
@@ -894,7 +950,8 @@ async function handleReply(client: TelegramClient, userId: number, input: string
   } else {
     const hint = remaining === Infinity ? "请重试。" : `请重试（剩余次数：${remaining}）`;
     try {
-      await client.sendMessage(userId, { message: `❌ 答案错误，${hint}`, parseMode: "html" });
+      const hintMsg = await client.sendMessage(userId, { message: `❌ 答案错误，${hint}`, parseMode: "html" });
+      state.msgIds.push(hintMsg.id);
     } catch {}
   }
 }
@@ -908,11 +965,9 @@ async function messageListener(message: Api.Message) {
     if (!message.isPrivate) return;
     if (!cfg.pluginOn())    return;
 
-    // 我方主动发出的私聊消息 → 将对方标记为已验证，后续来信直接放行
     if (message.out) {
-      const selfId = await getSelfId(client);
-      // 获取对方 ID（peerId 在私聊中即对方）
-      const peerId = (message.peerId as any)?.userId;
+      const selfId   = await getSelfId(client);
+      const peerId   = (message.peerId as any)?.userId;
       const targetId = peerId ? Number(peerId) : 0;
       if (targetId > 0 && targetId !== selfId) {
         const alreadyVerified = cfg.verified().some(r => r.id === targetId);
@@ -930,31 +985,24 @@ async function messageListener(message: Api.Message) {
     const userId = Number(message.senderId);
     if (!userId || userId <= 0) return;
 
-    // 忽略「我的收藏」：senderId === 自己
     const selfId = await getSelfId(client);
     if (selfId && userId === selfId) return;
 
-    // 从消息 sender 直取用户信息（不依赖 getEntity，避免 DC 缓存问题）
     const sender = (message as any).sender ?? (message as any)._sender;
     if (sender) cacheUserFromSender(sender);
 
-    // 忽略机器人（优先从 sender 判断，无 sender 才 fallback 到 getEntity）
     const botFlag = sender ? isBotFromSender(sender) : await isBot(client, userId);
     if (botFlag) return;
 
-    // 白名单放行（仅手动添加）
     if (wl.has(userId)) return;
 
-    // 已通过验证的用户直接放行，不再触发验证流程
     if (cfg.verified().some(r => r.id === userId)) return;
 
-    // 处于验证流程中 → 判断答案
     if (states.has(userId)) {
-      await handleReply(client, userId, message.text || "");
+      await handleReply(client, userId, message.text || "", message.id);
       return;
     }
 
-    // 初次来信
     await archiveChat(client, userId);
     await muteChat(client, userId);
     if (cfg.captchaOn()) {
@@ -968,14 +1016,11 @@ async function messageListener(message: Api.Message) {
 // ─── 工具函数 ─────────────────────────────────────────────────────────────────
 
 async function resolveUser(client: TelegramClient, arg: string): Promise<number | null> {
-  // 纯数字 ID：直接信任，不调 getEntity（用户可能无 DC 缓存）
   if (/^\d+$/.test(arg)) {
     const id = parseInt(arg);
-    // 尝试后台拉取信息填充缓存，失败也不影响返回值
     fetchUserInfo(client, id).catch(() => {});
     return id > 0 ? id : null;
   }
-  // @username：用 contacts.ResolveUsername，不依赖本地缓存
   try {
     const username = arg.replace(/^@/, "");
     const res = await client.invoke(new Api.contacts.ResolveUsername({ username })) as any;
@@ -994,69 +1039,121 @@ function fmtTime(iso: string): string {
 
 // ─── 帮助文本 ─────────────────────────────────────────────────────────────────
 
-function helpText(): string {
+function helpText(section?: string): string {
   const p = mainPrefix;
-  return `🔒 <b>PMCaptcha v${PLUGIN_VERSION}</b>
 
-<b>基础</b>
-  <code>${p}pmc on</code> / <code>off</code>  — 启用 / 禁用插件
-  <code>${p}pmc status</code>     — 查看当前配置与统计
+  const sections: Record<string, string> = {
 
-<b>验证开关与模式</b>
-  <code>${p}pmc captcha on</code> / <code>off</code> — 开启 / 关闭验证功能（默认关闭）
-  <code>${p}pmc captcha mode &lt;模式&gt;</code>
-    └ <code>math</code>         数学计算题（默认）
-    └ <code>text</code>         文字关键词回复
-    └ <code>img_digit</code>    图片验证码（纯数字，自动安装 canvas）
-    └ <code>img_mixed</code>    图片验证码（字母+数字，自动安装 canvas）
+    overview: `🔒 <b>PMCaptcha v${PLUGIN_VERSION} 帮助</b>
 
-<b>参数设置</b>
-  <code>${p}pmc set timeout &lt;秒&gt;</code>   — 验证超时（0=不限，默认 30）
-  <code>${p}pmc set tries &lt;次&gt;</code>     — 最大尝试次数（0=不限，默认 3）
-  <code>${p}pmc set keyword &lt;词&gt;</code>   — 文字模式关键词（默认"我同意"）
-  <code>${p}pmc set prompt &lt;文本&gt;</code>  — 自定义验证提示语（留空=恢复默认）
-    └ 占位符：math 模式用 <code>{question}</code>，text 模式用 <code>{keyword}</code>
-  <code>${p}pmc set fail [操作…]</code> — 验证失败后的额外操作（可复选）
-    └ <code>block</code> / <code>delete</code> / <code>delete_revoke</code> / <code>report</code> / <code>mute</code> / <code>archive</code> / <code>none</code>
-  <code>${p}pmc set pass [操作…]</code> — 验证通过后的操作（可复选）
-    └ <code>unmute</code> / <code>unarchive</code> / <code>none</code>
+<b>快速入门</b>
+  1. <code>${p}pmc on</code>              — 启用插件
+  2. <code>${p}pmc captcha on</code>      — 开启验证功能
+  3. <code>${p}pmc captcha math</code>    — 选择验证模式
+  4. <code>${p}pmc set fail 屏蔽</code>   — 设置失败后动作
+  5. <code>${p}pmc status</code>          — 查看当前配置
 
-<b>白名单</b>
-  <code>${p}pmc wl</code>                   — 查看白名单
-  <code>${p}pmc wl add &lt;ID/@user&gt;</code>  — 手动加入（支持回复消息）
-  <code>${p}pmc wl del &lt;ID/@user&gt;</code>  — 移除指定用户
+<b>分类帮助</b>
+  <code>${p}pmc h basic</code>    — 插件开关 & 状态
+  <code>${p}pmc h captcha</code>  — 验证模式设置
+  <code>${p}pmc h set</code>      — 参数配置（fail/pass/time/tries等）
+  <code>${p}pmc h wl</code>       — 白名单管理
+  <code>${p}pmc h record</code>   — 验证记录`,
+
+    basic: `🔒 <b>基础命令</b>
+
+  <code>${p}pmc on</code>       — 启用插件（开始拦截陌生人私聊）
+  <code>${p}pmc off</code>      — 禁用插件（停止拦截，验证设置保留不变）
+  <code>${p}pmc status</code>   — 查看完整配置与运行状态
+
+  ℹ️ <code>off</code> 只停用插件本身，不会重置验证（captcha）的开关状态，
+     下次 <code>on</code> 后验证功能恢复到关闭前的状态。`,
+
+    captcha: `🔒 <b>验证设置</b>
+
+<b>开关</b>
+  <code>${p}pmc captcha on</code>        — 开启验证功能
+  <code>${p}pmc captcha off</code>       — 关闭验证功能（陌生人仍会被静音归档，不发验证题）
+
+<b>模式</b>
+  <code>${p}pmc captcha math</code>      — 算术验证（默认，随机四则运算/幂运算，无需额外依赖）
+  <code>${p}pmc captcha text</code>      — 关键词验证（需回复指定词，或内置随机问答）
+  <code>${p}pmc captcha img_digit</code> — 图片验证·纯数字（自动安装 canvas 模块）
+  <code>${p}pmc captcha img_mixed</code> — 图片验证·字母+数字（自动安装 canvas 模块）`,
+
+    set: `🔒 <b>参数设置</b>
+
+<b>超时 / 次数</b>
+  <code>${p}pmc set time &lt;秒&gt;</code>    — 验证超时（0 = 不限时，默认 30）
+  <code>${p}pmc set tries &lt;次&gt;</code>   — 最大尝试次数（0 = 不限，默认 3）
+
+<b>文字模式</b>
+  <code>${p}pmc set keyword &lt;关键词&gt;</code>  — 设置文字模式回复关键词（默认"我同意"）
+  <code>${p}pmc set prompt &lt;文本&gt;</code>     — 自定义验证提示语（留空 = 恢复默认）
+    └ math 模式占位符：<code>{question}</code>
+    └ text 模式占位符：<code>{keyword}</code>
+
+<b>失败操作</b>（可复选，空格分隔）
+  <code>${p}pmc set fail block</code>   / <code>屏蔽</code>         — 屏蔽用户
+  <code>${p}pmc set fail delete</code>  / <code>删除</code>         — 双方撤回全部对话
+  <code>${p}pmc set fail report</code>  / <code>举报</code>         — 举报为垃圾信息
+  <code>${p}pmc set fail mute</code>    / <code>静音</code>         — 永久静音（失败时已默认执行）
+  <code>${p}pmc set fail archive</code> / <code>归档</code>         — 归档（失败时已默认执行）
+  <code>${p}pmc set fail none</code>    / <code>无</code>           — 清除所有额外操作
+  ✏️ 示例：<code>${p}pmc set fail 屏蔽 举报</code>
+  ℹ️ 修改后正在进行中的验证消息会实时更新。
+
+<b>通过操作</b>（可复选）
+  <code>${p}pmc set pass unmute</code>    / <code>取消静音</code>   — 通过后取消静音
+  <code>${p}pmc set pass unarchive</code> / <code>取消归档</code>   — 通过后取消归档
+  <code>${p}pmc set pass wl</code>        / <code>白名单</code>     — 通过后加入白名单
+  <code>${p}pmc set pass none</code>      / <code>无</code>         — 清除所有通过操作`,
+
+    wl: `🔒 <b>白名单管理</b>
+
+<b>快捷命令</b>
+  <code>${p}pmc add &lt;ID/@user&gt;</code>   — 将用户加入白名单（支持回复消息）
+  <code>${p}pmc del &lt;ID/@user&gt;</code>   — 将用户从白名单移除
+
+<b>wl 子命令</b>
+  <code>${p}pmc wl</code>                   — 查看白名单列表
+  <code>${p}pmc wl add &lt;ID/@user&gt;</code> — 同 add（支持回复消息）
+  <code>${p}pmc wl del &lt;ID/@user&gt;</code> — 同 del
   <code>${p}pmc wl del all</code>           — 清空白名单
-  <code>${p}pmc wl pass &lt;ID/@user&gt;</code> — 手动标记为验证通过并加入白名单
+  <code>${p}pmc wl pass &lt;ID/@user&gt;</code> — 手动标记为验证通过并加入白名单`,
 
-<b>验证记录</b>
-  <code>${p}pmc record</code>                              — 通过 / 失败摘要
-  <code>${p}pmc record verified</code>                    — 查看通过记录
-  <code>${p}pmc record failed</code>                      — 查看失败记录
-  <code>${p}pmc record del verified &lt;ID&gt;/all</code>     — 删除通过记录
-  <code>${p}pmc record del failed &lt;ID&gt;/all</code>       — 删除失败记录`;
+    record: `🔒 <b>验证记录</b>
+
+  <code>${p}pmc record</code>                               — 通过 / 失败人数摘要
+  <code>${p}pmc record verified</code>                     — 查看验证通过记录
+  <code>${p}pmc record failed</code>                       — 查看验证失败记录
+  <code>${p}pmc record del verified &lt;ID&gt;/all</code>   — 删除通过记录（支持 all）
+  <code>${p}pmc record del failed &lt;ID&gt;/all</code>     — 删除失败记录（支持 all）`,
+  };
+
+  if (section && sections[section]) return sections[section];
+  return sections.overview;
 }
 
 // ─── 指令处理器（统一入口）────────────────────────────────────────────────────
 
-/**
- * 所有 .pmc / .pmcaptcha 指令的统一处理函数。
- * on / off 会自动删除触发消息并 3 秒后删除回复；其余指令就地编辑消息。
- */
 const pmcaptcha = async (message: Api.Message) => {
   if (!(await waitDb())) return;
   const client  = message.client as TelegramClient;
   const args    = message.message.slice(1).split(/\s+/).slice(1);
   const command = (args[0] || "help").toLowerCase();
 
-  // ── on / off：启用 / 禁用插件（自动清理消息）────────────────────────────────
+  // ── on / off：启用 / 禁用插件 ────────────────────────────────────────────────
+  // 注意：off 只停用插件本身，不重置 captcha 状态，下次 on 后自动恢复
   if (command === "on" || command === "off") {
     const enabling = command === "on";
     set(K.ENABLED, enabling);
-    // off 时同步关闭验证功能
-    if (!enabling) set(K.CAP_ENABLED, false);
+    // ⚠️ 不再自动关闭 captcha_enabled，保留验证配置状态
     try {
       const tmp = await client.sendMessage(message.peerId, {
-        message: enabling ? "✅ <b>PMCaptcha 已启用</b>" : "🚫 <b>PMCaptcha 已禁用</b>（验证功能已同步关闭）",
+        message: enabling
+          ? "✅ <b>PMCaptcha 已启用</b>"
+          : `🚫 <b>PMCaptcha 已禁用</b>\n验证配置已保留，下次启用后自动恢复`,
         parseMode: "html"
       });
       try { await message.delete(); } catch {}
@@ -1068,13 +1165,12 @@ const pmcaptcha = async (message: Api.Message) => {
   const edit = async (text: string) => {
     try {
       await client.editMessage(message.peerId, {
-        message:      message.id,
+        message:     message.id,
         text,
-        parseMode:    "html",
-        linkPreview:  false   // 禁止网页预览（防止 @username 触发）
+        parseMode:   "html",
+        linkPreview: false
       });
     } catch (e: any) {
-      // 用户无 DC 信息时 peerId 无法解析，降级为直接回复原消息
       if (String(e).includes("Could not find the input entity")) {
         try { await message.reply({ message: text, parseMode: "html", linkPreview: false }); } catch {}
       } else {
@@ -1087,12 +1183,18 @@ const pmcaptcha = async (message: Api.Message) => {
     switch (command) {
 
       // ╔══════════════════════════════╗
-      // ║  基础                        ║
+      // ║  帮助  (.pmc h [section]) ║
       // ╚══════════════════════════════╝
 
-      case "help": case "h": case "?": case "":
-        await edit(helpText());
+      case "help": case "h": case "?": case "": {
+        const section = args[1]?.toLowerCase();
+        await edit(helpText(section));
         break;
+      }
+
+      // ╔══════════════════════════════╗
+      // ║  状态  (.pmc status)         ║
+      // ╚══════════════════════════════╝
 
       case "status": {
         const fa  = cfg.failActions();
@@ -1118,32 +1220,41 @@ const pmcaptcha = async (message: Api.Message) => {
         break;
       }
 
-      // ╔══════════════════════════════╗
-      // ║  验证开关 & 模式             ║
-      // ╚══════════════════════════════╝
+      // ╔══════════════════════════════════════╗
+      // ║  验证开关 & 模式  (.pmc captcha …)   ║
+      // ╚══════════════════════════════════════╝
 
       case "captcha": {
         const sub = args[1]?.toLowerCase();
 
+        // on / off
         if (sub === "on" || sub === "off") {
           set(K.CAP_ENABLED, sub === "on");
           await edit(sub === "on" ? "✅ 验证功能已开启" : "❌ 验证功能已关闭");
           break;
         }
 
+        // 直接用模式名作为三级命令（math / text / img_digit / img_mixed）
+        const validModes = Object.values(CaptchaMode) as string[];
+        if (sub && validModes.includes(sub)) {
+          set(K.CAP_MODE, sub);
+          await edit(`✅ 验证模式：<b>${modeLabel(sub as CaptchaMode)}</b>`);
+          break;
+        }
+
+        // mode <模式> 别名
         if (sub === "mode") {
           const m = args[2]?.toLowerCase();
-          const validModes = Object.values(CaptchaMode);
           if (!m || !validModes.includes(m as CaptchaMode)) {
             const current = cfg.mode();
             await edit(
               `当前模式：<b>${modeLabel(current)}</b>（<code>${current}</code>）\n\n` +
               `可用模式：\n` +
-              `<code>math</code>      — 数学计算题（默认）\n` +
-              `<code>text</code>      — 文字关键词回复\n` +
-              `<code>img_digit</code> — 图片验证码（纯数字）\n` +
-              `<code>img_mixed</code> — 图片验证码（字母+数字）\n\n` +
-              `用法：<code>${mainPrefix}pmc captcha mode &lt;模式&gt;</code>`
+              `<code>math</code>      — 算术验证（默认）\n` +
+              `<code>text</code>      — 关键词验证\n` +
+              `<code>img_digit</code> — 图片验证（纯数字）\n` +
+              `<code>img_mixed</code> — 图片验证（字母+数字）\n\n` +
+              `用法：<code>${mainPrefix}pmc captcha &lt;模式&gt;</code>`
             );
             break;
           }
@@ -1156,15 +1267,19 @@ const pmcaptcha = async (message: Api.Message) => {
         await edit(
           `验证功能：${cfg.captchaOn() ? "✅ 开启" : "❌ 关闭"}\n` +
           `当前模式：<b>${modeLabel(cfg.mode())}</b>\n\n` +
-          `<code>${mainPrefix}pmc captcha on/off</code>        — 开关验证\n` +
-          `<code>${mainPrefix}pmc captcha mode &lt;模式&gt;</code> — 切换模式`
+          `<code>${mainPrefix}pmc captcha on/off</code>           — 开关验证\n` +
+          `<code>${mainPrefix}pmc captcha math</code>             — 算术验证\n` +
+          `<code>${mainPrefix}pmc captcha text</code>             — 关键词验证\n` +
+          `<code>${mainPrefix}pmc captcha img_digit</code>        — 图片验证（纯数字）\n` +
+          `<code>${mainPrefix}pmc captcha img_mixed</code>        — 图片验证（字母+数字）\n\n` +
+          `详细说明：<code>${mainPrefix}pmc h captcha</code>`
         );
         break;
       }
 
-      // ╔══════════════════════════════╗
-      // ║  参数设置  (.pmc set …)      ║
-      // ╚══════════════════════════════╝
+      // ╔══════════════════════════════════╗
+      // ║  参数设置  (.pmc set …)          ║
+      // ╚══════════════════════════════════╝
 
       case "set": {
         const param = args[1]?.toLowerCase();
@@ -1172,33 +1287,37 @@ const pmcaptcha = async (message: Api.Message) => {
 
         if (!param) {
           await edit(
-            `❌ 用法：<code>${mainPrefix}pmc set &lt;参数&gt; &lt;值&gt;</code>\n\n` +
-            `可设置参数：\n` +
-            `<code>timeout</code>  — 验证超时秒数（0=不限，默认 30）\n` +
+            `❌ 用法：<code>${mainPrefix}pmc set &lt;三级命令&gt; &lt;值&gt;</code>\n\n` +
+            `三级命令：\n` +
+            `<code>time</code>     — 验证超时秒数（0=不限，默认 30）\n` +
             `<code>tries</code>    — 最大尝试次数（0=不限，默认 3）\n` +
             `<code>keyword</code>  — 文字模式关键词\n` +
             `<code>prompt</code>   — 自定义提示语（留空恢复默认）\n` +
-            `<code>fail</code>     — 失败操作（block/delete/delete_revoke/report/mute/archive/none）\n` +
-            `<code>pass</code>     — 通过操作（unmute/unarchive/none）`
+            `<code>fail</code>     — 失败操作（支持中文，如：屏蔽/删除/举报/静音/归档）\n` +
+            `<code>pass</code>     — 通过操作（支持中文，如：取消静音/取消归档/白名单）\n\n` +
+            `详细说明：<code>${mainPrefix}pmc h set</code>`
           );
           break;
         }
 
         switch (param) {
 
-          // ── timeout ──────────────────────────────────────────────────────
+          // ── time / timeout ─────────────────────────────────────────────────
+          case "time":
           case "timeout": {
             const n = parseInt(val);
             if (isNaN(n) || n < 0) {
-              await edit(`❌ 用法：<code>${mainPrefix}pmc set timeout &lt;秒&gt;</code>（0 = 不限时）`);
+              await edit(`❌ 用法：<code>${mainPrefix}pmc set time &lt;秒&gt;</code>（0 = 不限时）`);
               break;
             }
             set(K.CAP_TIMEOUT, n);
             await edit(`✅ 验证超时：<b>${n > 0 ? n + " 秒" : "不限"}</b>`);
+            // 刷新正在进行中的验证消息
+            await refreshActiveCaptchas(client);
             break;
           }
 
-          // ── tries ─────────────────────────────────────────────────────────
+          // ── tries ──────────────────────────────────────────────────────────
           case "tries": {
             const n = parseInt(val);
             if (isNaN(n) || n < 0) {
@@ -1207,10 +1326,11 @@ const pmcaptcha = async (message: Api.Message) => {
             }
             set(K.CAP_TRIES, n);
             await edit(`✅ 最大尝试次数：<b>${n > 0 ? n + " 次" : "不限"}</b>`);
+            await refreshActiveCaptchas(client);
             break;
           }
 
-          // ── keyword ───────────────────────────────────────────────────────
+          // ── keyword ────────────────────────────────────────────────────────
           case "keyword": {
             if (!val) {
               await edit(`❌ 用法：<code>${mainPrefix}pmc set keyword &lt;关键词&gt;</code>`);
@@ -1221,7 +1341,7 @@ const pmcaptcha = async (message: Api.Message) => {
             break;
           }
 
-          // ── prompt ────────────────────────────────────────────────────────
+          // ── prompt ─────────────────────────────────────────────────────────
           case "prompt": {
             set(K.CAP_PROMPT, val);
             await edit(val
@@ -1230,71 +1350,82 @@ const pmcaptcha = async (message: Api.Message) => {
             break;
           }
 
-          // ── fail ──────────────────────────────────────────────────────────
+          // ── fail ───────────────────────────────────────────────────────────
           case "fail": {
-            const subs = args.slice(2).map(s => s.toLowerCase()).filter(Boolean);
+            const subs = args.slice(2).filter(Boolean);
             if (!subs.length) {
               await edit(
-                `❌ 用法：<code>${mainPrefix}pmc set fail &lt;操作…&gt;</code>\n\n` +
-                `可选操作（可复选，空格分隔）：\n` +
-                `<code>block</code>         — 屏蔽用户\n` +
-                `<code>delete</code>        — 删除对话记录（己方）\n` +
-                `<code>delete_revoke</code> — 删除对话记录（双方撤回）\n` +
-                `<code>report</code>        — 举报为垃圾信息\n` +
-                `<code>mute</code>          — 永久静音（失败时默认已执行）\n` +
-                `<code>archive</code>       — 归档（失败时默认已执行）\n` +
-                `<code>none</code>          — 清除所有额外操作`
+                `❌ 用法：<code>${mainPrefix}pmc set fail &lt;操作…&gt;</code>（空格分隔，可复选）\n\n` +
+                `英文 / 中文 均可：\n` +
+                `<code>block</code>   / <code>屏蔽</code>   — 屏蔽用户\n` +
+                `<code>delete</code>  / <code>删除</code>   — 双方撤回全部对话\n` +
+                `<code>report</code>  / <code>举报</code>   — 举报为垃圾信息\n` +
+                `<code>mute</code>    / <code>静音</code>   — 永久静音（失败时默认已执行）\n` +
+                `<code>archive</code> / <code>归档</code>   — 归档（失败时默认已执行）\n` +
+                `<code>none</code>    / <code>无</code>     — 清除所有额外操作\n\n` +
+                `示例：<code>${mainPrefix}pmc set fail 屏蔽 举报</code>`
               );
               break;
             }
-            if (subs.includes("none")) {
+            if (subs.some(s => s.toLowerCase() === "none" || s === "无")) {
               set(K.CAP_ACTIONS, []);
               await edit("✅ 失败额外操作已清除（仅归档静音）");
+              await refreshActiveCaptchas(client);
               break;
             }
-            const validVals = Object.values(FailAction) as string[];
             const valid: FailAction[] = [];
             const bad: string[]       = [];
             for (const s of subs) {
-              if (validVals.includes(s)) valid.push(s as FailAction);
+              const resolved = resolveFailAction(s);
+              if (resolved) valid.push(resolved);
               else bad.push(s);
             }
             if (bad.length) {
-              await edit(`❌ 无效操作：<code>${bad.join("、")}</code>`);
+              await edit(
+                `❌ 无效操作：<code>${bad.join("、")}</code>\n\n` +
+                `可用（英文/中文）：block/屏蔽、delete/删除、report/举报、mute/静音、archive/归档、none/无`
+              );
               break;
             }
             set(K.CAP_ACTIONS, valid);
             await edit(`✅ 验证失败将执行：<b>${valid.map(a => FAIL_ACTION_LABEL[a] ?? a).join("、")}</b>`);
+            // 同步刷新正在进行的验证消息
+            await refreshActiveCaptchas(client);
             break;
           }
 
-          // ── pass ──────────────────────────────────────────────────────────
+          // ── pass ───────────────────────────────────────────────────────────
           case "pass": {
-            const subs = args.slice(2).map(s => s.toLowerCase()).filter(Boolean);
+            const subs = args.slice(2).filter(Boolean);
             if (!subs.length) {
               await edit(
-                `❌ 用法：<code>${mainPrefix}pmc set pass &lt;操作…&gt;</code>\n\n` +
-                `可选操作（可复选）：\n` +
-                `<code>unmute</code>    — 验证通过后取消静音\n` +
-                `<code>unarchive</code> — 验证通过后取消归档\n` +
-                `<code>none</code>      — 清除所有通过操作`
+                `❌ 用法：<code>${mainPrefix}pmc set pass &lt;操作…&gt;</code>（可复选）\n\n` +
+                `英文 / 中文 均可：\n` +
+                `<code>unmute</code>    / <code>取消静音</code>   — 验证通过后取消静音\n` +
+                `<code>unarchive</code> / <code>取消归档</code>   — 验证通过后取消归档\n` +
+                `<code>wl</code>        / <code>白名单</code>     — 验证通过后加入白名单\n` +
+                `<code>none</code>      / <code>无</code>         — 清除所有通过操作\n\n` +
+                `示例：<code>${mainPrefix}pmc set pass 取消静音 取消归档</code>`
               );
               break;
             }
-            if (subs.includes("none")) {
+            if (subs.some(s => s.toLowerCase() === "none" || s === "无")) {
               set(K.CAP_PASS_ACTIONS, []);
               await edit("✅ 通过操作已清除");
               break;
             }
-            const validVals = Object.values(PassAction) as string[];
             const valid: PassAction[] = [];
             const bad: string[]       = [];
             for (const s of subs) {
-              if (validVals.includes(s)) valid.push(s as PassAction);
+              const resolved = resolvePassAction(s);
+              if (resolved) valid.push(resolved);
               else bad.push(s);
             }
             if (bad.length) {
-              await edit(`❌ 无效操作：<code>${bad.join("、")}</code>`);
+              await edit(
+                `❌ 无效操作：<code>${bad.join("、")}</code>\n\n` +
+                `可用（英文/中文）：unmute/取消静音、unarchive/取消归档、wl/白名单、none/无`
+              );
               break;
             }
             set(K.CAP_PASS_ACTIONS, valid);
@@ -1302,9 +1433,9 @@ const pmcaptcha = async (message: Api.Message) => {
             break;
           }
 
-          // ── 已废弃/已移除的参数友好提示 ─────────────────────────────────
+          // ── 已废弃参数友好提示 ───────────────────────────────────────────
           case "ext-timeout": case "exttimeout":
-            await edit(`❌ ext-timeout 已移除，请使用 <code>${mainPrefix}pmc set timeout</code>`);
+            await edit(`❌ ext-timeout 已移除，请使用 <code>${mainPrefix}pmc set time</code>`);
             break;
           case "google-url": case "googleurl":
           case "cf-url":     case "cfurl":
@@ -1319,10 +1450,53 @@ const pmcaptcha = async (message: Api.Message) => {
 
           default:
             await edit(
-              `❌ 未知参数：<code>${param}</code>\n\n` +
-              `可设置：<code>timeout</code>、<code>tries</code>、<code>keyword</code>、<code>prompt</code>、<code>fail</code>、<code>pass</code>`
+              `❌ 未知三级命令：<code>${param}</code>\n\n` +
+              `可用：<code>time</code>、<code>tries</code>、<code>keyword</code>、<code>prompt</code>、<code>fail</code>、<code>pass</code>\n\n` +
+              `详细说明：<code>${mainPrefix}pmc h set</code>`
             );
         }
+        break;
+      }
+
+      // ╔══════════════════════════════════════════╗
+      // ║  白名单快捷命令  (.pmc add / .pmc del)   ║
+      // ╚══════════════════════════════════════════╝
+
+      case "add": {
+        // 二级命令 add：快捷白名单添加（等同 .pmc wl add）
+        let tid: number | null = null;
+        if (message.replyTo?.replyToMsgId) {
+          try {
+            const r = await client.getMessages(message.peerId, { ids: [message.replyTo.replyToMsgId] });
+            if (r[0]?.senderId) tid = Number(r[0].senderId);
+          } catch {}
+        }
+        if (!tid && args[1]) tid = await resolveUser(client, args[1]);
+        if (!tid || tid <= 0) {
+          await edit(
+            `❌ 用法：<code>${mainPrefix}pmc add &lt;ID/@user&gt;</code> 或回复对方消息\n\n` +
+            `请提供有效的用户 ID 或用户名。`
+          );
+          break;
+        }
+        if (await isBot(client, tid)) { await edit("❌ 无法将机器人加入白名单"); break; }
+        wl.add(tid);
+        const name = await getDisplayName(client, tid);
+        await edit(`✅ ${userLink(tid, name)} 已加入白名单`);
+        break;
+      }
+
+      case "del": {
+        // 二级命令 del：快捷白名单移除（等同 .pmc wl del）
+        if (!args[1]) {
+          await edit(`❌ 用法：<code>${mainPrefix}pmc del &lt;ID/@user&gt;</code>`);
+          break;
+        }
+        const tid = await resolveUser(client, args[1]);
+        if (!tid || tid <= 0) { await edit("❌ 无法解析目标用户"); break; }
+        wl.del(tid);
+        const delName = await getDisplayName(client, tid);
+        await edit(`✅ ${userLink(tid, delName)} 已从白名单移除`);
         break;
       }
 
@@ -1334,7 +1508,7 @@ const pmcaptcha = async (message: Api.Message) => {
       case "whitelist": {
         const sub = args[1]?.toLowerCase();
 
-        // ── wl（无子命令）：列出白名单 ──────────────────────────────────────
+        // wl（无子命令）：列出白名单
         if (!sub) {
           const list = cfg.whitelist();
           if (!list.length) { await edit("📋 <b>白名单为空</b>"); break; }
@@ -1346,7 +1520,7 @@ const pmcaptcha = async (message: Api.Message) => {
           break;
         }
 
-        // ── wl add ──────────────────────────────────────────────────────────
+        // wl add
         if (sub === "add") {
           let tid: number | null = null;
           if (message.replyTo?.replyToMsgId) {
@@ -1364,7 +1538,7 @@ const pmcaptcha = async (message: Api.Message) => {
           break;
         }
 
-        // ── wl del ──────────────────────────────────────────────────────────
+        // wl del
         if (sub === "del") {
           if (args[2]?.toLowerCase() === "all") {
             wl.clear();
@@ -1380,7 +1554,7 @@ const pmcaptcha = async (message: Api.Message) => {
           break;
         }
 
-        // ── wl pass ─────────────────────────────────────────────────────────
+        // wl pass
         if (sub === "pass") {
           if (!args[2]) { await edit(`❌ 用法：<code>${mainPrefix}pmc wl pass &lt;ID/@user&gt;</code>`); break; }
           const tid = await resolveUser(client, args[2]);
@@ -1400,11 +1574,14 @@ const pmcaptcha = async (message: Api.Message) => {
         await edit(
           `❌ 未知子命令：<code>${sub}</code>\n\n` +
           `可用：\n` +
-          `<code>${mainPrefix}pmc wl</code>               — 查看白名单\n` +
+          `<code>${mainPrefix}pmc add &lt;ID/@user&gt;</code>    — 快捷加入白名单\n` +
+          `<code>${mainPrefix}pmc del &lt;ID/@user&gt;</code>    — 快捷移除白名单\n` +
+          `<code>${mainPrefix}pmc wl</code>                  — 查看白名单\n` +
           `<code>${mainPrefix}pmc wl add &lt;ID/@user&gt;</code> — 加入白名单\n` +
           `<code>${mainPrefix}pmc wl del &lt;ID/@user&gt;</code> — 移除用户\n` +
-          `<code>${mainPrefix}pmc wl del all</code>       — 清空白名单\n` +
-          `<code>${mainPrefix}pmc wl pass &lt;ID/@user&gt;</code> — 手动标记通过`
+          `<code>${mainPrefix}pmc wl del all</code>          — 清空白名单\n` +
+          `<code>${mainPrefix}pmc wl pass &lt;ID/@user&gt;</code>— 手动标记通过\n\n` +
+          `详细说明：<code>${mainPrefix}pmc h wl</code>`
         );
         break;
       }
@@ -1414,24 +1591,16 @@ const pmcaptcha = async (message: Api.Message) => {
       // ╚══════════════════════════════╝
 
       case "record": {
-        /**
-         * 合并后的结构：
-         *   record                          — 显示通过 + 失败摘要
-         *   record verified                 — 列出通过记录
-         *   record failed                   — 列出失败记录
-         *   record del verified [<ID>/all]  — 删除通过记录
-         *   record del failed   [<ID>/all]  — 删除失败记录
-         */
-        const sub  = args[1]?.toLowerCase();  // "verified" | "failed" | "del" | undefined
-        const sub2 = args[2]?.toLowerCase();  // "verified" | "failed"（del 模式下）或 undefined
-        const sub3 = args[3]?.toLowerCase();  // "<ID>" | "all" | undefined
+        const sub  = args[1]?.toLowerCase();
+        const sub2 = args[2]?.toLowerCase();
+        const sub3 = args[3]?.toLowerCase();
 
         const rLbl: Record<FailedRecord["reason"], string> = {
           timeout:   "⏰ 超时",
           max_tries: "❌ 次数耗尽"
         };
 
-        // ── record（无子命令）：摘要 ─────────────────────────────────────────
+        // record（无子命令）：摘要
         if (!sub) {
           const vList = cfg.verified();
           const fList = cfg.failed();
@@ -1439,14 +1608,15 @@ const pmcaptcha = async (message: Api.Message) => {
             `📋 <b>验证记录摘要</b>\n\n` +
             `✅ 通过：<b>${vList.length}</b> 人\n` +
             `❌ 失败：<b>${fList.length}</b> 人\n\n` +
-            `使用 <code>${mainPrefix}pmc record verified</code> / <code>failed</code> 查看详情`
+            `<code>${mainPrefix}pmc record verified</code> — 查看通过列表\n` +
+            `<code>${mainPrefix}pmc record failed</code>   — 查看失败列表`
           );
           break;
         }
 
-        // ── record del <verified/failed> [<ID>/all] ──────────────────────────
+        // record del <verified/failed> [<ID>/all]
         if (sub === "del") {
-          const target = sub2;  // "verified" | "failed"
+          const target = sub2;
           if (target !== "verified" && target !== "failed") {
             await edit(`❌ 用法：<code>${mainPrefix}pmc record del verified/failed [&lt;ID&gt;/all]</code>`);
             break;
@@ -1471,7 +1641,7 @@ const pmcaptcha = async (message: Api.Message) => {
           break;
         }
 
-        // ── record verified / record failed ──────────────────────────────────
+        // record verified
         if (sub === "verified") {
           const list = cfg.verified();
           if (!list.length) { await edit("📋 <b>验证通过记录为空</b>"); break; }
@@ -1484,6 +1654,7 @@ const pmcaptcha = async (message: Api.Message) => {
           break;
         }
 
+        // record failed
         if (sub === "failed") {
           const list = cfg.failed();
           if (!list.length) { await edit("📋 <b>验证失败记录为空</b>"); break; }
@@ -1499,11 +1670,12 @@ const pmcaptcha = async (message: Api.Message) => {
         await edit(
           `❌ 未知子命令：<code>${sub}</code>\n\n` +
           `可用：\n` +
-          `<code>${mainPrefix}pmc record</code>                             — 摘要\n` +
-          `<code>${mainPrefix}pmc record verified</code>                   — 通过列表\n` +
-          `<code>${mainPrefix}pmc record failed</code>                     — 失败列表\n` +
-          `<code>${mainPrefix}pmc record del verified &lt;ID&gt;/all</code>  — 删除通过记录\n` +
-          `<code>${mainPrefix}pmc record del failed &lt;ID&gt;/all</code>    — 删除失败记录`
+          `<code>${mainPrefix}pmc record</code>                            — 摘要\n` +
+          `<code>${mainPrefix}pmc record verified</code>                  — 通过列表\n` +
+          `<code>${mainPrefix}pmc record failed</code>                    — 失败列表\n` +
+          `<code>${mainPrefix}pmc record del verified &lt;ID&gt;/all</code> — 删除通过记录\n` +
+          `<code>${mainPrefix}pmc record del failed &lt;ID&gt;/all</code>   — 删除失败记录\n\n` +
+          `详细说明：<code>${mainPrefix}pmc h record</code>`
         );
         break;
       }
@@ -1513,15 +1685,17 @@ const pmcaptcha = async (message: Api.Message) => {
       // ╚══════════════════════════════╝
 
       default:
-        await edit(`❌ 未知命令：<code>${command}</code>\n\n使用 <code>${mainPrefix}pmc help</code> 查看帮助`);
+        await edit(
+          `❌ 未知命令：<code>${command}</code>\n\n` +
+          `使用 <code>${mainPrefix}pmc h</code> 查看完整帮助\n` +
+          `或 <code>${mainPrefix}pmc h &lt;分类&gt;</code>（basic/captcha/set/wl/record）`
+        );
     }
   } catch (e) {
     log(LogLevel.ERROR, "Command error", e);
     try { await edit(`❌ 命令执行失败: ${e}`); } catch {}
   }
 };
-
-// ─── 初始化 Webhook 服务器 ───────────────────────────────────────────────────────
 
 // ─── 插件注册 ─────────────────────────────────────────────────────────────────
 
@@ -1530,7 +1704,31 @@ const pmc = pmcaptcha;
 
 class PMCaptchaPlugin extends Plugin {
   name        = "pmcaptcha";
-  description = `🔒 PMCaptcha v${PLUGIN_VERSION} - 陌生人私聊人机验证`;
+  description = [
+    `🔒 PMCaptcha v${PLUGIN_VERSION} — 陌生人私聊人机验证`,
+    ``,
+    `自动拦截陌生人私聊，发送验证题，通过后放行，失败后执行屏蔽/举报等操作。`,
+    ``,
+    `【验证模式】`,
+    `  math      — 算术验证（随机四则运算/幂运算）`,
+    `  text      — 关键词验证（回复指定词/内置随机问答）`,
+    `  img_digit — 图片验证（5位纯数字，自动安装 canvas）`,
+    `  img_mixed — 图片验证（5位字母+数字，自动安装 canvas）`,
+    ``,
+    `【失败操作】可复选，支持中/英文设置`,
+    `  屏蔽 / 删除对话 / 举报 / 静音 / 归档`,
+    ``,
+    `【通过操作】可复选，支持中/英文设置`,
+    `  取消静音 / 取消归档 / 加入白名单`,
+    ``,
+    `【其他功能】`,
+    `  • 白名单：手动添加信任用户永久免验证`,
+    `  • 验证记录：查看通过/失败历史及原因`,
+    `  • 实时刷新：修改参数后进行中的验证消息即时更新`,
+    `  • 我方主动发起对话时对方自动标记为已验证`,
+    ``,
+    `使用 .pmc h 查看完整命令帮助`,
+  ].join("\n");
   cmdHandlers = { pmc, pmcaptcha };
   listenMessageHandler = messageListener;
 }
