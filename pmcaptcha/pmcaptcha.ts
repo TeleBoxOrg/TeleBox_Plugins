@@ -311,7 +311,7 @@ function isBotFromSender(sender: any): boolean {
   return !!(sender as any)?.bot;
 }
 
-async function isBot(client: TelegramClient): Promise<boolean> {
+async function isBot(client: TelegramClient, userId: number): Promise<boolean> {
   const user = await fetchUserInfo(client, userId);
   return !!user?.bot;
 }
@@ -1516,7 +1516,6 @@ const pmcaptcha = async (message: Api.Message) => {
           for (const id of list) {
             if (await isBot(client, id)) continue;
             const name     = await getDisplayName(client, id);
-            const username = usernameCache.get(id);
             rows.push(`• ${userLink(id, name)}`);
           }
           if (!rows.length) { await edit("📋 <b>白名单为空</b>"); break; }
