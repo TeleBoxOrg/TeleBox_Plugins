@@ -8,7 +8,7 @@ import { createDirectoryInAssets } from "@utils/pathHelpers";
 import { Plugin } from "@utils/pluginBase";
 import { getPrefixes } from "@utils/pluginManager";
 
-const PLUGIN_VERSION = "5.0.1";
+const PLUGIN_VERSION = "5.0.2";
 
 // ─── 日志 ─────────────────────────────────────────────────────────────────────
 
@@ -905,12 +905,30 @@ async function messageListener(message: Api.Message) {
   if (!(await waitDb())) return;
   try {
     const client = message.client as TelegramClient;
-    if (!message.isPrivate)        return;
-    if (!cfg.pluginOn())           return;
-    if (message.out)               return;  // 忽略自己发出的消息
+    if (!message.isPrivate) return;
+    if (!cfg.pluginOn())    return;
+
+    // 我方主动发出的私聊消息 → 将对方标记为已验证，后续来信直接放行
+    if (message.out) {
+      const selfId = await getSelfId(client);
+      // 获取对方 ID（peerId 在私聊中即对方）
+      const peerId = (message.peerId as any)?.userId;
+      const targetId = peerId ? Number(peerId) : 0;
+      if (targetId > 0 && targetId !== selfId) {
+        const alreadyVerified = cfg.verified().some(r => r.id === targetId);
+        if (!alreadyVerified && !wl.has(targetId)) {
+          const sender = (message as any).sender ?? (message as any)._sender;
+          if (sender) cacheUserFromSender(sender);
+          const name = await getDisplayName(client, targetId).catch(() => String(targetId));
+          rec.addVerified(targetId, name, usernameCache.get(targetId));
+          log(LogLevel.INFO, `Auto-verified ${targetId} (we initiated chat)`);
+        }
+      }
+      return;
+    }
 
     const userId = Number(message.senderId);
-    if (!userId || userId <= 0)    return;
+    if (!userId || userId <= 0) return;
 
     // 忽略「我的收藏」：senderId === 自己
     const selfId = await getSelfId(client);
@@ -1032,10 +1050,13 @@ const pmcaptcha = async (message: Api.Message) => {
 
   // ── on / off：启用 / 禁用插件（自动清理消息）────────────────────────────────
   if (command === "on" || command === "off") {
-    set(K.ENABLED, command === "on");
+    const enabling = command === "on";
+    set(K.ENABLED, enabling);
+    // off 时同步关闭验证功能
+    if (!enabling) set(K.CAP_ENABLED, false);
     try {
       const tmp = await client.sendMessage(message.peerId, {
-        message: command === "on" ? "✅ <b>PMCaptcha 已启用</b>" : "🚫 <b>PMCaptcha 已禁用</b>",
+        message: enabling ? "✅ <b>PMCaptcha 已启用</b>" : "🚫 <b>PMCaptcha 已禁用</b>（验证功能已同步关闭）",
         parseMode: "html"
       });
       try { await message.delete(); } catch {}
@@ -1466,7 +1487,7 @@ const pmcaptcha = async (message: Api.Message) => {
         if (sub === "failed") {
           const list = cfg.failed();
           if (!list.length) { await edit("📋 <b>验证失败记录为空</b>"); break; }
-          const items = await Promise.全部(list.map(async r => {
+          const items = await Promise.all(list.map(async r => {
             if (r.username) usernameCache.set(r.id, r.username);
             const name = await getDisplayName(client, r.id).catch(() => r.name);
             return `• ${userLink(r.id, name)} — ${rLbl[r.reason]}\n  <i>${fmtTime(r.time)}</i>`;
