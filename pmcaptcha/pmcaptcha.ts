@@ -311,7 +311,7 @@ function isBotFromSender(sender: any): boolean {
   return !!(sender as any)?.bot;
 }
 
-async function isBot(client: TelegramClient, userId: number): Promise<boolean> {
+async function isBot(client: TelegramClient): Promise<boolean> {
   const user = await fetchUserInfo(client, userId);
   return !!user?.bot;
 }
@@ -1512,11 +1512,15 @@ const pmcaptcha = async (message: Api.Message) => {
         if (!sub) {
           const list = cfg.whitelist();
           if (!list.length) { await edit("📋 <b>白名单为空</b>"); break; }
-          const items = await Promise.all(list.map(async id => {
-            const name = await getDisplayName(client, id);
-            return `• ${userLink(id, name)}`;
-          }));
-          await edit(`📋 <b>白名单 (${list.length})</b>\n\n${items.join("\n")}`);
+          const rows: string[] = [];
+          for (const id of list) {
+            if (await isBot(client, id)) continue;
+            const name     = await getDisplayName(client, id);
+            const username = usernameCache.get(id);
+            rows.push(`• ${userLink(id, name)}`);
+          }
+          if (!rows.length) { await edit("📋 <b>白名单为空</b>"); break; }
+          await edit(`📋 <b>白名单 (${rows.length})</b>\n\n${rows.join("\n")}`);
           break;
         }
 
@@ -1641,29 +1645,41 @@ const pmcaptcha = async (message: Api.Message) => {
           break;
         }
 
-        // record verified
+        // record verified（白名单用户不在此显示）
         if (sub === "verified") {
           const list = cfg.verified();
           if (!list.length) { await edit("📋 <b>验证通过记录为空</b>"); break; }
-          const items = await Promise.all(list.map(async r => {
+          const wlSet = new Set(cfg.whitelist());
+          const rows: string[] = [];
+          for (const r of list) {
+            if (wlSet.has(r.id)) continue;           // 白名单优先级更高，不重复显示
+            if (await isBot(client, r.id)) continue;
             if (r.username) usernameCache.set(r.id, r.username);
             const name = await getDisplayName(client, r.id).catch(() => r.name);
-            return `• ${userLink(r.id, name)}\n  <i>${fmtTime(r.time)}</i>`;
-          }));
-          await edit(`✅ <b>验证通过 (${list.length})</b>\n\n${items.join("\n\n")}`);
+            rows.push(`• ${userLink(r.id, name)}\n  <i>${fmtTime(r.time)}</i>`);
+          }
+          if (!rows.length) { await edit("📋 <b>验证通过记录为空</b>"); break; }
+          await edit(`✅ <b>验证通过 (${rows.length})</b>\n\n${rows.join("\n\n")}`);
           break;
         }
 
-        // record failed
+        // record failed（白名单/已验证通过的用户不在此显示）
         if (sub === "failed") {
           const list = cfg.failed();
           if (!list.length) { await edit("📋 <b>验证失败记录为空</b>"); break; }
-          const items = await Promise.all(list.map(async r => {
+          const wlSet       = new Set(cfg.whitelist());
+          const verifiedSet = new Set(cfg.verified().map(v => v.id));
+          const rows: string[] = [];
+          for (const r of list) {
+            if (wlSet.has(r.id))       continue;    // 白名单优先级最高
+            if (verifiedSet.has(r.id)) continue;    // 已通过验证，优先级高于失败
+            if (await isBot(client, r.id)) continue;
             if (r.username) usernameCache.set(r.id, r.username);
             const name = await getDisplayName(client, r.id).catch(() => r.name);
-            return `• ${userLink(r.id, name)} — ${rLbl[r.reason]}\n  <i>${fmtTime(r.time)}</i>`;
-          }));
-          await edit(`❌ <b>验证失败 (${list.length})</b>\n\n${items.join("\n\n")}`);
+            rows.push(`• ${userLink(r.id, name)} — ${rLbl[r.reason]}\n  <i>${fmtTime(r.time)}</i>`);
+          }
+          if (!rows.length) { await edit("📋 <b>验证失败记录为空</b>"); break; }
+          await edit(`❌ <b>验证失败 (${rows.length})</b>\n\n${rows.join("\n\n")}`);
           break;
         }
 
