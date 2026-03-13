@@ -8,7 +8,7 @@ import { createDirectoryInAssets } from "@utils/pathHelpers";
 import { Plugin } from "@utils/pluginBase";
 import { getPrefixes } from "@utils/pluginManager";
 
-const PLUGIN_VERSION = "5.0.5";
+const PLUGIN_VERSION = "5.0.6";
 
 // ─── 日志 ─────────────────────────────────────────────────────────────────────
 
@@ -965,11 +965,25 @@ async function messageListener(message: Api.Message) {
     if (!message.isPrivate) return;
     if (!cfg.pluginOn())    return;
 
+    // ── 新增：跳过 Telegram 官方服务号 ─────────────────
+    const TELEGRAM_OFFICIAL_IDS = [777000];   // 官方账号 ID 列表（可扩展）
+    const senderId = Number(message.senderId);
+    if (TELEGRAM_OFFICIAL_IDS.includes(senderId)) {
+      log(LogLevel.INFO, `Skipping Telegram official service ID ${senderId}`);
+      return;
+    }
+    // ─────────────────────────────────────────────────
+
     if (message.out) {
       const selfId   = await getSelfId(client);
       const peerId   = (message.peerId as any)?.userId;
       const targetId = peerId ? Number(peerId) : 0;
       if (targetId > 0 && targetId !== selfId) {
+        // 同样跳过官方账号的自动标记
+        if (TELEGRAM_OFFICIAL_IDS.includes(targetId)) {
+          log(LogLevel.INFO, `Not auto-verifying official service ID ${targetId}`);
+          return;
+        }
         const alreadyVerified = cfg.verified().some(r => r.id === targetId);
         if (!alreadyVerified && !wl.has(targetId)) {
           const sender = (message as any).sender ?? (message as any)._sender;
@@ -987,6 +1001,9 @@ async function messageListener(message: Api.Message) {
 
     const selfId = await getSelfId(client);
     if (selfId && userId === selfId) return;
+
+    // 再次检查官方 ID（覆盖可能遗漏的场景）
+    if (TELEGRAM_OFFICIAL_IDS.includes(userId)) return;
 
     const sender = (message as any).sender ?? (message as any)._sender;
     if (sender) cacheUserFromSender(sender);
