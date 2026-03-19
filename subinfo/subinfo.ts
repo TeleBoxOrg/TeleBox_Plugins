@@ -1,5 +1,5 @@
 import { Plugin } from "@utils/pluginBase";
-import { Api } from "telegram";
+import { Api } from "teleproto";
 import { getGlobalClient } from "@utils/globalClient";
 import axios from "axios";
 import * as yaml from "js-yaml";
@@ -609,10 +609,11 @@ class SubinfoPlugin extends Plugin {
         const dateStr = dayjs().format('YYYYMMDD_HHmmss');
         const fileName = `subinfo_report_${dateStr}.txt`;
         const fileContent = resultText;
-        const fileBuffer = Buffer.from(fileContent, 'utf-8');
+        const fileBuffer = Buffer.from(fileContent, 'utf-8') as Buffer & { name?: string };
+        fileBuffer.name = fileName;
         
         try {
-            await client.sendFile(msg.chatId!, { file: fileBuffer, fileName: fileName, caption: `✅ 订阅查询报告 (共 ${urls.length} 个链接)\n${statsText.trim()}` });
+            await client.sendFile(msg.chatId!, { file: fileBuffer, caption: `✅ 订阅查询报告 (共 ${urls.length} 个链接)\n${statsText.trim()}` });
             await msg.delete();
         } catch (e) {
             await msg.edit({ text: `❌ 发送TXT文件失败，请检查权限。\n\n部分内容：\n${splitLongMessage(resultText, 1024)[0]}`, parseMode: 'html' });
@@ -737,10 +738,11 @@ class SubinfoPlugin extends Plugin {
         const dateStr = dayjs().format('YYYYMMDD_HHmmss');
         const fileName = `cha_report_${dateStr}.txt`;
         const fileContent = finalOutput || "未获取到任何信息";
-        const fileBuffer = Buffer.from(fileContent, 'utf-8');
+        const fileBuffer = Buffer.from(fileContent, 'utf-8') as Buffer & { name?: string };
+        fileBuffer.name = fileName;
         
         try {
-            await client.sendFile(msg.chatId!, { file: fileBuffer, fileName: fileName, caption: `✅ 简洁订阅查询报告 (共 ${urls.length} 个链接)` });
+            await client.sendFile(msg.chatId!, { file: fileBuffer, caption: `✅ 简洁订阅查询报告 (共 ${urls.length} 个链接)` });
             await msg.delete(); 
         } catch (e) {
             await msg.edit({ text: `❌ 发送TXT文件失败，请检查权限。\n\n部分内容：\n${splitLongMessage(finalOutput, 1024)[0]}`, parseMode: 'html' });

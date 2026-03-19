@@ -1,5 +1,5 @@
-import { Api, TelegramClient } from "telegram";
-import { CustomFile } from "telegram/client/uploads";
+import { Api, TelegramClient } from "teleproto";
+import { CustomFile } from "teleproto/client/uploads";
 import path from "path";
 import fs from "fs";
 import { execSync } from "child_process";
@@ -7,6 +7,7 @@ import { JSONFilePreset } from "lowdb/node";
 import { createDirectoryInAssets } from "@utils/pathHelpers";
 import { Plugin } from "@utils/pluginBase";
 import { getPrefixes } from "@utils/pluginManager";
+import bigInt from "big-integer";
 
 const PLUGIN_VERSION = "5.0.6";
 
@@ -281,7 +282,7 @@ async function fetchUserInfo(client: TelegramClient, userId: number): Promise<an
 
   try {
     const res = await client.invoke(new Api.users.GetUsers({
-      id: [new Api.InputUser({ userId: BigInt(userId), accessHash: BigInt(0) })]
+      id: [new Api.InputUser({ userId: bigInt(userId), accessHash: bigInt.zero })]
     })) as any[];
     const user = res?.[0];
     if (user && !(user instanceof Api.UserEmpty)) {

@@ -2,8 +2,8 @@
 import { Plugin } from "@utils/pluginBase";
 import { getGlobalClient } from "@utils/globalClient";
 import { getPrefixes } from "@utils/pluginManager";
-import { Api } from "telegram";
-import { NewMessage } from "telegram/events";
+import { Api } from "teleproto";
+import { NewMessage } from "teleproto/events";
 
 // HTML转义函数 (虽然这次用实体不需要了，但保留作为工具函数无妨)
 const htmlEscape = (text: string): string =>

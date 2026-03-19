@@ -8,7 +8,7 @@
 import _ from "lodash";
 import { getPrefixes } from "@utils/pluginManager";
 import { Plugin } from "@utils/pluginBase";
-import { Api } from "telegram";
+import { Api } from "teleproto";
 import {
   createDirectoryInAssets,
 } from "@utils/pathHelpers";

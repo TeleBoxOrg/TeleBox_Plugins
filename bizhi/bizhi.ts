@@ -20,9 +20,9 @@
 import axios from "axios";
 import { getPrefixes } from "@utils/pluginManager";
 import { Plugin } from "@utils/pluginBase";
-import { Api } from "telegram";
+import { Api } from "teleproto";
 import { getGlobalClient } from "@utils/globalClient";
-import { CustomFile } from "telegram/client/uploads.js";
+import { CustomFile } from "teleproto/client/uploads.js";
 
 // wallhaven API 接口类型
 interface WallhavenResponse {

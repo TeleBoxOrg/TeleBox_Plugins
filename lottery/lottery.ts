@@ -4,8 +4,8 @@ import path from "path";
 import Database from "better-sqlite3";
 import { createDirectoryInAssets } from "@utils/pathHelpers";
 import { getEntityWithHash } from "@utils/entityHelpers";
-import { Api } from "telegram/tl";
-import { TelegramClient } from "telegram";
+import { Api } from "teleproto/tl";
+import { TelegramClient } from "teleproto";
 import { getPrefixes } from "@utils/pluginManager";
 import bigInt from "big-integer";
 

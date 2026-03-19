@@ -4,9 +4,9 @@
  */
 
 import { Plugin } from "@utils/pluginBase";
-import { Api } from "telegram";
+import { Api } from "teleproto";
 import { getGlobalClient } from "@utils/globalClient";
-import { TelegramClient } from "telegram";
+import { TelegramClient } from "teleproto";
 import {
   createDirectoryInAssets,
   createDirectoryInTemp,

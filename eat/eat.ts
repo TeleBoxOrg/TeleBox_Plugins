@@ -1,8 +1,8 @@
 import { Plugin } from "@utils/pluginBase";
 import sharp from "sharp";
 import axios from "axios";
-import { Api } from "telegram";
-import { CustomFile } from "telegram/client/uploads";
+import { Api } from "teleproto";
+import { CustomFile } from "teleproto/client/uploads";
 import { getPrefixes } from "@utils/pluginManager";
 
 const prefixes = getPrefixes();

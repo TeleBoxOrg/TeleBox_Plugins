@@ -1,13 +1,13 @@
 import { Plugin } from "@utils/pluginBase";
 import { getGlobalClient } from "@utils/globalClient";
-import { Api } from "telegram";
+import { Api } from "teleproto";
 import { Buffer } from "buffer";
 import { exec } from "child_process";
 import { promisify } from "util";
 import { writeFileSync, readFileSync, unlinkSync, existsSync } from "fs";
 import { join } from "path";
 import { tmpdir } from "os";
-import { CustomFile } from "telegram/client/uploads";
+import { CustomFile } from "teleproto/client/uploads";
 
 const execAsync = promisify(exec);
 

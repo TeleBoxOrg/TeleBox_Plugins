@@ -1,5 +1,5 @@
 import { Plugin } from "@utils/pluginBase";
-import { Api } from "telegram";
+import { Api } from "teleproto";
 import { getGlobalClient } from "@utils/globalClient";
 
 // HTML转义函数（必需）
@@ -113,7 +113,7 @@ class PremiumPlugin extends Plugin {
           }
           continue;
         } else if (participant instanceof Api.ChatParticipant) {
-          user = participant.userId as unknown as Api.User;
+          user = null;
         } else if (participant instanceof Api.User) {
           user = participant;
         }

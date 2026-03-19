@@ -1,7 +1,7 @@
 import { Plugin } from "@utils/pluginBase";
 import { getGlobalClient } from "@utils/globalClient";
 import { createDirectoryInAssets } from "@utils/pathHelpers";
-import { Api } from "telegram";
+import { Api } from "teleproto";
 import { JSONFilePreset } from "lowdb/node";
 import * as path from "path";
 import bigInt, { BigInteger } from "big-integer";

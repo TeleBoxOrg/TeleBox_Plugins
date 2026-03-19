@@ -4,11 +4,11 @@
  * 支持媒体消息防撤回处理，文本消息快速删除
  */
 
-import { TelegramClient, Api } from "telegram";
+import { TelegramClient, Api } from "teleproto";
 import { getGlobalClient } from "@utils/globalClient";
 import { getEntityWithHash } from "@utils/entityHelpers";
 import { Plugin } from "@utils/pluginBase";
-import { CustomFile } from "telegram/client/uploads";
+import { CustomFile } from "teleproto/client/uploads";
 import * as fs from "fs";
 import * as path from "path";
 

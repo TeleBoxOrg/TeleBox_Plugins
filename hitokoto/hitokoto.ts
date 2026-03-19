@@ -1,5 +1,5 @@
 import { Plugin } from "@utils/pluginBase";
-import { Api } from "telegram";
+import { Api } from "teleproto";
 import axios from "axios";
 
 // 类型定义
@@ -86,10 +86,10 @@ class HitokotoPlugin extends Plugin {
    */
   private async fetchAndSendHitokoto(msg: Api.Message): Promise<void> {
     // 发送等待消息
-    const processingMsg = await msg.edit({
+    const processingMsg = (await msg.edit({
       text: "🔄 正在获取一言...",
       parseMode: "html"
-    });
+    })) ?? msg;
 
     let hitokotoData: HitokotoResponse | null = null;
     let retryCount = 0;

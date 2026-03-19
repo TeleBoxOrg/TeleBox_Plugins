@@ -1,7 +1,7 @@
 import { Plugin } from "@utils/pluginBase";
-import { Api, client, TelegramClient } from "telegram";
+import { Api, client, TelegramClient } from "teleproto";
 import axios from "axios";
-import { CustomFile } from "telegram/client/uploads.js";
+import { CustomFile } from "teleproto/client/uploads.js";
 
 const url = "https://api.52vmy.cn/api/wl/moyu";
 

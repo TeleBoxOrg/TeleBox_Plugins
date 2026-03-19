@@ -1,7 +1,7 @@
 // Cosplay Plugin - 从 cosplaytele.com 获取随机cosplay图片
 import { Plugin } from "../src/utils/pluginBase";
-import { Api } from "telegram";
-import { CustomFile } from "telegram/client/uploads";
+import { Api } from "teleproto";
+import { CustomFile } from "teleproto/client/uploads";
 import { getPrefixes } from "../src/utils/pluginManager";
 import { npm_install } from "../src/utils/npm_install";
 import axios, { AxiosError, AxiosInstance } from "axios";
@@ -335,7 +335,7 @@ async function sendImageAlbum(
 
     const singles: Api.InputSingleMedia[] = [];
 
-    const { getInputPhoto, getInputDocument } = await import("telegram/Utils");
+    const { getInputPhoto, getInputDocument } = await import("teleproto/Utils");
 
     for (let i = 0; i < files.length; i++) {
       const file = files[i];

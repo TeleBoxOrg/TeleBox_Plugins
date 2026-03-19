@@ -1,6 +1,6 @@
 import { Plugin } from "@utils/pluginBase";
-import { Api } from "telegram/tl";
-import { CustomFile } from "telegram/client/uploads";
+import { Api } from "teleproto/tl";
+import { CustomFile } from "teleproto/client/uploads";
 import { getGlobalClient } from "@utils/globalClient";
 import fs from "fs/promises";
 import path from "path";

@@ -1,6 +1,6 @@
 import { Plugin } from "../src/utils/pluginBase";
 import { getGlobalClient } from "../src/utils/globalClient";
-import { Api } from "telegram";
+import { Api } from "teleproto";
 import { createDirectoryInAssets } from "../src/utils/pathHelpers";
 import Database from "better-sqlite3";
 import path from "path";

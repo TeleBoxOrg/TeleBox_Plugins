@@ -4,7 +4,7 @@ import axios from "axios";
 import _ from "lodash";
 import { getPrefixes } from "@utils/pluginManager";
 import { Plugin } from "@utils/pluginBase";
-import { Api } from "telegram";
+import { Api } from "teleproto";
 import {
   createDirectoryInAssets,
   createDirectoryInTemp,
@@ -20,9 +20,9 @@ import {
   dealCommandPluginWithMessage,
   getCommandFromMessage,
 } from "@utils/pluginManager";
-import { sleep } from "telegram/Helpers";
+import { sleep } from "teleproto/Helpers";
 import dayjs from "dayjs";
-import { CustomFile } from "telegram/client/uploads.js";
+import { CustomFile } from "teleproto/client/uploads.js";
 import * as zlib from "zlib";
 import { execFile } from "child_process";
 import { promisify } from "util";

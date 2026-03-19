@@ -1,6 +1,6 @@
 // plugins/lu_bs.ts
 import { Plugin } from "@utils/pluginBase";
-import { Api } from "telegram";
+import { Api } from "teleproto";
 import { getGlobalClient } from "@utils/globalClient";
 import { JSONFilePreset } from "lowdb/node";
 import { createDirectoryInAssets } from "@utils/pathHelpers";
@@ -184,8 +184,9 @@ class LuBsPlugin extends Plugin {
       
       // 群组/频道需要检查管理员权限
       if (chat.className === "Channel" || chat.className === "Chat") {
-        const participant = await client.getParticipant(chat, sender);
-        return participant && (
+        const result = await client.invoke(new Api.channels.GetParticipant({ channel: chat as any, participant: sender as any })) as any;
+        const participant = result?.participant;
+        return !!participant && (
           participant instanceof Api.ChannelParticipantAdmin ||
           participant instanceof Api.ChannelParticipantCreator ||
           participant instanceof Api.ChatParticipantAdmin ||

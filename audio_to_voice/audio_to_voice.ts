@@ -1,6 +1,6 @@
 import { Plugin } from "../src/utils/pluginBase";
 import { getGlobalClient } from "../src/utils/globalClient";
-import { Api } from "telegram";
+import { Api } from "teleproto";
 import fs from "fs";
 import path from "path";
 import { createDirectoryInTemp } from "../src/utils/pathHelpers";

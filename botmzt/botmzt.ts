@@ -1,9 +1,9 @@
-import { Api } from "telegram";
+import { Api } from "teleproto";
 import { Plugin } from "@utils/pluginBase";
 import { getGlobalClient } from "@utils/globalClient";
 import { getPrefixes } from "@utils/pluginManager";
-import { sleep } from "telegram/Helpers";
-import { NewMessage } from "telegram/events";
+import { sleep } from "teleproto/Helpers";
+import { NewMessage } from "teleproto/events";
 
 // HTML转义函数
 const htmlEscape = (text: string): string => 

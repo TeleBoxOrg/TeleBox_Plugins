@@ -12,7 +12,7 @@ import {
   createDirectoryInAssets,
   createDirectoryInTemp,
 } from "@utils/pathHelpers";
-import { Api } from "telegram";
+import { Api } from "teleproto";
 import * as fs from "fs";
 import * as path from "path";
 import { exec, spawn } from "child_process";

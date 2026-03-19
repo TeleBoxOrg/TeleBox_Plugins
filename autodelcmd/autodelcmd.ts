@@ -1,5 +1,5 @@
 //@ts-nocheck
-import { Api } from "telegram";
+import { Api } from "teleproto";
 import { Plugin } from "@utils/pluginBase";
 import { getGlobalClient } from "@utils/globalClient";
 import { getPrefixes } from "@utils/pluginManager";

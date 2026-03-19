@@ -1,5 +1,5 @@
 import { Plugin } from "@utils/pluginBase";
-import { Api, TelegramClient } from "telegram";
+import { Api, TelegramClient } from "teleproto";
 import { getGlobalClient } from "@utils/globalClient";
 
 // HTML转义工具（每个插件必须实现）

@@ -16,8 +16,8 @@ import { Plugin } from "@utils/pluginBase";
 import { getGlobalClient } from "@utils/globalClient";
 import { getPrefixes } from "@utils/pluginManager";
 
-import { Api } from "telegram";
-import { CustomFile } from "telegram/client/uploads";
+import { Api } from "teleproto";
+import { CustomFile } from "teleproto/client/uploads";
 
 // ==================== 工具函数与常量 ====================
 /** 获取命令前缀 */

@@ -3,9 +3,9 @@ import path from "path";
 import Database from "better-sqlite3";
 import { createDirectoryInAssets } from "@utils/pathHelpers";
 import { getGlobalClient } from "@utils/globalClient";
-import { TelegramClient } from "telegram";
-import { NewMessage, NewMessageEvent } from "telegram/events";
-import { Api } from "telegram/tl";
+import { TelegramClient } from "teleproto";
+import { NewMessage, NewMessageEvent } from "teleproto/events";
+import { Api } from "teleproto/tl";
 import {
   safeForwardMessage,
   parseEntityId,

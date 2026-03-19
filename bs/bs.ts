@@ -5,9 +5,9 @@ import { createDirectoryInAssets } from "@utils/pathHelpers";
 import type { Low } from "lowdb";
 import { JSONFilePreset } from "lowdb/node";
 import * as path from "path";
-import { Api } from "telegram";
-import { sleep } from "telegram/Helpers";
-import { RPCError } from "telegram/errors";
+import { Api } from "teleproto";
+import { sleep } from "teleproto/Helpers";
+import { RPCError } from "teleproto/errors";
 
 const prefixes = getPrefixes();
 const mainPrefix = prefixes[0];

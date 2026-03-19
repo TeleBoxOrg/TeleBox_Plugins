@@ -1,4 +1,4 @@
-import { Api } from "telegram";
+import { Api } from "teleproto";
 import { Plugin } from "@utils/pluginBase";
 import { exec } from "child_process";
 import util from "util";

@@ -1,6 +1,6 @@
 import { Plugin } from "../src/utils/pluginBase";
 import { getGlobalClient } from "../src/utils/globalClient";
-import { Api } from "telegram";
+import { Api } from "teleproto";
 
 // HTML转义工具
 const htmlEscape = (text: string): string => 

@@ -1,6 +1,6 @@
 import { Plugin } from "../src/utils/pluginBase";
 import { getGlobalClient } from "../src/utils/globalClient";
-import { Api } from "telegram";
+import { Api } from "teleproto";
 import * as fs from "fs";
 import * as path from "path";
 import { createWriteStream } from "fs";
@@ -8,7 +8,7 @@ import { pipeline } from "stream";
 import { promisify } from "util";
 import archiver from "archiver";
 import bigInt from "big-integer";
-import { CustomFile } from "telegram/client/uploads";
+import { CustomFile } from "teleproto/client/uploads";
 import { exec } from "child_process";
 
 const execAsync = promisify(exec);

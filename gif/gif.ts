@@ -3,7 +3,7 @@ import { Plugin } from "@utils/pluginBase";
 import { getGlobalClient } from "@utils/globalClient";
 import { getPrefixes } from "@utils/pluginManager";
 import { createDirectoryInAssets } from "@utils/pathHelpers";
-import { Api } from "telegram";
+import { Api } from "teleproto";
 import fs from "fs";
 import path from "path";
 import { exec } from "child_process";

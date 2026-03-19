@@ -1,7 +1,7 @@
 import { Plugin } from "../src/utils/pluginBase";
 import { getGlobalClient } from "../src/utils/globalClient";
 import { getPrefixes } from "../src/utils/pluginManager";
-import { Api } from "telegram";
+import { Api } from "teleproto";
 
 // 获取命令前缀
 const prefixes = getPrefixes();

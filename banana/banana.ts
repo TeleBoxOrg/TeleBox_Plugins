@@ -3,8 +3,8 @@ import path from "path";
 import type { Low } from "lowdb";
 import { JSONFilePreset } from "lowdb/node";
 import { Plugin } from "@utils/pluginBase";
-import { Api } from "telegram";
-import { CustomFile } from "telegram/client/uploads.js";
+import { Api } from "teleproto";
+import { CustomFile } from "teleproto/client/uploads.js";
 import { createDirectoryInAssets } from "@utils/pathHelpers";
 
 interface BananaConfig {

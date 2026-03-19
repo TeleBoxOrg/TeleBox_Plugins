@@ -2,7 +2,7 @@ import axios from "axios";
 import _ from "lodash";
 import { getPrefixes } from "@utils/pluginManager";
 import { Plugin } from "@utils/pluginBase";
-import { Api } from "telegram";
+import { Api } from "teleproto";
 import { createDirectoryInAssets } from "@utils/pathHelpers";
 import { cronManager } from "@utils/cronManager";
 import * as cron from "cron";
@@ -14,7 +14,7 @@ import {
   dealCommandPluginWithMessage,
   getCommandFromMessage,
 } from "@utils/pluginManager";
-import { sleep } from "telegram/Helpers";
+import { sleep } from "teleproto/Helpers";
 import dayjs from "dayjs";
 
 const prefixes = getPrefixes();

@@ -1,12 +1,12 @@
 import { Plugin } from "@utils/pluginBase";
-import { Api } from "telegram";
+import { Api } from "teleproto";
 import { getGlobalClient } from "@utils/globalClient";
 import { createDirectoryInAssets, createDirectoryInTemp } from "@utils/pathHelpers";
 import { JSONFilePreset } from "lowdb/node";
 import * as path from "path";
 import * as fs from "fs/promises";
 import { statSync, existsSync } from "fs";
-import { CustomFile } from 'telegram/client/uploads';
+import { CustomFile } from 'teleproto/client/uploads';
 
 const htmlEscape = (text: string): string => 
   text.replace(/[&<>"']/g, m => ({ 

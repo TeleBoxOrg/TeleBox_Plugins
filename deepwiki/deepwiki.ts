@@ -1,7 +1,7 @@
 import { Plugin } from "@utils/pluginBase";
-import { Api } from "telegram";
+import { Api } from "teleproto";
 import { getPrefixes } from "@utils/pluginManager";
-import { JSONFilePreset, Low } from "lowdb/node";
+import { JSONFilePreset } from "lowdb/node";
 import { createDirectoryInAssets } from "@utils/pathHelpers";
 import { TelegramFormatter } from "@utils/telegramFormatter";
 import { TelegraphFormatter } from "@utils/telegraphFormatter";
@@ -121,7 +121,7 @@ const requireUser = (cond: any, msg: string) => {
 };
 
 class MessageSender {
-  static async sendOrEdit(msg: Api.Message, text: string, parseMode: "html" | "markdown" = "html"): Promise<Api.Message> {
+  static async sendOrEdit(msg: Api.Message, text: string, parseMode: "html" | "markdown" = "html"): Promise<Api.Message | undefined> {
     try {
       return await msg.edit({ text, parseMode, linkPreview: false } as any);
     } catch {
@@ -135,8 +135,8 @@ class MessageSender {
     parseMode: "html" | "markdown" = "html",
     replyToId?: number,
     linkPreview: boolean = false
-  ): Promise<Api.Message> {
-    return await msg.client.sendMessage(msg.chatId || msg.peerId, {
+  ): Promise<Api.Message | undefined> {
+    return await (msg.client as any).sendMessage(msg.chatId || msg.peerId, {
       message: text,
       parseMode,
       ...(replyToId ? { replyTo: replyToId } : {}),
@@ -146,8 +146,8 @@ class MessageSender {
 }
 
 class DeepWikiStore {
-  private dbMain!: Low<MainDB>;
-  private dbCtx!: Low<CtxDB>;
+  private dbMain: any;
+  private dbCtx: any;
 
   private static readonly GLOBAL_CHAT_KEY = "__global__";
 

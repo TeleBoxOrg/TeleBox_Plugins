@@ -1,6 +1,6 @@
 import { Plugin } from "@utils/pluginBase";
 import { getPrefixes } from "@utils/pluginManager";
-import { Api } from "telegram";
+import { Api } from "teleproto";
 
 const mainPrefix = getPrefixes()[0];
 const htmlEscape = (text: string): string =>
