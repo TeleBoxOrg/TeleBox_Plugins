@@ -2,12 +2,12 @@ import { Plugin } from "@utils/pluginBase";
 import { getGlobalClient } from "@utils/globalClient";
 import { getPrefixes } from "@utils/pluginManager";
 import { createDirectoryInAssets, createDirectoryInTemp } from "@utils/pathHelpers";
-import { Api } from "telegram";
+import { Api } from "teleproto";
 import sharp from "sharp";
 import * as fs from "fs";
 import * as path from "path";
 import { JSONFilePreset } from "lowdb/node";
-import { sleep } from "telegram/Helpers";
+import { sleep } from "teleproto/Helpers";
 
 // 必需工具函数
 const htmlEscape = (text: string): string => 

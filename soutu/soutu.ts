@@ -1,6 +1,6 @@
 
 import { Plugin } from "@utils/pluginBase";
-import { Api } from "telegram";
+import { Api } from "teleproto";
 import { getPrefixes } from "@utils/pluginManager";
 import axios from "axios";
 
@@ -97,7 +97,7 @@ class SoutuPlugin extends Plugin {
       else if (head.startsWith('52494646')) filename = "photo.webp";
 
       const form = new globalThis.FormData();
-      form.append("file", new Blob([buffer]), filename);
+      form.append("file", new Blob([new Uint8Array(buffer)]), filename);
 
       const response = await axios.post("https://0x0.st", form, {
         headers: { 'User-Agent': 'curl/8.0.1' },

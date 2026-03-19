@@ -1,6 +1,6 @@
 import { getPrefixes } from "@utils/pluginManager";
 import { Plugin } from "@utils/pluginBase";
-import { Api } from "telegram";
+import { Api } from "teleproto";
 import { createDirectoryInAssets } from "@utils/pathHelpers";
 import { cronManager } from "@utils/cronManager";
 import * as cron from "cron";

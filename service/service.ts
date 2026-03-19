@@ -1,5 +1,5 @@
 import { Plugin } from "@utils/pluginBase";
-import { Api, TelegramClient } from "telegram";
+import { Api, TelegramClient } from "teleproto";
 import { exec } from "child_process";
 import { promisify } from "util";
 import * as os from "os";

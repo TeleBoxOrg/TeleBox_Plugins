@@ -1,5 +1,5 @@
 import { Plugin } from "@utils/pluginBase";
-import { Api, TelegramClient } from "telegram";
+import { Api, TelegramClient } from "teleproto";
 
 
 const gt = async (msg: Api.Message) => {

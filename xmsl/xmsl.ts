@@ -1,5 +1,5 @@
 import { Plugin } from '@utils/pluginBase';
-import { Api } from 'telegram';
+import { Api } from 'teleproto';
 import axios from 'axios';
 import { createDirectoryInAssets, createDirectoryInTemp } from '@utils/pathHelpers';
 import * as path from 'path';
@@ -285,7 +285,7 @@ class XMSLPlugin extends Plugin {
 		try {
 			// 处理图片
 			if (message.media instanceof Api.MessageMediaPhoto) {
-				const buffer = await client.downloadMedia(message.media, { workers: 1 });
+				const buffer = await client.downloadMedia(message.media, {});
 				if (buffer && Buffer.isBuffer(buffer)) {
 					const detectedMime = detectImageMime(buffer);
 					if (detectedMime) {
@@ -312,7 +312,7 @@ class XMSLPlugin extends Plugin {
 
 				// TGS 动态贴纸 - 尝试渲染第一帧
 				if (mimeType === TGS_MIME) {
-					const buffer = await client.downloadMedia(message.media, { workers: 1 });
+					const buffer = await client.downloadMedia(message.media, {});
 					if (buffer && Buffer.isBuffer(buffer)) {
 						const pngBuffer = await extractTgsFirstFrame(buffer);
 						if (pngBuffer) {
@@ -329,7 +329,7 @@ class XMSLPlugin extends Plugin {
 
 				// 视频贴纸 (WebM) - 提取第一帧
 				if (mimeType === WEBM_MIME) {
-					const buffer = await client.downloadMedia(message.media, { workers: 1 });
+					const buffer = await client.downloadMedia(message.media, {});
 					if (buffer && Buffer.isBuffer(buffer)) {
 						const pngBuffer = await extractWebmFirstFrame(buffer);
 						if (pngBuffer) {
@@ -347,7 +347,7 @@ class XMSLPlugin extends Plugin {
 				// 静态图片和贴纸
 				if (SUPPORTED_IMAGE_MIMES.includes(mimeType)) {
 					// 已知支持的图片格式，直接下载
-					const buffer = await client.downloadMedia(message.media, { workers: 1 });
+					const buffer = await client.downloadMedia(message.media, {});
 					if (buffer && Buffer.isBuffer(buffer)) {
 						const detectedMime = detectImageMime(buffer);
 						if (detectedMime) {
@@ -361,7 +361,6 @@ class XMSLPlugin extends Plugin {
 				} else if (isSticker) {
 					// 其他贴纸类型（未知格式），尝试下载缩略图
 					const buffer = await client.downloadMedia(message.media, {
-						workers: 1,
 						thumb: 1
 					});
 					if (buffer && Buffer.isBuffer(buffer)) {

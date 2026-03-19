@@ -3,7 +3,7 @@ import { Plugin } from "@utils/pluginBase";
 import { getPrefixes } from "@utils/pluginManager";
 
 // Telegram API
-import { Api } from "telegram";
+import { Api } from "teleproto";
 
 // 内置依赖库
 import axios from "axios";

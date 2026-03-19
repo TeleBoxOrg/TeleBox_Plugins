@@ -1,7 +1,7 @@
 import { Plugin } from "../src/utils/pluginBase";
 import { getGlobalClient } from "../src/utils/globalClient";
 import { getPrefixes } from "../src/utils/pluginManager";
-import { Api } from "telegram";
+import { Api } from "teleproto";
 import * as fs from "fs";
 import * as path from "path";
 import { execSync } from "child_process";

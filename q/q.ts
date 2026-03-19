@@ -1,6 +1,6 @@
 import { Plugin } from "@utils/pluginBase";
 import { conversation } from "@utils/conversation";
-import { Api } from "telegram";
+import { Api } from "teleproto";
 
 const bots = ["QuotLyBot", "PagerMaid_QuotLyBot"];
 

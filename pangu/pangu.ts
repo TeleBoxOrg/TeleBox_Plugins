@@ -1,7 +1,7 @@
 "use strict";
 
 import { Plugin } from "@utils/pluginBase";
-import { Api } from "telegram";
+import { Api } from "teleproto";
 import { getPrefixes } from "@utils/pluginManager";
 import { createDirectoryInAssets } from "@utils/pathHelpers";
 import { JSONFilePreset } from "lowdb/node";

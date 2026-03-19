@@ -1,5 +1,5 @@
 import { Plugin } from "@utils/pluginBase";
-import { Api } from "telegram";
+import { Api } from "teleproto";
 import axios from "axios";
 import Database from "better-sqlite3";
 import * as fs from "fs";

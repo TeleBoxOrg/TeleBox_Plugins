@@ -1,6 +1,7 @@
 import { Plugin } from "@utils/pluginBase";
-import { Api, types } from "telegram";
+import { Api } from "teleproto";
 import { getGlobalClient } from "@utils/globalClient";
+import bigInt from "big-integer";
 
 // HTML转义函数（必需）
 const htmlEscape = (text: string): string => 
@@ -41,8 +42,8 @@ class RestorePinPlugin extends Plugin {
       new Api.channels.GetAdminLog({
         channel: chatId,
         q: "",
-        maxId: 0,
-        minId: 0,
+        maxId: bigInt.zero,
+        minId: bigInt.zero,
         limit: 100,
         eventsFilter: new Api.ChannelAdminLogEventsFilter({
           pinned: true

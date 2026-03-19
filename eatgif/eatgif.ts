@@ -8,7 +8,7 @@ import {
 import { getPrefixes } from "@utils/pluginManager";
 import path from "path";
 import fs from "fs";
-import { Api } from "telegram";
+import { Api } from "teleproto";
 import { encode, UnencodedFrame } from "modern-gif";
 import { exec } from "child_process";
 import { promisify } from "util";

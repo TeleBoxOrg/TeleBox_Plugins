@@ -1,8 +1,8 @@
 // zpr Plugin - 随机纸片人插件
 //@ts-nocheck
 import { Plugin } from "@utils/pluginBase";
-import { Api } from "telegram";
-import { CustomFile } from "telegram/client/uploads";
+import { Api } from "teleproto";
+import { CustomFile } from "teleproto/client/uploads";
 import { getGlobalClient } from "@utils/globalClient";
 import { getPrefixes } from "@utils/pluginManager";
 import { createDirectoryInAssets } from "@utils/pathHelpers";

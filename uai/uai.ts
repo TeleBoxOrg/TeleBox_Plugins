@@ -5,7 +5,7 @@
  */
 import { Plugin } from "@utils/pluginBase";
 import { getPrefixes } from "@utils/pluginManager";
-import { Api } from "telegram";
+import { Api } from "teleproto";
 import axios from "axios";
 import { JSONFilePreset } from "lowdb/node";
 import * as path from "path";

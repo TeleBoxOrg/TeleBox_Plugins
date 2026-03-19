@@ -3,7 +3,7 @@ import { createDirectoryInTemp } from '@utils/pathHelpers';
 import { execFile } from 'child_process';
 import fs from 'fs';
 import path from 'path';
-import { Api } from 'telegram';
+import { Api } from 'teleproto';
 import { promisify } from 'util';
 
 const execFileAsync = promisify(execFile);

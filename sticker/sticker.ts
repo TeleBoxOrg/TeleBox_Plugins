@@ -2,8 +2,8 @@ import { Plugin } from "@utils/pluginBase";
 import { getGlobalClient } from "@utils/globalClient";
 import { getPrefixes } from "@utils/pluginManager";
 import { createDirectoryInAssets } from "@utils/pathHelpers";
-import { Api, TelegramClient } from "telegram";
-import { sleep } from "telegram/Helpers";
+import { Api, TelegramClient } from "teleproto";
+import { sleep } from "teleproto/Helpers";
 import { JSONFilePreset } from "lowdb/node";
 import * as path from "path";
 

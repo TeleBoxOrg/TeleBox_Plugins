@@ -3,7 +3,7 @@ import axios from "axios";
 // 不再需要 form-data 依赖，Axios 会自动序列化对象为 FormData
 import { getPrefixes } from "@utils/pluginManager";
 import { Plugin } from "@utils/pluginBase";
-import { Api } from "telegram";
+import { Api } from "teleproto";
 import { getGlobalClient } from "@utils/globalClient";
 import { Buffer } from "buffer";
 

@@ -1,6 +1,6 @@
 // file name: clean.ts
 import { Plugin } from "@utils/pluginBase";
-import { Api } from "telegram";
+import { Api } from "teleproto";
 import { getGlobalClient } from "@utils/globalClient";
 import { banUser, getBannedUsers, unbanUser } from "@utils/banUtils";
 
@@ -68,7 +68,7 @@ class CleanPlugin extends Plugin {
   private blockedCleanupStartTime: number = 0;
   
   // 命令处理器
-  private cmdHandlers: { [key: string]: (msg: Api.Message) => Promise<void> };
+  cmdHandlers: { [key: string]: (msg: Api.Message) => Promise<void> };
 
   constructor() {
     super();

@@ -1,5 +1,5 @@
 import { Plugin } from "@utils/pluginBase";
-import { Api, TelegramClient } from "telegram";
+import { Api, TelegramClient } from "teleproto";
 import { getGlobalClient } from "@utils/globalClient";
 
 const dc = async (msg: Api.Message) => {

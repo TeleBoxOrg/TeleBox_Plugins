@@ -1,5 +1,5 @@
 import { Plugin } from "@utils/pluginBase";
-import { Api } from "telegram";
+import { Api } from "teleproto";
 import * as fs from "fs/promises";
 import axios from "axios";
 import { exec } from "child_process";

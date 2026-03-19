@@ -1,7 +1,7 @@
 import { getPrefixes } from "@utils/pluginManager";
 import { Plugin } from "@utils/pluginBase";
-import { Api } from "telegram";
-import { sleep } from "telegram/Helpers";
+import { Api } from "teleproto";
+import { sleep } from "teleproto/Helpers";
 import { randomInt } from "crypto";
 
 const prefixes = getPrefixes();
