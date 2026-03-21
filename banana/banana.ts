@@ -3,9 +3,14 @@ import path from "path";
 import type { Low } from "lowdb";
 import { JSONFilePreset } from "lowdb/node";
 import { Plugin } from "@utils/pluginBase";
+import { getPrefixes } from "@utils/pluginManager";
 import { Api } from "teleproto";
 import { CustomFile } from "teleproto/client/uploads.js";
 import { createDirectoryInAssets } from "@utils/pathHelpers";
+
+const prefixes = getPrefixes();
+const mainPrefix = prefixes[0];
+
 
 interface BananaConfig {
   apiKey: string;
@@ -24,10 +29,10 @@ const CONFIG_DEFAULTS: BananaConfig = {
 
 const help_text =
   "🎯 <b>Nano-Banana 图像编辑插件</b>\n" +
-  "• 回复图片并附带 <code>.banana 提示词</code> 调用 Gemini Nano-Banana 修改图像\n" +
-  "• <code>.banana key &lt;密钥&gt;</code> 配置 Gemini API Key\n" +
-  "• <code>.banana limit &lt;数值/MB&gt;</code> 调整图片大小上限（默认 10MB，可用 default 重置）\n" +
-  "• 使用 <code>.help banana</code> 随时查看此帮助";
+  "• 回复图片并附带 <code>${mainPrefix}banana 提示词</code> 调用 Gemini Nano-Banana 修改图像\n" +
+  "• <code>${mainPrefix}banana key &lt;密钥&gt;</code> 配置 Gemini API Key\n" +
+  "• <code>${mainPrefix}banana limit &lt;数值/MB&gt;</code> 调整图片大小上限（默认 10MB，可用 default 重置）\n" +
+  "• 使用 ";
 
 const dataDir = createDirectoryInAssets("banana");
 const configPath = path.join(dataDir, "config.json");
@@ -208,7 +213,7 @@ async function handleConfig(
     case "key": {
       if (!subValue) {
         await msg.edit({
-          text: "❌ 请提供 Gemini API Key，例如 `.banana key AIza...`",
+          text: "❌ 请提供 Gemini API Key，例如 `${mainPrefix}banana key AIza...`",
         });
         return;
       }
@@ -220,7 +225,7 @@ async function handleConfig(
       if (!subValue) {
         const current = await resolveMaxImageBytes();
         await msg.edit({
-          text: `当前图片大小上限：${formatBytes(current)}（范围 ${formatBytes(MIN_ALLOWED_IMAGE_BYTES)} - ${formatBytes(MAX_ALLOWED_IMAGE_BYTES)}）\n使用 <code>.banana limit default</code> 可恢复默认值`,
+          text: `当前图片大小上限：${formatBytes(current)}（范围 ${formatBytes(MIN_ALLOWED_IMAGE_BYTES)} - ${formatBytes(MAX_ALLOWED_IMAGE_BYTES)}）\n使用 <code>${mainPrefix}banana limit default</code> 可恢复默认值`,
           parseMode: "html",
         });
         return;
@@ -289,7 +294,7 @@ async function handleImageEdit(
   const apiKey = (await getConfigValue("apiKey")).trim();
   if (!apiKey) {
     await msg.edit({
-      text: "❌ 未配置 Gemini API Key，请先执行 `.banana key <密钥>`",
+      text: "❌ 未配置 Gemini API Key，请先执行 `${mainPrefix}banana key <密钥>`",
     });
     return;
   }
@@ -297,7 +302,7 @@ async function handleImageEdit(
   const prompt = promptText.trim();
   if (!prompt) {
     await msg.edit({
-      text: "❌ 请在命令后提供提示词，例如 `.banana 把猫换成骑士盔甲`",
+      text: "❌ 请在命令后提供提示词，例如 `${mainPrefix}banana 把猫换成骑士盔甲`",
     });
     return;
   }
@@ -505,6 +510,10 @@ async function handleBananaCommand(msg: Api.Message): Promise<void> {
 }
 
 class BananaPlugin extends Plugin {
+  cleanup(): void {
+    // 当前插件不持有需要在 reload 时额外释放的长期资源。
+  }
+
   description: string = `Nano-Banana 图像编辑插件\n\n${help_text}`;
   cmdHandlers: Record<string, (msg: Api.Message) => Promise<void>> = {
     banana: handleBananaCommand,

@@ -221,7 +221,6 @@ const help_text = `🎨 <b>随机纸片人插件</b>
 • <code>${mainPrefix}zpr r18 [数量]</code> - 获取指定数量R18图片
 • <code>${mainPrefix}zpr proxy</code> - 查看当前反代设置
 • <code>${mainPrefix}zpr proxy [地址]</code> - 设置反代地址
-• <code>${mainPrefix}zpr help</code> - 显示此帮助
 
 <b>使用示例：</b>
 <code>${mainPrefix}zpr</code> - 随机1张
@@ -513,6 +512,11 @@ async function getResult(message: Api.Message, r18 = 0, tag = "", num = 1): Prom
 }
 
 class ZprPlugin extends Plugin {
+  cleanup(): void {
+    // 引用重置：清空实例级 db / cache / manager 引用，便于 reload 后重新初始化。
+    this.db = null;
+  }
+
     description = `随机纸片人插件\n\n${help_text}`;
     
     cmdHandlers: Record<string, (msg: Api.Message, trigger?: Api.Message) => Promise<void>> = {

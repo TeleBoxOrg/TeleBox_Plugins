@@ -968,6 +968,10 @@ async function shiftMessageListener(
   await handleIncomingMessage(message, options?.isEdited);
 }
 class ShiftPlugin extends Plugin {
+  cleanup(): void {
+    // 当前插件不持有需要在 reload 时额外释放的长期资源。
+  }
+
   description: string = `智能转发助手 - 自动转发消息到指定目标\n\n${help_text}`;
   cmdHandlers: Record<string, (msg: Api.Message) => Promise<void>> = {
     shift: async (msg) => {

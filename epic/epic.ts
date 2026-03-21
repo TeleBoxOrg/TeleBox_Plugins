@@ -20,7 +20,6 @@ const help_text = `⚙️ <b>Epic 限免游戏</b>
 
 <b>🔧 使用方法:</b>
 • <code>${mainPrefix}epic</code> - 查看当前限免游戏
-• <code>${mainPrefix}epic help</code> - 显示帮助
 
 <b>📊 数据来源:</b>
 • Epic Games Store API`;
@@ -122,6 +121,10 @@ ${link}`;
 }
 
 class EpicPlugin extends Plugin {
+  cleanup(): void {
+    // 当前插件不持有需要在 reload 时额外释放的长期资源。
+  }
+
   description: string = help_text;
 
   cmdHandlers: Record<string, (msg: Api.Message) => Promise<void>> = {

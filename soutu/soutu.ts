@@ -28,6 +28,10 @@ const help_text = `🖼️ <b>搜图插件</b>
 • <code>${mainPrefix}${pluginName} help</code> - 显示此帮助消息`;
 
 class SoutuPlugin extends Plugin {
+  cleanup(): void {
+    // 当前插件不持有需要在 reload 时额外释放的长期资源。
+  }
+
   description: string = `回复图片进行搜图\n\n${help_text}`;
 
   cmdHandlers = {

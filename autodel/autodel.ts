@@ -1,23 +1,33 @@
 import { Plugin } from "../src/utils/pluginBase";
+import { getPrefixes } from "@utils/pluginManager";
 import { getGlobalClient } from "../src/utils/globalClient";
 import { Api } from "teleproto";
 import { createDirectoryInAssets } from "../src/utils/pathHelpers";
 import Database from "better-sqlite3";
 import path from "path";
 
+const prefixes = getPrefixes();
+const mainPrefix = prefixes[0];
+
+
 class AutoDelPlugin extends Plugin {
+  cleanup(): void {
+    // 引用重置：清空实例级 db / cache / manager 引用，便于 reload 后重新初始化。
+    this.db = null;
+  }
+
   description: string = `🕒 <b>定时自动删除消息</b><br/><br/>
 <b>命令</b><br/>
-• <code>.autodel [时间] [global]</code> 设置自动删除<br/>
-• <code>.autodel l</code> 查看当前设置<br/>
-• <code>.autodel cancel [global]</code> 取消设置<br/><br/>
+• <code>${mainPrefix}autodel [时间] [global]</code> 设置自动删除<br/>
+• <code>${mainPrefix}autodel l</code> 查看当前设置<br/>
+• <code>${mainPrefix}autodel cancel [global]</code> 取消设置<br/><br/>
 <b>时间格式</b><br/>
 • <code>30 seconds</code>、<code>5 minutes</code>、<code>2 hours</code>、<code>1 days</code><br/>
 • 简写：<code>30s</code>、<code>5m</code>、<code>2h</code>、<code>1d</code><br/>
 • 中文：<code>30秒</code>、<code>5分</code>/<code>5分钟</code>、<code>2小时</code>/<code>2时</code>、<code>1天</code><br/><br/>
 <b>示例</b><br/>
-• <code>.autodel 30s</code><br/>
-• <code>.autodel 5 分钟 global</code>（设置全局）<br/><br/>
+• <code>${mainPrefix}autodel 30s</code><br/>
+• <code>${mainPrefix}autodel 5 分钟 global</code>（设置全局）<br/><br/>
 <b>⚠️ 安全说明</b><br/>
 • 只会删除您自己发送的消息<br/>
 • 最小删除时间为5秒`;
@@ -108,16 +118,16 @@ class AutoDelPlugin extends Plugin {
   private getHelpText(): string {
     return `📝 <b>定时删除消息帮助</b>\n\n` +
            `<b>用法：</b>\n` +
-           `• <code>.autodel [时间] [global]</code> - 设置自动删除\n` +
-           `• <code>.autodel l</code> - 查看当前设置\n` +
-           `• <code>.autodel cancel [global]</code> - 取消设置\n\n` +
+           `• <code>${mainPrefix}autodel [时间] [global]</code> - 设置自动删除\n` +
+           `• <code>${mainPrefix}autodel l</code> - 查看当前设置\n` +
+           `• <code>${mainPrefix}autodel cancel [global]</code> - 取消设置\n\n` +
            `<b>时间格式：</b>\n` +
            `• 英文：30 seconds, 5 minutes, 2 hours, 1 days\n` +
            `• 简写：30s, 5m, 2h, 1d\n` +
            `• 中文：30秒，5分/5分钟，2小时/2时，1天\n\n` +
            `<b>示例：</b>\n` +
-           `• <code>.autodel 30s</code> - 30秒后自动删除\n` +
-           `• <code>.autodel 5 分钟 global</code> - 全局5分钟自动删除`;
+           `• <code>${mainPrefix}autodel 30s</code> - 30秒后自动删除\n` +
+           `• <code>${mainPrefix}autodel 5 分钟 global</code> - 全局5分钟自动删除`;
   }
 
   private async showAutoDelSettings(msg: Api.Message): Promise<void> {

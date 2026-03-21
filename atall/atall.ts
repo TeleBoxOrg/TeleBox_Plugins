@@ -56,6 +56,10 @@ const help_text = `📢 <b>AtAll</b>
 • 一般来说你可以通过置顶消息来提醒所有人的`;
 
 class AtAllPlugin extends Plugin {
+  cleanup(): void {
+    // 当前插件不持有需要在 reload 时额外释放的长期资源。
+  }
+
   description = help_text;
   
   cmdHandlers = {

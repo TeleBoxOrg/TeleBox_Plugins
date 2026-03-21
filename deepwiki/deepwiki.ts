@@ -532,6 +532,10 @@ const toIdString = (v: any): string => {
 };
 
 class DeepWikiPlugin extends Plugin {
+  cleanup(): void {
+    // 当前插件不持有需要在 reload 时额外释放的长期资源。
+  }
+
   name = "deepwiki";
 
   private store = new DeepWikiStore();
@@ -573,8 +577,7 @@ class DeepWikiPlugin extends Plugin {
       `• <code>${p}deepwiki del &lt;tag&gt;</code>（删除指定项目）\n\n` +
       `<b>📜 上下文管理</b>\n` +
       `• <code>${p}deepwiki ctx</code>（上下文状态）\n` +
-      `• <code>${p}deepwiki ctx on</code>（开启上下文）\n` +
-      `• <code>${p}deepwiki ctx off</code>（关闭上下文）\n` +
+      `• <code>${p}deepwiki ctx on/off</code>（开启或关闭上下文）\n` +
       `• <code>${p}deepwiki ctx del</code>（清空当前项目上下文）\n` +
       `• <code>${p}deepwiki ctx del &lt;tag&gt;</code>（清空指定项目上下文）\n` +
       `• <code>${p}deepwiki ctx del all</code>（清空全部项目上下文）\n\n` +

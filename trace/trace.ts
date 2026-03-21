@@ -1,10 +1,14 @@
 import { Plugin } from "@utils/pluginBase";
 import { getGlobalClient } from "@utils/globalClient";
+import { getPrefixes } from "@utils/pluginManager";
 import { createDirectoryInAssets } from "@utils/pathHelpers";
 import { Api } from "teleproto";
 import { JSONFilePreset } from "lowdb/node";
 import * as path from "path";
 import bigInt, { BigInteger } from "big-integer";
+
+const prefixes = getPrefixes();
+const mainPrefix = prefixes[0];
 
 // Helper to escape HTML special characters.
 const htmlEscape = (text: string): string =>
@@ -21,26 +25,26 @@ const help_text = `🎯 <b>自动回应插件 (Trace)</b>
 <i>通过自动发送 Reactions 来追踪特定用户或关键字消息</i>
 
 📌 <b>用户追踪</b>
-├ 💬 回复消息 + <code>.trace 👍👎🥰</code>
+├ 💬 回复消息 + <code>${mainPrefix}trace 👍👎🥰</code>
 │  └ 使用指定表情追踪该用户
-└ 🚫 回复消息 + <code>.trace</code>
+└ 🚫 回复消息 + <code>${mainPrefix}trace</code>
    └ 取消追踪该用户
 
 🔍 <b>关键字追踪</b>
-├ ➕ <code>.trace kw add &lt;词&gt; 👍👎🥰</code>
+├ ➕ <code>${mainPrefix}trace kw add &lt;词&gt; 👍👎🥰</code>
 │  └ 添加关键字自动回应
-└ ➖ <code>.trace kw del &lt;词&gt;</code>
+└ ➖ <code>${mainPrefix}trace kw del &lt;词&gt;</code>
    └ 删除关键字追踪
 
 📊 <b>管理命令</b>
-├ 📈 <code>.trace status</code> - 查看追踪统计
-├ 🗑️ <code>.trace clean</code> - 清除所有追踪
-└ ⚠️ <code>.trace reset</code> - 重置全部数据
+├ 📈 <code>${mainPrefix}trace status</code> - 查看追踪统计
+├ 🗑️ <code>${mainPrefix}trace clean</code> - 清除所有追踪
+└ ⚠️ <code>${mainPrefix}trace reset</code> - 重置全部数据
 
 ⚙️ <b>配置选项</b>
-├ 📝 <code>.trace log [true|false]</code>
+├ 📝 <code>${mainPrefix}trace log [true|false]</code>
 │  └ 操作回执保留 (默认: true)
-└ 🎭 <code>.trace big [true|false]</code>
+└ 🎭 <code>${mainPrefix}trace big [true|false]</code>
    └ 大号表情动画 (默认: true)
 
 💡 <b>使用提示</b>
@@ -78,6 +82,7 @@ class TracePlugin extends Plugin {
   // [MODIFIED] Added a property to store our own user ID.
   private meId: BigInteger | null = null;
   private MessageBuilder: any;
+  private pendingDeleteTimers = new Set<ReturnType<typeof setTimeout>>();
 
   constructor() {
     super();
@@ -129,6 +134,29 @@ class TracePlugin extends Plugin {
   private async initializeDB() {
     const dbPath = path.join(createDirectoryInAssets("trace"), "db.json");
     this.db = await JSONFilePreset<TraceDB>(dbPath, defaultState);
+  }
+
+
+  private scheduleDelete(msg: Api.Message, seconds: number): void {
+    let timer: ReturnType<typeof setTimeout>;
+    timer = setTimeout(() => {
+      this.pendingDeleteTimers.delete(timer);
+      msg.delete().catch(() => {});
+    }, seconds * 1000);
+    if (typeof (timer as any).unref === "function") {
+      (timer as any).unref();
+    }
+    this.pendingDeleteTimers.add(timer);
+  }
+
+  cleanup(): void {
+    // 真实资源清理：释放插件持有的定时器、监听器、运行时状态或临时资源。
+    for (const timer of this.pendingDeleteTimers) {
+      clearTimeout(timer);
+    }
+    this.pendingDeleteTimers.clear();
+    this.isPremium = null;
+    this.meId = null;
   }
   
   /**
@@ -415,7 +443,6 @@ class TracePlugin extends Plugin {
     response += `└ 🎭 大号动画: ${this.db.data.config.big ? '✅ 启用' : '❌ 禁用'}\n`;
     
     response += `\n━━━━━━━━━━━━━━━━\n`;
-    response += `💡 <i>使用 .trace help 查看帮助</i>`;
     
     await msg.edit({ text: response, parseMode: "html" });
   }
@@ -580,10 +607,7 @@ class TracePlugin extends Plugin {
   private async editAndDelete(msg: Api.Message, text: string, seconds: number = 5) {
       await msg.edit({ text, parseMode: "html" });
       if (!this.db.data.config.keepLog) {
-          const timer = setTimeout(() => {
-              msg.delete().catch(() => {});
-          }, seconds * 1000);
-          timer.unref();
+          this.scheduleDelete(msg, seconds);
       }
   }
   
@@ -614,10 +638,7 @@ class TracePlugin extends Plugin {
       }
       
       if (!this.db.data.config.keepLog) {
-          const timer = setTimeout(() => {
-              msg.delete().catch(() => {});
-          }, seconds * 1000);
-          timer.unref();
+          this.scheduleDelete(msg, seconds);
       }
   }
 }

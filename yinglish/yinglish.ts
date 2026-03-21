@@ -1,6 +1,11 @@
 import { Plugin } from "../src/utils/pluginBase";
+import { getPrefixes } from "@utils/pluginManager";
 import { getGlobalClient } from "../src/utils/globalClient";
 import { Api } from "teleproto";
+
+const prefixes = getPrefixes();
+const mainPrefix = prefixes[0];
+
 
 // HTML转义工具
 const htmlEscape = (text: string): string => 
@@ -10,15 +15,19 @@ const htmlEscape = (text: string): string =>
   }[m] || m));
 
 class YinglishPlugin extends Plugin {
+  cleanup(): void {
+    // 当前插件不持有需要在 reload 时额外释放的长期资源。
+  }
+
   description: string = `💋 <b>淫语翻译</b><br/><br/>
 <b>命令</b><br/>
-• <code>.yinglish [文本]</code>（也可回复一条消息使用）<br/><br/>
+• <code>${mainPrefix}yinglish [文本]</code>（也可回复一条消息使用）<br/><br/>
 <b>功能</b><br/>
 • 将中文/英文智能分词并随机替换为“淫语”风格文本<br/>
 • 支持回复消息直接转换<br/><br/>
 <b>示例</b><br/>
-• <code>.yinglish 你好世界</code><br/>
-• 回复一条消息后发送 <code>.yinglish</code>`;
+• <code>${mainPrefix}yinglish 你好世界</code><br/>
+• 回复一条消息后发送 <code>${mainPrefix}yinglish</code>`;
   
   cmdHandlers: Record<string, (msg: Api.Message) => Promise<void>> = {
     yinglish: async (msg: Api.Message) => {
@@ -68,7 +77,7 @@ class YinglishPlugin extends Plugin {
         }
         else {
           await msg.edit({
-            text: '❌ <b>参数不足</b>\n\n💡 请提供要转换的文本或回复一条消息\n\n<b>用法:</b>\n• <code>.yinglish 你好世界</code> - 转换指定文本\n• <code>.yinglish</code> (回复消息) - 转换回复消息的内容',
+            text: '❌ <b>参数不足</b>\n\n💡 请提供要转换的文本或回复一条消息\n\n<b>用法:</b>\n• <code>${mainPrefix}yinglish 你好世界</code> - 转换指定文本\n• <code>${mainPrefix}yinglish</code> (回复消息) - 转换回复消息的内容',
             parseMode: "html"
           });
           return;

@@ -15,6 +15,11 @@ const htmlEscape = (text: string): string =>
   }[m] || m));
 
 class AnnualReportPlugin extends Plugin {
+  cleanup(): void {
+    // 引用重置：清空实例级 db / cache / manager 引用，便于 reload 后重新初始化。
+    this.db = null;
+  }
+
   private readonly PLUGIN_NAME = "annualreport";
   private db: any;
   private configPath: string;

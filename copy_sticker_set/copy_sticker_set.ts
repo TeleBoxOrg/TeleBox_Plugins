@@ -3,6 +3,10 @@ import { getGlobalClient } from "../src/utils/globalClient";
 import { getPrefixes } from "../src/utils/pluginManager";
 import { Api } from "teleproto";
 
+const prefixes = getPrefixes();
+const mainPrefix = prefixes[0];
+
+
 // HTML转义函数
 function htmlEscape(text: string): string {
   return text
@@ -15,19 +19,23 @@ function htmlEscape(text: string): string {
 
 
 class CopyStickerSetPlugin extends Plugin {
+  cleanup(): void {
+    // 当前插件不持有需要在 reload 时额外释放的长期资源。
+  }
+
   description: string = `📦 <b>复制贴纸包</b><br/><br/>
 <b>命令格式</b><br/>
-• <code>.copy_sticker_set &lt;贴纸包&gt; [自定义名称] [limit=数字]</code><br/>
+• <code>${mainPrefix}copy_sticker_set &lt;贴纸包&gt; [自定义名称] [limit=数字]</code><br/>
 • <code>.css &lt;贴纸包&gt; [自定义名称] [limit=数字]</code><br/><br/>
 <b>参数说明</b><br/>
 • <code>&lt;贴纸包&gt;</code> - 贴纸包链接或短名称（必填）<br/>
 • <code>[自定义名称]</code> - 新贴纸包的标题（可选）<br/>
 • <code>[limit=数字]</code> - 限制复制数量（最大 120，默认 100）<br/><br/>
 <b>使用示例</b><br/>
-• <code>.copy_sticker_set https://t.me/addstickers/example</code><br/>
-• <code>.copy_sticker_set example_stickers</code><br/>
-• <code>.copy_sticker_set example_stickers 我的专属贴纸包</code><br/>
-• <code>.css example_stickers 我的专属贴纸包 limit=80</code><br/><br/>
+• <code>${mainPrefix}copy_sticker_set https://t.me/addstickers/example</code><br/>
+• <code>${mainPrefix}copy_sticker_set example_stickers</code><br/>
+• <code>${mainPrefix}copy_sticker_set example_stickers 我的专属贴纸包</code><br/>
+• <code>${mainPrefix}css example_stickers 我的专属贴纸包 limit=80</code><br/><br/>
 <b>注意事项</b><br/>
 • 复制的贴纸包将保存到你的账户中<br/>
 • 如不指定名称，将使用原贴纸包名称<br/>
@@ -60,7 +68,7 @@ class CopyStickerSetPlugin extends Plugin {
         await msg.edit({
            text: "📋 <b>复制贴纸包使用说明</b><br/><br/>" +
                  "<b>命令格式</b><br/>" +
-                 "<code>.copy_sticker_set &lt;贴纸包&gt; [自定义名称] [limit=数字]</code><br/>" +
+                 "<code>${mainPrefix}copy_sticker_set &lt;贴纸包&gt; [自定义名称] [limit=数字]</code><br/>" +
                  "<code>.css &lt;贴纸包&gt; [自定义名称] [limit=数字]</code><br/><br/>" +
                  "<b>参数说明</b><br/>" +
                  "• <code>&lt;贴纸包&gt;</code> - 贴纸包链接或短名称（必填）<br/>" +
@@ -68,13 +76,13 @@ class CopyStickerSetPlugin extends Plugin {
                  "• <code>[limit=数字]</code> - 限制复制数量（最大 120，默认 100）<br/><br/>" +
                  "<b>使用示例</b><br/>" +
                  "1. 使用完整链接：<br/>" +
-                 "   <code>.copy_sticker_set https://t.me/addstickers/example</code><br/><br/>" +
+                 "   <code>${mainPrefix}copy_sticker_set https://t.me/addstickers/example</code><br/><br/>" +
                  "2. 使用短名称：<br/>" +
-                 "   <code>.copy_sticker_set example_stickers</code><br/><br/>" +
+                 "   <code>${mainPrefix}copy_sticker_set example_stickers</code><br/><br/>" +
                  "3. 自定义新贴纸包名称：<br/>" +
-                 "   <code>.copy_sticker_set example_stickers 我的专属贴纸包</code><br/><br/>" +
+                 "   <code>${mainPrefix}copy_sticker_set example_stickers 我的专属贴纸包</code><br/><br/>" +
                  "4. 指定数量上限：<br/>" +
-                 "   <code>.css example_stickers 我的专属贴纸包 limit=80</code><br/><br/>" +
+                 "   <code>${mainPrefix}css example_stickers 我的专属贴纸包 limit=80</code><br/><br/>" +
                  "<b>注意事项</b><br/>" +
                  "• 复制的贴纸包将保存到你的账户中<br/>" +
                  "• 如不指定名称，将使用原贴纸包名称<br/>" +

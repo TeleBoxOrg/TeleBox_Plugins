@@ -182,6 +182,10 @@ const help_text = `🍗 <b>疯狂星期四插件</b>
 • <code>${mainPrefix}crazy4</code> - 随机发送一条疯狂星期四文案`;
 
 class Crazy4Plugin extends Plugin {
+  cleanup(): void {
+    // 当前插件不持有需要在 reload 时额外释放的长期资源。
+  }
+
   description: string = `疯狂星期四文案插件\n\n${help_text}`;
   
   cmdHandlers = {

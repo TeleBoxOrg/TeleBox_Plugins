@@ -1,4 +1,5 @@
 import { Plugin } from "@utils/pluginBase";
+import { getPrefixes } from "@utils/pluginManager";
 import { Api } from "teleproto";
 import { getGlobalClient } from "@utils/globalClient";
 import { createDirectoryInAssets, createDirectoryInTemp } from "@utils/pathHelpers";
@@ -7,6 +8,10 @@ import * as path from "path";
 import * as fs from "fs/promises";
 import { statSync, existsSync } from "fs";
 import { CustomFile } from 'teleproto/client/uploads';
+
+const prefixes = getPrefixes();
+const mainPrefix = prefixes[0];
+
 
 const htmlEscape = (text: string): string => 
   text.replace(/[&<>"']/g, m => ({ 
@@ -33,33 +38,32 @@ const help_text = `🔥<b>Prometheus -突破Telegram保存限制</b>
 • 支持批量处理多个消息链接
 • 支持范围保存功能（自动保存指定范围内的所有消息）
 • 支持来源显示功能
-• 同时支持<code>.prometheus</code>与<code>.pms</code>
+• 同时支持<code>${mainPrefix}prometheus</code>与<code>${mainPrefix}pms</code>
 
 <b>🔧 使用方法:</b>
 
 <b>设置默认目标:</b>
-• <code>.pms to [目标]</code> - 设置默认转发目标(支持用户名、chatid如-123456780、'me')
-• <code>.pms to me</code> - 重置为发给自己
-• <code>.pms target</code> - 查看当前目标
+• <code>${mainPrefix}pms to [目标]</code> - 设置默认转发目标(支持用户名、chatid如-123456780、'me')
+• <code>${mainPrefix}pms to me</code> - 重置为发给自己
+• <code>${mainPrefix}pms target</code> - 查看当前目标
 
 <b>来源显示控制:</b>
-• <code>.pms source on/off</code> - 开启/关闭来源显示功能
-• <code>.pms source</code> - 查看当前来源显示状态
+• <code>${mainPrefix}pms source on/off</code> - 开启/关闭来源显示功能
+• <code>${mainPrefix}pms source</code> - 查看当前来源显示状态
 
 <b>转发消息:</b>
-• <code>.pms</code> - 回复要转发的消息
-• <code>.pms [链接1] [链接2] ...</code> - 批量转发
-• <code>.pms [链接] [临时目标]</code> - 临时转发到指定对话
-• <code>.pms [链接1]|[链接2]</code> - 保存两个链接之间的所有消息（支持不连续编号，自动跳过不存在消息）
+• <code>${mainPrefix}pms</code> - 回复要转发的消息
+• <code>${mainPrefix}pms [链接1] [链接2] ...</code> - 批量转发
+• <code>${mainPrefix}pms [链接] [临时目标]</code> - 临时转发到指定对话
+• <code>${mainPrefix}pms [链接1]|[链接2]</code> - 保存两个链接之间的所有消息（支持不连续编号，自动跳过不存在消息）
 
 <b>💡 示例:</b>
-• <code>.pms to @group</code> - 设置默认目标
-• <code>.pms to -123456780</code> - 设置chatid为目标
-• <code>.pms source on</code> - 开启来源显示
-• <code>.pms</code> - 回复消息进行转发
-• <code>.pms https://t.me/c/123/1 https://t.me/c/123/2</code> - 批量转发
-• <code>.pms https://t.me/c/123/1 @username</code> - 转发到指定用户
-• <code>.pms t.me/c/123/1|t.me/c/123/100</code> - 自动保存123群组/频道内1-100号消息
+• <code>${mainPrefix}pms to @group</code> - 设置默认目标
+• <code>${mainPrefix}pms to -123456780</code> - 设置chatid为目标
+• <code>${mainPrefix}pms</code> - 回复消息进行转发
+• <code>${mainPrefix}pms https://t.me/c/123/1 https://t.me/c/123/2</code> - 批量转发
+• <code>${mainPrefix}pms https://t.me/c/123/1 @username</code> - 转发到指定用户
+• <code>${mainPrefix}pms t.me/c/123/1|t.me/c/123/100</code> - 自动保存123群组/频道内1-100号消息
 
 <b>📊 支持类型:</b>
 • 文本、图片、视频、音频、语音
@@ -68,6 +72,10 @@ const help_text = `🔥<b>Prometheus -突破Telegram保存限制</b>
 • 投票、地理位置`;
 
 class PrometheusPlugin extends Plugin {
+  cleanup(): void {
+    // 当前插件不持有需要在 reload 时额外释放的长期资源。
+  }
+
   name = "prometheus";
   description = help_text;
   
@@ -603,7 +611,7 @@ class PrometheusPlugin extends Plugin {
         if (parts.length === 2) {
           // 查看当前状态
           const status = config.showSource ? "开启 ✅" : "关闭 ❌";
-          await this.safeEditMessage(msg, `📊 来源显示功能: <b>${status}</b>\n\n💡 使用 <code>.pms source on</code> 开启\n💡 使用 <code>.pms source off</code> 关闭`, true);
+          await this.safeEditMessage(msg, `📊 来源显示功能: <b>${status}</b>\n\n`, true);
           return;
         }
         
@@ -615,7 +623,7 @@ class PrometheusPlugin extends Plugin {
           await this.setUserConfig(userId, { showSource: false });
           await this.safeEditMessage(msg, "❌ 已关闭来源显示功能\n\n转发消息后，将不再显示来源链接。", true);
         } else {
-          await this.safeEditMessage(msg, "❌ 无效的参数\n\n💡 使用: <code>.pms source on</code> 或 <code>.pms source off</code>", true);
+          await this.safeEditMessage(msg, "❌ 无效的参数\n\n使用: <code>${mainPrefix}pms source on/off</code>", true);
         }
         return;
       }
@@ -623,7 +631,7 @@ class PrometheusPlugin extends Plugin {
       // 处理子命令
       if (parts.length >= 2 && parts[1].toLowerCase() === "to") {
         if (parts.length < 3) {
-          await this.safeEditMessage(msg, "❌ 请指定转发目标\n\n💡 示例:\n<code>.pms to @username</code>\n<code>.pms to -123456780</code>\n<code>.pms to me</code>", true);
+          await this.safeEditMessage(msg, "❌ 请指定转发目标\n\n💡 示例:\n<code>${mainPrefix}pms to @username</code>\n<code>${mainPrefix}pms to -123456780</code>\n<code>${mainPrefix}pms to me</code>", true);
           return;
         }
         

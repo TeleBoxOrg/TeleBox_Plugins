@@ -2668,6 +2668,7 @@ class AiPlugin extends Plugin {
 
   // 资源清理方法 - 防止内存泄漏
   async cleanup(): Promise<void> {
+    // 真实资源清理：释放插件持有的定时器、监听器、运行时状态或临时资源。
     try {
       // 清理 Store 写入定时器
       if (Store._writeTimer) {

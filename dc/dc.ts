@@ -250,6 +250,10 @@ const dc = async (msg: Api.Message) => {
 };
 
 class DcPlugin extends Plugin {
+  cleanup(): void {
+    // 当前插件不持有需要在 reload 时额外释放的长期资源。
+  }
+
   description: string = `获取指定用户或当前群组/频道的 DC`;
   cmdHandlers: Record<string, (msg: Api.Message) => Promise<void>> = {
     dc,

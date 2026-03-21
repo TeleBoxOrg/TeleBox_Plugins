@@ -228,7 +228,7 @@ await msg.reply({ message: \`\${(await formatEntity(msg.sender)).display}, 不�
 
 <pre>${commandName} add 一键强制更新并退出重启
 return !msg.fwdFrom && ['a', 'b'].includes(msg.sender?.username) && msg.text === '${mainPrefix}${mainPrefix}'
-await run('${mainPrefix}update -f', msg); await run('${mainPrefix}dme 1', msg); try { await msg.delete() } catch (e) {}; await run('.exit', msg)</pre>
+await run('${mainPrefix}update -f', msg); await run('${mainPrefix}dme 1', msg); try { await msg.delete() } catch (e) {}; await run('${mainPrefix}exit', msg)</pre>
 
 - <code>username</code> 为 <code>a</code> 或 <code>b</code> 的用户可使用 <code>,,</code> 一键更新已安装的远程插件
 
@@ -245,6 +245,10 @@ await run('${mainPrefix}tpm update', msg); await run('${mainPrefix}dme 1', msg);
 `;
 
 class KittPlugin extends Plugin {
+  cleanup(): void {
+    // 当前插件不持有需要在 reload 时额外释放的长期资源。
+  }
+
   description: string = `\nK.I.T.T <blockquote>As you wish, Michael.</blockquote>\n\n使用 JavaScript 的高级触发器: 匹配 -> 执行, 高度自定义, 逻辑自由\n\n${help_text}`;
   cmdHandlers: Record<
     string,

@@ -74,6 +74,10 @@ function getTxtFromMsg(msg: Api.Message | string, n: number): string {
     .trim();
 }
 class ManageAdminPlugin extends Plugin {
+  cleanup(): void {
+    // 当前插件不持有需要在 reload 时额外释放的长期资源。
+  }
+
   description: string = `\n管理管理员\n\n${help_text}`;
   cmdHandlers: Record<
     string,
@@ -455,7 +459,6 @@ class ManageAdminPlugin extends Plugin {
         return;
       }
       await msg.edit({
-        text: `未知命令, 使用 <code>${mainPrefix}help ${pluginName}</code> 查看帮助`,
         parseMode: "html",
       });
     },

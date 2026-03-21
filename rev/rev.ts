@@ -1,10 +1,15 @@
 import { Plugin } from '@utils/pluginBase';
+import { getPrefixes } from '@utils/pluginManager';
 import { createDirectoryInTemp } from '@utils/pathHelpers';
 import { execFile } from 'child_process';
 import fs from 'fs';
 import path from 'path';
 import { Api } from 'teleproto';
 import { promisify } from 'util';
+
+const prefixes = getPrefixes();
+const mainPrefix = prefixes[0];
+
 
 const execFileAsync = promisify(execFile);
 const FAN_TEMP_DIR = createDirectoryInTemp('rev');
@@ -27,6 +32,10 @@ interface TransformOptions {
 }
 
 class REVPlugin extends Plugin {
+  cleanup(): void {
+    // 当前插件不持有需要在 reload 时额外释放的长期资源。
+  }
+
 	name = 'rev';
 
 	description = `🔄 <b>反转插件</b>
@@ -35,22 +44,22 @@ class REVPlugin extends Plugin {
 支持文字和媒体的多种反转操作，让你的内容倒过来！
 
 <b>📝 文字反转</b>
-• <code>.rev [文字]</code> - 反转文字内容（支持 emoji）
-• <code>.rev</code>（回复文字消息）- 反转回复的文字
+• <code>${mainPrefix}rev [文字]</code> - 反转文字内容（支持 emoji）
+• <code>${mainPrefix}rev</code>（回复文字消息）- 反转回复的文字
 
 <b>🖼️ 媒体反转</b>
 支持格式：图片 / GIF / WebM / WebP
-• <code>.rev</code>（回复媒体）- 水平翻转
-• <code>.rev h</code> - 水平翻转（左右镜像）
-• <code>.rev v</code> - 垂直翻转（上下镜像）
-• <code>.rev c</code> - 颜色反转（负片效果）
-• <code>.rev h c</code> - 组合使用（水平翻转 + 颜色反转）
+• <code>${mainPrefix}rev</code>（回复媒体）- 水平翻转
+• <code>${mainPrefix}rev h</code> - 水平翻转（左右镜像）
+• <code>${mainPrefix}rev v</code> - 垂直翻转（上下镜像）
+• <code>${mainPrefix}rev c</code> - 颜色反转（负片效果）
+• <code>${mainPrefix}rev h c</code> - 组合使用（水平翻转 + 颜色反转）
 
 <b>💡 使用示例</b>
-• <code>.rev 你好世界</code> → 界世好你
-• 回复图片 + <code>.rev v</code> → 上下翻转的图片
-• 回复 GIF + <code>.rev c</code> → 负片效果的 GIF
-• 回复 WebM + <code>.rev h c</code> → 水平翻转 + 负片效果`;
+• <code>${mainPrefix}rev 你好世界</code> → 界世好你
+• 回复图片 + <code>${mainPrefix}rev v</code> → 上下翻转的图片
+• 回复 GIF + <code>${mainPrefix}rev c</code> → 负片效果的 GIF
+• 回复 WebM + <code>${mainPrefix}rev h c</code> → 水平翻转 + 负片效果`;
 
 	cmdHandlers = {
 		rev: async (msg: Api.Message) => {
@@ -80,7 +89,7 @@ class REVPlugin extends Plugin {
 
 				// 无有效内容时的提示
 				await msg.edit({
-					text: '❌ 请提供文本内容或回复一条支持的消息\n\n<b>支持的格式：</b>\n• 文本消息（逐行反转）\n• 图片（JPG/PNG/BMP/WebP）\n• 动图（GIF/.gif.mp4）\n• 贴纸（WebM）\n\n💡 <b>使用方法：</b>\n<code>.rev [文本]</code> 或回复消息使用 <code>.rev [参数]</code>',
+					text: '❌ 请提供文本内容或回复一条支持的消息\n\n<b>支持的格式：</b>\n• 文本消息（逐行反转）\n• 图片（JPG/PNG/BMP/WebP）\n• 动图（GIF/.gif.mp4）\n• 贴纸（WebM）\n\n<b>使用方法：</b>\n<code>${mainPrefix}rev [文本]</code> 或回复消息使用 <code>${mainPrefix}rev [参数]</code>',
 					parseMode: 'html',
 				});
 			} catch (error: any) {

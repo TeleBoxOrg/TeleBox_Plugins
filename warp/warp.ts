@@ -471,31 +471,34 @@ WantedBy=multi-user.target`;
 // 帮助文本
 const helpText = `⚡ <b>WARP 管理面板</b>
 
-<code>.warp help</code> - 显示此帮助菜单
 
 <b>主要方案 (二选一)</b>
   <b>1. WireProxy (Socks5 代理)</b>
-    <code>.warp w [端口]</code> - 安装并启动 (与 Iptables 方案互斥)
+    <code>${mainPrefix}warp w [端口]</code> - 安装并启动 (与 Iptables 方案互斥)
 
   <b>2. Iptables (透明代理)</b>
-    <code>.warp e</code> - 安装 Iptables + dnsmasq + ipset (与 WireProxy 方案互斥)
+    <code>${mainPrefix}warp e</code> - 安装 Iptables + dnsmasq + ipset (与 WireProxy 方案互斥)
 
 <b>辅助命令</b>
-<code>.warp status</code> - 查看 WARP 综合状态
-<code>.warp y</code> - 切换 WireProxy 开/关
-<code>.warp ip</code> - 重启 WireProxy (更换 WARP IP)
-<code>.warp port &lt;端口&gt;</code> - 修改 WireProxy 监听端口
-<code>.warp proxy</code> - 配置 Telegram 代理设置 (需要 WireProxy 运行)
-<code>.warp unproxy</code> - 关闭 Telegram 代理设置
-<code>.warp music</code> - 配置 Music 插件代理设置
-<code>.warp unmusic</code> - 关闭 Music 插件代理设置
+<code>${mainPrefix}warp status</code> - 查看 WARP 综合状态
+<code>${mainPrefix}warp y</code> - 切换 WireProxy 开/关
+<code>${mainPrefix}warp ip</code> - 重启 WireProxy (更换 WARP IP)
+<code>${mainPrefix}warp port &lt;端口&gt;</code> - 修改 WireProxy 监听端口
+<code>${mainPrefix}warp proxy</code> - 配置 Telegram 代理设置 (需要 WireProxy 运行)
+<code>${mainPrefix}warp unproxy</code> - 关闭 Telegram 代理设置
+<code>${mainPrefix}warp music</code> - 配置 Music 插件代理设置
+<code>${mainPrefix}warp unmusic</code> - 关闭 Music 插件代理设置
 
 <b>系统</b>
-<code>.warp uninstall</code> - 仅卸载 WireProxy
-<code>.warp uninstall_all</code> - 卸载所有组件 (WireProxy 和 Iptables 方案)`;
+<code>${mainPrefix}warp uninstall</code> - 仅卸载 WireProxy
+<code>${mainPrefix}warp uninstall_all</code> - 卸载所有组件 (WireProxy 和 Iptables 方案)`;
 
 // 插件实现
 class WarpPlugin extends Plugin {
+  cleanup(): void {
+    // 当前插件不持有需要在 reload 时额外释放的长期资源。
+  }
+
   description: string = `Cloudflare WARP 管理\n\n${helpText}`;
 
   cmdHandlers = {
@@ -559,7 +562,7 @@ class WarpPlugin extends Plugin {
       // 检查 WireProxy 是否运行
       const svcCheck = await SystemExecutor.run("systemctl is-active wireproxy");
       if (!svcCheck.success || svcCheck.output !== "active") {
-        return "❌ WireProxy 未运行。请先使用 <code>.warp w</code> 启动 WireProxy。";
+        return "❌ WireProxy 未运行。请先使用 <code>${mainPrefix}warp w</code> 启动 WireProxy。";
       }
 
       // 获取当前端口
@@ -677,7 +680,7 @@ class WarpPlugin extends Plugin {
       // 检查 WireProxy 是否运行
       const svcCheck = await SystemExecutor.run("systemctl is-active wireproxy");
       if (!svcCheck.success || svcCheck.output !== "active") {
-        return "❌ WireProxy 未运行。请先使用 <code>.warp w</code> 启动 WireProxy。";
+        return "❌ WireProxy 未运行。请先使用 <code>${mainPrefix}warp w</code> 启动 WireProxy。";
       }
 
       // 获取当前端口
@@ -816,7 +819,7 @@ class WarpPlugin extends Plugin {
         return;
       }
 
-      // 处理 help 在前的情况：.warp help [subcommand]
+      // 处理 help 在前的情况：${mainPrefix}help warp [subcommand]
       if (sub === "help" || sub === "h") {
         if (args[1]) {
           // 显示特定子命令的帮助
@@ -916,7 +919,7 @@ class WarpPlugin extends Plugin {
           await msg.edit({ text: "🔄 正在检查环境...", parseMode: "html" });
           const wpStatus = await WireproxyManager.getStatus();
           if (wpStatus.includes("✅ 运行中")) {
-            await msg.edit({ text: "❌ WireProxy 正在运行。请先使用 `.warp stop` 停止它，然后再安装 Iptables 方案。", parseMode: "html" });
+            await msg.edit({ text: "❌ WireProxy 正在运行。请先使用 `${mainPrefix}warp stop` 停止它，然后再安装 Iptables 方案。", parseMode: "html" });
             return;
           }
 
@@ -961,7 +964,6 @@ class WarpPlugin extends Plugin {
         default:
           // 未知命令
           await msg.edit({
-            text: `❌ <b>未知命令:</b> <code>${htmlEscape(sub)}</code>\n\n💡 使用 <code>${mainPrefix}warp help</code> 查看帮助`,
             parseMode: "html"
           });
       }

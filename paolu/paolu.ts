@@ -1,6 +1,11 @@
 import { Plugin } from "@utils/pluginBase";
+import { getPrefixes } from "@utils/pluginManager";
 import { Api, TelegramClient } from "teleproto";
 import { getGlobalClient } from "@utils/globalClient";
+
+const prefixes = getPrefixes();
+const mainPrefix = prefixes[0];
+
 
 // HTML转义工具（每个插件必须实现）
 const htmlEscape = (text: string): string => 
@@ -12,7 +17,7 @@ const htmlEscape = (text: string): string =>
 // 帮助文档常量
 const help_text = `<b>⚠️ 一键跑路</b>
 
-<code>.paolu</code> - 删除群内所有消息并禁言所有成员
+<code>${mainPrefix}paolu</code> - 删除群内所有消息并禁言所有成员
 
 <b>警告：</b>此操作不可逆，请谨慎使用！`;
 
@@ -21,6 +26,10 @@ const sleep = (ms: number): Promise<void> =>
   new Promise((resolve) => setTimeout(resolve, ms));
 
 class PaoluPlugin extends Plugin {
+  cleanup(): void {
+    // 当前插件不持有需要在 reload 时额外释放的长期资源。
+  }
+
   description: string = `群组一键跑路插件 - 删除消息并禁言所有成员\n\n${help_text}`;
   
   cmdHandlers: Record<string, (msg: Api.Message) => Promise<void>> = {

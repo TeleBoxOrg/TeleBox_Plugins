@@ -32,6 +32,10 @@ interface PicToStickerConfig {
 }
 
 class PicToStickerPlugin extends Plugin {
+  cleanup(): void {
+    // 当前插件不持有需要在 reload 时额外释放的长期资源。
+  }
+
   private help_text = `🖼️ <b>图片转贴纸工具</b>
 
 <b>📝 功能：</b>
@@ -46,7 +50,6 @@ class PicToStickerPlugin extends Plugin {
 • <code>${mainPrefix}pts [表情]</code> - 使用自定义表情
 • <code>${mainPrefix}pts config</code> - 查看/修改配置
 • <code>${mainPrefix}pts batch</code> - 批量转换（回复多张图片）
-• <code>${mainPrefix}pts help</code> - 显示帮助
 
 <b>⚙️ 配置选项：</b>
 • <code>${mainPrefix}pts config emoji [表情]</code> - 设置默认表情
@@ -396,7 +399,6 @@ class PicToStickerPlugin extends Plugin {
       // 检查是否有图片
       if (!targetMsg.media || !(targetMsg.media instanceof Api.MessageMediaPhoto)) {
         await msg.edit({
-          text: `❌ <b>请回复一张图片</b>\n\n💡 使用 <code>${mainPrefix}pts help</code> 查看帮助`,
           parseMode: "html"
         });
         return;

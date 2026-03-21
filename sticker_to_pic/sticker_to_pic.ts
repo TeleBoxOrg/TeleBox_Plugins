@@ -148,7 +148,6 @@ const help_text = `🖼️ <b>贴纸转图片插件</b>
 • <code>${mainPrefix}stp doc</code> - 文档模式发送
 
 <b>🔄 管理命令:</b>
-• <code>${mainPrefix}stp help</code> - 显示此帮助
 
 <b>📋 支持格式:</b>
 • 输入：WebP贴纸文件
@@ -160,6 +159,10 @@ const help_text = `🖼️ <b>贴纸转图片插件</b>
 • 支持Linux/macOS自动安装`;
 
 class StickerToPicPlugin extends Plugin {
+  cleanup(): void {
+    // 当前插件不持有需要在 reload 时额外释放的长期资源。
+  }
+
   description: string = help_text;
   
   cmdHandlers: Record<string, (msg: Api.Message, trigger?: Api.Message) => Promise<void>> = {
@@ -284,7 +287,6 @@ class StickerToPicPlugin extends Plugin {
       } else {
         // 未知子命令，提示错误
         await msg.edit({
-          text: `❌ <b>未知命令:</b> <code>${htmlEscape(sub)}</code>\n\n💡 使用 <code>${mainPrefix}stp help</code> 查看帮助`,
           parseMode: "html"
         });
         return;
@@ -329,7 +331,6 @@ class StickerToPicPlugin extends Plugin {
        
       if (!targetMsg.media || !(targetMsg.media instanceof Api.MessageMediaDocument)) {
         await msg.edit({
-          text: `❌ <b>请回复一个贴纸消息</b>\n\n<b>用法:</b>\n1. 回复贴纸消息并使用 <code>${mainPrefix}stp</code>\n2. 发送贴纸后立即使用命令\n\n💡 使用 <code>${mainPrefix}stp help</code> 查看详细帮助`,
           parseMode: "html"
         });
         return;

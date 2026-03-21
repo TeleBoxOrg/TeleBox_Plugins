@@ -126,7 +126,7 @@ const help_text = `🗒️ <b>发电语录插件</b>
 • <code>${mainPrefix}fadian wyy</code> - 网抑云语录
 • <code>${mainPrefix}fadian cp</code> + 第二行/第三行为两个名字
 • <code>${mainPrefix}fadian clear</code> - 清理缓存并重新下载
-• <code>${mainPrefix}fadian help</code> - 查看帮助
+• 
 
 <b>使用示例：</b>
 <code>${mainPrefix}fadian fd 张三</code> - 生成张三的心理语录
@@ -134,6 +134,10 @@ const help_text = `🗒️ <b>发电语录插件</b>
 <code>${mainPrefix}fadian cp</code>\n第一个人\n第二个人 - 生成CP语录`;
 
 class FadianPlugin extends Plugin {
+  cleanup(): void {
+    // 当前插件不持有需要在 reload 时额外释放的长期资源。
+  }
+
   description: string = `从远程配置随机生成发电语录\n\n${help_text}`;
 
   cmdHandlers = {
@@ -290,7 +294,7 @@ class FadianPlugin extends Plugin {
             await msg.edit({
               text: `❌ <b>未知子命令:</b> <code>${htmlEscape(
                 sub
-              )}</code>\n\n💡 使用 <code>${mainPrefix}fadian help</code> 查看帮助`,
+              )}</code>`,
               parseMode: "html",
             });
         }

@@ -22,8 +22,8 @@ const htmlEscape = (text: string): string =>
 // 帮助文档常量
 const help_text = `<b>批量删除</b>
 
-<code>.da true</code> 开始删除
-<code>.da stop</code> 停止任务`;
+<code>${mainPrefix}da true</code> 开始删除
+<code>${mainPrefix}da stop</code> 停止任务`;
 
 // 删除任务状态管理
 interface DeleteTask {
@@ -596,6 +596,10 @@ const da = async (msg: Api.Message) => {
 };
 
 class DaPlugin extends Plugin {
+  cleanup(): void {
+    // 当前插件不持有需要在 reload 时额外释放的长期资源。
+  }
+
   // 必须在 description 中引用 help_text
   description: string = `群组消息批量删除插件\n\n${help_text}`;
   

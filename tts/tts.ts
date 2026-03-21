@@ -120,6 +120,10 @@ const getHelpText = () => `🗣️ <b>Azure TTS</b> (微软语音合成)
 
 // ========== 插件类 ==========
 class TTSPlugin extends Plugin {
+  cleanup(): void {
+    // 当前插件不持有需要在 reload 时额外释放的长期资源。
+  }
+
     name = "tts";
     description = () => getHelpText();
 

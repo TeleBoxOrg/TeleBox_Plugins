@@ -237,6 +237,10 @@ const help_text = `🚀 <b>智能汇率查询助手</b>
 • <code>rate CNY USDT 7000</code> - 7000元换USDT`;
 
 class RatePlugin extends Plugin {
+  cleanup(): void {
+    // 当前插件不持有需要在 reload 时额外释放的长期资源。
+  }
+
   description: string = `加密货币汇率查询 & 数量换算\n\n${help_text}`;
 
   // 货币缓存 - 提高性能，避免重复API调用

@@ -238,6 +238,10 @@ const help_text = `🎬 <b>JavDB 番号查询</b>
 • 附带 JavDB 和 MissAV 在线观看链接`;
 
 class JavDBPlugin extends Plugin {
+  cleanup(): void {
+    // 当前插件不持有需要在 reload 时额外释放的长期资源。
+  }
+
   description: string = `JavDB 番号查询\n\n${help_text}`;
   cmdHandlers: Record<string, (msg: Api.Message) => Promise<void>> = {};
 

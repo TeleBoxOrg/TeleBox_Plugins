@@ -151,6 +151,14 @@ class ConfigManager {
   private static initLock = false;  // 添加锁防止并发初始化
   private static configPath: string;
 
+  static cleanup(): void {
+    // 引用重置：清空实例级 db / cache / manager 引用，便于 reload 后重新初始化。
+    this.db = null;
+    this.initialized = false;
+    this.initLock = false;
+    this.configPath = "";
+  }
+
   private static async init(): Promise<void> {
     if (this.initialized) return;
     
@@ -253,7 +261,6 @@ const modifySSHConfig = async (
 const help_text = `🔐 <b>SSH管理插件</b>
 
 <b>密钥管理：</b>
-• <code>${mainPrefix}ssh</code> - 显示帮助信息
 • <code>${mainPrefix}ssh gen add</code> - 生成新密钥并追加到现有密钥
 • <code>${mainPrefix}ssh gen replace</code> - 生成新密钥并替换所有旧密钥
 • <code>${mainPrefix}ssh keys</code> - 查看当前授权的所有密钥
@@ -275,7 +282,6 @@ const help_text = `🔐 <b>SSH管理插件</b>
 • <code>${mainPrefix}ssh set @username</code> - 设置发送到指定用户
 • <code>${mainPrefix}ssh set me</code> - 重置为默认发送到收藏夹
 • <code>${mainPrefix}ssh info</code> - 查看SSH状态和配置
-• <code>${mainPrefix}ssh help</code> - 显示此帮助
 
 <b>示例：</b>
 <code>${mainPrefix}ssh gen replace</code> - 生成新密钥并清空旧密钥
@@ -414,7 +420,6 @@ class SSHPlugin extends Plugin {
 
         default:
           await msg.edit({
-            text: `❌ <b>未知命令:</b> <code>${htmlEscape(sub)}</code>\n\n💡 使用 <code>${mainPrefix}ssh help</code> 查看帮助`,
             parseMode: "html"
           });
       }
@@ -1011,7 +1016,7 @@ ${keysContent}`;
     
     if (!enable && !disable) {
       await msg.edit({
-        text: `❌ <b>无效的参数</b>\n\n使用: <code>${mainPrefix}ssh pwauth on</code> 或 <code>${mainPrefix}ssh pwauth off</code>`,
+        text: `❌ <b>无效的参数</b>\n\n使用: <code>${mainPrefix}ssh pwauth on/off</code>`,
         parseMode: "html"
       });
       return;
@@ -1055,7 +1060,7 @@ ${keysContent}`;
     
     if (!enable && !disable) {
       await msg.edit({
-        text: `❌ <b>无效的参数</b>\n\n使用: <code>${mainPrefix}ssh keyauth on</code> 或 <code>${mainPrefix}ssh keyauth off</code>`,
+        text: `❌ <b>无效的参数</b>\n\n使用: <code>${mainPrefix}ssh keyauth on/off</code>`,
         parseMode: "html"
       });
       return;

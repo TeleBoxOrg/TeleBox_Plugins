@@ -12,6 +12,10 @@ function formatCN(date: Date): string {
 }
 
 class MoyuPlugin extends Plugin {
+  cleanup(): void {
+    // 当前插件不持有需要在 reload 时额外释放的长期资源。
+  }
+
   description: string = "摸鱼日报";
   cmdHandlers: Record<string, (msg: Api.Message) => Promise<void>> = {
     moyu: async (msg) => {

@@ -84,9 +84,32 @@ const CURRENT_CONFIG_VERSION = 1;
 class AutoDeleteService {
   private client: any;
   private config: AutoDeleteConfig = {};
+  private pendingTimeouts = new Set<ReturnType<typeof setTimeout>>();
 
   constructor(client: any) {
     this.client = client;
+  }
+
+  private scheduleTimeout(callback: () => void | Promise<void>, delayMs: number) {
+    let timer: ReturnType<typeof setTimeout>;
+    timer = setTimeout(async () => {
+      this.pendingTimeouts.delete(timer);
+      try {
+        await callback();
+      } catch (error) {
+        console.error("[autodelcmd] 定时任务执行失败:", error);
+      }
+    }, delayMs);
+    this.pendingTimeouts.add(timer);
+    return timer;
+  }
+
+  public cleanup(): void {
+    // 真实资源清理：释放插件持有的定时器、监听器、运行时状态或临时资源。
+    for (const timer of this.pendingTimeouts) {
+      clearTimeout(timer);
+    }
+    this.pendingTimeouts.clear();
   }
 
   // 获取默认配置规则
@@ -306,7 +329,7 @@ class AutoDeleteService {
           console.log(`[autodelcmd] 找到消息 ID ${exitMsg.mid}，将在10秒后删除`);
           
           // 使用较短的延迟时间完成未完成的删除任务
-          setTimeout(async () => {
+          this.scheduleTimeout(async () => {
             try {
               console.log(`[autodelcmd] 正在执行未完成的删除任务，消息 ID ${exitMsg.mid}`);
               await message[0].delete({ revoke: true });
@@ -344,7 +367,7 @@ class AutoDeleteService {
       console.error(`[autodelcmd] 保存删除任务失败:`, error);
     }
     
-    setTimeout(async () => {
+    this.scheduleTimeout(async () => {
       try {
         console.log(`[autodelcmd] 正在删除消息 ID ${msg.id}`);
         await msg.delete({ revoke: true });
@@ -671,6 +694,10 @@ async function ensureServiceInitialized(): Promise<boolean> {
 }
 
 class AutoDeletePlugin extends Plugin {
+  cleanup(): void {
+    // 真实资源清理：释放插件持有的定时器、监听器、运行时状态或临时资源。
+  }
+
   // 插件启动时自动初始化
   constructor() {
     super();
@@ -718,7 +745,6 @@ class AutoDeletePlugin extends Plugin {
 • 精确匹配只匹配无参数的命令调用，不匹配带参数的调用
 
 <b>使用示例:</b>
-• <code>${mainPrefix}autodelcmd on</code> - 启用自动删除功能
 • <code>${mainPrefix}autodelcmd list</code> - 查看所有配置规则
 • <code>${mainPrefix}autodelcmd add ping 30</code> - ping命令30秒后删除
 • <code>${mainPrefix}autodelcmd add speedtest 60 -r</code> - speedtest命令60秒后删除（🔄包含响应）
@@ -727,7 +753,6 @@ class AutoDeletePlugin extends Plugin {
 • <code>${mainPrefix}autodelcmd del ping</code> - 查看ping命令的所有规则
 • <code>${mainPrefix}autodelcmd del 1</code> - 使用ID删除指定规则
 • <code>${mainPrefix}autodelcmd reset</code> - 重置为默认配置
-• <code>${mainPrefix}autodelcmd off</code> - 禁用自动删除功能
 
 <b>配置文件位置:</b>
 配置文件保存在 <code>assets/autodelcmd/config.json</code>，可直接编辑修改规则。
@@ -1014,9 +1039,9 @@ class AutoDeletePlugin extends Plugin {
     text += `• 配置规则数: ${allRules.length}\n\n`;
     
     if (!isEnabled) {
-      text += `💡 使用 <code>autodelcmd on</code> 启用功能`;
+      text += ``;
     } else {
-      text += `💡 使用 <code>autodelcmd off</code> 禁用功能`;
+      text += ``;
     }
 
     await msg.edit({ text, parseMode: "html" });
@@ -1078,6 +1103,12 @@ class AutoDeletePlugin extends Plugin {
   }
 
   // 监听所有消息，实现命令后处理
+  cleanup(): void {
+    serviceInstance?.cleanup();
+    serviceInstance = null;
+    cachedUserId = null;
+  }
+
   listenMessageHandler = async (msg: Api.Message) => {
     try {
       // 检查功能是否启用

@@ -28,12 +28,16 @@ const help_text = `🎲 <b>随机色色视频获取</b>
 
 <b>命令：</b>
 • <code>${mainPrefix}kkp</code> - 从SeSe3000Bot获取随机视频并转发
-• <code>${mainPrefix}kkp help</code> - 显示帮助信息
+
 
 <b>说明：</b>
 该插件会自动与SeSe3000Bot交互获取随机视频内容`;
 
 class KkpPlugin extends Plugin {
+  cleanup(): void {
+    // 真实资源清理：释放插件持有的定时器、监听器、运行时状态或临时资源。
+  }
+
   description: string = `🎲 随机色色视频获取\n\n${help_text}`;
 
   // 存储等待回复的消息监听器
@@ -70,7 +74,7 @@ class KkpPlugin extends Plugin {
           await msg.edit({
             text: `❌ <b>未知命令:</b> <code>${htmlEscape(
               sub,
-            )}</code>\n\n💡 使用 <code>${mainPrefix}kkp help</code> 查看帮助`,
+            )}</code>`,
             parseMode: "html",
           });
           return;

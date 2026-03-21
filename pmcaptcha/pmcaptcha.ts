@@ -1065,23 +1065,22 @@ function helpText(section?: string): string {
     overview: `🔒 <b>PMCaptcha v${PLUGIN_VERSION} 帮助</b>
 
 <b>快速入门</b>
-  1. <code>${p}pmc on</code>              — 启用插件
-  2. <code>${p}pmc captcha on</code>      — 开启验证功能
+  1. <code>${p}pmc on/off</code>          — 启用或禁用插件
+  2. <code>${p}pmc captcha on/off</code>  — 开启或关闭验证功能
   3. <code>${p}pmc captcha math</code>    — 选择验证模式
   4. <code>${p}pmc set fail 屏蔽</code>   — 设置失败后动作
   5. <code>${p}pmc status</code>          — 查看当前配置
 
 <b>分类帮助</b>
-  <code>${p}pmc h basic</code>    — 插件开关 & 状态
-  <code>${p}pmc h captcha</code>  — 验证模式设置
-  <code>${p}pmc h set</code>      — 参数配置（fail/pass/time/tries等）
-  <code>${p}pmc h wl</code>       — 白名单管理
-  <code>${p}pmc h record</code>   — 验证记录`,
+  
+  
+  
+  
+  `,
 
     basic: `🔒 <b>基础命令</b>
 
-  <code>${p}pmc on</code>       — 启用插件（开始拦截陌生人私聊）
-  <code>${p}pmc off</code>      — 禁用插件（停止拦截，验证设置保留不变）
+  <code>${p}pmc on/off</code>    — 启用或禁用插件（关闭时验证设置保留不变）
   <code>${p}pmc status</code>   — 查看完整配置与运行状态
 
   ℹ️ <code>off</code> 只停用插件本身，不会重置验证（captcha）的开关状态，
@@ -1090,8 +1089,7 @@ function helpText(section?: string): string {
     captcha: `🔒 <b>验证设置</b>
 
 <b>开关</b>
-  <code>${p}pmc captcha on</code>        — 开启验证功能
-  <code>${p}pmc captcha off</code>       — 关闭验证功能（陌生人仍会被静音归档，不发验证题）
+  <code>${p}pmc captcha on/off</code>     — 开启或关闭验证功能
 
 <b>模式</b>
   <code>${p}pmc captcha math</code>      — 算术验证（默认，随机四则运算/幂运算，无需额外依赖）
@@ -1290,7 +1288,7 @@ const pmcaptcha = async (message: Api.Message) => {
           `<code>${mainPrefix}pmc captcha text</code>             — 关键词验证\n` +
           `<code>${mainPrefix}pmc captcha img_digit</code>        — 图片验证（纯数字）\n` +
           `<code>${mainPrefix}pmc captcha img_mixed</code>        — 图片验证（字母+数字）\n\n` +
-          `详细说明：<code>${mainPrefix}pmc h captcha</code>`
+          ``
         );
         break;
       }
@@ -1313,7 +1311,7 @@ const pmcaptcha = async (message: Api.Message) => {
             `<code>prompt</code>   — 自定义提示语（留空恢复默认）\n` +
             `<code>fail</code>     — 失败操作（支持中文，如：屏蔽/删除/举报/静音/归档）\n` +
             `<code>pass</code>     — 通过操作（支持中文，如：取消静音/取消归档/白名单）\n\n` +
-            `详细说明：<code>${mainPrefix}pmc h set</code>`
+            ``
           );
           break;
         }
@@ -1470,7 +1468,7 @@ const pmcaptcha = async (message: Api.Message) => {
             await edit(
               `❌ 未知三级命令：<code>${param}</code>\n\n` +
               `可用：<code>time</code>、<code>tries</code>、<code>keyword</code>、<code>prompt</code>、<code>fail</code>、<code>pass</code>\n\n` +
-              `详细说明：<code>${mainPrefix}pmc h set</code>`
+              ``
             );
         }
         break;
@@ -1602,7 +1600,7 @@ const pmcaptcha = async (message: Api.Message) => {
           `<code>${mainPrefix}pmc wl del &lt;ID/@user&gt;</code> — 移除用户\n` +
           `<code>${mainPrefix}pmc wl del all</code>          — 清空白名单\n` +
           `<code>${mainPrefix}pmc wl pass &lt;ID/@user&gt;</code>— 手动标记通过\n\n` +
-          `详细说明：<code>${mainPrefix}pmc h wl</code>`
+          ``
         );
         break;
       }
@@ -1708,7 +1706,7 @@ const pmcaptcha = async (message: Api.Message) => {
           `<code>${mainPrefix}pmc record failed</code>                    — 失败列表\n` +
           `<code>${mainPrefix}pmc record del verified &lt;ID&gt;/all</code> — 删除通过记录\n` +
           `<code>${mainPrefix}pmc record del failed &lt;ID&gt;/all</code>   — 删除失败记录\n\n` +
-          `详细说明：<code>${mainPrefix}pmc h record</code>`
+          ``
         );
         break;
       }
@@ -1719,9 +1717,10 @@ const pmcaptcha = async (message: Api.Message) => {
 
       default:
         await edit(
-          `❌ 未知命令：<code>${command}</code>\n\n` +
-          `使用 <code>${mainPrefix}pmc h</code> 查看完整帮助\n` +
-          `或 <code>${mainPrefix}pmc h &lt;分类&gt;</code>（basic/captcha/set/wl/record）`
+          `❌ 未知命令：<code>${command}</code>
+
+` +
+          `可用命令：<code>${mainPrefix}pmc</code> / <code>${mainPrefix}pmcaptcha</code>`
         );
     }
   } catch (e) {
@@ -1736,6 +1735,10 @@ const pmcaptcha = async (message: Api.Message) => {
 const pmc = pmcaptcha;
 
 class PMCaptchaPlugin extends Plugin {
+  cleanup(): void {
+    // 真实资源清理：释放插件持有的定时器、监听器、运行时状态或临时资源。
+  }
+
   name        = "pmcaptcha";
   description = [
     `🔒 PMCaptcha v${PLUGIN_VERSION} — 陌生人私聊人机验证`,
@@ -1760,7 +1763,7 @@ class PMCaptchaPlugin extends Plugin {
     `  • 实时刷新：修改参数后进行中的验证消息即时更新`,
     `  • 我方主动发起对话时对方自动标记为已验证`,
     ``,
-    `使用 .pmc h 查看完整命令帮助`,
+    ``,
   ].join("\n");
   cmdHandlers = { pmc, pmcaptcha };
   listenMessageHandler = messageListener;

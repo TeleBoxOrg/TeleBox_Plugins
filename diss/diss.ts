@@ -1,10 +1,18 @@
 import { Plugin } from "@utils/pluginBase";
+import { getPrefixes } from "@utils/pluginManager";
 import { Api } from "teleproto";
 import axios from "axios";
 
+const prefixes = getPrefixes();
+const mainPrefix = prefixes[0];
+
 class DissPlugin extends Plugin {
+  cleanup(): void {
+    // 当前插件不持有需要在 reload 时额外释放的长期资源。
+  }
+
   // 插件描述
-  description = "🗣️ 儒雅随和版祖安语录\n\n使用 .diss 触发";
+  description = "🗣️ 儒雅随和版祖安语录\n\n使用 ${mainPrefix}diss 触发";
 
   // 命令处理器
   cmdHandlers = {

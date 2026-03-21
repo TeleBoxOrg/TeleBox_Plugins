@@ -173,11 +173,14 @@ ${translated}`,
 };
 
 class GtPlugin extends Plugin {
+  cleanup(): void {
+    // 当前插件不持有需要在 reload 时额外释放的长期资源。
+  }
+
   description: string = `
 谷歌翻译插件：
 - gt [文本] - 翻译为中文（默认）
 - gt en [文本] - 翻译为英文
-- gt help - 显示帮助信息
 
 也可回复一段消息后使用：
 - gt 或 gt en

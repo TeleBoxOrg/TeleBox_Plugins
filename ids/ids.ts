@@ -35,6 +35,10 @@ const help_text = `🆔 <b>用户信息查询插件</b>
 • @用户名、用户ID、频道ID、回复消息`;
 
 class IdsPlugin extends Plugin {
+  cleanup(): void {
+    // 当前插件不持有需要在 reload 时额外释放的长期资源。
+  }
+
   description: string = `用户信息查询插件\n\n${help_text}`;
 
   // 高精度采样点 (ID, Timestamp) - 2026最新校准
