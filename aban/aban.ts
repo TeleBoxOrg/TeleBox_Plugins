@@ -1,10 +1,15 @@
 import { Plugin } from "@utils/pluginBase";
+import { getPrefixes } from "@utils/pluginManager";
 import { getGlobalClient } from "@utils/globalClient";
 import { createDirectoryInAssets } from "@utils/pathHelpers";
 import { Api, TelegramClient } from "teleproto";
 import { Low } from "lowdb";
 import { JSONFile } from "lowdb/node";
 import path from "path";
+
+const prefixes = getPrefixes();
+const mainPrefix = prefixes[0];
+
 
 // ==================== 配置常量 ====================
 const CONFIG = {
@@ -19,14 +24,14 @@ const CONFIG = {
 // ==================== 帮助文本 ====================
 const HELP_TEXT = `<b>封禁管理</b>
 
-<code>.kick</code> 踢出
-<code>.ban</code> 封禁  
-<code>.unban</code> 解封
-<code>.mute [time]</code> 禁言 (如 60s/5m/1h/1d，不填则永久)
-<code>.unmute</code> 解禁言
-<code>.sb</code> 批量封禁
-<code>.unsb</code> 批量解封
-<code>.refresh</code> 刷新
+<code>${mainPrefix}kick</code> 踢出
+<code>${mainPrefix}ban</code> 封禁  
+<code>${mainPrefix}unban</code> 解封
+<code>${mainPrefix}mute [time]</code> 禁言 (如 60s/5m/1h/1d，不填则永久)
+<code>${mainPrefix}unmute</code> 解禁言
+<code>${mainPrefix}sb</code> 批量封禁
+<code>${mainPrefix}unsb</code> 批量解封
+<code>${mainPrefix}refresh</code> 刷新
 
 回复消息或@用户名`;
 
@@ -850,6 +855,9 @@ class CommandHandlers {
 
 // ==================== 插件主类 ====================
 class AbanPlugin extends Plugin {
+  cleanup(): void {
+  }
+
   description: string = HELP_TEXT;
 
   cmdHandlers: Record<string, (msg: Api.Message) => Promise<void>> = {

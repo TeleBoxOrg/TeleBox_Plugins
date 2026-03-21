@@ -1,6 +1,6 @@
 /**
  * UAI 插件 - 引用消息 AI 分析
- * 引用某用户/频道的消息，回复 .uai zj/fx 进行总结/分析
+ * 引用某用户/频道的消息，回复 ${mainPrefix}uai zj/fx 进行总结/分析
  * 支持消息折叠显示，保持AI回答中的HTML格式
  */
 import { Plugin } from "@utils/pluginBase";
@@ -319,8 +319,7 @@ const getHelpText = () => `⚙️ <b>UAI - 用户消息AI分析</b>
 • <code>${mainPrefix}uai 自定义名</code> - 使用自定义提示词
 
 <b>⚙️ 折叠显示:</b>
-• <code>${mainPrefix}uai collapse on</code> - 开启AI回答折叠
-• <code>${mainPrefix}uai collapse off</code> - 关闭AI回答折叠
+• <code>${mainPrefix}uai collapse on/off</code> - 开启或关闭 AI 回答折叠
 
 <b>🔌 供应商配置:</b>
 • <code>${mainPrefix}uai add &lt;名称&gt; &lt;url&gt; &lt;key&gt; &lt;type&gt;</code> - 添加供应商
@@ -344,12 +343,16 @@ const getHelpText = () => `⚙️ <b>UAI - 用户消息AI分析</b>
 • 数量格式: 50(最近50条)
 
 <b>🔍 使用示例:</b>
-1. 引用用户消息，回复: <code>.uai zj</code> - 总结当天消息
-2. 引用用户消息，回复: <code>.uai fx 100</code> - 分析最近100条
-3. 引用频道消息，回复: <code>.uai zj</code> - 总结频道消息`;
+1. 引用用户消息，回复: <code>${mainPrefix}uai zj</code> - 总结当天消息
+2. 引用用户消息，回复: <code>${mainPrefix}uai fx 100</code> - 分析最近100条
+3. 引用频道消息，回复: <code>${mainPrefix}uai zj</code> - 总结频道消息`;
 
 // ========== 插件类 ==========
 class UAIPlugin extends Plugin {
+    cleanup(): void {
+  }
+
+
     name = "uai";
     description = () => getHelpText();
 
@@ -522,7 +525,7 @@ class UAIPlugin extends Plugin {
 
             // 检查 AI 配置
             if (!db.data.default_provider || !db.data.providers[db.data.default_provider]) {
-                await msg.edit({ text: "❌ 请先配置 AI 供应商\n\n使用: <code>.uai add 名称 url key type</code>", parseMode: "html" });
+                await msg.edit({ text: "❌ 请先配置 AI 供应商\n\n使用: <code>${mainPrefix}uai add 名称 url key type</code>", parseMode: "html" });
                 return;
             }
 
@@ -664,10 +667,6 @@ class UAIPlugin extends Plugin {
             }
         }
     };
-
-    async cleanup(): Promise<void> {
-        // 无需清理资源
-    }
 }
 
 export default new UAIPlugin();

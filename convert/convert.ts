@@ -277,9 +277,12 @@ const help_text = toSimplified(`🎬 <b>视频转音频 AI 助手</b>
 
  • <b>其他命令:</b>
    <code>${mainPrefix}convert clear</code> (清理临时文件)
-   <code>${mainPrefix}convert help</code> (显示此帮助信息)`);
+   `);
 
 class ConvertPlugin extends Plugin {
+  cleanup(): void {
+  }
+
   description: string = help_text;
   
   cmdHandlers: Record<string, (msg: Api.Message) => Promise<void>> = {
@@ -313,7 +316,7 @@ class ConvertPlugin extends Plugin {
     const reply = await msg.getReplyMessage();
 
     if (!client || !reply || (!reply.document && !reply.video)) {
-      await msg.edit({ text: `❌ <b>使用错误</b>\n\n请回复一个视频消息后再使用此命令。\n\n发送 <code>${mainPrefix}convert help</code> 查看帮助。`, parseMode: "html" });
+      await msg.edit({ text: `❌ <b>使用错误</b>\n\n请回复一个视频消息后再使用此命令。\n\n请回复一个视频消息后再试。`, parseMode: "html" });
       return;
     }
     
@@ -346,7 +349,7 @@ class ConvertPlugin extends Plugin {
 
         if (useAi && userQuery) {
             const apiKey = GeminiConfigManager.get(GEMINI_API_KEY);
-            if (!apiKey) throw new Error("Gemini API Key 未设置。\n请使用 `.convert apikey <key>` 命令设置。");
+            if (!apiKey) throw new Error("Gemini API Key 未设置。\n请使用 <code>${mainPrefix}convert apikey &lt;key&gt;</code> 命令设置。");
 
             await msg.edit({ text: "🤖 AI 正在识别歌曲信息...", parseMode: "html" });
             const gemini = new GeminiClient(apiKey);
