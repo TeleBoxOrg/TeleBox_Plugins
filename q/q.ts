@@ -1,6 +1,11 @@
 import { Plugin } from "@utils/pluginBase";
+import { getPrefixes } from "@utils/pluginManager";
 import { conversation } from "@utils/conversation";
 import { Api } from "teleproto";
+
+const prefixes = getPrefixes();
+const mainPrefix = prefixes[0];
+
 
 const bots = ["QuotLyBot", "PagerMaid_QuotLyBot"];
 
@@ -77,7 +82,11 @@ const q = async (msg: Api.Message) => {
 };
 
 class QPlugin extends Plugin {
-  description: string = `.q [count] - 制作语录表情包（同时发送给 @QuotLyBot 和 @PagerMaid_QuotLyBot）, count: 可选，默认为 1, 表示消息的数量`;
+  cleanup(): void {
+    // 当前插件不持有需要在 reload 时额外释放的长期资源。
+  }
+
+  description: string = `${mainPrefix}q [count] - 制作语录表情包（同时发送给 @QuotLyBot 和 @PagerMaid_QuotLyBot）, count: 可选，默认为 1, 表示消息的数量`;
   cmdHandlers: Record<string, (msg: Api.Message) => Promise<void>> = {
     q,
   };

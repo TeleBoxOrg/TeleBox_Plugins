@@ -1,10 +1,14 @@
 import { Plugin } from "@utils/pluginBase";
+import { getPrefixes } from "@utils/pluginManager";
 import { getGlobalClient } from "@utils/globalClient";
 import { createDirectoryInAssets } from "@utils/pathHelpers";
 import { Api, TelegramClient, utils } from "teleproto";
 import { Low } from "lowdb";
 import { JSONFile } from "lowdb/node";
 import path from "path";
+
+const prefixes = getPrefixes();
+const mainPrefix = prefixes[0];
 
 // ==================== 配置常量 ====================
 const CONFIG = {
@@ -16,7 +20,7 @@ const CONFIG = {
 const HELP_TEXT = `<b>自动复读插件使用说明</b>
 
 <b>指令列表：</b>
-<code>.autorepeat on / off</code> - 在群组中使用，开启 / 关闭 当前群组
+<code>${mainPrefix}autorepeat on/off</code> - 在群组中使用，开启 / 关闭 当前群组
 <code>.autorepeat on / off [群组ID / @群组名 / https://t.me/群组名]</code> - 开启指定群组
 <code>.autorepeat allon</code> - 开启全部群组自动复读
 <code>.autorepeat alloff</code> - 关闭全部群组自动复读
@@ -25,7 +29,7 @@ const HELP_TEXT = `<b>自动复读插件使用说明</b>
 <code>.autorepeat</code> - 查看当前群组状态
 
 <b>高级用法：</b>
-• 从目标群组转发消息，回复该消息使用 <code>.autorepeat on</code> 可开启该群组
+• 从目标群组转发消息后，回复该消息并使用 <code>${mainPrefix}autorepeat on/off</code> 可切换该群组状态
 
 <b>复读规则：</b>
 • <b>触发条件</b>：默认5分钟内有5位不同用户发送完全相同的内容
@@ -658,7 +662,10 @@ class CommandHandlers {
 }
 
 // ==================== 插件主类 ====================
-class AutoRepeatPlugin extends Plugin {  // 修改类名
+class AutoRepeatPlugin extends Plugin {
+  cleanup(): void {
+  }
+  // 修改类名
   description: string = HELP_TEXT;
 
   cmdHandlers: Record<string, (msg: Api.Message) => Promise<void>> = {

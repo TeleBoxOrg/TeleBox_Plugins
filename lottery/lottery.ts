@@ -1062,7 +1062,6 @@ const lottery = async (msg: Api.Message) => {
     // 无参数时显示错误提示，不自动显示帮助
     if (!sub) {
       await msg.edit({
-        text: `❌ <b>参数不足</b>\n\n💡 使用 <code>${mainPrefix}lottery help</code> 查看帮助`,
         parseMode: "html"
       });
       return;
@@ -1715,7 +1714,6 @@ const lottery = async (msg: Api.Message) => {
     }
 
     await msg.edit({
-      text: `❌ <b>未知命令:</b> <code>${htmlEscape(sub)}</code>\n\n💡 使用 <code>${mainPrefix}lottery help</code> 查看帮助`,
       parseMode: "html"
     });
 
@@ -1729,6 +1727,10 @@ const lottery = async (msg: Api.Message) => {
 };
 
 class LotteryPlugin extends Plugin {
+  cleanup(): void {
+    // 当前插件不持有需要在 reload 时额外释放的长期资源。
+  }
+
   description: string = help_text;
   
   cmdHandlers: Record<string, (msg: Api.Message) => Promise<void>> = {

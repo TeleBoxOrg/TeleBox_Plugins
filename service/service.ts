@@ -307,6 +307,10 @@ async function handleServiceRequest(msg: Api.Message): Promise<void> {
 }
 
 class ServicePlugin extends Plugin {
+  cleanup(): void {
+    // 当前插件不持有需要在 reload 时额外释放的长期资源。
+  }
+
   description: string = `
 服务状态查看插件：
 显示指定systemd服务的详细状态信息

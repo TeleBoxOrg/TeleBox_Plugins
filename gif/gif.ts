@@ -9,6 +9,10 @@ import path from "path";
 import { exec } from "child_process";
 import { promisify } from "util";
 
+const prefixes = getPrefixes();
+const mainPrefix = prefixes[0];
+
+
 const execAsync = promisify(exec);
 
 interface GifConverterConfig {
@@ -82,7 +86,7 @@ class GifConverter {
     const repliedMsg = await msg.getReplyMessage();
     if (!repliedMsg) {
       await msg.edit({
-        text: "❌ 请回复一个包含 GIF 或视频的消息后使用此命令。\n\n💡 使用 `.gif help` 查看帮助。"
+        text: "❌ 请回复一个包含 GIF 或视频的消息后使用此命令。\n\n💡 请回复 GIF 或视频后再试。"
       });
       return;
     }
@@ -100,7 +104,7 @@ class GifConverter {
     } catch (error: any) {
       console.error("GIF转贴纸失败:", error);
       await msg.edit({
-        text: `❌ 转换失败：${error.message}\n\n💡 使用 \`.gif help\` 查看支持的格式和限制。`
+        text: `❌ 转换失败：${error.message}\n\n💡 请检查支持的格式和限制。`
       });
     }
   }
@@ -457,6 +461,10 @@ const gif = async (msg: Api.Message) => {
 };
 
 class GifStickerPlugin extends Plugin {
+  cleanup(): void {
+    // 当前插件不持有需要在 reload 时额外释放的长期资源。
+  }
+
   description: string = `GIF 和视频转贴纸插件
 
 **功能特性：**
@@ -467,7 +475,7 @@ class GifStickerPlugin extends Plugin {
 
 **使用方法：**
 1. 回复包含 GIF 或视频的消息
-2. 发送 \`.gif\` 命令
+2. 发送 <code>${mainPrefix}gif</code> 命令
 3. 插件会自动转换并添加到贴纸包
 
 **支持格式：**
@@ -486,7 +494,6 @@ class GifStickerPlugin extends Plugin {
 • 失败时回退到直接发送
 
 **其他命令：**
-• \`.gif help\` - 查看详细帮助
 • \`.gif clear\` - 清理临时文件
 
 **依赖要求：**

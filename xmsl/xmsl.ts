@@ -1,4 +1,5 @@
 import { Plugin } from '@utils/pluginBase';
+import { getPrefixes } from '@utils/pluginManager';
 import { Api } from 'teleproto';
 import axios from 'axios';
 import { createDirectoryInAssets, createDirectoryInTemp } from '@utils/pathHelpers';
@@ -11,6 +12,9 @@ import { promisify } from 'util';
 
 const execFileAsync = promisify(execFile);
 const XMSL_TEMP_DIR = createDirectoryInTemp('xmsl');
+
+const prefixes = getPrefixes();
+const mainPrefix = prefixes[0];
 
 type APIMode = 'openai' | 'gemini';
 
@@ -105,6 +109,8 @@ async function extractTgsFirstFrame(tgsBuffer: Buffer): Promise<Buffer | null> {
 		// 使用 rlottie-python 渲染 TGS 到 GIF
 		const pythonScript = `
 import sys
+
+
 from rlottie_python import LottieAnimation
 anim = LottieAnimation.from_tgs(sys.argv[1])
 anim.save_animation(sys.argv[2])
@@ -180,6 +186,10 @@ const SYSTEM_PROMPT = `你的任务是对用户的内容（文字或图片）做
 你：羡慕会吃`;
 
 class XMSLPlugin extends Plugin {
+  cleanup(): void {
+    // 当前插件不持有需要在 reload 时额外释放的长期资源。
+  }
+
 	name = 'xmsl';
 	private config: XMSLConfig = {
 		apiMode: 'openai',
@@ -195,12 +205,12 @@ class XMSLPlugin extends Plugin {
 
 <b>📋 命令列表</b>
 
-• <code>.xmsl [内容]</code> 或 <code>.xm [内容]</code> - 生成羡慕语句
-• <code>.xmsl</code>回复图片/贴纸 - 识别图片生成羡慕语句
-• <code>.xmsl</code> 或 <code>.xm</code> - 显示状态
-• <code>.xm set [key] [value]</code> - 修改配置
-• <code>.xm show</code> - 显示配置
-• <code>.xm help</code> - 显示帮助
+• <code>${mainPrefix}xmsl [内容]</code> 或 <code>${mainPrefix}xm [内容]</code> - 生成羡慕语句
+• <code>${mainPrefix}xmsl</code>回复图片/贴纸 - 识别图片生成羡慕语句
+• <code>${mainPrefix}xmsl</code> 或 <code>${mainPrefix}xm</code> - 显示状态
+• <code>${mainPrefix}xm set [key] [value]</code> - 修改配置
+• <code>${mainPrefix}xm show</code> - 显示配置
+
 <b>🖼️ 支持的媒体类型</b>
 • 图片 (jpeg/png/gif)
 • 静态贴纸 (webp)
@@ -466,7 +476,7 @@ class XMSLPlugin extends Plugin {
 	private async handleSet(msg: Api.Message, args: string[]) {
 		if (args.length < 2) {
 			await msg.edit({
-				text: '❌ 参数错误\n使用: <code>.xm set [key] [value]</code>',
+				text: '❌ 参数错误\n使用: <code>${mainPrefix}xm set [key] [value]</code>',
 				parseMode: 'html',
 			});
 			return;
@@ -530,7 +540,7 @@ ${modeEmoji} 模式: ${this.config.apiMode}
 📍 地址: ${this.htmlEscape(this.config.baseUrl.replace(/\/$/, ''))}
 🤖 模型: ${this.config.model}
 
-使用 <code>.xm help</code> 查看帮助`;
+使用  查看帮助`;
 
 		await msg.edit({ text: statusText, parseMode: 'html' });
 	}
@@ -543,7 +553,7 @@ key: ${this.config.apiKey ? '✅ 已设置' : '❌ 未设置'}
 url: <code>${this.htmlEscape(this.config.baseUrl.replace(/\/$/, ''))}</code>
 model: <code>${this.htmlEscape(this.config.model)}</code>
 
-使用 <code>.xm set [key] [value]</code> 修改配置`;
+使用 <code>${mainPrefix}xm set [key] [value]</code> 修改配置`;
 
 		await msg.edit({ text: configText, parseMode: 'html' });
 	}
@@ -551,7 +561,7 @@ model: <code>${this.htmlEscape(this.config.model)}</code>
 	private async askAI(msg: Api.Message, question: string, imageInfo?: MediaInfo) {
 		if (!this.config.apiKey) {
 			await msg.edit({
-				text: '❌ 未设置 API 密钥\n使用: <code>.xm set key [你的密钥]</code>',
+				text: '❌ 未设置 API 密钥\n使用: <code>${mainPrefix}xm set key [你的密钥]</code>',
 				parseMode: 'html',
 			});
 			return;
@@ -559,7 +569,7 @@ model: <code>${this.htmlEscape(this.config.model)}</code>
 
 		if (!this.config.model) {
 			await msg.edit({
-				text: '❌ 未设置模型\n使用: <code>.xm set model [模型名]</code>',
+				text: '❌ 未设置模型\n使用: <code>${mainPrefix}xm set model [模型名]</code>',
 				parseMode: 'html',
 			});
 			return;

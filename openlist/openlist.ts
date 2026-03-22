@@ -51,6 +51,10 @@ const helpText = `⚙️ <b>OpenList 管理插件</b>
 `;
 
 class OpenListPlugin extends Plugin {
+  cleanup(): void {
+    // 当前插件不持有需要在 reload 时额外释放的长期资源。
+  }
+
   description: string = `\nOpenList 管理\n\n${helpText}`;
   cmdHandlers: Record<string, (msg: Api.Message) => Promise<void>> = {
     openlist: async (msg: Api.Message) => {

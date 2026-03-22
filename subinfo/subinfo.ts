@@ -1,10 +1,15 @@
 import { Plugin } from "@utils/pluginBase";
+import { getPrefixes } from "@utils/pluginManager";
 import { Api } from "teleproto";
 import { getGlobalClient } from "@utils/globalClient";
 import axios from "axios";
 import * as yaml from "js-yaml";
 import * as cheerio from "cheerio";
 import dayjs from "dayjs";
+
+const prefixes = getPrefixes();
+const mainPrefix = prefixes[0];
+
 
 // --- 静态配置 ---
 
@@ -286,14 +291,18 @@ async function getWebsiteInfo(url: string): Promise<{ website: string | null; we
 }
 
 class SubinfoPlugin extends Plugin {
+  cleanup(): void {
+    // 当前插件不持有需要在 reload 时额外释放的长期资源。
+  }
+
   description =
     `📈 <b>订阅链接多维度查询工具</b>
 
 <b>使用方法：</b>
-• <code>.subinfo [链接]</code> - 详细查询
-• <code>.subinfo txt [链接]</code> - 详细查询，以TXT文件输出
-• <code>.cha [链接]</code> - 简洁查询
-• <code>.cha txt [链接]</code> - 简洁查询，以TXT文件输出
+• <code>${mainPrefix}subinfo [链接]</code> - 详细查询
+• <code>${mainPrefix}subinfo txt [链接]</code> - 详细查询，以TXT文件输出
+• <code>${mainPrefix}cha [链接]</code> - 简洁查询
+• <code>${mainPrefix}cha txt [链接]</code> - 简洁查询，以TXT文件输出
 • <b>你也可以使用以上命令回复某条包含订阅链接的消息进行查询</b>
 
 <b>功能特性：</b>
@@ -653,9 +662,9 @@ class SubinfoPlugin extends Plugin {
        await msg.edit({
         text: "❌ <b>无效的参数</b>\n\n" + 
               "💡 使用方法：\n" +
-              "• <code>.cha [订阅链接]</code> - 查询订阅链接\n" +
-              "• <code>.cha txt [订阅链接]</code> - **以TXT文件输出**\n" +
-              "• 回复包含链接的消息并发送 <code>.cha</code> 或 <code>.cha txt</code>",
+              "• <code>${mainPrefix}cha [订阅链接]</code> - 查询订阅链接\n" +
+              "• <code>${mainPrefix}cha txt [订阅链接]</code> - **以TXT文件输出**\n" +
+              "• 回复包含链接的消息并发送 <code>${mainPrefix}cha</code> 或 <code>${mainPrefix}cha txt</code>",
         parseMode: "html"
        });
        return;

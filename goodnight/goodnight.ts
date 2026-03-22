@@ -1,9 +1,13 @@
 import { Plugin } from "@utils/pluginBase";
+import { getPrefixes } from "@utils/pluginManager";
 import { Api } from "teleproto";
 import { JSONFilePreset } from "lowdb/node";
 import { createDirectoryInAssets } from "@utils/pathHelpers";
 import * as path from "path";
 import dayjs from "dayjs";
+const prefixes = getPrefixes();
+const mainPrefix = prefixes[0];
+
 import { getGlobalClient } from "@utils/globalClient";
 
 // 定义数据库结构
@@ -25,10 +29,9 @@ class GreetingPlugin extends Plugin {
         const help = `🌙 <b>早晚安统计插件</b>\n\n` +
                      `自动回复早晚安并统计排名。默认关闭，需手动开启。\n\n` +
                      `<b>指令:</b>\n` +
-                     `• <code>.goodnight on</code> - 开启统计\n` +
-                     `• <code>.goodnight off</code> - 关闭统计\n` +
-                     `• <code>.goodnight utc+8</code> - 设置时区 (支持 utc+8, utc-5 格式)\n` +
-                     `• <code>.goodnight</code> - 查看状态`;
+                     `• <code>${mainPrefix}goodnight on/off</code> - 开启或关闭统计\n` +
+                     `• <code>${mainPrefix}goodnight utc+8</code> - 设置时区 (支持 utc+8, utc-5 格式)\n` +
+                     `• <code>${mainPrefix}goodnight</code> - 查看状态`;
         return help;
     };
     
@@ -43,6 +46,11 @@ class GreetingPlugin extends Plugin {
         super();
         this.initDB();
     }
+
+  cleanup(): void {
+    // 引用重置：清空实例级 db / cache / manager 引用，便于 reload 后重新初始化。
+    this.db = null;
+  }
 
     // 初始化数据库
     private async initDB() {
@@ -158,10 +166,9 @@ class GreetingPlugin extends Plugin {
                          `当前时区: UTC${tzSign}${groupData.timezone}\n` +
                          `当前时间: ${currentTzTime}\n\n` +
                          `<b>指令:</b>\n` +
-                         `• <code>.goodnight on</code> - 开启统计\n` +
-                         `• <code>.goodnight off</code> - 关闭统计\n` +
-                         `• <code>.goodnight utc+8</code> - 设置时区\n` +
-                         `• <code>.goodnight</code> - 查看状态`;
+                         `• <code>${mainPrefix}goodnight on/off</code> - 开启或关闭统计\n` +
+                         `• <code>${mainPrefix}goodnight utc+8</code> - 设置时区\n` +
+                         `• <code>${mainPrefix}goodnight</code> - 查看状态`;
             await msg.edit({ text: help, parseMode: "html" });
         }
     }

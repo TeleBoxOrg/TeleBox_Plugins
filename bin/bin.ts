@@ -133,6 +133,10 @@ async function fetchFromBincheck(bin: string): Promise<Partial<{ scheme: string;
 }
 
 class BinPlugin extends Plugin {
+  cleanup(): void {
+    // 当前插件不持有需要在 reload 时额外释放的长期资源。
+  }
+
   description: string = `BIN 查询插件\n\n${help_text}`;
   cmdHandlers: Record<string, (msg: Api.Message) => Promise<void>> = {
     bin: async (msg: Api.Message) => {

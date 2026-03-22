@@ -584,7 +584,7 @@ const keyword = async (msg: Api.Message) => {
 <code>keyword alias</code> - 查看当前群组继承设置
 <code>keyword alias 123456</code> - 设置继承其他群组的关键词
 <code>keyword alias rm</code> - 删除继承设置
-<code>keyword help</code> - 显示此帮助信息
+
 
 <b>📝 添加关键词任务格式：</b>
 <code>keyword 关键词内容
@@ -823,7 +823,10 @@ reply delete ban3600</code>
 };
 
 class KeywordPlugin extends Plugin {
-  description: string = `关键词回复管理 .keyword h 查看帮助`;
+  cleanup(): void {
+  }
+
+  description: string = `关键词回复管理`;
   cmdHandlers: Record<string, (msg: Api.Message) => Promise<void>> = {
     keyword,
   };

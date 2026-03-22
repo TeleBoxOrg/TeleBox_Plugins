@@ -19,6 +19,18 @@ const mainPrefix = prefixes[0];
 // 机器人用户名
 const BOT_USERNAME = "FinelyGirlsBot";
 
+type PendingReplyListener = {
+  client: any;
+  handler: (event: any) => Promise<void>;
+  eventBuilder: NewMessage;
+  timeoutId: NodeJS.Timeout;
+};
+
+const runtime = {
+  pendingDeleteTimers: new Set<NodeJS.Timeout>(),
+  pendingReplyListeners: new Set<PendingReplyListener>(),
+};
+
 // 帮助文本
 const help_text = `🎨 <b>妹子图片插件</b>
 
@@ -53,7 +65,9 @@ async function waitForBotReply(
 ): Promise<Api.Message | null> {
   return new Promise((resolve) => {
     let timeoutId: NodeJS.Timeout | null = null;
-    let eventHandler: ((event: any) => void) | null = null;
+    let eventHandler: ((event: any) => Promise<void>) | null = null;
+    let eventBuilder: NewMessage | null = null;
+    let pendingListener: PendingReplyListener | null = null;
     let isResolved = false;
 
     const cleanup = (result: Api.Message | null) => {
@@ -62,22 +76,29 @@ async function waitForBotReply(
       
       if (timeoutId) {
         clearTimeout(timeoutId);
+        runtime.pendingDeleteTimers.delete(timeoutId);
         timeoutId = null;
       }
       
       if (eventHandler) {
         try {
-          client.removeEventHandler(eventHandler, new NewMessage({}));
+          client.removeEventHandler(eventHandler, eventBuilder || new NewMessage({}));
         } catch (e) {
           console.warn('[botmzt] 移除事件监听器失败:', e);
         }
         eventHandler = null;
+      }
+
+      if (pendingListener) {
+        runtime.pendingReplyListeners.delete(pendingListener);
+        pendingListener = null;
       }
       
       resolve(result);
     };
 
     timeoutId = setTimeout(() => cleanup(null), timeout);
+    runtime.pendingDeleteTimers.add(timeoutId);
 
     eventHandler = async (event: any) => {
       try {
@@ -119,7 +140,18 @@ async function waitForBotReply(
     };
 
     try {
-      client.addEventHandler(eventHandler, new NewMessage({}));
+      eventBuilder = new NewMessage({});
+      client.addEventHandler(eventHandler, eventBuilder);
+      if (timeoutId) {
+        const listener: PendingReplyListener = {
+          client,
+          handler: eventHandler,
+          eventBuilder,
+          timeoutId,
+        };
+        pendingListener = listener;
+        runtime.pendingReplyListeners.add(listener);
+      }
     } catch (error) {
       console.error('[botmzt] 添加事件监听器失败:', error);
       cleanup(null);
@@ -419,6 +451,22 @@ async function sendImageWithSpoiler(msg: Api.Message, command: string): Promise<
 }
 
 class MztNewPlugin extends Plugin {
+  cleanup(): void {
+    // 真实资源清理：释放插件持有的定时器、监听器、运行时状态或临时资源。
+    for (const timer of runtime.pendingDeleteTimers) {
+      clearTimeout(timer);
+    }
+    runtime.pendingDeleteTimers.clear();
+    for (const listener of runtime.pendingReplyListeners) {
+      clearTimeout(listener.timeoutId);
+      try {
+        listener.client.removeEventHandler(listener.handler, listener.eventBuilder);
+      } catch (error) {
+        console.warn("[botmzt] cleanup 移除事件监听器失败:", error);
+      }
+    }
+    runtime.pendingReplyListeners.clear();
+  }
   description: string = `妹子图片插件 - 从 ${BOT_USERNAME} 获取各类图片\n\n${help_text}`;
 
   cmdHandlers = {
@@ -465,8 +513,11 @@ class MztNewPlugin extends Plugin {
             }
           } catch (error) {
             // 忽略删除错误
+          } finally {
+            runtime.pendingDeleteTimers.delete(deleteTimer);
           }
         }, 30000);
+        runtime.pendingDeleteTimers.add(deleteTimer);
 
       } catch (error: any) {
         console.error("[mztnew] 显示设置失败:", error);

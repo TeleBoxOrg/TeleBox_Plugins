@@ -116,7 +116,6 @@ const help_text = `🌤️ <b>天气查询插件</b>
 
 <b>🔧 使用方法:</b>
 • <code>${mainPrefix}weather &lt;城市名&gt;</code> - 查询指定城市天气
-• <code>${mainPrefix}weather help</code> - 显示此帮助
 
 <b>💡 使用示例:</b>
 • <code>${mainPrefix}weather 北京</code> - 查询北京天气
@@ -135,6 +134,10 @@ const help_text = `🌤️ <b>天气查询插件</b>
 • 数据来源：Open-Meteo (免费、无需API密钥)`;
 
 class WeatherPlugin extends Plugin {
+  cleanup(): void {
+    // 当前插件不持有需要在 reload 时额外释放的长期资源。
+  }
+
   description: string = help_text;
   private apiUrl: string = "https://api.open-meteo.com/v1";
   private geocodingUrl: string = "https://geocoding-api.open-meteo.com/v1/search";
@@ -163,7 +166,6 @@ class WeatherPlugin extends Plugin {
       // 无参数时显示错误提示
       if (args.length === 0) {
         await msg.edit({
-          text: `❌ <b>参数不足</b>\n\n💡 使用 <code>${mainPrefix}weather help</code> 查看帮助\n\n<b>快速示例:</b>\n• <code>${mainPrefix}weather 北京</code>\n• <code>${mainPrefix}weather Shanghai</code>\n• <code>${mainPrefix}weather New York</code>`,
           parseMode: "html"
         });
         return;

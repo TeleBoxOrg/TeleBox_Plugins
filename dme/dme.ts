@@ -1091,7 +1091,6 @@ const help_text = `🗑️ <b>智能防撤回删除插件</b>
 <b>可用命令：</b>
 • <code>${mainPrefix}dme [数量]</code> - 快速删除指定数量的消息
 • <code>${mainPrefix}dme -f [数量]</code> - 防撤回模式（替换媒体后删除）
-• <code>${mainPrefix}dme help</code> - 显示帮助信息
 
 <b>智能适配：</b>
 • 自动检测禁止转发和复制的群组
@@ -1157,7 +1156,6 @@ const dme = async (msg: Api.Message) => {
     
     if (isNaN(userRequestedCount) || userRequestedCount <= 0) {
       await msg.edit({
-        text: `❌ <b>参数错误:</b> 数量必须是正整数\n\n💡 使用 <code>${mainPrefix}dme help</code> 查看帮助`,
         parseMode: "html"
       });
       return;
@@ -1281,6 +1279,10 @@ const dme = async (msg: Api.Message) => {
 };
 
 class DmePlugin extends Plugin {
+  cleanup(): void {
+    // 当前插件不持有需要在 reload 时额外释放的长期资源。
+  }
+
   description: string = `智能防撤回删除插件\n\n${help_text}`;
   cmdHandlers: Record<string, (msg: Api.Message) => Promise<void>> = {
     dme,

@@ -39,6 +39,10 @@ const help_text = `👮 <b>一键 AT 管理员</b>
 • 支持回复消息时召唤管理员`;
 
 class AtAdminsPlugin extends Plugin {
+  cleanup(): void {
+    // 当前插件不持有需要在 reload 时额外释放的长期资源。
+  }
+
   description: string = help_text;
   
   cmdHandlers: Record<string, (msg: Api.Message, trigger?: Api.Message) => Promise<void>> = {

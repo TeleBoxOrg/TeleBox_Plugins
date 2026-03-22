@@ -1,7 +1,11 @@
 import { Plugin } from "@utils/pluginBase";
 import { Api } from "teleproto";
 import { getGlobalClient } from "@utils/globalClient";
+import { getPrefixes } from "@utils/pluginManager";
 import bigInt from "big-integer";
+
+const prefixes = getPrefixes();
+const mainPrefix = prefixes[0];
 
 // HTML转义函数（必需）
 const htmlEscape = (text: string): string => 
@@ -16,7 +20,7 @@ const helpText = `📌 <b>恢复置顶插件</b>
 <b>功能：</b>自动恢复管理员误取消的置顶消息
 
 <b>命令：</b>
-• <code>.restore_pin</code> - 自动恢复所有可恢复的置顶消息
+• <code>${mainPrefix}restore_pin</code> - 自动恢复所有可恢复的置顶消息
 
 <b>使用说明：</b>
 1. 仅在群组中可用
@@ -24,6 +28,10 @@ const helpText = `📌 <b>恢复置顶插件</b>
 3. 自动扫描并恢复最近取消的置顶消息`;
 
 class RestorePinPlugin extends Plugin {
+  cleanup(): void {
+    // 当前插件不持有需要在 reload 时额外释放的长期资源。
+  }
+
   name = "restore_pin";
   description = helpText;
 

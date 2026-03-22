@@ -1,8 +1,12 @@
 import { Plugin } from "@utils/pluginBase";
+import { getPrefixes } from "@utils/pluginManager";
 import { Api } from "teleproto";
 import { getGlobalClient } from "@utils/globalClient";
 
 // HTML转义函数
+const prefixes = getPrefixes();
+const mainPrefix = prefixes[0];
+
 const htmlEscape = (text: string): string => 
   text.replace(/[&<>"']/g, m => ({ 
     '&': '&amp;', '<': '&lt;', '>': '&gt;', 
@@ -27,6 +31,10 @@ const parseTimeString = (timeStr: string): number => {
 };
 
 class PortballPlugin extends Plugin {
+  cleanup(): void {
+    // 当前插件不持有需要在 reload 时额外释放的长期资源。
+  }
+
   name = "portball";
   description = "🔇 临时禁言工具 - 回复消息实现XX秒禁言";
   
@@ -37,7 +45,7 @@ class PortballPlugin extends Plugin {
   private readonly helpText = `🔇 <b>Portball 临时禁言工具</b>
 
 <b>用法：</b>
-<code>.portball [理由] 时间</code>
+<code>${mainPrefix}portball [理由] 时间</code>
 
 <b>时间单位：</b>
 • s - 秒 (默认)
@@ -46,10 +54,10 @@ class PortballPlugin extends Plugin {
 • d - 天
 
 <b>示例：</b>
-• <code>.portball 广告 5m</code> - 禁言5分钟
-• <code>.portball 10m</code> - 禁言10分钟
-• <code>.portball 刷屏 1h</code> - 禁言1小时
-• <code>.portball 300</code> - 禁言300秒
+• <code>${mainPrefix}portball 广告 5m</code> - 禁言5分钟
+• <code>${mainPrefix}portball 10m</code> - 禁言10分钟
+• <code>${mainPrefix}portball 刷屏 1h</code> - 禁言1小时
+• <code>${mainPrefix}portball 300</code> - 禁言300秒
 
 <b>注意：</b>
 • 需要回复目标用户的消息

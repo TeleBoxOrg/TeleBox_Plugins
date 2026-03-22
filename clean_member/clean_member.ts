@@ -560,7 +560,6 @@ const clean_member = async (msg: Api.Message) => {
   const mode = (args[0] || "").toLowerCase();
   if (!mode) {
     await msg.edit({
-      text: `❌ <b>参数不足</b>\n\n💡 使用 <code>${mainPrefix}clean_member help</code> 查看帮助`,
       parseMode: "html"
     });
     return;
@@ -639,7 +638,6 @@ const clean_member = async (msg: Api.Message) => {
     day = 0;
   } else {
     await msg.edit({
-      text: `❌ <b>无效模式</b>\n\n请输入1-5之间的数字\n💡 使用 <code>${mainPrefix}clean_member help</code> 查看帮助`,
       parseMode: "html",
     });
     return;
@@ -896,6 +894,10 @@ const clean_member = async (msg: Api.Message) => {
 };
 
 class CleanMemberPlugin extends Plugin {
+  cleanup(): void {
+    // 当前插件不持有需要在 reload 时额外释放的长期资源。
+  }
+
   description: string = getHelpText();
   cmdHandlers: Record<string, (msg: Api.Message) => Promise<void>> = {
     clean_member

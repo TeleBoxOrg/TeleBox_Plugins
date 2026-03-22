@@ -144,6 +144,10 @@ const help = `🧩 <b>Sub-Store 管理</b>
 • <code>${mainPrefix}sub restore</code> - 恢复`;
 
 class SubStorePlugin extends Plugin {
+  cleanup(): void {
+    // 当前插件不持有需要在 reload 时额外释放的长期资源。
+  }
+
   description = `Sub-Store 管理\n\n${help}`;
 
   cmdHandlers: Record<string, (msg: Api.Message) => Promise<void>> = {

@@ -122,7 +122,6 @@ const help_text = `⭐ <b>贴纸收藏插件</b>
 • <code>${mainPrefix}sticker to &lt;包名&gt;</code> - (回复贴纸时) 临时保存到指定包。
 • <code>${mainPrefix}sticker cancel</code> - 取消设置的默认贴纸包。
 • <code>${mainPrefix}sticker</code> - (不回复贴纸) 查看当前配置。
-• <code>${mainPrefix}sticker help</code> - 显示此帮助信息。
 
 <b>💡 使用示例:</b>
 • 回复贴纸, 发送 <code>${mainPrefix}sticker</code>
@@ -137,6 +136,9 @@ const help_text = `⭐ <b>贴纸收藏插件</b>
 `;
 
 class StickerPlugin extends Plugin {
+  cleanup(): void {
+  }
+
   description: string = help_text;
 
   cmdHandlers: Record<string, (msg: Api.Message) => Promise<void>> = {
@@ -297,7 +299,6 @@ class StickerPlugin extends Plugin {
             text += `未设置默认贴纸包，且您没有用户名，收藏前必须先设置一个默认包。`;
         }
       }
-      text += `\n\n使用 <code>${htmlEscape(mainPrefix)}sticker help</code> 查看更多指令。`;
       await msg.edit({ text, parseMode: "html", linkPreview: false });
       return;
     }

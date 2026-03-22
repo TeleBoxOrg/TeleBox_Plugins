@@ -1,6 +1,10 @@
 import { Plugin } from "@utils/pluginBase";
 import { Api } from "teleproto";
 import { getGlobalClient } from "@utils/globalClient";
+import { getPrefixes } from "@utils/pluginManager";
+
+const prefixes = getPrefixes();
+const mainPrefix = prefixes[0];
 
 // HTML转义函数（必需）
 const htmlEscape = (text: string): string => 
@@ -12,16 +16,20 @@ const htmlEscape = (text: string): string =>
 const help_text = `📋 <b>listusernames - 列出公开群组/频道</b>
 
 <b>命令格式：</b>
-<code>.listusernames</code>
+<code>${mainPrefix}listusernames</code>
 
 <b>功能说明：</b>
 • 列出所有属于自己的公开群组/频道
 • 所有用户均可使用
 
 <b>使用示例：</b>
-<code>.listusernames</code>`;
+<code>${mainPrefix}listusernames</code>`;
 
 class ListUsernamesPlugin extends Plugin {
+  cleanup(): void {
+    // 当前插件不持有需要在 reload 时额外释放的长期资源。
+  }
+
   description = help_text;
   
   cmdHandlers = {

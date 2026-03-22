@@ -371,6 +371,10 @@ async function relayParseResult(
 }
 
 class ParseHubPlugin extends Plugin {
+  cleanup(): void {
+    // 当前插件不持有需要在 reload 时额外释放的长期资源。
+  }
+
   description: string = `\n${pluginName}\n\n${helpText}`;
   cmdHandlers: Record<string, (msg: Api.Message) => Promise<void>> = {
     parsehub: async (msg: Api.Message) => {

@@ -274,6 +274,7 @@ class CosplayScraper {
 }
 
 async function cleanup(files: string[]): Promise<void> {
+    // 真实资源清理：释放插件持有的定时器、监听器、运行时状态或临时资源。
   await Promise.allSettled(
     files.map(async (filePath) => {
       try {
@@ -397,6 +398,9 @@ async function sendImages(
 }
 
 class CosplayPlugin extends Plugin {
+  cleanup(): void {
+    // 当前插件不持有需要在 reload 时额外释放的长期资源。
+  }
   private scraper: CosplayScraper | null = null;
   private initPromise: Promise<void>;
 

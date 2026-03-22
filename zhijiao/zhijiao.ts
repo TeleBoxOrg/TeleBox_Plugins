@@ -140,6 +140,10 @@ function formatTossLine(index: number, toss?: TossResult): string {
 }
 
 class ZhijiaoPlugin extends Plugin {
+  cleanup(): void {
+    // 当前插件不持有需要在 reload 时额外释放的长期资源。
+  }
+
   description: string = `\n掷筊\n强随机 使用 笅杯卦辞廿七句\n${help_text}`;
   cmdHandlers: Record<
     string,

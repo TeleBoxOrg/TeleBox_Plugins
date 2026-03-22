@@ -27,7 +27,7 @@ const help_text = `🗞️ <b>每日新闻插件</b>
 
 <b>🔧 使用方法:</b>
 • <code>${mainPrefix}news</code> - 获取完整的每日资讯
-• <code>${mainPrefix}news help</code> - 显示此帮助信息
+
 
 <b>💡 示例:</b>
 • <code>${mainPrefix}news</code> - 获取今日完整资讯包
@@ -75,6 +75,10 @@ interface NewsResponse {
 }
 
 class NewsPlugin extends Plugin {
+  cleanup(): void {
+    // 当前插件不持有需要在 reload 时额外释放的长期资源。
+  }
+
   description: string = `🔧 <b>NEWS</b>
 
 <b>📝 功能描述:</b>
@@ -121,7 +125,7 @@ class NewsPlugin extends Plugin {
 
         // 未知子命令
         await msg.edit({
-          text: `❌ <b>未知命令:</b> <code>${htmlEscape(sub)}</code>\n\n💡 使用 <code>${mainPrefix}news help</code> 查看帮助`,
+          text: `❌ <b>未知命令:</b> <code>${htmlEscape(sub)}</code>`,
           parseMode: "html"
         });
 

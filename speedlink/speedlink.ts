@@ -954,6 +954,10 @@ const speedtest = async (msg: Api.Message): Promise<void> => {
 
 // --- Plugin class ---
 class SpeedlinkPlugin extends Plugin {
+  cleanup(): void {
+    // 当前插件不持有需要在 reload 时额外释放的长期资源。
+  }
+
   description: string = `⚡️ 网络速度测试工具 (多服务器)\n\n${HELP_TEXT}`;
   cmdHandlers: Record<string, (msg: Api.Message) => Promise<void>> = {
     speedlink: speedtest,

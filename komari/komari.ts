@@ -648,6 +648,9 @@ async function handleKomariRequest(msg: Api.Message): Promise<void> {
 }
 
 class KomariPlugin extends Plugin {
+  cleanup(): void {
+  }
+
   description: string = `
 Komari 服务器监控插件：
 基于 Komari API 获取服务器和节点状态信息

@@ -8,6 +8,10 @@ import { JSONFilePreset } from "lowdb/node";
 import * as path from "path";
 import _ from "lodash";
 
+const prefixes = getPrefixes();
+const mainPrefix = prefixes[0];
+
+
 // ==========================================
 // 🛠️ 内置 Pangu 核心逻辑 (无需外部依赖)
 // ==========================================
@@ -153,13 +157,13 @@ const help_text = `⚙️ <b>pangu - 为消息添加「盘古之白」</b>
 • 智能保护链接不被破坏
 
 <b>🔧 使用方法:</b>
-• <code>.pangu</code> - 查看当前状态/显示帮助
-• <code>.pangu [文本]</code> - 测试格式化效果
-• <code>.pangu on/off</code> - 在当前会话开启/关闭
-• <code>.pangu global on/off</code> - 开启/关闭全局模式
-• <code>.pangu whitelist add/remove</code> - 将当前会话加入/移出白名单
-• <code>.pangu blacklist add/remove</code> - 将当前会话加入/移出黑名单
-• <code>.pangu stats</code> - 查看统计信息
+• <code>${mainPrefix}pangu</code> - 查看当前状态/显示帮助
+• <code>${mainPrefix}pangu [文本]</code> - 测试格式化效果
+• <code>${mainPrefix}pangu on/off</code> - 在当前会话开启/关闭
+• <code>${mainPrefix}pangu global on/off</code> - 开启/关闭全局模式
+• <code>${mainPrefix}pangu whitelist add/remove</code> - 将当前会话加入/移出白名单
+• <code>${mainPrefix}pangu blacklist add/remove</code> - 将当前会话加入/移出黑名单
+• <code>${mainPrefix}pangu stats</code> - 查看统计信息
 
 <b>📊 优先级说明:</b>
 ⚪ 白名单 > ⚫ 黑名单 > 💬 会话设置 > 🌐 全局模式`;
@@ -180,6 +184,11 @@ interface PanguConfig {
 
 // 插件主体
 class PanguPlugin extends Plugin {
+  cleanup(): void {
+    // 引用重置：清空实例级 db / cache / manager 引用，便于 reload 后重新初始化。
+    this.db = null;
+  }
+
   name = "pangu";
   description: string = `📝 Pangu 消息格式化插件\n\n${help_text}`;
   private db: any;
@@ -419,7 +428,7 @@ class PanguPlugin extends Plugin {
       });
     } else {
       await msg.edit({
-        text: `❌ 无效的参数\n\n使用：<code>.pangu global on</code> 或 <code>.pangu global off</code>`,
+        text: `❌ 无效的参数\n\n使用：<code>${mainPrefix}pangu global on/off</code>`,
         parseMode: "html"
       });
     }
@@ -429,7 +438,7 @@ class PanguPlugin extends Plugin {
   private async handleTest(msg: Api.Message, text: string): Promise<void> {
     if (!text.trim()) {
       await msg.edit({
-        text: `❌ 请提供测试文本\n\n使用：<code>.pangu 你好World123测试</code>`,
+        text: `❌ 请提供测试文本\n\n使用：<code>${mainPrefix}pangu 你好World123测试</code>`,
         parseMode: "html"
       });
       return;

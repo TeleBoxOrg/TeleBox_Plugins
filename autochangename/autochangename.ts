@@ -12,8 +12,11 @@ import { JSONFilePreset } from "lowdb/node";
 import { cronManager } from "@utils/cronManager";
 import * as path from "path";
 
+const prefixes = getPrefixes();
+const mainPrefix = prefixes[0];
+
+
 // === 配置与工具函数 ===
-const [mainPrefix] = getPrefixes();
 const htmlEscape = (text: string): string => 
   text.replace(/[&<>"']/g, m => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#x27;'}[m] || m));
 
@@ -24,14 +27,12 @@ const help_text = `🤖 <b>自动昵称更新插件 v2.2</b>
 
 <b>📌 快速开始（按顺序执行）：</b>
 1️⃣ <code>${mainPrefix}acn save</code> - 保存您当前的昵称（首次使用必须）
-2️⃣ <code>${mainPrefix}acn on</code> - 开启自动更新功能
+2️⃣ <code>${mainPrefix}acn on/off</code> - 开启或关闭自动更新功能
 3️⃣ <code>${mainPrefix}acn mode</code> - 切换显示模式（时间/文案/混合）
 
 <b>🎯 基础命令：</b>
-• <code>${mainPrefix}acn help</code> - 显示此帮助信息
 • <code>${mainPrefix}acn save</code> - 保存当前昵称为原始昵称
-• <code>${mainPrefix}acn on</code> 或 <code>${mainPrefix}acn enable</code> - 开启自动更新
-• <code>${mainPrefix}acn off</code> 或 <code>${mainPrefix}acn disable</code> - 关闭自动更新
+• <code>${mainPrefix}acn on/off</code> 或 <code>${mainPrefix}acn enable/disable</code> - 开启或关闭自动更新
 • <code>${mainPrefix}acn mode</code> - 循环切换显示模式
 • <code>${mainPrefix}acn status</code> - 查看当前运行状态
 
@@ -85,11 +86,11 @@ const help_text = `🤖 <b>自动昵称更新插件 v2.2</b>
 <code>${mainPrefix}acn save</code>
 <code>${mainPrefix}acn text add 工作中</code>
 <code>${mainPrefix}acn text add 休息中</code>
-<code>${mainPrefix}acn emoji on</code> (开启时钟emoji)
-<code>${mainPrefix}acn showtz on</code> (显示时区)
+<code>${mainPrefix}acn emoji on/off</code> (开启或关闭时钟emoji)
+<code>${mainPrefix}acn showtz on/off</code> (显示或隐藏时区)
 <code>${mainPrefix}acn order text,time,emoji,name</code> (自定义顺序)
 <code>${mainPrefix}acn mode</code> (切换到both模式)
-<code>${mainPrefix}acn on</code>`;
+<code>${mainPrefix}acn on/off</code>`;
 
 // === 类型定义 ===
 interface UserSettings {
@@ -595,6 +596,7 @@ class NameManager {
   
   // 清理资源
   cleanup(): void {
+    // 真实资源清理：停止自动更新任务并重置运行时缓存。
     this.stopAutoUpdate();
     this.profileCache = null;
     this.isUpdating = false;
@@ -611,6 +613,11 @@ const nameManager = NameManager.getInstance();
 
 // 插件类
 class AutoChangeNamePlugin extends Plugin {
+  cleanup(): void {
+    // 真实资源清理：停止自动更新任务并重置运行时缓存。
+    nameManager.cleanup();
+  }
+
   description: string = help_text;
 
   cmdHandlers: Record<string, (msg: Api.Message, trigger?: Api.Message) => Promise<void>> = {
@@ -636,7 +643,6 @@ class AutoChangeNamePlugin extends Plugin {
         if (msg.fromId && msg.fromId.className === 'PeerChannel') {
           isChannelMessage = true;
           await msg.edit({
-            text: `⚠️ <b>频道身份限制</b>\n\n检测到您使用频道身份发送此消息。\n\n<b>自动昵称插件仅支持个人账号使用</b>，无法修改频道资料。\n\n请切换到您的个人账号后重试：\n1. 点击消息输入框旁的头像\n2. 选择您的个人账号\n3. 重新发送命令\n\n💡 使用 <code>${mainPrefix}acn help</code> 查看完整帮助`,
             parseMode: "html"
           });
           return;
@@ -651,7 +657,6 @@ class AutoChangeNamePlugin extends Plugin {
         
         if (!userId || isNaN(userId)) {
           await msg.edit({
-            text: `❌ <b>无法获取用户ID</b>\n\n可能原因：\n• 使用了频道身份发言\n• 消息来源异常\n\n<b>解决方法：</b>\n1. 确保使用个人账号发言\n2. 在私聊或允许的群组中使用\n\n💡 使用 <code>${mainPrefix}acn help</code> 查看完整帮助`,
             parseMode: "html"
           });
           return;
@@ -671,7 +676,6 @@ class AutoChangeNamePlugin extends Plugin {
         // 对于非save、help、status命令，检查是否需要引导
         if (isFirstTime && !["save", "help", "h", "status"].includes(sub)) {
           await msg.edit({
-            text: `👋 <b>新用户引导</b>\n\n看起来您是第一次使用自动昵称插件！\n\n<b>🎯 您想要执行：</b> <code>${sub}</code>\n\n<b>💡 但是需要先完成设置：</b>\n\n<b>第一步：</b> <code>${mainPrefix}acn save</code>\n<i>保存您当前的昵称作为原始昵称</i>\n\n完成后，您就可以使用所有功能了！\n\n<b>快速开始指南：</b>\n1. <code>${mainPrefix}acn save</code> - 保存昵称\n2. <code>${mainPrefix}acn on</code> - 开启自动更新\n3. <code>${mainPrefix}acn help</code> - 查看完整帮助\n\n设置完成后，欢迎回来继续使用 <code>${mainPrefix}acn ${sub}</code> 命令！`,
             parseMode: "html"
           });
           return;
@@ -750,7 +754,6 @@ class AutoChangeNamePlugin extends Plugin {
 
           default:
             await msg.edit({
-              text: `❌ <b>未知命令:</b> <code>${htmlEscape(sub)}</code>\n\n💡 使用 <code>${mainPrefix}acn help</code> 查看帮助`,
               parseMode: "html"
             });
         }
@@ -799,13 +802,13 @@ class AutoChangeNamePlugin extends Plugin {
         if (isFirstTimeSave) {
           // 首次保存，提供完整引导
           await msg.edit({
-            text: `🎉 <b>昵称保存成功！设置完成</b>\n\n<b>✅ 已保存的原始昵称：</b>\n• 姓名: <code>${htmlEscape(settings.original_first_name || "")}</code>\n• 姓氏: <code>${htmlEscape(settings.original_last_name || "(空)")}</code>\n\n<b>🚀 接下来您可以：</b>\n\n<b>1. 立即开始使用</b>\n<code>${mainPrefix}acn on</code> - 开启自动昵称更新\n\n<b>2. 个性化设置（推荐）</b>\n<code>${mainPrefix}acn text add 工作中</code> - 添加状态文案\n<code>${mainPrefix}acn emoji on</code> - 显示时钟表情 🕐\n<code>${mainPrefix}acn showtz on</code> - 显示时区 GMT+8\n\n<b>3. 查看更多功能</b>\n<code>${mainPrefix}acn help</code> - 完整功能指南\n\n<b>💡 小提示：</b>昵称每分钟自动更新，随时可用 <code>${mainPrefix}acn off</code> 关闭`,
+            text: `🎉 <b>昵称保存成功！设置完成</b>\n\n<b>✅ 已保存的原始昵称：</b>\n• 姓名: <code>${htmlEscape(settings.original_first_name || "")}</code>\n• 姓氏: <code>${htmlEscape(settings.original_last_name || "(空)")}</code>\n\n<b>🚀 接下来您可以：</b>\n\n<b>1. 立即开始使用</b>\n<code>${mainPrefix}acn on/off</code> - 开启或关闭自动昵称更新\n\n<b>2. 个性化设置（推荐）</b>\n<code>${mainPrefix}acn text add 工作中</code> - 添加状态文案\n<code>${mainPrefix}acn emoji on/off</code> - 开启或关闭时钟表情 🕐\n<code>${mainPrefix}acn showtz on/off</code> - 显示或隐藏时区 GMT+8\n\n\n<b>💡 小提示：</b>昵称会每分钟自动更新。`,
             parseMode: "html"
           });
         } else {
           // 非首次保存，简化提示
           await msg.edit({
-            text: `✅ <b>昵称已重新保存</b>\n\n<b>姓名:</b> <code>${htmlEscape(settings.original_first_name || "")}</code>\n<b>姓氏:</b> <code>${htmlEscape(settings.original_last_name || "(空)")}</code>\n\n${settings.is_enabled ? '自动更新仍在运行中' : `使用 <code>${mainPrefix}acn on</code> 启用动态昵称`}`,
+            text: `✅ <b>昵称已重新保存</b>\n\n<b>姓名:</b> <code>${htmlEscape(settings.original_first_name || "")}</code>\n<b>姓氏:</b> <code>${htmlEscape(settings.original_last_name || "(空)")}</code>\n\n${settings.is_enabled ? '自动更新仍在运行中' : '可按需重新启用动态昵称'}`,
             parseMode: "html"
           });
         }
@@ -831,7 +834,6 @@ class AutoChangeNamePlugin extends Plugin {
 
       // 首次使用，提供详细的引导
       await msg.edit({
-        text: `🎉 <b>欢迎使用自动昵称插件！</b>\n\n这是您第一次使用本插件，让我来帮您快速开始：\n\n<b>📋 第一步：保存当前昵称</b>\n<code>${mainPrefix}acn save</code>\n<i>将您当前的昵称保存为原始昵称（重要！）</i>\n\n<b>🚀 第二步：开启自动更新</b>\n<code>${mainPrefix}acn on</code>\n<i>启用每分钟自动更新昵称功能</i>\n\n<b>🎨 第三步（可选）：个性化设置</b>\n• <code>${mainPrefix}acn text add 工作中</code> - 添加个性文案\n• <code>${mainPrefix}acn emoji on</code> - 开启时钟表情\n• <code>${mainPrefix}acn showtz on</code> - 显示时区信息\n\n<b>⚠️ 重要提醒：</b>\n请确保您当前的昵称是"干净"的（不含时间、emoji等），\n这样才能在需要时完美恢复原始昵称。\n\n<b>🆘 需要帮助？</b>\n使用 <code>${mainPrefix}acn help</code> 查看完整功能说明`,
         parseMode: "html"
       });
       return;
@@ -1161,7 +1163,7 @@ class AutoChangeNamePlugin extends Plugin {
     } else {
       // 没有参数时显示当前状态
       await msg.edit({
-        text: `🕐 <b>时钟Emoji设置</b>\n\n当前状态: <code>${settings.show_clock_emoji ? "开启" : "关闭"}</code>\n\n使用方法：\n• <code>${mainPrefix}acn emoji on</code> - 开启时钟emoji\n• <code>${mainPrefix}acn emoji off</code> - 关闭时钟emoji`,
+        text: `🕐 <b>时钟Emoji设置</b>\n\n当前状态: <code>${settings.show_clock_emoji ? "开启" : "关闭"}</code>\n\n使用方法：\n• <code>${mainPrefix}acn emoji on/off</code> - 开启或关闭时钟emoji`,
         parseMode: "html"
       });
       return;
@@ -1200,7 +1202,7 @@ class AutoChangeNamePlugin extends Plugin {
     } else {
       // 没有参数时显示当前状态
       await msg.edit({
-        text: `🌍 <b>时区显示设置</b>\n\n当前状态: <code>${settings.show_timezone ? "开启" : "关闭"}</code>\n\n使用方法：\n• <code>${mainPrefix}acn showtz on</code> - 显示时区 (如 GMT+8)\n• <code>${mainPrefix}acn showtz off</code> - 隐藏时区`,
+        text: `🌍 <b>时区显示设置</b>\n\n当前状态: <code>${settings.show_timezone ? "开启" : "关闭"}</code>\n\n使用方法：\n• <code>${mainPrefix}acn showtz on/off</code> - 显示或隐藏时区`,
         parseMode: "html"
       });
       return;

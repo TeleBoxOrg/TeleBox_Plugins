@@ -539,6 +539,10 @@ ${mainPrefix}eat set</pre>
 `;
 
 class AcronPlugin extends Plugin {
+  cleanup(): void {
+    // 当前插件不持有需要在 reload 时额外释放的长期资源。
+  }
+
   description: string = `定时发送/转发/复制/置顶/取消置顶/删除消息/执行命令\n\n${help_text}`;
   cmdHandlers: Record<
     string,

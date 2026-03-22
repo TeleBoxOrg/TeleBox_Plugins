@@ -285,6 +285,10 @@ async function getWallpaper(lx: string): Promise<{imageBuffer: Buffer, filename:
 }
 
 class BizhiPlugin extends Plugin {
+  cleanup(): void {
+    // 当前插件不持有需要在 reload 时额外释放的长期资源。
+  }
+
   description: string = `\n高品质壁纸\n\n${help_text}`;
   cmdHandlers: Record<string, (msg: Api.Message) => Promise<void>> = {
     bizhi: async (msg: Api.Message) => {

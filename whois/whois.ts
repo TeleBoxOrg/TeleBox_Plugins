@@ -41,7 +41,6 @@ const help_text = `🔍 <b>WHOIS 域名查询</b>
 • <code>${mainPrefix}whois batch &lt;域名1&gt; &lt;域名2&gt;...</code> - 批量查询
 • <code>${mainPrefix}whois history</code> - 查看查询历史
 • <code>${mainPrefix}whois clear</code> - 清除历史记录
-• <code>${mainPrefix}whois help</code> - 显示帮助
 
 <b>💡 示例：</b>
 • <code>${mainPrefix}whois google.com</code>
@@ -79,6 +78,10 @@ interface WhoisDB {
 }
 
 class WhoisPlugin extends Plugin {
+  cleanup(): void {
+    this.db = undefined;
+  }
+
   description = help_text;
   private db?: Awaited<ReturnType<typeof JSONFilePreset<WhoisDB>>>;
   private pluginDir: string;
@@ -193,7 +196,6 @@ class WhoisPlugin extends Plugin {
       // 无参数时显示错误提示
       if (!domain) {
         await msg.edit({
-          text: `❌ <b>参数不足</b>\n\n💡 使用 <code>${mainPrefix}whois &lt;域名&gt;</code> 查询域名信息\n💡 或回复包含域名的消息\n\n📖 使用 <code>${mainPrefix}whois help</code> 查看帮助`,
           parseMode: "html"
         });
         return;

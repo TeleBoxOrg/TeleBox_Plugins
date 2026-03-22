@@ -2,8 +2,12 @@ import { Plugin } from "@utils/pluginBase";
 import { Api } from "teleproto/tl";
 import { CustomFile } from "teleproto/client/uploads";
 import { getGlobalClient } from "@utils/globalClient";
+import { getPrefixes } from "@utils/pluginManager";
 import fs from "fs/promises";
 import path from "path";
+
+const prefixes = getPrefixes();
+const mainPrefix = prefixes[0];
 
 const CONFIG_FILE_PATH = path.join(
   process.cwd(),
@@ -261,7 +265,7 @@ class SearchService {
   }
 
   private async handleDelete(msg: Api.Message, args: string) {
-    if (!args) throw new Error("用法: .so del <频道链接|序号> [...] 或 .so del all。");
+    if (!args) throw new Error("用法: ${mainPrefix}so del <频道链接|序号> [...] 或 ${mainPrefix}so del all。");
     if (args.toLowerCase().trim() === "all") {
         const count = this.config.channelList.length;
         this.config.channelList = [];
@@ -316,7 +320,7 @@ class SearchService {
   }
 
   private async handleDefault(msg: Api.Message, args: string) {
-    if (!args) throw new Error("用法: .so default <频道链接> 或 .so default d。");
+    if (!args) throw new Error("用法: ${mainPrefix}so default <频道链接> 或 ${mainPrefix}so default d。");
     if (args === "d") {
         this.config.defaultChannel = null;
         await this.saveConfig();
@@ -325,7 +329,7 @@ class SearchService {
     }
     const normalizedHandle = args.trim();
     if (!this.config.channelList.some((c) => c.handle === normalizedHandle)) {
-        throw new Error("请先使用 `.so add` 添加此频道。");
+        throw new Error("请先使用 `${mainPrefix}so add` 添加此频道。");
     }
     this.config.defaultChannel = normalizedHandle;
     await this.saveConfig();
@@ -401,7 +405,7 @@ class SearchService {
         }
         break;
       default:
-        throw new Error("用法: .so ad <add|del|list> [关键词]");
+        throw new Error("用法: ${mainPrefix}so ad <add|del|list> [关键词]");
     }
   }
 
@@ -422,7 +426,7 @@ class SearchService {
     type: "kkp" | "search"
   ) {
     if (this.config.channelList.length === 0)
-      throw new Error("请至少使用 `.so add` 添加一个搜索频道。");
+      throw new Error("请至少使用 `${mainPrefix}so add` 添加一个搜索频道。");
 
     const initialMessage = type === "kkp" ? "🎲 正在随机寻找视频..." : "🔍 正在搜索视频...";
     await msg.edit({ text: initialMessage });
@@ -686,11 +690,16 @@ const so = async (msg: Api.Message) => {
 };
 
 class ChannelSearchPlugin extends Plugin {
+    cleanup(): void {
+    // 当前插件不持有需要在 reload 时额外释放的长期资源。
+  }
+
+
   description: string = `强大的多频道资源搜索插件，具备高级功能：
 
 搜索功能:
-- 关键词搜索: .so <关键词> （不限制大小和时长）
-- 随机速览: .so kkp （随机选择20秒-3分钟的视频）
+- 关键词搜索: ${mainPrefix}so <关键词> （不限制大小和时长）
+- 随机速览: ${mainPrefix}so kkp （随机选择20秒-3分钟的视频）
 
 选项:
 - 防剧透模式: -s (下载视频并将其作为防剧透消息发送)
@@ -698,16 +707,16 @@ class ChannelSearchPlugin extends Plugin {
 
 频道管理:
 - 添加频道: .so add <频道链接> (使用 \\ 分隔)
-- 删除频道: .so del <频道链接|序号> [...] 或 .so del all (删除所有)
-- 设置默认: .so default <频道链接> 或 .so default d (移除默认)
-- 列出频道: .so list
-- 导出配置: .so export
-- 导入配置: .so import (回复备份文件)
+- 删除频道: ${mainPrefix}so del <频道链接|序号> [...] 或 ${mainPrefix}so del all (删除所有)
+- 设置默认: ${mainPrefix}so default <频道链接> 或 ${mainPrefix}so default d (移除默认)
+- 列出频道: ${mainPrefix}so list
+- 导出配置: ${mainPrefix}so export
+- 导入配置: ${mainPrefix}so import (回复备份文件)
 
 广告过滤:
-- 添加关键词: .so ad add <关键词1> <关键词2> ...
-- 删除关键词: .so ad del <关键词1> <关键词2> ...
-- 查看关键词: .so ad list`;
+- 添加关键词: ${mainPrefix}so ad add <关键词1> <关键词2> ...
+- 删除关键词: ${mainPrefix}so ad del <关键词1> <关键词2> ...
+- 查看关键词: ${mainPrefix}so ad list`;
   
   cmdHandlers: Record<string, (msg: Api.Message) => Promise<void>> = {
     so,

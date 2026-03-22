@@ -1,5 +1,6 @@
 import { Api } from "teleproto";
 import { Plugin } from "@utils/pluginBase";
+import { getPrefixes } from "@utils/pluginManager";
 import { exec } from "child_process";
 import util from "util";
 import fs from "fs";
@@ -9,6 +10,10 @@ import { Converter } from "opencc-js";
 import * as https from "https";
 import * as http from "http";
 import Database from "better-sqlite3";
+
+const prefixes = getPrefixes();
+const mainPrefix = prefixes[0];
+
 
 const execPromise = util.promisify(exec);
 
@@ -31,16 +36,16 @@ const HELP_TEXT = toSimplified(
 
   • 搜索下载 (AI或标准模式):
     .yt <搜索关键词>
-    示例: .yt 稻香
+    示例: ${mainPrefix}yt 稻香
 
   • 指定下载 (手动指定元数据):
     .yt <歌名>-<歌手>
-    示例: .yt 晴天-周杰伦
+    示例: ${mainPrefix}yt 晴天-周杰伦
 
   • AI 功能配置:
-    .yt apikey <你的API密钥>
+    ${mainPrefix}yt apikey <你的API密钥>
     .yt apikey
-    .yt apikey clear
+    ${mainPrefix}yt apikey clear
 
   • 核心更新 (更新下载核心):
     .yt update
@@ -383,7 +388,7 @@ async function downloadAndUploadSong(msg: Api.Message, songQuery: string, prefer
     } catch (error: any) {
         const errorMessage = error.stderr || error.message || "未知错误";
         if (errorMessage.includes("HTTP Error 403")) {
-            throw new Error(toSimplified("下载失败：YouTube拒绝了请求(403)。这通常是由于下载核心版本过旧。\n\n请尝试使用 `.yt update` 命令更新后再试。"));
+            throw new Error(toSimplified("下载失败：YouTube拒绝了请求(403)。这通常是由于下载核心版本过旧。\n\n请尝试使用 `${mainPrefix}yt update` 命令更新后再试。"));
         }
         throw new Error(toSimplified(`yt-dlp 执行失败: ${errorMessage}`));
     }
@@ -428,9 +433,9 @@ async function handleApiKeyCommand(msg: Api.Message, apiKey: string): Promise<vo
         const currentKey = GeminiConfigManager.get(GEMINI_CONFIG_KEYS.API_KEY);
         if (currentKey) {
             const maskedKey = currentKey.substring(0, 4) + "..." + currentKey.substring(currentKey.length - 4);
-            await msg.edit({ text: toSimplified(`🤖 Gemini AI 已配置\n\n当前 Key: ${maskedKey}\n\n要更新, 请使用 .yt apikey <新密钥>\n要清除, 请使用 .yt apikey clear`) });
+            await msg.edit({ text: toSimplified(`🤖 Gemini AI 已配置\n\n当前 Key: ${maskedKey}\n\n要更新, 请使用 ${mainPrefix}yt apikey <新密钥>\n要清除, 请使用 ${mainPrefix}yt apikey clear`) });
         } else {
-            await msg.edit({ text: toSimplified(`🤖 Gemini AI 未配置\n\n使用方法: .yt apikey <你的API密钥>`) });
+            await msg.edit({ text: toSimplified(`🤖 Gemini AI 未配置\n\n使用方法: ${mainPrefix}yt apikey <你的API密钥>`) });
         }
         return;
     }
@@ -490,6 +495,10 @@ const yt = async (msg: Api.Message) => {
 };
 
 class YtMusicPlugin extends Plugin {
+  cleanup(): void {
+    // 当前插件不持有需要在 reload 时额外释放的长期资源。
+  }
+
     description: string = HELP_TEXT;
     cmdHandlers: Record<string, (msg: Api.Message) => Promise<void>> = { yt };
 }

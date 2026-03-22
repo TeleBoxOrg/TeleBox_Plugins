@@ -33,6 +33,10 @@ const help_text = `🔐 <b>编码解码工具集</b>
 支持回复消息后直接使用命令进行编码/解码`;
 
 class EncodePlugin extends Plugin {
+  cleanup(): void {
+    // 当前插件不持有需要在 reload 时额外释放的长期资源。
+  }
+
   description: string = `编码解码工具插件\n\n${help_text}`;
 
   cmdHandlers: Record<string, (msg: Api.Message) => Promise<void>> = {

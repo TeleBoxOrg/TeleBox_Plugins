@@ -708,6 +708,10 @@ async function sendTargetFeedback(options: {
 const helpResponse = `🛰️ <b>保送插件</b>\n\n${escapeHtml(helpText)}`;
 
 class BsPlugin extends Plugin {
+  cleanup(): void {
+    // 当前插件不持有需要在 reload 时额外释放的长期资源。
+  }
+
   description: string = `保送被回复的消息至指定目标\n\n${helpText}`;
 
   cmdHandlers: Record<string, (msg: Api.Message) => Promise<void>> = {

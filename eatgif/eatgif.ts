@@ -113,6 +113,10 @@ async function assetBufferFor(filePath: string): Promise<Buffer> {
 }
 
 class EatGifPlugin extends Plugin {
+  cleanup(): void {
+    // 当前插件不持有需要在 reload 时额外释放的长期资源。
+  }
+
   description: string = `生成头像融合动图\n\n${help_text}`;
   cmdHandlers: Record<
     string,

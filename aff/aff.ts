@@ -1,8 +1,13 @@
 import { Plugin } from "@utils/pluginBase";
+import { getPrefixes } from "@utils/pluginManager";
 import { Api } from "teleproto";
 import { JSONFilePreset } from "lowdb/node";
 import { createDirectoryInAssets } from "@utils/pathHelpers";
 import * as path from "path";
+
+const prefixes = getPrefixes();
+const mainPrefix = prefixes[0];
+
 
 interface AffData {
   text: string;
@@ -16,6 +21,11 @@ interface DBData {
 }
 
 class AffPlugin extends Plugin {
+  cleanup(): void {
+    // 引用重置：清空实例级 db / cache / manager 引用，便于 reload 后重新初始化。
+    this.db = null;
+  }
+
   private db: any = null;
   private readonly PLUGIN_NAME = "aff";
   
@@ -25,11 +35,11 @@ class AffPlugin extends Plugin {
 在别人要打算买机场的时候光速发出自己的aff信息（支持多条）
 
 <b>使用方法：</b>
-• <code>.aff</code> - 发送默认aff（如有多条则显示列表）
-• <code>.aff &lt;序号&gt;</code> - 发送指定序号的aff
-• <code>.aff list</code> - 查看所有已保存的aff
-• <code>.aff save</code> - 回复一条消息以新增aff
-• <code>.aff remove &lt;序号&gt;</code> - 删除指定aff`;
+• <code>${mainPrefix}aff</code> - 发送默认aff（如有多条则显示列表）
+• <code>${mainPrefix}aff &lt;序号&gt;</code> - 发送指定序号的aff
+• <code>${mainPrefix}aff list</code> - 查看所有已保存的aff
+• <code>${mainPrefix}aff save</code> - 回复一条消息以新增aff
+• <code>${mainPrefix}aff remove &lt;序号&gt;</code> - 删除指定aff`;
 
   // 命令处理器
   cmdHandlers = {
@@ -135,10 +145,10 @@ class AffPlugin extends Plugin {
       await msg.edit({
         text: "❌ <b>无效的参数</b>\n\n" + 
               "💡 使用方法：\n" +
-              "• <code>.aff</code> - 发送/列表\n" +
-              "• <code>.aff &lt;序号&gt;</code> - 发送指定条目\n" +
-              "• <code>.aff save</code> - 保存回复\n" +
-              "• <code>.aff remove &lt;序号&gt;</code> - 删除条目",
+              "• <code>${mainPrefix}aff</code> - 发送/列表\n" +
+              "• <code>${mainPrefix}aff &lt;序号&gt;</code> - 发送指定条目\n" +
+              "• <code>${mainPrefix}aff save</code> - 保存回复\n" +
+              "• <code>${mainPrefix}aff remove &lt;序号&gt;</code> - 删除条目",
         parseMode: "html"
       });
 
@@ -153,7 +163,7 @@ class AffPlugin extends Plugin {
     
     if (affs.length === 0) {
       await msg.edit({
-        text: "❌ <b>暂无Aff信息</b>\n\n💡 请回复一条消息使用 <code>.aff save</code> 保存",
+        text: "❌ <b>暂无Aff信息</b>\n\n💡 请回复一条消息使用 <code>${mainPrefix}aff save</code> 保存",
         parseMode: "html"
       });
       return;
@@ -215,7 +225,7 @@ class AffPlugin extends Plugin {
       listText += `<b>${idx + 1}.</b> ${preview}\n`;
     });
 
-    listText += "\n💡 使用 <code>.aff &lt;序号&gt;</code> 发送指定条目";
+    listText += "\n💡 使用 <code>${mainPrefix}aff &lt;序号&gt;</code> 发送指定条目";
 
     await msg.edit({
       text: listText,
@@ -262,7 +272,7 @@ class AffPlugin extends Plugin {
   private async handleRemove(msg: Api.Message, param?: string): Promise<void> {
     if (!param) {
       await msg.edit({
-        text: "❌ <b>请指定要删除的序号</b>\n💡 例如：<code>.aff remove 1</code>",
+        text: "❌ <b>请指定要删除的序号</b>\n💡 例如：<code>${mainPrefix}aff remove 1</code>",
         parseMode: "html"
       });
       return;

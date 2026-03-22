@@ -1750,6 +1750,9 @@ class Downloader {
 
 // ==================== Main Plugin ====================
 class MusicPlugin extends Plugin {
+  cleanup(): void {
+  }
+
   private static initialized = false;
   private downloader: Downloader;
 

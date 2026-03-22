@@ -452,6 +452,9 @@ async function handleAitcCommand(msg: Api.Message): Promise<void> {
 }
 
 class AitcPlugin extends Plugin {
+  cleanup(): void {
+  }
+
   description: string = `
 自定义 Prompt 的 AI 转写插件：
 - aitc url &lt;地址&gt; - 自定义API地址（兼容OpenAI SDK，默认OpenAI）

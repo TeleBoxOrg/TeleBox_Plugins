@@ -10,21 +10,29 @@ import archiver from "archiver";
 import bigInt from "big-integer";
 import { CustomFile } from "teleproto/client/uploads";
 import { exec } from "child_process";
+import { getPrefixes } from "@utils/pluginManager";
+const prefixes = getPrefixes();
+const mainPrefix = prefixes[0];
+
 
 const execAsync = promisify(exec);
 
 
 class GetStickersPlugin extends Plugin {
+  cleanup(): void {
+    // 当前插件不持有需要在 reload 时额外释放的长期资源。
+  }
+
   description: string = `🧩 <b>贴纸包打包下载</b><br/><br/>
 <b>命令</b><br/>
-• <code>.getstickers</code>（回复任意贴纸）<br/><br/>
+• <code>${mainPrefix}getstickers</code>（回复任意贴纸）<br/><br/>
 <b>功能</b><br/>
 • 从回复的贴纸中识别贴纸包并下载全部贴纸<br/>
 • 使用 FFmpeg 自动转换所有格式为 gif（方便微信使用）<br/>
 • 支持 webp、tgs、mp4 格式转换<br/>
 • 自动生成 pack.txt 与全部资源，并以 ZIP 发送<br/><br/>
 <b>用法</b><br/>
-1) 回复一张贴纸并发送 <code>.getstickers</code><br/><br/>
+1) 回复一张贴纸并发送 <code>${mainPrefix}getstickers</code><br/><br/>
 <b>依赖安装</b><br/>
 • <b>FFmpeg</b>（必需）:<br/>
   - Windows: <code>choco install ffmpeg</code><br/>
