@@ -540,6 +540,15 @@ const groupBuffers = new Map<
   }
 >();
 
+function cleanupGroupBuffers(): void {
+  for (const entry of groupBuffers.values()) {
+    if (entry.timer) {
+      clearTimeout(entry.timer);
+    }
+  }
+  groupBuffers.clear();
+}
+
 function getGroupKey(message: any): string | null {
   const gid = (message as any).groupedId;
   const sid = getChatIdFromMessage(message);
@@ -824,7 +833,7 @@ class BackupManager {
       let hasMore = true;
       let offsetId = task.lastMessageId || 0;
 
-      while (hasMore) {
+      while (hasMore && task.status === "running") {
         const batch = await client.getMessages(task.sourceId, {
           limit: batchSize,
           offsetId,
@@ -836,6 +845,10 @@ class BackupManager {
         }
 
         for (const message of batch) {
+          if (task.status !== "running") {
+            break;
+          }
+
           try {
             // 限流控制
             await this.rateLimiter.throttle();
@@ -872,6 +885,14 @@ class BackupManager {
             }
           }
         }
+
+        if (task.status !== "running") {
+          break;
+        }
+      }
+
+      if (task.status !== "running") {
+        return;
       }
 
       // 完成备份
@@ -912,6 +933,16 @@ class BackupManager {
 
   static getBackupStatus(taskId: string): BackupTask | null {
     return this.tasks.get(taskId) || null;
+  }
+
+  static cleanup(): void {
+    for (const task of this.tasks.values()) {
+      if (task.status === "running" || task.status === "pending") {
+        task.status = "failed";
+      }
+    }
+    this.tasks.clear();
+    this.rateLimiter.reset();
   }
 }
 
@@ -969,7 +1000,17 @@ async function shiftMessageListener(
 }
 class ShiftPlugin extends Plugin {
   cleanup(): void {
-    // 当前插件不持有需要在 reload 时额外释放的长期资源。
+    cleanupGroupBuffers();
+    BackupManager.cleanup();
+    ruleCache.clear();
+    if (sqliteDb) {
+      sqliteDb.close();
+      sqliteDb = null;
+    }
+    if (lowdb?.write) {
+      void lowdb.write().catch(() => {});
+    }
+    lowdb = null;
   }
 
   description: string = `智能转发助手 - 自动转发消息到指定目标\n\n${help_text}`;

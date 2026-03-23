@@ -80,12 +80,10 @@ class HitokotoPlugin extends Plugin {
    */
   private async handleHitokotoCommand(msg: Api.Message): Promise<void> {
     try {
-      // 解析参数
       const parts = msg.text?.trim().split(/\s+/) || [];
       const subCommand = parts[1]?.toLowerCase() || "";
       
-      // 处理 help/h 子指令或无参数情况
-      if (!subCommand || subCommand === "help" || subCommand === "h") {
+      if (subCommand === "help" || subCommand === "h") {
         await msg.edit({
           text: help_text,
           parseMode: "html"
@@ -95,7 +93,6 @@ class HitokotoPlugin extends Plugin {
 
       const params = this.parseTypeParams(parts.slice(1));
       
-      // 如果不是 help/h，则执行获取一言功能
       await this.fetchAndSendHitokoto(msg, params);
       
     } catch (error: any) {

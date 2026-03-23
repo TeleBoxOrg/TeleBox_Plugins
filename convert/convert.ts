@@ -32,7 +32,7 @@ const GEMINI_CONFIG_DB_PATH = path.join(dbDir, "gemini_config.db");
 const GEMINI_API_KEY = "convert_gemini_api_key";
 
 class GeminiConfigManager {
-  private static db: Database.Database;
+  private static db: Database.Database | null = null;
   private static initialized = false;
 
   private static init(): void {
@@ -72,6 +72,16 @@ class GeminiConfigManager {
     } catch (error) {
       console.error("[convert] Failed to save config:", error);
     }
+  }
+
+  static cleanup(): void {
+    if (this.db) {
+      try {
+        this.db.close();
+      } catch {}
+    }
+    this.db = null;
+    this.initialized = false;
   }
 }
 
@@ -281,6 +291,7 @@ const help_text = toSimplified(`🎬 <b>视频转音频 AI 助手</b>
 
 class ConvertPlugin extends Plugin {
   cleanup(): void {
+    GeminiConfigManager.cleanup();
   }
 
   description: string = help_text;

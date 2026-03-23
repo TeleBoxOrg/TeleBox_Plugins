@@ -23,6 +23,7 @@ tpm i <插件名>
 - `autodelcmd` - 自动删除命令消息  
 - `autorepeat` - 智能自动复读机  
 - `banana` - Nano-Banana 图像编辑  
+- `bgp` - BGP路由图查询工具  
 - `bin` - 卡头检测  
 - `bizhi` - 发送一张壁纸  
 - `botmzt` - 随机获取写真图片  
@@ -87,12 +88,12 @@ tpm i <插件名>
 - `pmcaptcha` - 简单防私聊  
 - `portball` - 临时禁言  
 - `premium` - 群组大会员统计  
-- `prometheus` - 突破Telegram保存限制  
 - `q` - 消息引用生成贴纸  
 - `qr` - QR 二维码  
 - `rate` - 货币实时汇率查询与计算  
 - `restore_pin` - 恢复群组被取消的置顶消息  
 - `rev` - 反转你的消息  
+- `save` - 本地保存插件  
 - `search` - 频道消息搜索  
 - `service` - systemd服务状态查看  
 - `shift` - 智能消息转发系统  

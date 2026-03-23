@@ -75,7 +75,7 @@ if (!fs.existsSync(path.dirname(GEMINI_CONFIG_DB_PATH))) {
 }
 
 class GeminiConfigManager {
-    private static db: Database.Database;
+    private static db: Database.Database | null = null;
     private static initialized = false;
     private static init(): void {
         if (this.initialized) return;
@@ -87,6 +87,7 @@ class GeminiConfigManager {
     }
     static get(key: string, defaultValue?: string): string {
         this.init();
+        if (!this.db) return defaultValue || GEMINI_DEFAULT_CONFIG[key] || "";
         try {
             const row = this.db.prepare("SELECT value FROM config WHERE key = ?").get(key) as { value: string } | undefined;
             return row ? row.value : (defaultValue || GEMINI_DEFAULT_CONFIG[key] || "");
@@ -94,9 +95,20 @@ class GeminiConfigManager {
     }
     static set(key: string, value: string): void {
         this.init();
+        if (!this.db) return;
         try {
             this.db.prepare(`INSERT OR REPLACE INTO config (key, value, updated_at) VALUES (?, ?, CURRENT_TIMESTAMP)`).run(key, value);
         } catch (error) { console.error("[yt-dlp] 保存配置失败:", error); }
+    }
+
+    static cleanup(): void {
+        if (this.db) {
+            try {
+                this.db.close();
+            } catch {}
+        }
+        this.db = null;
+        this.initialized = false;
     }
 }
 
@@ -496,7 +508,7 @@ const yt = async (msg: Api.Message) => {
 
 class YtMusicPlugin extends Plugin {
   cleanup(): void {
-    // 当前插件不持有需要在 reload 时额外释放的长期资源。
+    GeminiConfigManager.cleanup();
   }
 
     description: string = HELP_TEXT;

@@ -24,7 +24,7 @@ if (!fs.existsSync(path.dirname(CONFIG_DB_PATH))) {
 
 // 配置管理器 - 使用SQLite数据库
 class ConfigManager {
-  private static db: Database.Database;
+  private static db: Database.Database | null = null;
   private static initialized = false;
 
   // 初始化数据库
@@ -48,6 +48,7 @@ class ConfigManager {
 
   static get(key: string, defaultValue?: string): string {
     this.init();
+    if (!this.db) return defaultValue || "";
 
     try {
       const stmt = this.db.prepare("SELECT value FROM config WHERE key = ?");
@@ -65,6 +66,7 @@ class ConfigManager {
 
   static set(key: string, value: string): void {
     this.init();
+    if (!this.db) return;
 
     try {
       const stmt = this.db.prepare(`
@@ -80,6 +82,7 @@ class ConfigManager {
   // 获取所有配置
   static getAll(): { [key: string]: string } {
     this.init();
+    if (!this.db) return {};
 
     try {
       const stmt = this.db.prepare("SELECT key, value FROM config");
@@ -100,6 +103,7 @@ class ConfigManager {
   // 删除配置
   static delete(key: string): void {
     this.init();
+    if (!this.db) return;
 
     try {
       const stmt = this.db.prepare("DELETE FROM config WHERE key = ?");
@@ -112,8 +116,12 @@ class ConfigManager {
   // 关闭数据库连接
   static close(): void {
     if (this.db) {
-      this.db.close();
+      try {
+        this.db.close();
+      } catch {}
     }
+    this.db = null;
+    this.initialized = false;
   }
 }
 
@@ -649,6 +657,7 @@ async function handleKomariRequest(msg: Api.Message): Promise<void> {
 
 class KomariPlugin extends Plugin {
   cleanup(): void {
+    ConfigManager.close();
   }
 
   description: string = `
