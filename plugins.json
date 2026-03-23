@@ -311,10 +311,6 @@
     "url": "https://github.com/TeleBoxOrg/TeleBox_Plugins/blob/main/premium/premium.ts?raw=true",
     "desc": "群组大会员统计"
   },
-  "prometheus": {
-    "url": "https://github.com/TeleBoxOrg/TeleBox_Plugins/blob/main/prometheus/prometheus.ts?raw=true",
-    "desc": "突破Telegram保存限制"
-  },
   "q": {
     "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/q/q.ts?raw=true",
     "desc": "消息引用生成贴纸"
@@ -334,6 +330,10 @@
   "rev": {
     "url": "https://github.com/TeleBoxOrg/TeleBox_Plugins/blob/main/rev/rev.ts?raw=true",
     "desc": "反转你的消息"
+  },
+  "save": {
+    "url": "https://github.com/TiaraBasori/TeleBox_Plugins/blob/main/save/save.ts?raw=true",
+    "desc": "本地保存插件"
   },
   "search": {
     "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/search/search.ts?raw=true",
