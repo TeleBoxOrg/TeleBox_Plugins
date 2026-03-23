@@ -288,6 +288,10 @@ const help_text = `🔐 <b>SSH管理插件</b>
 <code>${mainPrefix}ssh keys export</code> - 导出所有密钥到文件`;
 
 class SSHPlugin extends Plugin {
+  cleanup(): void {
+    ConfigManager.cleanup();
+  }
+
   description: string = `SSH管理和服务器配置\n\n${help_text}`;
 
   cmdHandlers = {
@@ -1552,4 +1556,3 @@ ${keysContent}`;
 }
 
 export default new SSHPlugin();
-

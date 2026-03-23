@@ -1,835 +1,482 @@
-/**
- * TeleBox AI 插件（完美整合版）
- * 兼容 OpenAI / Gemini / Claude / 火山 等标准接口
- * 功能：对话、搜索、识图、生图、TTS、语音回答、全局 Prompt 预设、上下文记忆、 Telegraph 长文等
- * 用法：.ai  或  .ai chat|search|image|tts|audio|searchaudio|prompt|config|model|...
- * 2025-05 最终优化版
- */
 import { Plugin } from "@utils/pluginBase";
-import { getPrefixes } from "@utils/pluginManager";
 import { Api } from "teleproto";
-import axios, { AxiosRequestConfig, AxiosResponse } from "axios";
+import { getPrefixes } from "@utils/pluginManager";
+import type { Low } from "lowdb";
 import { JSONFilePreset } from "lowdb/node";
-import * as path from "path";
-import * as fs from "fs";
-import sharp from "sharp";
 import { createDirectoryInAssets } from "@utils/pathHelpers";
+import { TelegramFormatter } from "@utils/telegramFormatter";
+import { TelegraphFormatter } from "@utils/telegraphFormatter";
+import { execFile } from "child_process";
+import fs from "fs";
+import * as path from "path";
+import axios, { type AxiosInstance, type AxiosRequestConfig, type AxiosResponse } from "axios";
+import sharp from "sharp";
+import http from "http";
+import https from "https";
+import { promisify } from "util";
 
-/* ---------- 类型定义 ---------- */
-type Provider = {
-  apiKey: string;
-  baseUrl: string;
-  compatauth?: Compat;
-  authMethod?: AuthMethod;
-  authConfig?: AuthConfig;
-};
-type Compat = "openai" | "gemini" | "claude";
-type Models = { chat: string; search: string; image: string; tts: string };
-type Telegraph = {
-  enabled: boolean;
-  limit: number;
-  token: string;
-  posts: { title: string; url: string; createdAt: string }[];
-};
-type VoiceConfig = { gemini: string; openai: string };
-type DB = {
-  dataVersion?: number;
-  providers: Record<string, Provider>;
-  modelCompat?: Record<string, Record<string, Compat>>;
-  modelCatalog?: { map: Record<string, Compat>; updatedAt?: string };
-  models: Models;
-  contextEnabled: boolean;
+interface ProviderConfig {
+  tag: string;
+  url: string;
+  key: string;
+}
+
+interface TelegraphItem {
+  url: string;
+  title: string;
+  createdAt: string;
+}
+
+interface DB {
+  configs: Record<string, ProviderConfig>;
+  currentChatTag: string;
+  currentChatModel: string;
+  currentSearchTag: string;
+  currentSearchModel: string;
+  currentImageTag: string;
+  currentImageModel: string;
+  currentVideoTag: string;
+  currentVideoModel: string;
+  imagePreview: boolean;
+  videoPreview: boolean;
+  videoAudio: boolean;
+  videoDuration: number;
+  prompt: string;
   collapse: boolean;
-  telegraph: Telegraph;
-  voices?: VoiceConfig;
-  histories: Record<string, { role: string; content: string }[]>;
-  histMeta?: Record<string, { lastAt: string }>;
-  presetPrompt?: string; // 全局 Prompt 预设
-  timeout?: number; // 全局超时时间（毫秒）
-  maxTokens?: number; // 最大输出 token 数
-  linkPreview?: boolean; // 链接即时预览开关
+  timeout: number;
+  telegraphToken: string;
+  telegraph: {
+    enabled: boolean;
+    limit: number;
+    list: TelegraphItem[];
+  };
+}
 
+type AIContentPart =
+  | { type: "text"; text: string }
+  | { type: "image_url"; image_url: { url: string } };
+
+interface AIImage {
+  data?: Buffer;
+  url?: string;
+  mimeType: string;
+}
+
+interface AIVideo {
+  data?: Buffer;
+  url?: string;
+  mimeType: string;
+}
+
+type ResolvedImageData = {
+  data: Buffer;
+  mimeType: string;
 };
 
-/* ---------- 常量 ---------- */
-const MAX_MSG = 4096;
-const PAGE_EXTRA = 48;
-const WRAP_EXTRA_COLLAPSED = 64;
-const HISTORY_MAX_ITEMS = 50;
-const HISTORY_MAX_BYTES = 64 * 1024;
-const MODEL_REFRESH_DEBOUNCE_MS = 2000;
-const DEFAULT_TIMEOUT_MS = 30000; // 默认超时 30 秒
-const MAX_TIMEOUT_MS = 600000; // 最大超时 10 分钟
-const DEFAULT_MAX_TOKENS = 16384; // 默认最大输出 token（约8000中文字）
-const GEMINI_VOICES = [
-  "Zephyr", "Puck", "Charon", "Kore", "Fenrir", "Leda", "Orus", "Aoede",
-  "Callirhoe", "Autonoe", "Enceladus", "Iapetus", "Umbriel", "Algieba",
-  "Despina", "Erinome", "Algenib", "Rasalgethi", "Laomedeia", "Achernar",
-  "Alnilam", "Schedar", "Gacrux", "Pulcherrima", "Achird", "Zubenelgenubi",
-  "Vindemiatrix", "Sadachbia", "Sadaltager", "Sulafar"
-] as const;
-const OPENAI_VOICES = ["alloy", "echo", "fable", "onyx", "nova", "shimmer"] as const;
+interface AbortToken {
+  readonly aborted: boolean;
+  readonly reason?: string;
+  readonly signal: AbortSignal;
+  abort(reason?: string): void;
+  throwIfAborted(): void;
+}
 
-/* ---------- 工具函数 ---------- */
-// 动态获取命令前缀
-const prefixes = getPrefixes();
-const mainPrefix = prefixes[0];
+interface FeatureHandler {
+  readonly name: string;
+  readonly command: string;
+  readonly description: string;
+  execute(msg: Api.Message, args: string[], prefixes: string[]): Promise<void>;
+}
 
-const trimBase = (u: string) => u.replace(/\/$/, "");
-const html = (t: string) =>
-  t.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
-const escapeRegExp = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-const shortenUrlForDisplay = (u: string) => {
+interface Middleware {
+  process<T>(
+    input: T,
+    next: (input: T, token?: AbortToken) => Promise<any>,
+    token?: AbortToken
+  ): Promise<any>;
+}
+
+const execFileAsync = promisify(execFile);
+
+type AuthMode = "bearer" | "query-key";
+
+type ProviderMode = "chat" | "search" | "image" | "video";
+
+type ProviderStrategy =
+  | "openai-rest"
+  | "gemini-rest"
+  | "doubao-rest"
+  | "gemini-image-rest"
+  | "gemini-video-rest";
+
+type ModelMatchRule = {
+  type: "prefix" | "exact" | "includes" | "regex";
+  value: string;
+};
+
+type ImageDefaults = {
+  size?: string;
+  quality?: string;
+  responseFormat?: "b64_json" | "url";
+  extraParams?: Record<string, any>;
+};
+
+type VideoDefaults = {
+  responseFormat?: "b64_json" | "url";
+  extraParams?: Record<string, any>;
+};
+
+type ProviderModelRule = {
+  match: ModelMatchRule;
+  override: Partial<ProviderModeConfig>;
+};
+
+type ProviderModeConfig = {
+  strategy: ProviderStrategy;
+  endpoint?: string;
+  authMode?: AuthMode;
+  baseUrlType?: "origin" | "openai" | "gemini" | "raw";
+  imageDefaults?: ImageDefaults;
+  videoDefaults?: VideoDefaults;
+  imageUrlPolicy?: "any" | "data-only";
+  supportsEdit?: boolean;
+  modelRules?: ProviderModelRule[];
+};
+
+type ProviderProfile = {
+  id: string;
+  authMode?: AuthMode;
+  modes: Partial<Record<ProviderMode, ProviderModeConfig>>;
+};
+
+type VideoImageMode = "auto" | "reference" | "first" | "firstlast";
+
+type ChatContext = {
+  providerConfig: ProviderConfig;
+  model: string;
+  config: DB;
+  modeConfig: ProviderModeConfig;
+  question: string;
+  images: AIContentPart[];
+  token?: AbortToken;
+};
+
+type ImageContext = {
+  providerConfig: ProviderConfig;
+  model: string;
+  config: DB;
+  modeConfig: ProviderModeConfig;
+  prompt: string;
+  image?: AIImage;
+  token?: AbortToken;
+};
+
+type VideoContext = {
+  providerConfig: ProviderConfig;
+  model: string;
+  config: DB;
+  modeConfig: ProviderModeConfig;
+  prompt: string;
+  images: AIContentPart[];
+  imageMode: VideoImageMode;
+  token?: AbortToken;
+};
+
+type StrategyHandler = {
+  chat?: (ctx: ChatContext) => Promise<{ text: string; images: AIImage[] }>;
+  search?: (ctx: ChatContext) => Promise<{ text: string; sources: Array<{ url: string; title?: string }> }>;
+  image?: (ctx: ImageContext) => Promise<AIImage[]>;
+  video?: (ctx: VideoContext) => Promise<AIVideo[]>;
+};
+
+const hosts = (
+  hostList: string[],
+  profile: ProviderProfile
+): Record<string, ProviderProfile> => {
+  const out: Record<string, ProviderProfile> = {};
+  for (const h of hostList) {
+    const host = h.trim();
+    if (!host) continue;
+    out[host] = profile;
+  }
+  return out;
+};
+
+const PROVIDER_PROFILES: Record<string, ProviderProfile> = {
+  "generativelanguage.googleapis.com": {
+    id: "gemini",
+    authMode: "query-key",
+    modes: {
+      chat: { strategy: "gemini-rest" },
+      search: { strategy: "gemini-rest" },
+      image: { strategy: "gemini-rest" },
+      video: {
+        strategy: "gemini-video-rest",
+        baseUrlType: "gemini",
+        endpoint: "v1beta/models/{model}:generateVideos",
+      },
+    },
+  },
+  "ark.cn-beijing.volces.com": {
+    id: "doubao",
+    authMode: "bearer",
+    modes: {
+      chat: {
+        strategy: "openai-rest",
+        baseUrlType: "origin",
+        endpoint: "api/v3/chat/completions",
+        imageUrlPolicy: "data-only",
+      },
+      image: {
+        strategy: "doubao-rest",
+        baseUrlType: "origin",
+        endpoint: "api/v3/images/generations",
+        imageDefaults: {
+          size: "2K",
+          responseFormat: "url",
+          extraParams: {
+            sequential_image_generation: "disabled",
+            watermark: true,
+          },
+        },
+        supportsEdit: true,
+      },
+      video: {
+        strategy: "doubao-rest",
+        baseUrlType: "origin",
+        endpoint: "api/v3/contents/generations/tasks",
+        videoDefaults: {
+          extraParams: {},
+        },
+      },
+    },
+  },
+  "api.openai.com": {
+    id: "openai",
+    authMode: "bearer",
+    modes: {
+      chat: { strategy: "openai-rest" },
+      search: { strategy: "openai-rest" },
+      image: { strategy: "openai-rest", supportsEdit: true },
+      video: { strategy: "openai-rest", endpoint: "chat/completions" },
+    },
+  },
+  "api.moonshot.cn": {
+    id: "moonshot",
+    authMode: "bearer",
+    modes: {
+      chat: { strategy: "openai-rest" },
+    },
+  },
+  ...hosts(
+    ["127.0.0.1", "api.abjj.de"],
+    {
+      id: "local-cliproxy",
+      authMode: "query-key",
+      modes: {
+        chat: { strategy: "openai-rest", baseUrlType: "openai" },
+        search: {
+          strategy: "openai-rest",
+          baseUrlType: "openai",
+          modelRules: [
+            {
+              match: { type: "includes", value: "gemini" },
+              override: {
+                strategy: "gemini-rest",
+                baseUrlType: "gemini"
+              }
+            }
+          ]
+        },
+        image: {
+          strategy: "gemini-image-rest",
+          baseUrlType: "gemini",
+          endpoint: "models/{model}:generateContent",
+          authMode: "query-key",
+          supportsEdit: true,
+        },
+        video: { strategy: "openai-rest", baseUrlType: "openai", endpoint: "chat/completions" },
+      },
+    },
+  ),
+};
+
+const DEFAULT_PROVIDER_PROFILE: ProviderProfile = {
+  id: "openai-compatible",
+  authMode: "bearer",
+  modes: {
+    chat: { strategy: "openai-rest" },
+    search: { strategy: "openai-rest" },
+    image: { strategy: "openai-rest", supportsEdit: true },
+    video: { strategy: "openai-rest", endpoint: "chat/completions" },
+  },
+};
+
+const getProviderHost = (url: string): string | null => {
   try {
-    const url = new URL(u);
-    const host = url.hostname;
-    const path = url.pathname && url.pathname !== "/" ? url.pathname : "";
-    let text = host + path;
-    if (text.length > 60) text = text.slice(0, 45) + "…" + text.slice(-10);
-    return text || u;
+    return new URL(url).hostname;
   } catch {
-    return u.length > 60 ? u.slice(0, 45) + "…" + u.slice(-10) : u;
+    return null;
   }
 };
-const nowISO = () => new Date().toISOString();
-const sleep = (ms: number) => new Promise<void>(res => setTimeout(res, ms));
-const shouldRetry = (err: any): boolean => {
-  const s = err?.response?.status;
-  const code = err?.code;
-  return (
-    s === 429 || s === 500 || s === 502 || s === 503 || s === 504 ||
-    code === "ECONNRESET" || code === "ETIMEDOUT" || code === "ENOTFOUND" ||
-    !!(err?.isAxiosError && !err?.response)
-  );
+
+const getProviderProfile = (url: string): ProviderProfile => {
+  const host = getProviderHost(url);
+  if (!host) return DEFAULT_PROVIDER_PROFILE;
+  return PROVIDER_PROFILES[host] ?? DEFAULT_PROVIDER_PROFILE;
 };
-const axiosWithRetry = async <T = any>(
-  config: AxiosRequestConfig,
-  tries = 2,
-  backoffMs = 500
-): Promise<AxiosResponse<T>> => {
-  let attempt = 0;
-  let lastErr: any;
-  const configuredTimeout = Store.data.timeout || DEFAULT_TIMEOUT_MS;
-  while (attempt <= tries) {
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), configuredTimeout);
+
+const mergeDefaults = <T extends { extraParams?: Record<string, any> }>(a?: T, b?: T): T | undefined => {
+  if (!a && !b) return undefined;
+  return {
+    ...(a || {}),
+    ...(b || {}),
+    extraParams: { ...(a?.extraParams || {}), ...(b?.extraParams || {}) },
+  } as T;
+};
+
+const matchModelRule = (model: string, rule: ModelMatchRule): boolean => {
+  if (!model) return false;
+  if (rule.type === "exact") return model === rule.value;
+  if (rule.type === "prefix") return model.startsWith(rule.value);
+  if (rule.type === "includes") return model.includes(rule.value);
+  if (rule.type === "regex") {
     try {
-      const baseConfig: AxiosRequestConfig = {
-        timeout: configuredTimeout,
-        signal: controller.signal,
-        ...config
-      };
-      const result = await axios(baseConfig);
-      clearTimeout(timeoutId);
-      return result;
-    } catch (err: any) {
-      clearTimeout(timeoutId);
-      lastErr = err;
-      if (err.name === 'CanceledError' || err.code === 'ERR_CANCELED') {
-        throw new Error(`请求超时（${configuredTimeout / 1000}秒）`);
-      }
-      if (attempt >= tries || !shouldRetry(err)) throw err;
-      const jitter = Math.floor(Math.random() * 200);
-      await sleep(backoffMs * Math.pow(2, attempt) + jitter);
-      attempt++;
+      return new RegExp(rule.value).test(model);
+    } catch {
+      return false;
     }
   }
-  throw lastErr;
+  return false;
 };
 
-/* ---------- 原子 JSON 写入 ---------- */
-const atomicWriteJSON = async (file: string, data: any) => {
-  const dir = path.dirname(file);
-  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-  const tmp = file + ".tmp";
-  await fs.promises.writeFile(tmp, JSON.stringify(data, null, 2), "utf8");
-  await fs.promises.rename(tmp, file);
-};
-
-/* ---------- 通用鉴权 ---------- */
-enum AuthMethod {
-  BEARER_TOKEN = "bearer_token",
-  API_KEY_HEADER = "api_key_header",
-  QUERY_PARAM = "query_param",
-  BASIC_AUTH = "basic_auth",
-  CUSTOM_HEADER = "custom_header"
-}
-interface AuthConfig {
-  method: AuthMethod;
-  apiKey: string;
-  headerName?: string;
-  paramName?: string;
-  username?: string;
-  password?: string;
-}
-class UniversalAuthHandler {
-  static buildAuthHeaders(config: AuthConfig): Record<string, string> {
-    const headers: Record<string, string> = {};
-    switch (config.method) {
-      case AuthMethod.BEARER_TOKEN:
-        headers["Authorization"] = `Bearer ${config.apiKey}`;
-        break;
-      case AuthMethod.API_KEY_HEADER:
-        headers[config.headerName || "X-API-Key"] = config.apiKey;
-        break;
-      case AuthMethod.CUSTOM_HEADER:
-        if (config.headerName) headers[config.headerName] = config.apiKey;
-        break;
-      case AuthMethod.BASIC_AUTH:
-        headers["Authorization"] = `Basic ${Buffer.from(
-          `${config.username || config.apiKey}:${config.password || ""}`
-        ).toString("base64")}`;
-        break;
-    }
-    return headers;
-  }
-  static buildAuthParams(config: AuthConfig): Record<string, string> {
-    const params: Record<string, string> = {};
-    if (config.method === AuthMethod.QUERY_PARAM) {
-      params[config.paramName || "key"] = config.apiKey;
-    }
-    return params;
-  }
-  static detectAuthMethod(baseUrl: string): AuthMethod {
-    const url = baseUrl.toLowerCase();
-    if (url.includes("generativelanguage.googleapis.com") || url.includes("aiplatform.googleapis.com"))
-      return AuthMethod.QUERY_PARAM;
-    if (url.includes("anthropic.com")) return AuthMethod.API_KEY_HEADER;
-    if (url.includes("aip.baidubce.com")) return AuthMethod.QUERY_PARAM;
-    return AuthMethod.BEARER_TOKEN;
-  }
-}
-
-/* ---------- 统一鉴权构建 ---------- */
-const buildAuthAttempts = (p: Provider, extraHeaders: Record<string, string> = {}) => {
-  if (p.authConfig) {
-    const headers = { ...UniversalAuthHandler.buildAuthHeaders(p.authConfig), ...extraHeaders };
-    const params = { ...UniversalAuthHandler.buildAuthParams(p.authConfig) };
-    return [{ headers, params }];
-  }
-  const detected = UniversalAuthHandler.detectAuthMethod(p.baseUrl);
-  const cfg: AuthConfig = {
-    method: detected,
-    apiKey: p.apiKey,
-    headerName: detected === AuthMethod.API_KEY_HEADER ? "x-api-key" : undefined,
-    paramName: detected === AuthMethod.QUERY_PARAM ? "key" : undefined
+const resolveModeConfig = (
+  profile: ProviderProfile,
+  mode: ProviderMode,
+  model: string
+): ProviderModeConfig | undefined => {
+  const base = profile.modes[mode];
+  if (!base) return undefined;
+  const rules = base.modelRules || [];
+  const matchedRule = rules.find((rule) => matchModelRule(model, rule.match));
+  if (!matchedRule) return { ...base };
+  const ruleOverrides = matchedRule.override || {};
+  return {
+    ...base,
+    ...ruleOverrides,
+    imageDefaults: mergeDefaults(base.imageDefaults, ruleOverrides.imageDefaults),
+    videoDefaults: mergeDefaults(base.videoDefaults, ruleOverrides.videoDefaults),
   };
-  const headers = { ...UniversalAuthHandler.buildAuthHeaders(cfg), ...extraHeaders };
-  const params = { ...UniversalAuthHandler.buildAuthParams(cfg) };
-  return [{ headers, params }];
-};
-const tryPostJSON = async (url: string, body: any, attempts: Array<{ headers?: any; params?: any }>) => {
-  let lastErr: any;
-  for (const a of attempts) {
-    try {
-      const r = await axiosWithRetry({ method: "POST", url, data: body, ...(a || {}) });
-      return r.data;
-    } catch (err) {
-      lastErr = err;
-    }
-  }
-  throw lastErr;
 };
 
-/* ---------- lowdb 封装 ---------- */
-class Store {
-  static db: any = null;
-  static data: DB = {
-    providers: {},
-    models: { chat: "", search: "", image: "", tts: "" },
-    contextEnabled: false,
-    collapse: false,
-    telegraph: { enabled: false, limit: 0, token: "", posts: [] },
-    voices: { gemini: "Kore", openai: "alloy" },
-    histories: {},
-    presetPrompt: "",
-    timeout: DEFAULT_TIMEOUT_MS
-  };
-  static baseDir = "";
-  static file = "";
-  static async init() {
-    if (this.db) return;
-    this.baseDir = createDirectoryInAssets("ai");
-    this.file = path.join(this.baseDir, "config.json");
-    this.db = await JSONFilePreset<DB>(this.file, this.data);
-    this.data = this.db.data;
-    const d: any = this.data;
-    // 默认值填充
-    const defaults: Record<string, any> = {
-      dataVersion: 5, providers: {}, modelCompat: {}, modelCatalog: { map: {}, updatedAt: undefined },
-      models: { chat: "", search: "", image: "", tts: "" }, contextEnabled: false, collapse: false,
-      telegraph: { enabled: false, limit: 0, token: "", posts: [] }, voices: { gemini: "Kore", openai: "alloy" },
-      histories: {}, histMeta: {}, presetPrompt: "", timeout: DEFAULT_TIMEOUT_MS, maxTokens: DEFAULT_MAX_TOKENS
-    };
-    for (const [k, v] of Object.entries(defaults)) if (d[k] === undefined || d[k] === null) d[k] = v;
-    if (d.dataVersion < 3) { try { await refreshModelCatalog(true); } catch { } d.dataVersion = 5; }
-    // 确保超时值在有效范围内
-    if (d.timeout > MAX_TIMEOUT_MS) d.timeout = MAX_TIMEOUT_MS;
-    if (d.timeout < 10000) d.timeout = DEFAULT_TIMEOUT_MS;
-    await this.writeSoon();
+const resolveBaseUrl = (
+  providerConfig: ProviderConfig,
+  modeConfig: ProviderModeConfig
+): string => {
+  const baseType = modeConfig.baseUrlType ?? "raw";
+  if (baseType === "origin") {
+    return new URL(providerConfig.url).origin;
   }
-  static async write() { await atomicWriteJSON(this.file, this.data); }
-  static writeSoonDelay = 300;
-  static _writeTimer: NodeJS.Timeout | null = null;
-  static async writeSoon(): Promise<void> {
-    if (this._writeTimer) clearTimeout(this._writeTimer);
-    this._writeTimer = setTimeout(async () => {
-      try { await atomicWriteJSON(this.file, this.data); } finally { this._writeTimer = null; }
-    }, this.writeSoonDelay);
-    return Promise.resolve();
+  if (baseType === "openai") {
+    return normalizeOpenAIBaseUrl(providerConfig.url);
   }
-}
+  if (baseType === "gemini") {
+    return normalizeGeminiBaseUrl(providerConfig.url);
+  }
+  return providerConfig.url;
+};
 
-/* ---------- 消息分片 & 折叠 ---------- */
-const applyWrap = (s: string, collapse?: boolean) => {
-  if (!collapse) return s;
-  if (/<blockquote(?:\s|>|\/)\/?>/i.test(s)) return s;
-  return `<span class="tg-spoiler">${s}</span>`;
+const resolveEndpointUrl = (baseUrl: string, endpoint?: string): string => {
+  if (!endpoint) return baseUrl;
+  if (/^https?:\/\//.test(endpoint)) return endpoint;
+  const base = baseUrl.endsWith("/") ? baseUrl : `${baseUrl}/`;
+  const cleaned = endpoint.startsWith("/") ? endpoint.slice(1) : endpoint;
+  return new URL(cleaned, base).toString();
 };
-const buildChunks = (text: string, collapse?: boolean, postfix?: string) => {
-  const WRAP_EXTRA = collapse ? WRAP_EXTRA_COLLAPSED : 0;
-  const parts = splitMessage(text, PAGE_EXTRA + WRAP_EXTRA);
-  if (parts.length === 0) return [];
-  if (parts.length === 1) return [applyWrap(parts[0], collapse) + (postfix || "")];
-  const total = parts.length;
-  const chunks: string[] = [];
-  for (let i = 0; i < total; i++) {
-    const isLast = i === total - 1;
-    const header = `📄 (${i + 1}/${total})\n\n`;
-    const body = header + parts[i];
-    const wrapped = applyWrap(body, collapse) + (isLast ? (postfix || "") : "");
-    chunks.push(wrapped);
-  }
-  return chunks;
-};
-const sendLong = async (msg: Api.Message, text: string, opts?: { collapse?: boolean }, postfix?: string) => {
-  const chunks = buildChunks(text, opts?.collapse, postfix);
-  if (chunks.length === 0) return;
-  if (chunks.length === 1) { await msg.edit({ text: chunks[0], parseMode: "html" }); return; }
-  await msg.edit({ text: chunks[0], parseMode: "html" });
-  if (msg.client) {
-    const peer = msg.peerId;
-    for (let i = 1; i < chunks.length; i++) await msg.client.sendMessage(peer, { message: chunks[i], parseMode: "html" });
-  } else {
-    for (let i = 1; i < chunks.length; i++) await msg.reply({ message: chunks[i], parseMode: "html" });
-  }
-};
-const sendLongReply = async (msg: Api.Message, replyToId: number, text: string, opts?: { collapse?: boolean }, postfix?: string) => {
-  const chunks = buildChunks(text, opts?.collapse, postfix);
-  if (!msg.client) return;
-  const peer = msg.peerId;
-  for (const chunk of chunks) await msg.client.sendMessage(peer, { message: chunk, parseMode: "html", replyTo: replyToId });
-};
-const extractText = (m: Api.Message | null | undefined) => {
+
+const getMessageText = (m?: Api.Message | null): string => {
   if (!m) return "";
-  const anyM: any = m;
-  return (anyM.message || anyM.text || anyM.caption || "");
+  const text = (m as any).message ?? (m as any).text ?? "";
+  return typeof text === "string" ? text : "";
 };
-/**
- * 提取引用文本或被回复消息的文本
- * 优先级：1. 引用文本 (quoteText) 2. 被回复消息的内容
- * @param msg 当前消息
- * @param replyMsg 被回复的消息（通过 getReplyMessage 获取）
- * @returns 引用文本或被回复消息的文本
- */
-const extractQuoteOrReplyText = (msg: Api.Message, replyMsg: Api.Message | null | undefined): string => {
-  // 优先使用引用文本 (Telegram 的 quote reply 功能)
-  const quoteText = (msg.replyTo as any)?.quoteText;
-  if (quoteText && typeof quoteText === "string" && quoteText.trim()) {
-    return quoteText.trim();
-  }
-  // 回退到被回复消息的内容
-  return extractText(replyMsg);
-};
-const splitMessage = (text: string, reserve = 0) => {
-  const limit = Math.max(1, MAX_MSG - Math.max(0, reserve));
-  if (text.length <= limit) return [text];
-  const parts: string[] = [];
-  let cur = "";
-  for (const line of text.split("\n")) {
-    if (line.length > limit) {
-      if (cur) { parts.push(cur); cur = ""; }
-      for (let i = 0; i < line.length; i += limit) parts.push(line.slice(i, i + limit));
-      continue;
-    }
-    const next = cur ? cur + "\n" + line : line;
-    if (next.length > limit) { parts.push(cur); cur = line; } else { cur = next; }
-  }
-  if (cur) parts.push(cur);
+
+const htmlEscape = (text: string): string =>
+  text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+
+const buildUserContent = (text: string, images: AIContentPart[]): string | AIContentPart[] => {
+  if (images.length === 0) return text;
+  const parts: AIContentPart[] = [];
+  if (text.trim()) parts.push({ type: "text", text });
+  parts.push(...images);
   return parts;
 };
 
-/* ---------- 兼容类型检测 ---------- */
-const detectCompat = (model: string): Compat => {
-  const m = (model || "").toLowerCase();
-  if (/\bclaude\b|anthropic/.test(m)) return "claude";
-  if (/\bgemini\b|(^gemini-)|image-generation/.test(m)) return "gemini";
-  if (/(^gpt-|gpt-4o|gpt-image|dall-e|^tts-1\b)/.test(m)) return "openai";
-  return "openai";
+const extractErrorMessage = (error: any): string => {
+  const msgText = typeof error?.message === "string" ? error.message : "";
+  const reasonText =
+    typeof error?.cause === "string"
+      ? error.cause
+      : error?.cause
+        ? String(error.cause)
+        : error?.config?.signal?.reason
+          ? String(error.config.signal.reason)
+          : "";
+
+  if ((msgText + reasonText).includes("请求超时")) return "请求超时";
+  if (error?.name === "AbortError" || msgText.toLowerCase().includes("aborted")) return "操作已取消";
+  if (error?.code === "ECONNABORTED") return "请求超时";
+  if (error?.response?.status === 429) return "请求过于频繁，请稍后重试";
+  return error?.response?.data?.error?.message || error?.response?.data?.message || msgText || "未知错误";
 };
 
-/* ---------- 模型目录 ---------- */
-const catalogInflight: { refreshing: boolean; lastPromise: Promise<void> | null } = { refreshing: false, lastPromise: null };
-const getCompatFromCatalog = (model: string): Compat | null => {
-  const ml = String(model || "").toLowerCase();
-  const map = Store.data.modelCatalog?.map || ({} as Record<string, Compat>);
-  const v = (map as any)[ml] as Compat | undefined;
-  return v ?? null;
-};
-const refreshModelCatalog = async (force = false): Promise<void> => {
-  if (!force && catalogInflight.refreshing) return catalogInflight.lastPromise || Promise.resolve();
-  catalogInflight.refreshing = true;
-  const work = (async () => {
-    try {
-      const entries = Object.entries(Store.data.providers || {});
-      const merged: Record<string, Compat> = {};
-      for (const [, p] of entries) {
-        try {
-          const res = await listModelsByAnyCompat(p);
-          const mp: Record<string, Compat> = (((res as any).modelMap) || {}) as Record<string, Compat>;
-          for (const [k, v] of Object.entries(mp)) merged[k] = v;
-        } catch { }
-      }
-      const catalog = (Store.data.modelCatalog ??= { map: {}, updatedAt: undefined } as any);
-      (catalog as any).map = merged as any;
-      (catalog as any).updatedAt = nowISO();
-      await Store.writeSoon();
-    } finally {
-      catalogInflight.refreshing = false;
-      catalogInflight.lastPromise = null;
-    }
-  })();
-  catalogInflight.lastPromise = work;
-  return work;
-};
-/* ---------- 模型刷新防抖 ---------- */
-let refreshDebounceTimer: NodeJS.Timeout | null = null;
-const debouncedRefreshModelCatalog = () => {
-  if (refreshDebounceTimer) clearTimeout(refreshDebounceTimer);
-  refreshDebounceTimer = setTimeout(() => {
-    refreshDebounceTimer = null;
-    refreshModelCatalog(true).catch(() => { });
-  }, MODEL_REFRESH_DEBOUNCE_MS);
-};
-const compatResolving = new Map<string, Promise<Compat>>();
-const resolveCompat = async (name: string, model: string, p: Provider): Promise<Compat> => {
-  const ml = String(model || "").toLowerCase();
-  const cat = getCompatFromCatalog(ml);
-  if (cat) return cat;
-  const mc = (Store.data.modelCompat && (Store.data.modelCompat as any)[name]) ? (Store.data.modelCompat as any)[name][ml] as Compat | undefined : undefined;
-  const byName = detectCompat(model);
-  if (mc) return mc;
-  setTimeout(() => { void refreshModelCatalog(false).catch(() => { }); }, 0);
-  const pending = compatResolving.get(name + "::" + ml) || compatResolving.get(name);
-  if (pending) return await pending;
-  const task = (async () => {
-    try {
-      const res = await listModelsByAnyCompat(p);
-      const primary: Compat | null = (res.compat as Compat) || null;
-      const map: Record<string, Compat> = (((res as any).modelMap) || {}) as Record<string, Compat>;
-      if (!Store.data.modelCompat) Store.data.modelCompat = {} as any;
-      if (!(Store.data.modelCompat as any)[name]) (Store.data.modelCompat as any)[name] = {} as any;
-      for (const [k, v] of Object.entries(map)) {
-        const cur = (Store.data.modelCompat as any)[name][k] as Compat | undefined;
-        if (cur !== v) (Store.data.modelCompat as any)[name][k] = v;
-      }
-      let comp: Compat = (Store.data.modelCompat as any)[name][ml] as Compat;
-      if (!comp) comp = (primary as Compat) || byName;
-      if (((Store.data.modelCompat as any)[name][ml] as Compat | undefined) !== comp) (Store.data.modelCompat as any)[name][ml] = comp;
-      const cat = (Store.data.modelCatalog ??= { map: {}, updatedAt: undefined } as any);
-      const catMap = (cat as any).map as Record<string, Compat>;
-      for (const [k, v] of Object.entries(map)) if ((catMap as any)[k] !== v) (catMap as any)[k] = v as Compat;
-      if ((catMap as any)[ml] !== comp) (catMap as any)[ml] = comp;
-      (cat as any).updatedAt = nowISO();
-      if (primary && p) if (p.compatauth !== primary) p.compatauth = primary;
-      await Store.writeSoon();
-      return comp;
-    } catch {
-      const comp: Compat = byName;
-      if (!Store.data.modelCompat) Store.data.modelCompat = {} as any;
-      if (!(Store.data.modelCompat as any)[name]) (Store.data.modelCompat as any)[name] = {} as any;
-      if (!(Store.data.modelCompat as any)[name][ml]) (Store.data.modelCompat as any)[name][ml] = comp;
-      try { await Store.writeSoon(); } catch { }
-      setTimeout(() => { void refreshModelCatalog(false).catch(() => { }); }, 0);
-      return comp;
-    } finally {
-      compatResolving.delete(name + "::" + ml);
-      compatResolving.delete(name);
-    }
-  })();
-  compatResolving.set(name + "::" + ml, task);
-  return await task;
-};
-
-/* ---------- 错误映射 ---------- */
-const mapError = (err: any, ctx?: string): string => {
-  const s = err?.response?.status as number | undefined;
-  const body = err?.response?.data;
-  const raw = body?.error?.message || body?.message || err?.message || String(err);
-  let hint = "";
-  if (s === 400) hint = "请求格式有误，可能是模型不支持当前参数或输入过长";
-  else if (s === 401 || s === 403) hint = "认证失败，请检查 API Key 是否正确、是否有对应权限";
-  else if (s === 404) hint = "接口不存在，请检查 BaseURL/兼容类型或服务商路由";
-  else if (s === 429) hint = "请求过于频繁或额度受限，请稍后重试或调整速率";
-  else if (typeof s === "number" && s >= 500) hint = "服务端异常，请稍后重试或更换服务商";
-  else if (!s) hint = "网络异常，请检查网络或 BaseURL";
-  const where = ctx ? `（${ctx}）` : "";
-  return `${raw}${hint ? "｜" + hint : ""}${s ? `｜HTTP ${s}` : ""}${where}`;
-};
-
-/* ---------- 模型名规范化 ---------- */
-const normalizeModelName = (x: any): string => {
-  let s = String(x?.id || x?.slug || x?.name || x || "");
-  s = s.trim();
-  const q = s.indexOf("?");
-  if (q >= 0) s = s.slice(0, q);
-  const h = s.indexOf("#");
-  if (h >= 0) s = s.slice(0, h);
-  if (s.includes("/")) s = s.split("/").pop() || s;
-  return s.trim();
-};
-
-/* ---------- 快捷选取 ---------- */
-const pick = (kind: keyof Models): { provider: string; model: string } | null => {
-  const s = Store.data.models[kind];
-  if (!s) return null;
-  const i = s.indexOf(" ");
-  if (i <= 0) return null;
-  const provider = s.slice(0, i);
-  const model = s.slice(i + 1);
-  return { provider, model };
-};
-const providerOf = (name: string): Provider | null => Store.data.providers[name] || null;
-const footer = (model: string, extra?: string) => {
-  const src = model.toLowerCase().includes("claude") ? "Anthropic Claude" : model.toLowerCase().includes("gemini") ? "Google Gemini" : "OpenAI";
-  return `\n\n<i>Powered by ${src}${extra ? " " + extra : ""}</i>`;
-};
-const ensureDir = () => {
-  if (!fs.existsSync(Store.baseDir)) fs.mkdirSync(Store.baseDir, { recursive: true });
-};
-/* ---------- 上下文隔离（用户+会话） ---------- */
-const contextKey = (msg: Api.Message): string => {
-  const chatId = String((msg.peerId as any)?.channelId || (msg.peerId as any)?.userId || (msg.peerId as any)?.chatId || "global");
-  const userId = String((msg as any).senderId || (msg as any).fromId?.userId || "unknown");
-  return `${userId}:${chatId}`;
-};
-const chatIdStr = (msg: Api.Message) => contextKey(msg); // 兼容别名
-const isGroupOrChannel = (msg: Api.Message): boolean => {
-  const peer = msg.peerId;
-  return (peer as any)?.className === "PeerChannel" || (peer as any)?.className === "PeerChat";
-};
-const histFor = (id: string) => Store.data.histories[id] || [];
-const HISTORY_GLOBAL_MAX_SESSIONS = 200;
-const HISTORY_GLOBAL_MAX_BYTES = 2 * 1024 * 1024;
-const pruneGlobalHistories = () => {
-  const ids = Object.keys(Store.data.histories || {});
-  if (!ids.length) return;
-  const meta = (Store.data.histMeta || {}) as Record<string, { lastAt: string }>;
-  const sizeOfItem = (x: { role: string; content: string }) => Buffer.byteLength(`${x.role}:${x.content}`);
-  const sizeOfHist = (arr: { role: string; content: string }[]) => arr.reduce((t, x) => t + sizeOfItem(x), 0);
-  let totalBytes = 0;
-  for (const id of ids) totalBytes += sizeOfHist(Store.data.histories[id] || []);
-  if (ids.length <= HISTORY_GLOBAL_MAX_SESSIONS && totalBytes <= HISTORY_GLOBAL_MAX_BYTES) return;
-  const sorted = ids.sort((a, b) => {
-    const ta = Date.parse((meta[a]?.lastAt) || "1970-01-01T00:00:00.000Z");
-    const tb = Date.parse((meta[b]?.lastAt) || "1970-01-01T00:00:00.000Z");
-    return ta - tb;
-  });
-  while ((sorted.length > HISTORY_GLOBAL_MAX_SESSIONS || totalBytes > HISTORY_GLOBAL_MAX_BYTES) && sorted.length) {
-    const victim = sorted.shift()!;
-    const arr = Store.data.histories[victim] || [];
-    totalBytes -= sizeOfHist(arr);
-    delete Store.data.histories[victim];
-    if (Store.data.histMeta) delete Store.data.histMeta[victim];
+class UserError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "UserError";
   }
-};
-const pushHist = (id: string, role: string, content: string) => {
-  if (!Store.data.histories[id]) Store.data.histories[id] = [];
-  Store.data.histories[id].push({ role, content });
-  const h = Store.data.histories[id];
-  while (h.length > HISTORY_MAX_ITEMS) h.shift();
-  const sizeOf = (x: { role: string; content: string }) => Buffer.byteLength(`${x.role}:${x.content}`);
-  let total = 0;
-  for (const x of h) total += sizeOf(x);
-  while (total > HISTORY_MAX_BYTES && h.length > 1) { const first = h.shift()!; total -= sizeOf(first); }
-  if (!Store.data.histMeta) Store.data.histMeta = {} as any;
-  (Store.data.histMeta as any)[id] = { lastAt: new Date().toISOString() };
-  pruneGlobalHistories();
+}
+
+const requireUser = (condition: any, message: string): void => {
+  if (!condition) throw new UserError(message);
 };
 
-/* ---------- 文本清理 & 格式化 ---------- */
-const cleanTextBasic = (t: string): string =>
-  t
-    .replace(/\uFEFF/g, "")
-    .replace(/[\uFFFC\uFFFF\uFFFE]/g, "")
-    .replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, "")
-    .replace(/\r\n/g, "\n")
-    .replace(/[\u200B\u200C\u200D\u2060]/g, "")
-    .normalize("NFKC");
-const escapeAndFormatForTelegram = (raw: string): string => {
-  const cleaned = cleanTextBasic(raw || "");
-  let escaped = html(cleaned);
-  escaped = escaped.replace(/\*\*([^*]+)\*\*/g, "<b>$1</b>");
-  escaped = escaped.replace(/\*\*\s*\[?引用来源]?\s*\*\*/g, "<b>引用来源</b>");
-  escaped = escaped.replace(/^\s*-\s*\[([^]]+)]\((https?:\/\/[^\s)]+)\)\s*$/gm, (_m, title: string, url: string) => {
-    const href = html(String(url));
-    return `• <a href="${href}">${title}</a>`;
-  });
-  const urlRegex = /\bhttps?:\/\/[^\s<>"')}\x5D]+/g;
-  const urls = cleaned.match(urlRegex) || [];
-  for (const u of urls) {
-    const display = shortenUrlForDisplay(u);
-    const escapedUrl = html(u);
-    const anchor = `<a href="${html(u)}">${html(display)}</a>`;
-    escaped = escaped.replace(new RegExp(escapeRegExp(escapedUrl), "g"), anchor);
+type ProcessingKind = "chat" | "search" | "image" | "video";
+
+const PROCESSING_TEXT: Record<ProcessingKind, string> = {
+  chat: "💬 <b>正在处理chat任务</b>",
+  search: "🔎 <b>正在处理search任务</b>",
+  image: "🖼️ <b>正在处理image任务</b>",
+  video: "🎬 <b>正在处理video任务</b>",
+};
+
+const formatErrorForDisplay = (error: any): string => {
+  if (
+    error instanceof UserError ||
+    error?.name === "AbortError" ||
+    (typeof error?.message === "string" && error.message.toLowerCase().includes("aborted"))
+  ) {
+    const extracted = extractErrorMessage(error);
+    if (extracted === "请求超时") return `❌ <b>错误:</b> 请求超时`;
+    const msg = error instanceof UserError ? error.message : "操作已取消";
+    return `🚫 ${msg}`;
   }
-  escaped = escaped.replace(/^&gt;\s?(.+)$/gm, "<blockquote>$1</blockquote>");
-  return escaped;
+  return `❌ <b>错误:</b> ${extractErrorMessage(error)}`;
 };
 
-/* ---------- 路由降级 ---------- */
-const isRouteError = (err: any): boolean => {
-  const s = err?.response?.status;
-  const txt = String(err?.response?.data || err?.message || "").toLowerCase();
-  return s === 404 || s === 405 || (s === 400 && /(unknown|not found|invalid path|no route)/.test(txt));
-};
-const geminiRequestWithFallback = async (p: Provider, path: string, axiosConfig: any): Promise<any> => {
-  const base = trimBase(p.baseUrl);
-  const mkConfigs = () => {
-    const baseCfg = { ...axiosConfig };
-    const headersBase = { ...(baseCfg.headers || {}) };
-    const paramsBase = { ...(baseCfg.params || {}) };
-    const cfgKey = { ...baseCfg, headers: { ...headersBase }, params: { ...paramsBase, key: p.apiKey } };
-    const cfgXGoog = { ...baseCfg, headers: { ...headersBase, "x-goog-api-key": p.apiKey }, params: { ...paramsBase } };
-    const cfgAuth = { ...baseCfg, headers: { ...headersBase, Authorization: `Bearer ${p.apiKey}` }, params: { ...paramsBase } };
-    const pref = p.compatauth;
-    const ordered = (pref === "openai" || pref === "claude") ? [cfgAuth, cfgXGoog, cfgKey] : [cfgKey, cfgXGoog, cfgAuth];
-    const seen = new Set<string>();
-    const out: any[] = [];
-    for (const c of ordered) {
-      const sig = JSON.stringify({ h: c.headers || {}, p: c.params || {} });
-      if (!seen.has(sig)) { seen.add(sig); out.push(c); }
-    }
-    return out;
-  };
-  const configs = mkConfigs();
-  const paths = [`/v1beta${path}`, `/v1${path}`];
-  let lastErr: any;
-  for (const suffix of paths) {
-    for (const cfg of configs) {
-      try {
-        const r = await axiosWithRetry({ url: base + suffix, ...cfg });
-        return r.data;
-      } catch (err: any) {
-        lastErr = err;
-        if (isRouteError(err)) break;
-      }
-    }
-  }
-  throw lastErr;
+const sendProcessing = async (msg: Api.Message, kind: ProcessingKind): Promise<void> => {
+  await MessageSender.sendOrEdit(msg, PROCESSING_TEXT[kind], { parseMode: "html" });
 };
 
-/* ---------- Anthropic 版本缓存 ---------- */
-const anthropicVersionCache = new Map<string, string>();
-const getAnthropicVersion = async (p: Provider): Promise<string> => {
-  const key = trimBase(p.baseUrl) || "anthropic";
-  const cached = anthropicVersionCache.get(key);
-  if (cached) return cached;
-  let ver = "2023-06-01";
-  const base = trimBase(p.baseUrl);
-  try {
-    await axiosWithRetry({ method: "GET", url: base + "/v1/models", headers: { "x-api-key": p.apiKey } });
-  } catch (err: any) {
-    const txt = JSON.stringify(err?.response?.data || err?.message || "");
-    const matches = txt.match(/\b20\d{2}-\d{2}-\d{2}\b/g);
-    if (matches && matches.length) {
-      matches.sort();
-      ver = matches[matches.length - 1];
-    }
-  }
-  anthropicVersionCache.set(key, ver);
-  return ver;
+const sendErrorMessage = async (msg: Api.Message, error: any, trigger?: Api.Message): Promise<void> => {
+  await MessageSender.sendOrEdit(trigger || msg, formatErrorForDisplay(error), { parseMode: "html" });
 };
 
-/* ---------- AI 响应清理工具 ---------- */
-
-/**
- * 清理 AI 思考标签（<think>...</think>）
- * 一些模型会返回带有思考过程的响应，需要移除
- */
-const cleanAIThinking = (text: string): string => {
-  // 移除 <think>...</think> 标签及其内容
-  let cleaned = text.replace(/<think>[\s\S]*?<\/think>/gi, "");
-  // 同时处理 [think]...[/think] 格式
-  cleaned = cleaned.replace(/\[think\][\s\S]*?\[\/think\]/gi, "");
-  return cleaned.trim();
+const parseDataUrl = (url: string): { mimeType: string; data: Buffer } | null => {
+  const match = url.match(/^data:([^;]+);base64,(.+)$/);
+  if (!match) return null;
+  return { mimeType: match[1], data: Buffer.from(match[2], "base64") };
 };
 
-/**
- * 从文本中提取内嵌的 base64 图片
- * 支持 Markdown 图片格式：![alt](data:image/...;base64,...)
- * 以及直接的 data URI 格式
- * @returns 提取的图片数组，包含 base64 数据和 mime 类型
- */
-const extractEmbeddedImages = (text: string): Array<{ data: string; mime: string; alt?: string }> => {
-  const images: Array<{ data: string; mime: string; alt?: string }> = [];
-
-  // 匹配 Markdown 格式: ![alt](data:image/xxx;base64,...)
-  const mdRegex = /!\[([^\]]*)\]\((data:image\/([a-z0-9+.-]+);base64,([A-Za-z0-9+/=]+))\)/gi;
-  let match: RegExpExecArray | null;
-  while ((match = mdRegex.exec(text)) !== null) {
-    const alt = match[1];
-    const mimeType = match[3]; // jpeg, png, webp, etc.
-    const base64Data = match[4];
-    if (base64Data && base64Data.length > 100) { // 确保是有效的图片数据
-      images.push({ data: base64Data, mime: `image/${mimeType}`, alt });
-    }
-  }
-
-  // 匹配直接的 data URI 格式（不在 Markdown 中）
-  // 避免重复匹配已经在 Markdown 中处理过的
-  const dataUriRegex = /(?<!![\^\[\]\(])data:image\/([a-z0-9+.-]+);base64,([A-Za-z0-9+/=]{100,})/gi;
-  while ((match = dataUriRegex.exec(text)) !== null) {
-    const mimeType = match[1];
-    const base64Data = match[2];
-    // 检查是否已经添加过（通过比较base64数据的前100个字符）
-    const isDuplicate = images.some(img => img.data.substring(0, 100) === base64Data.substring(0, 100));
-    if (!isDuplicate && base64Data.length > 100) {
-      images.push({ data: base64Data, mime: `image/${mimeType}` });
-    }
-  }
-
-  return images;
-};
-
-/**
- * 从文本中移除内嵌图片，只保留文字内容
- */
-const cleanEmbeddedImages = (text: string): string => {
-  // 移除 Markdown 图片格式
-  let cleaned = text.replace(/!\[[^\]]*\]\(data:image\/[a-z0-9+.-]+;base64,[A-Za-z0-9+/=]+\)/gi, "[图片]");
-  // 移除直接的 data URI
-  cleaned = cleaned.replace(/data:image\/[a-z0-9+.-]+;base64,[A-Za-z0-9+/=]{100,}/gi, "[图片数据]");
-  return cleaned.trim();
-};
-
-/**
- * 处理 AI 响应，提取图片和清理文本
- * @returns 处理后的结果，包含清理后的文本和提取的图片
- */
-const processAIResponse = (rawContent: string): { text: string; images: Array<{ data: string; mime: string; alt?: string }> } => {
-  // 首先清理思考标签
-  const withoutThinking = cleanAIThinking(rawContent);
-
-  // 提取内嵌图片
-  const images = extractEmbeddedImages(withoutThinking);
-
-  // 清理图片数据，只保留文字
-  let text = withoutThinking;
-  if (images.length > 0) {
-    text = cleanEmbeddedImages(withoutThinking);
-  }
-
-  return { text, images };
-};
-
-/* ---------- 格式化 Q&A ---------- */
-const formatQA = (qRaw: string, aRaw: string) => {
-  const expandAttr = Store.data.collapse ? ' expandable' : "";
-  const qEsc = escapeAndFormatForTelegram(qRaw);
-  const aEsc = escapeAndFormatForTelegram(aRaw);
-  const Q = `<b>Q:</b>\n<blockquote${expandAttr}>${qEsc}</blockquote>`;
-  const A = `<b>A:</b>\n<blockquote${expandAttr}>${aEsc}</blockquote>`;
-  return `${Q}\n\n${A}`;
-};
-
-/* ---------- Telegraph 工具 ---------- */
-const toNodes = (text: string) => JSON.stringify(text.split("\n\n").map(p => ({ tag: "p", children: [p] })));
-const ensureTGToken = async (): Promise<string> => {
-  if (Store.data.telegraph.token) return Store.data.telegraph.token;
-  const resp = await axiosWithRetry({
-    method: "POST",
-    url: "https://api.telegra.ph/createAccount",
-    params: { short_name: "TeleBoxAI", author_name: "TeleBox" }
-  });
-  const t = resp.data?.result?.access_token || "";
-  Store.data.telegraph.token = t;
-  await Store.writeSoon();
-  return t;
-};
-const createTGPage = async (title: string, text: string): Promise<string[]> => {
-  // Telegraph 单页限制约 64KB JSON，8000安全值
-  const MAX_CHARS_PER_PAGE = 8000;
-
-  const tryCreate = async (token: string, pageTitle: string, content: string): Promise<string | null> => {
-    const contentNodes = JSON.parse(toNodes(content));
-    const resp = await axiosWithRetry({
-      method: "POST",
-      url: "https://api.telegra.ph/createPage",
-      headers: { "Content-Type": "application/json" },
-      data: {
-        access_token: token,
-        title: pageTitle,
-        content: contentNodes,
-        return_content: false
-      }
-    });
-    if (!resp.data?.ok) {
-      return null;
-    }
-    return resp.data?.result?.url || null;
-  };
-
-  // 按段落分割内容成多个块
-  const splitContent = (fullText: string): string[] => {
-    if (fullText.length <= MAX_CHARS_PER_PAGE) return [fullText];
-
-    const paragraphs = fullText.split("\n\n");
-    const chunks: string[] = [];
-    let current = "";
-
-    for (const para of paragraphs) {
-      const next = current ? current + "\n\n" + para : para;
-      if (next.length > MAX_CHARS_PER_PAGE && current) {
-        chunks.push(current);
-        current = para;
-      } else {
-        current = next;
-      }
-    }
-    if (current) chunks.push(current);
-    return chunks;
-  };
-
-  try {
-    const token = await ensureTGToken();
-    if (!token) return [];
-
-    const chunks = splitContent(text);
-
-
-
-    // 多页创建
-    const urls: string[] = [];
-    for (let i = 0; i < chunks.length; i++) {
-      const pageTitle = title;
-      try {
-        const url = await tryCreate(token, pageTitle, chunks[i]);
-        if (url) urls.push(url);
-      } catch {
-        // 页面创建失败，静默处理
-      }
-    }
-    return urls;
-  } catch {
-    return [];
-  }
-};
-
-
-/* ---------- 媒体处理辅助函数 ---------- */
-
-// 归一化下载的媒体结果
 const normalizeDownloadedMedia = async (downloaded: any): Promise<Buffer | null> => {
   if (!downloaded) return null;
   if (Buffer.isBuffer(downloaded)) return downloaded;
@@ -845,42 +492,81 @@ const normalizeDownloadedMedia = async (downloaded: any): Promise<Buffer | null>
   return null;
 };
 
-// 提取第一帧 (GIF/WebM/Sticker)
+const getImageExtensionForMime = (mimeType: string): string => {
+  if (mimeType === "image/png") return ".png";
+  if (mimeType === "image/webp") return ".webp";
+  if (mimeType === "image/gif") return ".gif";
+  return ".jpg";
+};
+
 const extractFirstFrame = async (buffer: Buffer): Promise<Buffer | null> => {
   try {
-    // animated: true 读取第一帧，转为 png
     return await sharp(buffer, { animated: true }).png().toBuffer();
   } catch {
     return null;
   }
 };
 
-// 获取 Document 缩略图
 const getDocumentThumb = (doc: Api.Document): Api.TypePhotoSize | undefined => {
   const thumbs = doc.thumbs || [];
   if (thumbs.length === 0) return undefined;
   return thumbs[thumbs.length - 1];
 };
 
-/**
- * 智能下载并处理消息中的媒体（支持图片、GIF、贴纸等）
- * 返回适合 AI 视觉模型的 Buffer (通常是 PNG/JPEG)
- */
-const downloadMessageMediaAsData = async (msg: Api.Message): Promise<{ buffer: Buffer; mime: string } | null> => {
-  if (!msg?.media || !msg.client) return null;
+const resolveImageInputs = async (
+  parts: AIContentPart[],
+  httpClient: HttpClient,
+  token?: AbortToken,
+  options?: { allowFailures?: boolean }
+): Promise<ResolvedImageData[]> => {
+  const resolved: ResolvedImageData[] = [];
+  const allowFailures = options?.allowFailures ?? false;
+  for (const part of parts) {
+    if (part.type !== "image_url") continue;
+    const dataUrl = parseDataUrl(part.image_url.url);
+    if (dataUrl) {
+      resolved.push({ data: dataUrl.data, mimeType: dataUrl.mimeType });
+      if (!allowFailures) break;
+      continue;
+    }
+    try {
+      const image = await resolveAIImageData({ url: part.image_url.url, mimeType: "image/jpeg" }, httpClient, token);
+      if (image?.data) {
+        resolved.push({ data: image.data, mimeType: image.mimeType });
+        if (!allowFailures) break;
+      }
+    } catch (error) {
+      if (!allowFailures) throw error;
+    }
+  }
+  return resolved;
+};
 
-  // 1. 普通 Photo
+const resolveImagePart = async (
+  parts: AIContentPart[],
+  httpClient: HttpClient,
+  token?: AbortToken
+): Promise<AIImage | null> => {
+  const resolved = await resolveImageInputs(parts, httpClient, token, { allowFailures: false });
+  if (!resolved.length) return null;
+  return { data: resolved[0].data, mimeType: resolved[0].mimeType };
+};
+
+const collectImagePartsFromSingleMessage = async (msg: Api.Message, out: AIContentPart[]): Promise<void> => {
+  if (!msg.media || !msg.client) return;
+
   if (msg.media instanceof Api.MessageMediaPhoto) {
     const downloaded = await msg.client.downloadMedia(msg);
     const buffer = await normalizeDownloadedMedia(downloaded);
-    if (!buffer) return null;
-    return { buffer, mime: "image/jpeg" };
+    if (!buffer) return;
+    const dataUrl = `data:image/jpeg;base64,${buffer.toString("base64")}`;
+    out.push({ type: "image_url", image_url: { url: dataUrl } });
+    return;
   }
 
-  // 2. Document (可能是普通图片、GIF、贴纸)
   if (msg.media instanceof Api.MessageMediaDocument && msg.media.document instanceof Api.Document) {
     const doc = msg.media.document;
-    const docMime = (doc.mimeType || "").toLowerCase();
+    const docMime = doc.mimeType || "";
     const isAnimated =
       docMime === "image/gif" ||
       docMime === "video/webm" ||
@@ -888,1806 +574,3193 @@ const downloadMessageMediaAsData = async (msg: Api.Message): Promise<{ buffer: B
       docMime === "application/x-tg-sticker" ||
       doc.attributes?.some((attr) => attr instanceof Api.DocumentAttributeAnimated);
 
-    // 2.1 静态图片 Document
+    const thumb = getDocumentThumb(doc);
+
     if (!isAnimated && docMime.startsWith("image/")) {
       const downloaded = await msg.client.downloadMedia(msg);
       const buffer = await normalizeDownloadedMedia(downloaded);
-      if (!buffer) return null;
-      return { buffer, mime: docMime };
+      if (!buffer) return;
+      const dataUrl = `data:${docMime};base64,${buffer.toString("base64")}`;
+      out.push({ type: "image_url", image_url: { url: dataUrl } });
+      return;
     }
 
-    // 2.2 动态媒体 (GIF / WebM / Sticker) -> 抽帧
     let frameBuffer: Buffer | null = null;
 
-    // 优先尝试利用 Telegram 提供的缩略图
-    const thumb = getDocumentThumb(doc);
     if (thumb) {
-      try {
-        const downloaded = await msg.client.downloadMedia(msg, { thumb });
-        const buffer = await normalizeDownloadedMedia(downloaded);
-        if (buffer) {
-          // 确保是 PNG
-          try { frameBuffer = await sharp(buffer).png().toBuffer(); } catch { frameBuffer = buffer; }
+      const downloaded = await msg.client.downloadMedia(msg, { thumb });
+      const buffer = await normalizeDownloadedMedia(downloaded);
+      if (buffer) {
+        try {
+          frameBuffer = await sharp(buffer).png().toBuffer();
+        } catch {
+          frameBuffer = buffer;
         }
-      } catch {
-        // 缩略图下载失败，回退到原文件
       }
     }
 
-    // 如果没有缩略图或失败，尝试下载原文件并抽帧
     if (!frameBuffer) {
-      try {
-        const downloaded = await msg.client.downloadMedia(msg);
-        const buffer = await normalizeDownloadedMedia(downloaded);
-        if (buffer) {
+      const downloaded = await msg.client.downloadMedia(msg);
+      const buffer = await normalizeDownloadedMedia(downloaded);
+      if (buffer) {
+        try {
           frameBuffer = await extractFirstFrame(buffer);
-        }
-      } catch {
-        // 原文件下载/抽帧失败
-      }
-    }
-
-    if (frameBuffer) {
-      return { buffer: frameBuffer, mime: "image/png" };
-    }
-  }
-
-  return null;
-};
-
-/* ---------- 聊天适配 ---------- */
-const chatOpenAI = async (p: Provider, model: string, msgs: { role: string; content: string }[], maxTokens?: number, useSearch?: boolean) => {
-  const url = trimBase(p.baseUrl) + "/v1/chat/completions";
-  const effectiveMaxTokens = maxTokens || Store.data.maxTokens || DEFAULT_MAX_TOKENS;
-  const body: any = { model, messages: msgs, max_tokens: effectiveMaxTokens };
-  if (useSearch && p.baseUrl?.includes("api.openai.com")) {
-    body.tools = [{
-      type: "function",
-      function: {
-        name: "web_search",
-        description: "Search the web for current information and return relevant results",
-        parameters: {
-          type: "object",
-          properties: { query: { type: "string", description: "The search query to execute" } },
-          required: ["query"]
+        } catch {
+          frameBuffer = null;
         }
       }
-    }];
-  } else if (useSearch) {
-    const searchPrompt = "请基于你的知识回答以下问题，如果需要最新信息请说明。";
-    msgs[msgs.length - 1].content = searchPrompt + "\n\n" + msgs[msgs.length - 1].content;
-  }
-  const attempts = buildAuthAttempts(p);
-  try {
-    const data: any = await tryPostJSON(url, body, attempts);
-    return data?.choices?.[0]?.message?.content || "";
-  } catch (lastErr: any) {
-    const status = lastErr?.response?.status;
-    const bodyErr = lastErr?.response?.data;
-    const msg = bodyErr?.error?.message || bodyErr?.message || lastErr?.message || String(lastErr);
-    throw new Error(`[chatOpenAI] adapter=openai model=${html(model)} status=${status || "network"} message=${msg}`);
-  }
-};
-const chatClaude = async (p: Provider, model: string, msgs: { role: string; content: string }[], maxTokens?: number, useSearch?: boolean) => {
-  const url = trimBase(p.baseUrl) + "/v1/messages";
-  const effectiveMaxTokens = maxTokens || Store.data.maxTokens || DEFAULT_MAX_TOKENS;
-  const body: any = { model, max_tokens: effectiveMaxTokens, messages: msgs.map(m => ({ role: m.role === "assistant" ? "assistant" : "user", content: m.content })) };
-  if (useSearch && p.baseUrl?.includes("api.anthropic.com")) {
-    body.tools = [{ type: "web_search_20241220", name: "web_search", max_uses: 3 }];
-  }
-  const v = await getAnthropicVersion(p);
-  const attempts = buildAuthAttempts(p, { "anthropic-version": v });
-  try {
-    const data: any = await tryPostJSON(url, body, attempts);
-    if (data?.content && Array.isArray(data.content)) {
-      const textBlocks = data.content
-        .filter((block: any) => block.type === "text")
-        .map((block: any) => block.text)
-        .filter((text: string) => text && text.trim());
-      if (textBlocks.length > 0) return textBlocks.join("\n\n");
     }
-    const possibleTexts = [
-      data?.content?.[0]?.text,
-      data?.message?.content?.[0]?.text,
-      data?.choices?.[0]?.message?.content,
-      data?.response,
-      data?.text,
-      data?.content,
-      data?.message?.content,
-      data?.output
-    ];
-    for (const text of possibleTexts) if (typeof text === "string" && text.trim()) return text.trim();
-    return "";
-  } catch (lastErr: any) {
-    const status = lastErr?.response?.status;
-    const bodyErr = lastErr?.response?.data;
-    const msg = bodyErr?.error?.message || bodyErr?.message || lastErr?.message || String(lastErr);
-    throw new Error(`[chatClaude] adapter=claude model=${html(model)} status=${status || "network"} message=${msg}`);
+
+    if (!frameBuffer) return;
+
+    const dataUrl = `data:image/png;base64,${frameBuffer.toString("base64")}`;
+    out.push({ type: "image_url", image_url: { url: dataUrl } });
   }
 };
-const chatGemini = async (p: Provider, model: string, msgs: { role: string; content: string }[], useSearch: boolean = false) => {
-  const path = `/models/${encodeURIComponent(model)}:generateContent`;
-  const effectiveMaxTokens = Store.data.maxTokens || DEFAULT_MAX_TOKENS;
-  const requestData: any = {
-    contents: [{ parts: msgs.map(m => ({ text: m.content })) }],
-    generationConfig: {
-      maxOutputTokens: effectiveMaxTokens,
-      temperature: 0.9
-    }
-  };
-  if (useSearch) requestData.tools = [{ googleSearch: {} }];
-  const data = await geminiRequestWithFallback(p, path, {
-    method: "POST",
-    data: requestData,
-    params: { key: p.apiKey }
-  });
-  const parts = data?.candidates?.[0]?.content?.parts || [];
-  return parts.map((x: any) => x.text || "").join("");
+
+const getMessageImageParts = async (msg?: Api.Message): Promise<AIContentPart[]> => {
+  if (!msg?.client) return [];
+
+  const parts: AIContentPart[] = [];
+
+  const rawGroupedId = (msg as any).groupedId;
+  const groupedId = rawGroupedId ? rawGroupedId.toString() : undefined;
+
+  if (!groupedId) {
+    await collectImagePartsFromSingleMessage(msg, parts);
+    return parts;
+  }
+
+  const peer = msg.chatId || msg.peerId;
+  const sameGroupMessages: Api.Message[] = [];
+
+  for await (const m of msg.client.iterMessages(peer, { limit: 50 })) {
+    if (!(m instanceof Api.Message)) continue;
+
+    const g = (m as any).groupedId;
+    if (!g) continue;
+
+    if (g.toString() !== groupedId) continue;
+
+    sameGroupMessages.push(m);
+  }
+
+  sameGroupMessages.sort((a, b) => Number(a.id) - Number(b.id));
+
+  for (const m of sameGroupMessages) {
+    await collectImagePartsFromSingleMessage(m, parts);
+  }
+
+  return parts;
 };
 
-/* ---------- 视觉对话 ---------- */
-const chatVisionOpenAI = async (p: Provider, model: string, imageB64: string, prompt?: string, mime?: string) => {
-  const url = trimBase(p.baseUrl) + "/v1/chat/completions";
-  const content = [
-    { type: "text", text: prompt || "用中文描述此图片" },
-    { type: "image_url", image_url: { url: `data:${mime || "image/png"};base64,${imageB64}` } }
-  ];
-  const body = { model, messages: [{ role: "user", content }] };
-  const attempts = buildAuthAttempts(p);
+const getGroupedMessageIds = async (msg: Api.Message): Promise<number[]> => {
+  if (!msg?.client) return [];
+  const rawGroupedId = (msg as any).groupedId;
+  const groupedId = rawGroupedId ? rawGroupedId.toString() : undefined;
+  if (!groupedId) return [];
+
+  const peer = msg.chatId || msg.peerId;
+  const ids: number[] = [];
+
+  for await (const m of msg.client.iterMessages(peer, { limit: 50 })) {
+    if (!(m instanceof Api.Message)) continue;
+    const g = (m as any).groupedId;
+    if (!g) continue;
+    if (g.toString() !== groupedId) continue;
+    ids.push(Number(m.id));
+  }
+
+  if (!ids.includes(Number(msg.id))) ids.push(Number(msg.id));
+
+  return Array.from(new Set(ids)).sort((a, b) => a - b);
+};
+
+const deleteMessageOrGroup = async (msg: Api.Message): Promise<void> => {
   try {
-    const data: any = await tryPostJSON(url, body, attempts);
-    return data?.choices?.[0]?.message?.content || "";
-  } catch (lastErr: any) {
-    const status = lastErr?.response?.status;
-    const bodyErr = lastErr?.response?.data;
-    const msg = bodyErr?.error?.message || bodyErr?.message || lastErr?.message || String(lastErr);
-    throw new Error(`[chatVisionOpenAI] adapter=openai model=${html(model)} status=${status || "network"} message=${msg}`);
-  }
-};
-const chatVisionGemini = async (p: Provider, model: string, imageB64: string, prompt?: string, mime?: string) => {
-  const path = `/models/${encodeURIComponent(model)}:generateContent`;
-  try {
-    const data = await geminiRequestWithFallback(p, path, {
-      method: "POST",
-      data: {
-        contents: [
-          {
-            role: "user",
-            parts: [
-              { inlineData: { mimeType: mime || "image/png", data: imageB64 } },
-              { text: prompt || "用中文描述此图片" }
-            ]
-          }
-        ]
-      },
-      params: { key: p.apiKey }
-    });
-    const parts = data?.candidates?.[0]?.content?.parts || [];
-    return parts.map((x: any) => x.text || "").join("");
-  } catch (err: any) {
-    const status = err?.response?.status;
-    const body = err?.response?.data;
-    const msg = body?.error?.message || body?.message || err?.message || String(err);
-    throw new Error(`[chatVisionGemini] adapter=gemini model=${html(model)} status=${status || "network"} message=${msg}`);
-  }
-};
-const chatVisionClaude = async (p: Provider, model: string, imageB64: string, prompt?: string, mime?: string) => {
-  const url = trimBase(p.baseUrl) + "/v1/messages";
-  const v = await getAnthropicVersion(p);
-  const body = {
-    model,
-    max_tokens: 1024,
-    messages: [
-      {
-        role: "user",
-        content: [
-          { type: "text", text: prompt || "用中文描述此图片" },
-          { type: "image", source: { type: "base64", media_type: mime || "image/png", data: imageB64 } }
-        ]
-      }
-    ]
-  };
-  const attempts = buildAuthAttempts(p, { "anthropic-version": v });
-  try {
-    const data: any = await tryPostJSON(url, body, attempts);
-    const blocks = data?.content || data?.message?.content || [];
-    return Array.isArray(blocks) ? blocks.map((b: any) => b?.text || b?.content?.[0]?.text || "").join("") : "";
-  } catch (lastErr: any) {
-    const status = lastErr?.response?.status;
-    const bodyErr = lastErr?.response?.data;
-    const msg = bodyErr?.error?.message || bodyErr?.message || lastErr?.message || String(lastErr);
-    throw new Error(`[chatVisionClaude] adapter=claude model=${html(model)} status=${status || "network"} message=${msg}`);
-  }
-};
-const chatVision = async (p: Provider, compat: string, model: string, imageB64: string, prompt?: string, mime?: string): Promise<string> => {
-  if (compat === "openai") return chatVisionOpenAI(p, model, imageB64, prompt, mime);
-  if (compat === "gemini") return chatVisionGemini(p, model, imageB64, prompt, mime);
-  if (compat === "claude") return chatVisionClaude(p, model, imageB64, prompt, mime);
-  return chatOpenAI(p, model, [{ role: "user", content: prompt || "描述这张图片" } as any] as any);
-};
+    if (!msg?.client) return;
+    const peer = msg.chatId || msg.peerId;
+    const ids = await getGroupedMessageIds(msg);
 
-/* ---------- 生图 ---------- */
-const imageOpenAI = async (
-  p: Provider,
-  model: string,
-  prompt: string,
-  sourceImage?: { data: string; mime: string }
-): Promise<string> => {
-  const base = trimBase(p.baseUrl);
-  const isEdit = !!sourceImage;
-
-  // 尝试多种方式：优先使用 generations 端点（大多数第三方兼容）
-  // 如果有源图片，将图片 base64 嵌入请求体（某些平台如豆包支持此方式）
-  const url = base + "/v1/images/generations";
-
-  // 根据模型选择合适的分辨率
-  // 某些模型（如豆包 imagen）要求最小 3686400 像素 (1920x1920)
-  // 通用模型使用 1024x1024
-  const modelLower = model.toLowerCase();
-  const needsHighRes = modelLower.includes("imagen") ||
-    modelLower.includes("sd3") ||
-    modelLower.includes("sdxl") ||
-    modelLower.includes("flux") ||
-    modelLower.includes("seedream") ||
-    modelLower.includes("doubao");
-  const imageSize = needsHighRes ? "2048x2048" : "1024x1024";
-
-  // 构建请求体
-  let body: any = {
-    model,
-    prompt,
-    n: 1,
-    response_format: "b64_json",
-    size: imageSize
-  };
-
-  // 如果有源图片，添加到请求体（兼容某些支持图生图的第三方平台）
-  if (isEdit && sourceImage) {
-    body.image = `data:${sourceImage.mime};base64,${sourceImage.data}`;
-  }
-
-  const attempts = buildAuthAttempts(p, { "Content-Type": "application/json" });
-
-  try {
-    const data = await tryPostJSON(url, body, attempts);
-    const first = data?.data?.[0] || {};
-    const b64 = first?.b64_json || first?.image_base64 || first?.image || "";
-    if (b64) return String(b64);
-    const urlOut = first?.url || first?.image_url;
-    if (urlOut) {
-      try {
-        const r = await axiosWithRetry({ method: "GET", url: String(urlOut), responseType: "arraybuffer" });
-        const buf: any = r.data;
-        const b: Buffer = Buffer.isBuffer(buf) ? buf : Buffer.from(buf);
-        if (b && b.length > 0) return b.toString("base64");
-      } catch { }
-    }
-    return "";
-  } catch (err: any) {
-    // 如果 generations 端点不支持图生图，尝试 edits 端点 (标准 OpenAI 格式)
-    if (isEdit && sourceImage) {
-      try {
-        const editUrl = base + "/v1/images/edits";
-        const editBody = {
-          model,
-          prompt,
-          image: `data:${sourceImage.mime};base64,${sourceImage.data}`,
-          n: 1,
-          response_format: "b64_json",
-          size: imageSize
-        };
-        const editData = await tryPostJSON(editUrl, editBody, attempts);
-        const first = editData?.data?.[0] || {};
-        const b64 = first?.b64_json || first?.image_base64 || first?.image || "";
-        if (b64) return String(b64);
-        const urlOut = first?.url || first?.image_url;
-        if (urlOut) {
-          const r = await axiosWithRetry({ method: "GET", url: String(urlOut), responseType: "arraybuffer" });
-          const buf: any = r.data;
-          const b: Buffer = Buffer.isBuffer(buf) ? buf : Buffer.from(buf);
-          if (b && b.length > 0) return b.toString("base64");
-        }
-      } catch { }
-    }
-    throw err;
-  }
-};
-const imageGemini = async (p: Provider, model: string, prompt: string, sourceImage?: { data: string; mime: string }): Promise<{ image?: Buffer; text?: string; mime?: string }> => {
-  let imageModel = model;
-  if (!model.includes("image") && !model.includes("2.5-flash") && !model.includes("2.0-flash") && !model.includes("3-pro")) {
-    imageModel = "gemini-2.5-flash-image-preview";
-  }
-  const path = `/models/${encodeURIComponent(imageModel)}:generateContent`;
-
-  // 构建请求内容 - 支持图生图
-  const parts: any[] = [];
-  if (sourceImage) {
-    // 图生图：先添加原图，再添加提示词
-    parts.push({
-      inlineData: {
-        mimeType: sourceImage.mime,
-        data: sourceImage.data
-      }
-    });
-  }
-  parts.push({ text: prompt });
-
-  try {
-    const data = await geminiRequestWithFallback(p, path, {
-      method: "POST",
-      data: {
-        contents: [{ role: "user", parts }],
-        generationConfig: { responseModalities: ["TEXT", "IMAGE"], temperature: 0.7, maxOutputTokens: 2048 }
-      },
-      params: { key: p.apiKey }
-    });
-    const responseParts = data?.candidates?.[0]?.content?.parts || [];
-    let text: string | undefined;
-    let image: Buffer | undefined;
-    let mime: string | undefined;
-    for (const part of responseParts) {
-      const pAny: any = part;
-      if (pAny?.text) {
-        const rawText = String(pAny.text);
-        // 清理思考标签
-        const cleanedText = cleanAIThinking(rawText);
-
-        // 尝试从文本中提取内嵌的 data URI 图片
-        const embeddedImages = extractEmbeddedImages(cleanedText);
-        if (embeddedImages.length > 0) {
-          // 使用第一张提取到的图片
-          const firstImg = embeddedImages[0];
-          image = Buffer.from(firstImg.data, "base64");
-          mime = firstImg.mime;
-          // 清理图片数据后的文本
-          const remainingText = cleanEmbeddedImages(cleanedText).replace(/\[图片\]/g, "").replace(/\[图片数据\]/g, "").trim();
-          if (remainingText && remainingText.length > 10) {
-            text = remainingText;
-          }
-        } else {
-          text = cleanedText;
-        }
-      }
-      const inline = pAny?.inlineData || pAny?.inline_data;
-      if (inline?.data) {
-        image = Buffer.from(inline.data, "base64");
-        mime = inline?.mimeType || inline?.mime_type || "image/png";
-      }
-      const fileUri = pAny?.fileData?.fileUri || pAny?.file_data?.file_uri;
-      if (fileUri) {
-        const hint = `生成的图片已提供文件URI：${String(fileUri)}`;
-        text = text ? `${text}\n${hint}` : hint;
-      }
-    }
-    return { image, text, mime };
-  } catch (err: any) {
-    const body = err?.response?.data;
-    const msg = body?.error?.message || body?.message || err?.message || String(err);
-    throw new Error(`图片生成失败：${msg}`);
-  }
-};
-
-/* ---------- TTS ---------- */
-const ttsGemini = async (p: Provider, model: string, input: string, voiceName?: string): Promise<{ audio?: Buffer; mime?: string }> => {
-  const path = `/models/${encodeURIComponent(model)}:generateContent`;
-  const voice = voiceName || "Kore";
-  const buildPayloads = () => [
-    {
-      contents: [{ role: "user", parts: [{ text: input }] }],
-      generationConfig: {
-        responseModalities: ["AUDIO"],
-        speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: voice } } }
-      }
-    },
-    {
-      contents: [{ role: "user", parts: [{ text: input }] }],
-      generationConfig: { responseModalities: ["AUDIO"] }
-    }
-  ];
-  try {
-    const payloads = buildPayloads();
-    for (let i = 0; i < payloads.length; i++) {
-      const payload = payloads[i];
-      try {
-        const data = await geminiRequestWithFallback(p, path, {
-          method: "POST",
-          data: payload,
-          params: { key: p.apiKey },
-          timeout: 60000
-        });
-        const parts = data?.candidates?.[0]?.content?.parts || [];
-        for (const part of parts) {
-          const pAny: any = part;
-          const inline = pAny?.inlineData || pAny?.inline_data;
-          const d = inline?.data;
-          const m = inline?.mimeType || inline?.mime_type || "audio/ogg";
-          if (d && String(m).startsWith("audio/")) {
-            const audio = Buffer.from(d, "base64");
-            const mime = m;
-            return { audio, mime };
-          }
-        }
-      } catch {
-        // Payload 失败，尝试下一个
-      }
-    }
-    return {};
-  } catch {
-    return {};
-  }
-};
-const ttsOpenAI = async (p: Provider, model: string, input: string, voiceName?: string): Promise<Buffer> => {
-  const base = trimBase(p.baseUrl);
-  const paths = ["/v1/audio/speech", "/v1/audio/tts", "/audio/speech"];
-  const payload = { model, input, voice: voiceName || "alloy", format: "opus" };
-  const attempts = buildAuthAttempts(p, { "Content-Type": "application/json" });
-  let lastErr: any;
-  for (const pth of paths) {
-    const url = base + pth;
-    for (const a of attempts) {
-      try {
-        const r = await axiosWithRetry({ method: "POST", url, data: payload, responseType: "arraybuffer", ...(a || {}), timeout: 60000 });
-        const data: any = r.data;
-        const buf: Buffer = Buffer.isBuffer(data) ? data : Buffer.from(data);
-        if (buf && buf.length > 0) return buf;
-      } catch (err: any) {
-        lastErr = err;
-      }
-    }
-  }
-  const status = lastErr?.response?.status;
-  const bodyErr = lastErr?.response?.data;
-  const msg = bodyErr?.error?.message || bodyErr?.message || lastErr?.message || String(lastErr);
-  throw new Error(`[ttsOpenAI] adapter=openai model=${html(model)} status=${status || "network"} message=${msg}`);
-};
-
-/* ---------- PCM -> WAV ---------- */
-const convertPcmL16ToWavIfNeeded = (raw: Buffer, mime?: string): { buf: Buffer; mime: string } => {
-  let buf = raw;
-  let outMime = mime || "audio/ogg";
-  const lm = outMime.toLowerCase();
-  if (lm.includes("l16") && lm.includes("pcm")) {
-    try {
-      const parse = (mt: string) => {
-        const [fileType, ...params] = mt.split(";").map(s => s.trim());
-        const [, format] = (fileType || "").split("/");
-        const opts: any = { numChannels: 1, sampleRate: 24000, bitsPerSample: 16 };
-        if (format && format.toUpperCase().startsWith("L")) {
-          const bits = parseInt(format.slice(1), 10);
-          if (!isNaN(bits)) opts.bitsPerSample = bits;
-        }
-        for (const param of params) {
-          const [k, v] = param.split("=").map(s => s.trim());
-          if (k === "rate") { const r = parseInt(v, 10); if (!isNaN(r)) opts.sampleRate = r; }
-          if (k === "channels") { const c = parseInt(v, 10); if (!isNaN(c)) opts.numChannels = c; }
-        }
-        return opts;
-      };
-      const createHeader = (len: number, o: any) => {
-        const byteRate = o.sampleRate * o.numChannels * o.bitsPerSample / 8;
-        const blockAlign = o.numChannels * o.bitsPerSample / 8;
-        const b = Buffer.alloc(44);
-        b.write("RIFF", 0);
-        b.writeUInt32LE(36 + len, 4);
-        b.write("WAVE", 8);
-        b.write("fmt ", 12);
-        b.writeUInt32LE(16, 16);
-        b.writeUInt16LE(1, 20);
-        b.writeUInt16LE(o.numChannels, 22);
-        b.writeUInt32LE(o.sampleRate, 24);
-        b.writeUInt32LE(byteRate, 28);
-        b.writeUInt16LE(blockAlign, 32);
-        b.writeUInt16LE(o.bitsPerSample, 34);
-        b.write("data", 36);
-        b.writeUInt32LE(len, 40);
-        return b;
-      };
-      const opts = parse(outMime);
-      const header = createHeader(buf.length, opts);
-      buf = Buffer.concat([header, buf]);
-      outMime = "audio/wav";
-    } catch { }
-  }
-  return { buf, mime: outMime };
-};
-
-/* ---------- 语音发送 ---------- */
-const sendVoiceWithCaption = async (msg: Api.Message, fileBuf: Buffer, caption: string, replyToId?: number): Promise<void> => {
-  try {
-    const file: any = Object.assign(fileBuf, { name: "ai.ogg" });
-    await msg.client?.sendFile(msg.peerId, {
-      file,
-      caption,
-      parseMode: "html",
-      replyTo: replyToId || undefined,
-      attributes: [new Api.DocumentAttributeAudio({ duration: 0, voice: true })]
-    });
-  } catch (error: any) {
-    if (error?.message?.includes("CHAT_SEND_VOICES_FORBIDDEN") || error?.message?.includes("VOICES_FORBIDDEN")) {
-      try {
-        const altFile: any = Object.assign(fileBuf, { name: "ai.wav" });
-        await msg.client?.sendFile(msg.peerId, {
-          file: altFile,
-          caption,
-          parseMode: "html",
-          replyTo: replyToId || undefined
-        });
-        return;
-      } catch {
-        // 回退到文本消息
-        const fallbackText = caption + "\n\n⚠️ 语音发送被禁止，已转为文本消息";
-        if (replyToId) {
-          await msg.client?.sendMessage(msg.peerId, { message: fallbackText, parseMode: "html", replyTo: replyToId });
-        } else {
-          await msg.client?.sendMessage(msg.peerId, { message: fallbackText, parseMode: "html" });
-        }
-      }
-    } else {
-      throw error;
-    }
-  }
-};
-
-/* ---------- 图片发送 ---------- */
-const sendImageFile = async (msg: Api.Message, buf: Buffer, caption: string, replyToId?: number, mimeHint?: string): Promise<void> => {
-  const ext = (mimeHint || "image/png").includes("png") ? "png" : (mimeHint || "").includes("jpeg") ? "jpg" : "png";
-  const file: any = Object.assign(buf, { name: `ai.${ext}` });
-  await msg.client?.sendFile(msg.peerId, { file, caption, parseMode: "html", replyTo: replyToId || undefined });
-};
-
-/* ---------- 长文自动选择 ---------- */
-const sendLongAuto = async (msg: Api.Message, text: string, replyToId?: number, opts?: { collapse?: boolean }, postfix?: string): Promise<void> => {
-  if (replyToId) await sendLongReply(msg, replyToId, text, opts, postfix);
-  else await sendLong(msg, text, opts, postfix);
-};
-
-// 公共 TTS 执行函数
-const executeTTS = async (msg: Api.Message, text: string, replyToId: number): Promise<boolean> => {
-  const m = pick("tts");
-  if (!m) { await msg.edit({ text: "❌ 未设置 tts 模型", parseMode: "html" }); return false; }
-  const p = providerOf(m.provider);
-  if (!p?.apiKey) { await msg.edit({ text: "❌ 服务商/令牌未配置", parseMode: "html" }); return false; }
-  const compat = await resolveCompat(m.provider, m.model, p);
-  if (!Store.data.voices) Store.data.voices = { gemini: "Kore", openai: "alloy" };
-  const voice = compat === "gemini" ? Store.data.voices.gemini : Store.data.voices.openai;
-  await msg.edit({ text: "🔊 合成中...", parseMode: "html" });
-  try {
-    if (compat === "openai") {
-      const audio = await ttsOpenAI(p, m.model, text, voice);
-      await sendVoiceWithCaption(msg, audio, "", replyToId);
-    } else if (compat === "gemini") {
-      const { audio, mime } = await ttsGemini(p, m.model, text, voice);
-      if (!audio) { await msg.edit({ text: "❌ 语音合成失败", parseMode: "html" }); return false; }
-      const { buf } = convertPcmL16ToWavIfNeeded(audio, mime);
-      await sendVoiceWithCaption(msg, buf, "", replyToId);
-    } else {
-      await msg.edit({ text: "❌ 当前服务商不支持语音合成", parseMode: "html" }); return false;
+    if (ids.length > 1) {
+      await msg.client.deleteMessages(peer, ids, { revoke: true });
+      return;
     }
     await msg.delete();
-    return true;
-  } catch (e: any) {
-    await msg.edit({ text: `❌ 语音合成失败: ${html(e?.message || e)}`, parseMode: "html" });
+  } catch { }
+};
+
+const resolveAIImageData = async (
+  image: AIImage,
+  httpClient: HttpClient,
+  token?: AbortToken
+): Promise<AIImage | null> => {
+  if (image.data) return image;
+  if (!image.url) return null;
+  const response = await httpClient.request(
+    {
+      url: image.url,
+      method: "GET",
+      responseType: "arraybuffer",
+    },
+    token
+  );
+  const contentType = response.headers?.["content-type"]?.split(";")[0] || image.mimeType || "image/jpeg";
+  return { data: Buffer.from(response.data), mimeType: contentType };
+};
+
+const getVideoExtensionForMime = (mimeType: string): string => {
+  if (mimeType === "video/webm") return ".webm";
+  if (mimeType === "video/quicktime") return ".mov";
+  return ".mp4";
+};
+
+const resolveAIVideoData = async (
+  video: AIVideo,
+  httpClient: HttpClient,
+  token?: AbortToken
+): Promise<AIVideo | null> => {
+  if (video.data) return video;
+  if (!video.url) return null;
+  const response = await httpClient.request(
+    {
+      url: video.url,
+      method: "GET",
+      responseType: "arraybuffer",
+    },
+    token
+  );
+  const contentType = response.headers?.["content-type"]?.split(";")[0] || video.mimeType || "video/mp4";
+  return { data: Buffer.from(response.data), mimeType: contentType };
+};
+
+const videoHasAudioTrack = async (filePath: string): Promise<boolean> => {
+  try {
+    const { stdout } = await execFileAsync("ffprobe", [
+      "-v",
+      "error",
+      "-show_streams",
+      "-select_streams",
+      "a:0",
+      "-of",
+      "json",
+      filePath,
+    ]);
+
+    const info = JSON.parse(stdout);
+    const streams = info.streams || [];
+    return streams.length > 0;
+  } catch {
     return false;
   }
 };
 
-
-/* ---------- 模型列表解析 ---------- */
-const parseModelListFromResponse = (data: any): string[] => {
-  const arr = Array.isArray(data) ? data : data?.data || data?.models || [];
-  return (arr || []).map((x: any) => normalizeModelName(x));
-};
-
-/* ---------- 按兼容类型枚举模型 ---------- */
-const listModels = async (p: Provider, compat: Compat): Promise<string[]> => {
-  const base = trimBase(p.baseUrl);
-  const tryGet = async (url: string, headers: Record<string, string> = {}, prefer?: Compat) => {
-    const attempts = buildAuthAttempts({ ...p, compatauth: prefer || p.compatauth } as Provider, headers);
-    let lastErr: any;
-    for (const a of attempts) {
-      try {
-        const r = await axiosWithRetry({ method: "GET", url, ...(a || {}) });
-        return r.data;
-      } catch (e: any) {
-        lastErr = e;
-      }
-    }
-    throw lastErr;
-  };
-  let lastErr: any = null;
-  if (compat === "openai") {
-    const url = base + "/v1/models";
-    try {
-      const data = await tryGet(url);
-      return parseModelListFromResponse(data);
-    } catch (e: any) {
-      lastErr = e;
-    }
-    try {
-      const vAnth = await getAnthropicVersion(p);
-      const data = await tryGet(url, { "anthropic-version": vAnth }, "claude");
-      return parseModelListFromResponse(data);
-    } catch (e: any) {
-      lastErr = e;
-    }
-    try {
-      const data = await tryGet(base + "/v1beta/models", {}, "gemini");
-      return parseModelListFromResponse(data);
-    } catch (e: any) {
-      lastErr = e;
-    }
-  } else if (compat === "claude") {
-    const url = base + "/v1/models";
-    try {
-      const vAnth = await getAnthropicVersion(p);
-      const data = await tryGet(url, { "anthropic-version": vAnth }, "claude");
-      return parseModelListFromResponse(data);
-    } catch (e: any) {
-      lastErr = e;
-    }
-    try {
-      const data = await tryGet(url);
-      return parseModelListFromResponse(data);
-    } catch (e: any) {
-      lastErr = e;
-    }
-    try {
-      const data = await tryGet(base + "/v1beta/models", {}, "gemini");
-      return parseModelListFromResponse(data);
-    } catch (e: any) {
-      lastErr = e;
-    }
-  } else {
-    const url1 = base + "/v1beta/models";
-    const url2 = base + "/v1/models";
-    try {
-      const data = await tryGet(url1, {}, "gemini");
-      const list = parseModelListFromResponse(data);
-      if (list.length) return list;
-    } catch (e: any) {
-      lastErr = e;
-    }
-    try {
-      const data = await tryGet(url2, {}, "gemini");
-      const list = parseModelListFromResponse(data);
-      if (list.length) return list;
-    } catch (e: any) {
-      lastErr = e;
-    }
-    try {
-      const data = await tryGet(url2);
-      return parseModelListFromResponse(data);
-    } catch (e: any) {
-      lastErr = e;
-    }
-  }
-  if (lastErr) throw lastErr;
-  throw new Error("无法获取模型列表：服务无有效输出");
-};
-const listModelsByAnyCompat = async (p: Provider): Promise<{ models: string[]; compat: Compat | null; compats: Compat[]; modelMap?: Record<string, Compat> }> => {
-  const order: Compat[] = ["openai", "gemini", "claude"];
-  const merged = new Map<string, string>();
-  const compats: Compat[] = [];
-  const modelMap: Record<string, Compat> = {};
-  let primary: Compat | null = null;
-  for (const c of order) {
-    try {
-      const list = await listModels(p, c);
-      if (Array.isArray(list) && list.length) {
-        if (!primary) primary = c;
-        if (!compats.includes(c)) compats.push(c);
-        for (const m of list) {
-          const k = String(m || "").toLowerCase();
-          if (k && !merged.has(k)) merged.set(k, m);
-          if (k && modelMap[k] === undefined) modelMap[k] = c;
-        }
-      }
-    } catch { }
-  }
-  for (const k of Object.keys(modelMap)) {
-    const g = detectCompat(k);
-    if ((g === "gemini" || g === "claude") && modelMap[k] !== g) modelMap[k] = g;
-  }
-  return { models: Array.from(merged.values()), compat: primary, compats, modelMap };
-};
-
-/* ---------- 预设 Prompt 应用 ---------- */
-const applyPresetPrompt = (userInput: string): string => {
-  const preset = Store.data.presetPrompt || "";
-  if (!preset.trim()) return userInput;
-  return `${preset}\n\n${userInput}`;
-};
-
-/* ---------- 统一聊天调用 ---------- */
-const callChat = async (kind: "chat" | "search", text: string, msg: Api.Message): Promise<{ content: string; model: string }> => {
-  const m = pick(kind);
-  if (!m) throw new Error(`未设置${kind}模型，请先配置`);
-  const p = providerOf(m.provider);
-  if (!p) throw new Error(`服务商 ${m.provider} 未配置`);
-  const compat = await resolveCompat(m.provider, m.model, p);
-  const id = chatIdStr(msg);
-  const msgs: { role: string; content: string }[] = [];
-  const processedText = applyPresetPrompt(text);
-  msgs.push({ role: "user", content: processedText });
-  let out = "";
+const ensureVideoHasAudio = async (inputPath: string, outputPath: string): Promise<string> => {
   try {
-    const isSearch = kind === "search";
-    if (compat === "openai") out = await chatOpenAI(p, m.model, msgs, undefined, isSearch);
-    else if (compat === "claude") out = await chatClaude(p, m.model, msgs, undefined, isSearch);
-    else out = await chatGemini(p, m.model, msgs, isSearch);
-  } catch (e: any) {
-    const em = e?.message || String(e);
-    throw new Error(`[${kind}] provider=${m.provider} compat=${compat} model=${html(m.model)} :: ${em}`);
+    const hasAudio = await videoHasAudioTrack(inputPath);
+    if (hasAudio) {
+      return inputPath;
+    }
+
+    await execFileAsync("ffmpeg", [
+      "-y",
+      "-i",
+      inputPath,
+      "-f",
+      "lavfi",
+      "-i",
+      "anullsrc=channel_layout=stereo:sample_rate=44100",
+      "-c:v",
+      "copy",
+      "-shortest",
+      "-c:a",
+      "aac",
+      "-b:a",
+      "128k",
+      outputPath,
+    ]);
+
+    return outputPath;
+  } catch {
+    return inputPath;
   }
-  if (Store.data.contextEnabled) {
-    pushHist(id, "user", text);
-    pushHist(id, "assistant", out);
-    await Store.writeSoon();
-  }
-  return { content: out, model: m.model };
 };
 
+const createAbortToken = (): AbortToken => {
+  const controller = new AbortController();
+  return {
+    get aborted() {
+      return controller.signal.aborted;
+    },
+    get reason() {
+      return controller.signal.reason?.toString();
+    },
+    get signal() {
+      return controller.signal;
+    },
+    abort(reason?: string) {
+      if (!controller.signal.aborted) controller.abort(reason);
+    },
+    throwIfAborted() {
+      if (controller.signal.aborted) {
+        throw new UserError(controller.signal.reason?.toString() || "操作已取消");
+      }
+    },
+  };
+};
 
+const sleep = (ms: number, token?: AbortToken): Promise<void> => {
+  return new Promise<void>((resolve, reject) => {
+    token?.throwIfAborted();
+    let settled = false;
+    const cleanup = () => {
+      if (!token?.signal) return;
+      token.signal.removeEventListener("abort", abortHandler);
+    };
+    const timeoutId = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      resolve();
+    }, ms);
+    const abortHandler = () => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeoutId);
+      cleanup();
+      reject(new UserError(token?.reason?.toString() || "操作已取消"));
+    };
+    if (token?.signal) token.signal.addEventListener("abort", abortHandler, { once: true });
+  });
+};
 
-/* ---------- 帮助文案 ---------- */
-const help_text = `🔧 📝 <b>特性</b>
-兼容 Google Gemini、OpenAI、Anthropic Claude、Baidu 标准接口，统一指令，一处配置，多处可用。
+const retryWithFixedDelay = async <T>(
+  operation: () => Promise<T>,
+  maxRetries: number = 2,
+  delayMs: number = 1000,
+  token?: AbortToken
+): Promise<T> => {
+  let lastError: any;
+  for (let i = 0; i < maxRetries; i++) {
+    token?.throwIfAborted();
+    try {
+      return await operation();
+    } catch (error: any) {
+      lastError = error;
+      if (token?.aborted) throw error;
+      if (!isRetryableError(error)) throw error;
+      if (i === maxRetries - 1) break;
+      await sleep(delayMs, token);
+    }
+  }
+  throw lastError;
+};
 
-✨ <b>亮点</b>
-• 🔀 模型混用：对话 / 搜索 / 图片 / 语音 可分别指定不同服务商的不同模型
-• 🧠 可选上下文记忆、📰 长文自动发布 Telegraph、🧾 消息折叠显示
-• 🎯 全局Prompt预设：为所有对话设置统一的系统提示词
+const isRetryableError = (error: any): boolean => {
+  if (!error) return false;
+  if (error.name === "AbortError") return false;
+  if (typeof error.message === "string" && error.message.toLowerCase().includes("aborted")) return false;
 
-<blockquote expandable>💬 <b>对话</b>
-<code>${mainPrefix}ai chat [问题]</code>
-• 示例：<code>${mainPrefix}ai chat 你好，帮我简单介绍一下你</code>
-• 支持多轮对话（可执行 <code>${mainPrefix}ai context on</code> 开启记忆）
-• 超长回答可自动转 Telegraph
+  const status = error.response?.status;
+  if (typeof status === "number") {
+    if (status === 429) return true;
+    if (status >= 500 && status <= 599) return true;
+    return false;
+  }
 
-🔍 <b>搜索</b>
-<code>${mainPrefix}ai search [查询]</code>
-• 示例：<code>${mainPrefix}ai search 2024 年 AI 技术进展</code>
+  if (error.isAxiosError && !error.response) return true;
+  if (typeof error.code === "string") return true;
 
-🖼️ <b>图片</b>
-<code>${mainPrefix}ai image [描述]</code>
-• 示例：<code>${mainPrefix}ai image 未来城市的科幻夜景</code>
+  return false;
+};
 
-🎵 <b>文本转语音</b>
-<code>${mainPrefix}ai tts [文本]</code>
-• 示例：<code>${mainPrefix}ai tts 你好，这是一次语音合成测试</code>
+type TaskStatus = "pending" | "running" | "succeeded" | "failed";
 
-🎤 <b>语音回答</b>
-<code>${mainPrefix}ai audio [问题]</code>
-• 示例：<code>${mainPrefix}ai audio 用 30 秒介绍人工智能的发展</code>
+interface TaskPollResult<T> {
+  status: TaskStatus;
+  result?: T;
+  errorMessage?: string;
+}
 
-🔍🎤 <b>搜索并语音回答</b>
-<code>${mainPrefix}ai searchaudio [查询]</code>
-• 示例：<code>${mainPrefix}ai searchaudio 2024 年最新科技趋势</code>
+interface TaskPollOptions {
+  maxAttempts?: number;
+  intervalMs?: number;
+}
 
-🎯 <b>全局Prompt预设</b>
-<code>${mainPrefix}ai prompt set [内容]</code> - 设置全局Prompt预设
-<code>${mainPrefix}ai prompt clear</code> - 清除全局Prompt预设
-<code>${mainPrefix}ai prompt show</code> - 显示当前Prompt预设
-• 预设将自动添加到所有对话请求前，适用于角色设定、回答风格等统一配置
+type TaskFetchFn = (token?: AbortToken) => Promise<any>;
+type TaskParseFn<T> = (data: any) => TaskPollResult<T>;
 
-💭 <b>对话上下文</b>
-<code>${mainPrefix}ai context on|off|show|del</code>
+const pollTask = async <T>(
+  fetchJob: TaskFetchFn,
+  parseResult: TaskParseFn<T>,
+  options: TaskPollOptions = {},
+  token?: AbortToken
+): Promise<T> => {
+  const maxAttempts = options.maxAttempts ?? 303;
+  const intervalMs = options.intervalMs ?? 2000;
 
-📋 <b>消息折叠</b>
-<code>${mainPrefix}ai collapse on|off</code>
+  for (let i = 0; i < maxAttempts; i++) {
+    token?.throwIfAborted();
 
-📰 <b>Telegraph 长文</b>
-<code>${mainPrefix}ai telegraph on|off|limit &lt;数量&gt;|list|del &lt;n|all&gt;</code>
-• limit &lt;数量&gt;：设置字数阈值（0 表示不限制）
-• 自动创建 / 管理 / 删除 Telegraph 文章
+    const data = await retryWithFixedDelay(() => fetchJob(token), 2, 1000, token);
+    const result = parseResult(data);
 
-🎤 <b>音色管理</b>
-<code>${mainPrefix}ai voice list</code> - 查看所有可用音色（Gemini 30种 / OpenAI 6种）
-<code>${mainPrefix}ai voice show</code> - 查看当前音色配置
-<code>${mainPrefix}ai voice gemini [音色名]</code> - 设置 Gemini TTS 音色
-<code>${mainPrefix}ai voice openai [音色名]</code> - 设置 OpenAI TTS 音色
-• Gemini 音色示例：Kore, Puck, Charon, Leda, Aoede 等
-• OpenAI 音色示例：alloy, echo, fable, onyx, nova, shimmer
+    if (result.status === "failed") {
+      throw new Error(result.errorMessage || "任务执行失败");
+    }
 
-⚙️ <b>模型管理</b>
-<code>${mainPrefix}ai model list</code> - 查看当前模型配置
-<code>${mainPrefix}ai model chat|search|image|tts [服务商] [模型]</code> - 设置各功能模型
-<code>${mainPrefix}ai model default</code> - 清空所有功能模型
-<code>${mainPrefix}ai model auto</code> - 智能分配 chat/search/image/tts
+    if (result.status === "succeeded") {
+      if (result.result === undefined) {
+        throw new Error("任务成功但未返回结果");
+      }
+      return result.result;
+    }
 
-🔧 <b>配置管理</b>
-<code>${mainPrefix}ai config status</code> - 显示配置概览
-<code>${mainPrefix}ai config add [服务商] [API密钥] [BaseURL]</code>
-<code>${mainPrefix}ai config list</code> - 查看已配置的服务商
-<code>${mainPrefix}ai config model [服务商]</code> - 查看该服务商可用模型
-<code>${mainPrefix}ai config update [服务商] [apikey|baseurl] [值]</code>
-<code>${mainPrefix}ai config remove [服务商|all]</code>
+    await sleep(intervalMs, token);
+  }
 
-📝 <b>配置示例</b>
-• OpenAI：<code>${mainPrefix}ai config add openai sk-proj-xxx https://api.openai.com</code>
-• DeepSeek：<code>${mainPrefix}ai config add deepseek sk-xxx https://api.deepseek.com</code>
-• Grok：<code>${mainPrefix}ai config add grok xai-xxx https://api.x.ai</code>
-• Claude：<code>${mainPrefix}ai config add claude sk-ant-xxx https://api.anthropic.com</code>
-• Gemini：<code>${mainPrefix}ai config add gemini AIzaSy-xxx https://generativelanguage.googleapis.com</code>
+  throw new Error("任务执行超时");
+};
 
-⚡ <b>简洁命令与别名</b>
-常用简写
-• 对话：<code>${mainPrefix}ai [问题]</code>或<code>${mainPrefix}ai chat [问题]</code>
-• 搜索：<code>${mainPrefix}ai s [查询]</code>
-• 图片：<code>${mainPrefix}ai img [描述]</code>
-• 语音：<code>${mainPrefix}ai v [文本]</code>
-• 回答为语音：<code>${mainPrefix}ai a [问题]</code> / 搜索并语音：<code>${mainPrefix}ai sa [查询]</code>
-• 上下文：<code>${mainPrefix}ai ctx on|off</code>
-• 模型：<code>${mainPrefix}ai m list</code> / 设置：<code>${mainPrefix}ai m chat|search|image|tts [服务商] [模型]</code>
-• 配置：<code>${mainPrefix}ai c add [服务商] [API密钥] [BaseURL]</code>
-• 别名：<code>s</code>=search, <code>img</code>/<code>i</code>=image, <code>v</code>=tts, <code>a</code>=audio, <code>sa</code>=searchaudio, <code>ctx</code>=context, <code>fold</code>=collapse, <code>cfg</code>/<code>c</code>=config, <code>m</code>=model
+interface MessageOptions {
+  parseMode?: string;
+  linkPreview?: boolean;
+}
 
-⏱️ <b>超时设置</b>
-<code>${mainPrefix}ai timeout</code> - 查看当前超时时间
-<code>${mainPrefix}ai timeout set [秒]</code> - 设置超时时间（10-600秒）
-<code>${mainPrefix}ai timeout reset</code> - 重置为默认值（30秒）
+class MessageSender {
+  static async sendOrEdit(msg: Api.Message, text: string, options?: MessageOptions): Promise<Api.Message> {
+    try {
+      const edited = await msg.edit({ text, ...options });
+      if (edited) return edited;
+    } catch (error: any) {
+      const msgText = typeof error?.message === "string" ? error.message : "";
+      if (msgText.includes("MESSAGE_ID_INVALID") || msgText.includes("400")) {
+        const replied = await msg.reply({ message: text, ...options });
+        if (replied) return replied;
+      }
+      throw error;
+    }
 
-📝 <b>最大输出 Token</b>
-<code>${mainPrefix}ai maxtokens</code> - 查看当前设置
-<code>${mainPrefix}ai maxtokens set [数量]</code> - 设置最大输出 token（100-128000）
-<code>${mainPrefix}ai maxtokens reset</code> - 重置为默认值（16384，约8000中文字）
-• 生成超长文本时需增大此值，同时建议增加超时时间
+    const replied = await msg.reply({ message: text, ...options });
+    if (replied) return replied;
+    throw new Error("消息发送失败");
+  }
 
-🔗 <b>链接预览</b>
-<code>${mainPrefix}ai preview</code> - 查看当前状态
-<code>${mainPrefix}ai preview on|off</code> - 开启/关闭链接预览
-</blockquote>`;
+  static async sendNew(
+    msg: Api.Message,
+    text: string,
+    options?: MessageOptions,
+    replyToId?: number
+  ): Promise<Api.Message> {
+    if (!msg.client) {
+      throw new Error("客户端未初始化");
+    }
 
+    return await msg.client.sendMessage(msg.chatId || msg.peerId, {
+      message: text,
+      ...(options || {}),
+      ...(replyToId ? { replyTo: replyToId } : {}),
+    });
+  }
+}
 
-/* ---------- 插件主体 ---------- */
-class AiPlugin extends Plugin {
-  description = `🤖 智能AI助手\n\n${help_text}`;
-  cmdHandlers = {
-    ai: async (msg: Api.Message) => {
-      await Store.init();
-      ensureDir();
-      const text = (msg as any).text || (msg as any).message || "";
-      const lines = text.trim().split(/\r?\n/g);
-      const parts = (lines[0] || "").split(/\s+/);
-      const [, sub, ...args] = parts;
-      const subl = (sub || "").toLowerCase();
-      const aliasMap: Record<string, string> = {
-        s: "search",
-        img: "image",
-        i: "image",
-        v: "tts",
-        a: "audio",
-        sa: "searchaudio",
-        ctx: "context",
-        fold: "collapse",
-        cfg: "config",
-        c: "config",
-        m: "model"
-      };
-      const subn = aliasMap[subl] || subl;
-      const knownSubs = [
-        "config", "model", "context", "collapse", "telegraph", "voice", "prompt",
-        "chat", "search", "image", "tts", "audio", "searchaudio", "help", "timeout", "preview", "maxtokens"
-      ];
-      const isUnknownBareQuery = !!subn && !knownSubs.includes(subn);
-      try {
-        const preflight = async (kind: keyof Models): Promise<{ m: { provider: string; model: string }; p: Provider; compat: Compat } | null> => {
-          const m = pick(kind);
-          if (!m) { await msg.edit({ text: `❌ 未设置 ${kind} 模型`, parseMode: "html" }); return null; }
-          const p = providerOf(m.provider);
-          if (!p) { await msg.edit({ text: "❌ 服务商未配置", parseMode: "html" }); return null; }
-          if (!p.apiKey) { await msg.edit({ text: "❌ 未提供令牌，请先配置 API Key（ai config add/update）", parseMode: "html" }); return null; }
-          const compat = await resolveCompat(m.provider, m.model, p);
-          return { m, p, compat };
-        };
+class MessageUtils {
+  private configManagerPromise: Promise<ConfigManager>;
+  private httpClient: HttpClient;
+  private telegraphTokenPromise: Promise<string> | null = null;
 
-        /* ---------- 帮助命令 ---------- */
-        if (subn === "help" || subn === "h" || subn === "?") {
-          await sendLong(msg, help_text);
-          return;
-        }
+  constructor(configManagerPromise: Promise<ConfigManager>, httpClient: HttpClient) {
+    this.configManagerPromise = configManagerPromise;
+    this.httpClient = httpClient;
+  }
 
-        /* ---------- Prompt 预设管理 ---------- */
-        if (subn === "prompt") {
-          const a0 = (args[0] || "").toLowerCase();
-          if (a0 === "set") {
-            // 支持多行 Prompt：从原始文本中提取 "prompt set" 后的全部内容
-            const fullText = (msg as any).text || (msg as any).message || "";
-            // 匹配 "-ai prompt set " 或 ".ai prompt set " 等前缀，忽略大小写
-            const promptSetMatch = fullText.match(/^[.\-\/!]ai\s+prompt\s+set\s+/i);
-            let promptContent = "";
-            if (promptSetMatch) {
-              promptContent = fullText.slice(promptSetMatch[0].length).trim();
-            } else {
-              // 回退到旧逻辑（理论上不会走到这里）
-              promptContent = args.slice(1).join(" ").trim();
-            }
-            if (!promptContent) {
-              await msg.edit({ text: "❌ 请提供预设Prompt内容", parseMode: "html" });
-              return;
-            }
-            Store.data.presetPrompt = promptContent;
-            await Store.writeSoon();
-            await msg.edit({ text: `✅ 已设置全局Prompt预设\n\n<blockquote expandable>${html(promptContent)}</blockquote>`, parseMode: "html" });
-            return;
-          }
-          if (a0 === "clear") {
-            Store.data.presetPrompt = "";
-            await Store.writeSoon();
-            await msg.edit({ text: "✅ 已清除全局Prompt预设", parseMode: "html" });
-            return;
-          }
-          if (a0 === "show") {
-            const currentPrompt = Store.data.presetPrompt || "";
-            if (!currentPrompt) {
-              await msg.edit({ text: "📝 当前未设置全局Prompt预设", parseMode: "html" });
-              return;
-            }
-            await sendLong(msg, `📝 <b>当前全局Prompt预设</b>\n\n<blockquote expandable>${html(currentPrompt)}</blockquote>`);
-            return;
-          }
-          await msg.edit({ text: "❌ 未知 prompt 子命令\n支持: set|clear|show", parseMode: "html" });
-          return;
-        }
+  async createTelegraphPage(markdown: string, titleSource?: string, token?: AbortToken): Promise<TelegraphItem> {
+    const configManager = await this.configManagerPromise;
+    const config = configManager.getConfig();
 
-        /* ---------- 配置管理 ---------- */
-        if (subn === "config") {
-          if (isGroupOrChannel(msg)) {
-            await msg.edit({ text: "❌ 为保护用户隐私，禁止在公共对话环境使用ai config所有子命令", parseMode: "html" });
-            return;
-          }
-          const a0 = (args[0] || "").toLowerCase();
-          if (a0 === "status") {
-            const cur = Store.data.models;
-            const flags = [
-              `• 上下文: ${Store.data.contextEnabled ? "开启" : "关闭"}`,
-              `• 折叠: ${Store.data.collapse ? "开启" : "关闭"}`,
-              `• Telegraph: ${Store.data.telegraph.enabled ? "开启" : "关闭"}${Store.data.telegraph.enabled && Store.data.telegraph.limit ? `（阈值 ${Store.data.telegraph.limit}）` : ""}`,
-              `• Prompt预设: ${Store.data.presetPrompt ? "✅ 已设置" : "❌ 未设置"}`,
+    const tgToken = await this.ensureTGToken(config, token);
+    const rawTitle = (titleSource || "").replace(/\s+/g, " ").trim();
+    const shortTitle = rawTitle.length > 24 ? `${rawTitle.slice(0, 24)}…` : rawTitle;
+    const title = shortTitle || `Telegraph - ${new Date().toLocaleString()}`;
+    const nodes = TelegraphFormatter.toNodes(markdown);
 
-            ].join("\n");
-            const provList = Object.entries(Store.data.providers)
-              .map(([n, v]) => {
-                const display = shortenUrlForDisplay(v.baseUrl);
-                return `• <b>${html(n)}</b> - key:${v.apiKey ? "✅" : "❌"} base:<a href="${html(v.baseUrl)}">${html(display)}</a>`;
-              })
-              .join("\n") || "(空)";
-            const txt = `⚙️ <b>AI 配置概览</b>\n\n<b>功能模型</b>\n<b>chat:</b> <code>${html(cur.chat) || "(未设)"}</code>\n<b>search:</b> <code>${html(cur.search) || "(未设)"}</code>\n<b>image:</b> <code>${html(cur.image) || "(未设)"}</code>\n<b>tts:</b> <code>${html(cur.tts) || "(未设)"}</code>\n\n<b>功能开关</b>\n${flags}\n\n<b>服务商</b>\n${provList}`;
-            await sendLong(msg, txt);
-            return;
-          }
-          if (a0 === "add") {
-            const [name, key, baseUrl] = [args[1], args[2], args[3]];
-            if (!name || !key || !baseUrl) {
-              await msg.edit({ text: "❌ 参数不足", parseMode: "html" });
-              return;
-            }
-            try {
-              const u = new URL(baseUrl);
-              if (u.protocol !== "http:" && u.protocol !== "https:") {
-                await msg.edit({ text: "❌ baseUrl 无效，请使用 http/https 协议", parseMode: "html" });
-                return;
-              }
-            } catch {
-              await msg.edit({ text: "❌ baseUrl 无效，请检查是否为合法 URL", parseMode: "html" });
-              return;
-            }
-            Store.data.providers[name] = { apiKey: key, baseUrl: trimBase(baseUrl.trim()) };
-            if (Store.data.modelCompat) delete Store.data.modelCompat[name];
-            compatResolving.delete(name);
-            await Store.writeSoon();
-            debouncedRefreshModelCatalog();
-            await msg.edit({ text: `✅ 已添加 <b>${html(name)}</b>`, parseMode: "html" });
-            return;
-          }
-          if (a0 === "update") {
-            const [name, field, ...rest] = args.slice(1);
-            const value = (rest.join(" ") || "").trim();
-            if (!name || !field || !value) {
-              await msg.edit({ text: "❌ 参数不足", parseMode: "html" });
-              return;
-            }
-            const p = Store.data.providers[name];
-            if (!p) {
-              await msg.edit({ text: "❌ 未找到服务商", parseMode: "html" });
-              return;
-            }
-            if (field.toLowerCase() === "apikey") {
-              p.apiKey = value;
-              delete (p as any).compatauth;
-            } else if (field.toLowerCase() === "baseurl") {
-              try {
-                const u = new URL(value);
-                if (u.protocol !== "http:" && u.protocol !== "https:") {
-                  await msg.edit({ text: "❌ baseUrl 无效，请使用 http/https 协议", parseMode: "html" });
-                  return;
-                }
-              } catch {
-                await msg.edit({ text: "❌ baseUrl 无效，请检查是否为合法 URL", parseMode: "html" });
-                return;
-              }
-              p.baseUrl = trimBase(value.trim());
-              delete (p as any).compatauth;
-            } else {
-              await msg.edit({ text: "❌ 字段仅支持 apikey|baseurl", parseMode: "html" });
-              return;
-            }
-            if (Store.data.modelCompat) delete Store.data.modelCompat[name];
-            compatResolving.delete(name);
-            await Store.writeSoon();
-            debouncedRefreshModelCatalog();
-            await msg.edit({ text: `✅ 已更新 <b>${html(name)}</b> 的 <code>${html(field)}</code>`, parseMode: "html" });
-            return;
-          }
-          if (a0 === "remove") {
-            const target = (args[1] || "").toLowerCase();
-            if (!target) {
-              await msg.edit({ text: "❌ 请输入服务商名称或 all", parseMode: "html" });
-              return;
-            }
-            if (target === "all") {
-              Store.data.providers = {};
-              Store.data.modelCompat = {};
-              Store.data.modelCatalog = { map: {}, updatedAt: undefined } as any;
-              compatResolving.clear();
-            } else {
-              if (!Store.data.providers[target]) {
-                await msg.edit({ text: "❌ 未找到服务商", parseMode: "html" });
-                return;
-              }
-              delete Store.data.providers[target];
-              if (Store.data.modelCompat) delete Store.data.modelCompat[target];
-              const kinds: (keyof Models)[] = ["chat", "search", "image", "tts"];
-              for (const k of kinds) {
-                const v = Store.data.models[k];
-                if (v && v.startsWith(target + " ")) Store.data.models[k] = "";
-              }
-            }
-            await Store.writeSoon();
-            debouncedRefreshModelCatalog();
-            await msg.edit({ text: "✅ 已删除", parseMode: "html" });
-            return;
-          }
-          if (a0 === "list") {
-            const list = Object.entries(Store.data.providers)
-              .map(([n, v]) => {
-                const display = shortenUrlForDisplay(v.baseUrl);
-                return `• <b>${html(n)}</b> - key:${v.apiKey ? "✅" : "❌"} base:<a href="${html(v.baseUrl)}">${html(display)}</a>`;
-              })
-              .join("\n") || "(空)";
-            await sendLong(msg, `📦 <b>已配置服务商</b>\n\n${list}`);
-            return;
-          }
-          if (a0 === "model") {
-            const name = args[1];
-            const p = name && providerOf(name);
-            if (!p) {
-              await msg.edit({ text: "❌ 未找到服务商", parseMode: "html" });
-              return;
-            }
-            let models: string[] = [];
-            let selected: Compat | null = null;
-            try {
-              const res = await listModelsByAnyCompat(p);
-              models = res.models;
-              selected = res.compat;
-            } catch { }
-            if (!models.length || !selected) {
-              await msg.edit({ text: "❌ 该服务商的权鉴方式未使用OpenAI、Google Gemini、Claude的标准接口，不做兼容。", parseMode: "html" });
-              return;
-            }
-            const buckets = { chat: [] as string[], search: [] as string[], image: [] as string[], tts: [] as string[] };
-            for (const m of models) {
-              const ml = String(m).toLowerCase();
-              if (/image|dall|sd|gpt-image/.test(ml)) buckets.image.push(m);
-              else if (/tts|voice|audio\.speech|gpt-4o.*-tts|\b-tts\b/.test(ml)) buckets.tts.push(m);
-              else {
-                buckets.chat.push(m);
-                buckets.search.push(m);
-              }
-            }
-            const txt = `🧾 <b>${html(name!)}</b> 可用模型\n\n<b>chat/search</b>:\n${buckets.chat.length ? buckets.chat.map(x => "• " + html(x)).join("\n") : "(空)"}\n\n<b>image</b>:\n${buckets.image.length ? buckets.image.map(x => "• " + html(x)).join("\n") : "(空)"}\n\n<b>tts</b>:\n${buckets.tts.length ? buckets.tts.map(x => "• " + html(x)).join("\n") : "(空)"}`;
-            await sendLong(msg, txt);
-            return;
-          }
-          await msg.edit({ text: "❌ 未知 config 子命令", parseMode: "html" });
-          return;
-        }
+    const response = await this.httpClient.request(
+      {
+        url: "https://api.telegra.ph/createPage",
+        method: "POST",
+        data: {
+          access_token: tgToken,
+          title,
+          content: nodes,
+          return_content: false,
+        },
+      },
+      token
+    );
 
-        /* ---------- 模型管理 ---------- */
-        if (subn === "model") {
-          const a0 = (args[0] || "").toLowerCase();
-          if (a0 === "list") {
-            const cur = Store.data.models;
-            const txt = `⚙️ <b>当前模型配置</b>\n\n<b>chat:</b> <code>${html(cur.chat) || "(未设)"}</code>\n<b>search:</b> <code>${html(cur.search) || "(未设)"}</code>\n<b>image:</b> <code>${html(cur.image) || "(未设)"}</code>\n<b>tts:</b> <code>${html(cur.tts) || "(未设)"}</code>`;
-            await sendLong(msg, txt);
-            return;
-          }
-          if (a0 === "default") {
-            Store.data.models = { chat: "", search: "", image: "", tts: "" };
-            await Store.writeSoon();
-            await msg.edit({ text: "✅ 已清空所有功能模型设置", parseMode: "html" });
-            return;
-          }
-          if (a0 === "auto") {
-            const entries = Object.entries(Store.data.providers);
-            if (!entries.length) {
-              await msg.edit({ text: "❌ 请先使用 ai config add 添加服务商", parseMode: "html" });
-              return;
-            }
-            const modelsBy: Record<string, string[]> = {};
-            for (const [n, p] of entries) {
-              try {
-                const { models } = await listModelsByAnyCompat(p);
-                if (Array.isArray(models) && models.length) {
-                  modelsBy[n] = models;
-                } else {
-                  modelsBy[n] = [];
-                }
-              } catch {
-                modelsBy[n] = [];
-              }
-            }
-            const bucketsBy: Record<string, { chat: string[]; search: string[]; image: string[]; tts: string[] }> = {};
-            for (const [n, list] of Object.entries(modelsBy)) {
-              const buckets = { chat: [] as string[], search: [] as string[], image: [] as string[], tts: [] as string[] };
-              for (const m of list) {
-                const ml = String(m).toLowerCase();
-                if (/image|dall|sd|gpt-image/.test(ml)) buckets.image.push(m);
-                else if (/tts|voice|audio\.speech|gpt-4o.*-tts|\b-tts\b/.test(ml)) buckets.tts.push(m);
-                else {
-                  buckets.chat.push(m);
-                  buckets.search.push(m);
-                }
-              }
-              bucketsBy[n] = buckets;
-            }
-            const orders: Array<Compat | "other"> = ["openai", "gemini", "claude", "other"];
-            const modelFamilyOf = (m: string): Compat | "other" => {
-              const s = m.toLowerCase();
-              if (/(gpt-|dall-e|gpt-image|tts-1|gpt-4o|\bo[134](?:-|\b))/.test(s)) return "openai";
-              if (/gemini/.test(s)) return "gemini";
-              if (/claude/.test(s)) return "claude";
-              return "other";
-            };
-            const isStable = (m: string) => !/(preview|experimental|beta|dev|test|sandbox|staging)/i.test(m);
-            const labelWeight = (s: string) => {
-              const l = s.toLowerCase();
-              let w = 0;
-              if (/ultra/.test(l)) w += 0.09; if (/\bpro\b/.test(l)) w += 0.08; if (/opus/.test(l)) w += 0.08;
-              if (/sonnet/.test(l)) w += 0.07; if (/flash/.test(l)) w += 0.06; if (/haiku/.test(l)) w += 0.03;
-              if (/nano|lite|mini/.test(l)) w += 0.02;
-              return w;
-            };
-            const popularPatterns: Record<Compat | "other", RegExp> = {
-              openai: /gpt-4o|gpt-4\.?1|gpt-4-turbo|gpt-4|gpt-3\.5|gpt-image|tts-1|o[134]-?mini?/i,
-              claude: /claude-3\.?[57]-sonnet|claude-3-opus|claude-3-sonnet|claude-3-haiku|claude-2/i,
-              gemini: /gemini-2\.5|gemini-2\.0|gemini-1\.5|gemini-1\.0/i,
-              other: /deepseek|grok|llama-3|mistral|mixtral|qwen2|command-r/i
-            };
-            const isPopularByFamily = (m: string, family: Compat | "other") => popularPatterns[family]?.test(m) ?? false;
-            const popularityWeight = (m: string, family: Compat | "other") => isPopularByFamily(m, family) ? 0.5 : 0;
-            const versionScore = (m: string, family: Compat | "other") => {
-              const s = String(m).toLowerCase();
-              const numMatch = s.match(/(\d+(?:\.\d+)?)/);
-              let base = numMatch ? parseFloat(numMatch[1]) : 0;
-              if (/gpt-4o/.test(s)) base = Math.max(base, 4.01);
-              if (/tts-1/.test(s)) base = Math.max(base, 1.0);
-              return base + labelWeight(s) + popularityWeight(m, family);
-            };
-            const sortCandidates = (_kind: "chat" | "search" | "image" | "tts", family: Compat | "other", list: string[]) => {
-              const preferred = list.filter(m => isPopularByFamily(m, family));
-              const useList = preferred.length ? preferred : list;
-              const stable = useList.filter(m => isStable(m));
-              const unstable = useList.filter(m => !isStable(m));
-              const cmp = (a: string, b: string) => versionScore(b, family) - versionScore(a, family);
-              stable.sort(cmp);
-              unstable.sort(cmp);
-              return [...stable, ...unstable];
-            };
-            const pickAcrossKind = (kind: "chat" | "search" | "image" | "tts", preferredProvider?: string) => {
-              const providerOrder = (() => {
-                const names = entries.map(([n]) => n);
-                if (preferredProvider && names.includes(preferredProvider)) {
-                  const rest = names.filter(n => n !== preferredProvider);
-                  return [preferredProvider, ...rest];
-                }
-                return names;
-              })();
-              for (const fam of orders) {
-                for (const n of providerOrder) {
-                  const bucket = bucketsBy[n]?.[kind] || [];
-                  if (!bucket.length) continue;
-                  const candidates = bucket.filter(m => modelFamilyOf(m) === fam);
-                  if (!candidates.length) continue;
-                  const sorted = sortCandidates(kind, fam, candidates);
-                  const m = sorted[0];
-                  if (m) return { n, m, c: fam };
-                }
-              }
-              for (const n of providerOrder) {
-                const bucket = bucketsBy[n]?.[kind] || [];
-                if (!bucket.length) continue;
-                const sorted = sortCandidates(kind, "other", bucket);
-                const m = sorted[0];
-                if (m) return { n, m, c: "other" as const };
-              }
-              return null as any;
-            };
-            const chatPref = pick("chat")?.provider || undefined;
-            const searchPref = pick("search")?.provider || undefined;
-            const imagePref = pick("image")?.provider || undefined;
-            const ttsPref = pick("tts")?.provider || undefined;
-            const anchorProvider = chatPref || searchPref || imagePref || ttsPref || undefined;
-            const chatSel = pickAcrossKind("chat", anchorProvider);
-            const searchSel = pickAcrossKind("search", anchorProvider);
-            const imageSel = pickAcrossKind("image", anchorProvider);
-            const ttsSel = pickAcrossKind("tts", anchorProvider);
-            if (!chatSel) {
-              await msg.edit({ text: "❌ 未在任何已配置服务商中找到可用 chat 模型", parseMode: "html" });
-              return;
-            }
-            const prev = { ...Store.data.models };
-            Store.data.models.chat = `${chatSel.n} ${chatSel.m}`;
-            Store.data.models.search = searchSel ? `${searchSel.n} ${searchSel.m}` : prev.search;
-            Store.data.models.image = imageSel ? `${imageSel.n} ${imageSel.m}` : prev.image;
-            Store.data.models.tts = ttsSel ? `${ttsSel.n} ${ttsSel.m}` : prev.tts;
-            await Store.writeSoon();
-            const cur = Store.data.models;
-            const detail = `✅ 已智能分配 chat/search/image/tts\n\n<b>chat:</b> <code>${html(cur.chat) || "(未设)"}</code>\n<b>search:</b> <code>${html(cur.search) || "(未设)"}</code>\n<b>image:</b> <code>${html(cur.image) || "(未设)"}</code>\n<b>tts:</b> <code>${html(cur.tts) || "(未设)"}</code>`;
-            await msg.edit({ text: detail, parseMode: "html" });
-            return;
-          }
-          const kind = a0 as keyof Models;
-          if (["chat", "search", "image", "tts"].includes(kind)) {
-            const [provider, ...mm] = args.slice(1);
-            const model = (mm.join(" ") || "").trim();
-            if (!provider || !model) {
-              await msg.edit({ text: "❌ 参数不足", parseMode: "html" });
-              return;
-            }
-            if (!Store.data.providers[provider]) {
-              await msg.edit({ text: "❌ 未知服务商", parseMode: "html" });
-              return;
-            }
-            Store.data.models[kind] = `${provider} ${model}`;
-            await Store.writeSoon();
-            await msg.edit({ text: `✅ 已设置 ${kind}: <code>${html(Store.data.models[kind])}</code>`, parseMode: "html" });
-            return;
-          }
-          await msg.edit({ text: "❌ 未知 model 子命令", parseMode: "html" });
-          return;
-        }
+    const url = response.data?.result?.url;
+    if (!url) throw new Error(response.data?.error || "Telegraph页面创建失败");
 
-        /* ---------- 上下文管理 ---------- */
-        if (subn === "context") {
-          const a0 = (args[0] || "").toLowerCase();
-          const id = chatIdStr(msg);
-          if (a0 === "on") {
-            Store.data.contextEnabled = true;
-            await Store.writeSoon();
-            await msg.edit({ text: "✅ 已开启上下文", parseMode: "html" });
-            return;
-          }
-          if (a0 === "off") {
-            Store.data.contextEnabled = false;
-            await Store.writeSoon();
-            await msg.edit({ text: "✅ 已关闭上下文", parseMode: "html" });
-            return;
-          }
-          if (a0 === "show") {
-            const items = histFor(id);
-            const t = items.map(x => `${x.role}: ${html(x.content)}`).join("\n");
-            await sendLong(msg, t || "(空)");
-            return;
-          }
-          if (a0 === "del") {
-            const histItems = Store.data.histories[id] || [];
-            const count = histItems.length;
-            delete Store.data.histories[id];
-            if (Store.data.histMeta) delete Store.data.histMeta[id];
-            await Store.writeSoon();
-            await msg.edit({ text: `✅ 已清空本会话上下文（${count} 条记录）`, parseMode: "html" });
-            return;
-          }
-          await msg.edit({ text: "❌ 未知 context 子命令\n支持: on|off|show|del", parseMode: "html" });
-          return;
-        }
+    return { url, title, createdAt: new Date().toISOString() };
+  }
 
-        /* ---------- 折叠开关 ---------- */
-        if (subn === "collapse") {
-          const a0 = (args[0] || "").toLowerCase();
-          Store.data.collapse = a0 === "on";
-          await Store.writeSoon();
-          await msg.edit({ text: `✅ 消息折叠: ${Store.data.collapse ? "开启" : "关闭"}`, parseMode: "html" });
-          return;
-        }
+  async sendLongMessage(
+    msg: Api.Message,
+    text: string,
+    replyToId?: number,
+    token?: AbortToken,
+    options?: { poweredByTag?: string }
+  ): Promise<Api.Message> {
+    token?.throwIfAborted();
 
-        /* ---------- Telegraph ---------- */
-        if (subn === "telegraph") {
-          const a0 = (args[0] || "").toLowerCase();
-          if (a0 === "on") {
-            Store.data.telegraph.enabled = true;
-            await Store.writeSoon();
-            await msg.edit({ text: "✅ 已开启 telegraph", parseMode: "html" });
-            return;
-          }
-          if (a0 === "off") {
-            Store.data.telegraph.enabled = false;
-            await Store.writeSoon();
-            await msg.edit({ text: "✅ 已关闭 telegraph", parseMode: "html" });
-            return;
-          }
-          if (a0 === "limit") {
-            const n = parseInt(args[1] || "0");
-            Store.data.telegraph.limit = isFinite(n) ? n : 0;
-            await Store.writeSoon();
-            await msg.edit({ text: `✅ 阈值: ${Store.data.telegraph.limit}`, parseMode: "html" });
-            return;
-          }
-          if (a0 === "list") {
-            const list = Store.data.telegraph.posts.map((p, i) => `${i + 1}. <a href="${p.url}">${html(p.title)}</a> ${p.createdAt}`).join("\n") || "(空)";
-            await sendLong(msg, `🧾 <b>Telegraph 列表</b>\n\n${list}`);
-            return;
-          }
-          if (a0 === "del") {
-            const t = (args[1] || "").toLowerCase();
-            if (t === "all") Store.data.telegraph.posts = [];
-            else {
-              const i = parseInt(args[1] || "0") - 1;
-              if (i >= 0) Store.data.telegraph.posts.splice(i, 1);
-            }
-            await Store.writeSoon();
-            await msg.edit({ text: "✅ 操作完成", parseMode: "html" });
-            return;
-          }
-          await msg.edit({ text: "❌ 未知 telegraph 子命令", parseMode: "html" });
-          return;
-        }
+    const configManager = await this.configManagerPromise;
+    const config = configManager.getConfig();
 
-        /* ---------- 音色管理 ---------- */
-        if (subn === "voice") {
-          const a0 = (args[0] || "").toLowerCase();
-          if (!Store.data.voices) Store.data.voices = { gemini: "Kore", openai: "alloy" };
-          if (a0 === "list") {
-            const geminiList = GEMINI_VOICES.map((v, i) => `${i + 1}. ${v}`).join("\n");
-            const openaiList = OPENAI_VOICES.map((v, i) => `${i + 1}. ${v}`).join("\n");
-            const header = `🎤 <b>可用音色列表</b>\n\n<b>当前配置:</b>\nGemini: <code>${Store.data.voices.gemini}</code>\nOpenAI: <code>${Store.data.voices.openai}</code>\n\n`;
-            const collapsedContent = `<b>Gemini (${GEMINI_VOICES.length}种):</b>\n${geminiList}\n\n<b>OpenAI (${OPENAI_VOICES.length}种):</b>\n${openaiList}`;
-            const txt = header + `<blockquote expandable>${collapsedContent}</blockquote>`;
-            await sendLong(msg, txt);
-            return;
-          }
-          if (a0 === "show") {
-            const txt = `🎤 <b>当前音色配置</b>\n\n<b>Gemini:</b> <code>${Store.data.voices.gemini}</code>\n<b>OpenAI:</b> <code>${Store.data.voices.openai}</code>`;
-            await msg.edit({ text: txt, parseMode: "html" });
-            return;
-          }
-          if (a0 === "gemini") {
-            const voiceName = args[1];
-            if (!voiceName) {
-              await msg.edit({ text: `❌ 请指定音色名称\n当前: <code>${Store.data.voices.gemini}</code>`, parseMode: "html" });
-              return;
-            }
-            if (!GEMINI_VOICES.includes(voiceName as any)) {
-              await msg.edit({ text: `❌ 未知音色: ${html(voiceName)}\n使用 <code>ai voice list</code> 查看可用音色`, parseMode: "html" });
-              return;
-            }
-            Store.data.voices.gemini = voiceName;
-            await Store.writeSoon();
-            await msg.edit({ text: `✅ 已设置 Gemini 音色: <code>${html(voiceName)}</code>`, parseMode: "html" });
-            return;
-          }
-          if (a0 === "openai") {
-            const voiceName = args[1];
-            if (!voiceName) {
-              await msg.edit({ text: `❌ 请指定音色名称\n当前: <code>${Store.data.voices.openai}</code>`, parseMode: "html" });
-              return;
-            }
-            if (!OPENAI_VOICES.includes(voiceName as any)) {
-              await msg.edit({ text: `❌ 未知音色: ${html(voiceName)}\n使用 <code>ai voice list</code> 查看可用音色`, parseMode: "html" });
-              return;
-            }
-            Store.data.voices.openai = voiceName;
-            await Store.writeSoon();
-            await msg.edit({ text: `✅ 已设置 OpenAI 音色: <code>${html(voiceName)}</code>`, parseMode: "html" });
-            return;
-          }
-          await msg.edit({ text: "❌ 未知 voice 子命令\n支持: list|show|gemini <音色>|openai <音色>", parseMode: "html" });
-          return;
-        }
+    const poweredByTag = (options?.poweredByTag ?? config.currentChatTag) || "";
+    const poweredByText = poweredByTag ? `\n<i>🍀Powered by ${poweredByTag}</i>` : "";
 
-        /* ---------- 超时设置 ---------- */
-        if (subn === "timeout") {
-          const a0 = (args[0] || "").toLowerCase();
-          if (a0 === "show" || !a0) {
-            const current = Store.data.timeout || DEFAULT_TIMEOUT_MS;
-            await msg.edit({ text: `⏱️ 当前超时时间: <code>${current / 1000}秒</code>`, parseMode: "html" });
-            return;
-          }
-          if (a0 === "set") {
-            const val = args[1];
-            if (!val) {
-              await msg.edit({ text: "❌ 请指定超时时间（秒）\n例如: <code>ai timeout set 180</code> 设置为180秒", parseMode: "html" });
-              return;
-            }
-            const sec = parseInt(val);
-            if (!isFinite(sec) || sec < 10 || sec > 600) {
-              await msg.edit({ text: "❌ 超时时间必须在 10-600 秒之间（最多10分钟）", parseMode: "html" });
-              return;
-            }
-            Store.data.timeout = sec * 1000;
-            await Store.writeSoon();
-            await msg.edit({ text: `✅ 已设置超时时间: <code>${sec}秒</code>`, parseMode: "html" });
-            return;
-          }
-          if (a0 === "reset") {
-            Store.data.timeout = DEFAULT_TIMEOUT_MS;
-            await Store.writeSoon();
-            await msg.edit({ text: `✅ 已重置超时时间为默认值: <code>${DEFAULT_TIMEOUT_MS / 1000}秒</code>`, parseMode: "html" });
-            return;
-          }
-          await msg.edit({ text: "❌ 未知 timeout 子命令\n支持: show|set <秒>|reset", parseMode: "html" });
-          return;
-        }
+    if (text.length <= 4050) {
+      token?.throwIfAborted();
 
-        /* ---------- 最大输出 Token 设置 ---------- */
-        if (subn === "maxtokens" || subn === "tokens" || subn === "maxtoken") {
-          const a0 = (args[0] || "").toLowerCase();
-          if (a0 === "show" || !a0) {
-            const current = Store.data.maxTokens || DEFAULT_MAX_TOKENS;
-            const approxChars = Math.floor(current / 2); // 大约1 token = 0.5个中文字
-            await msg.edit({ text: `📝 当前最大输出 Token: <code>${current}</code>\n约等于 <code>${approxChars}</code> 个中文字\n\n💡 生成超长文本时建议同时增加超时时间`, parseMode: "html" });
-            return;
-          }
-          if (a0 === "set") {
-            const val = args[1];
-            if (!val) {
-              await msg.edit({ text: "❌ 请指定最大 token 数\n例如: <code>ai maxtokens set 32768</code> 设置为32768", parseMode: "html" });
-              return;
-            }
-            const num = parseInt(val);
-            if (!isFinite(num) || num < 100 || num > 128000) {
-              await msg.edit({ text: "❌ Token 数必须在 100-128000 之间", parseMode: "html" });
-              return;
-            }
-            Store.data.maxTokens = num;
-            await Store.writeSoon();
-            const approxChars = Math.floor(num / 2);
-            await msg.edit({ text: `✅ 已设置最大输出 Token: <code>${num}</code>\n约等于 <code>${approxChars}</code> 个中文字\n\n💡 建议同时设置超时: <code>ai timeout set 300</code>`, parseMode: "html" });
-            return;
-          }
-          if (a0 === "reset") {
-            Store.data.maxTokens = DEFAULT_MAX_TOKENS;
-            await Store.writeSoon();
-            await msg.edit({ text: `✅ 已重置最大输出 Token 为默认值: <code>${DEFAULT_MAX_TOKENS}</code>`, parseMode: "html" });
-            return;
-          }
-          await msg.edit({ text: "❌ 未知 maxtokens 子命令\n支持: show|set <数量>|reset", parseMode: "html" });
-          return;
-        }
+      const parts = text.split(/(?=A:\n)/);
+      if (parts.length === 2) {
+        const questionPart = parts[0];
+        const answerPart = parts[1];
+        const cleanAnswer = answerPart.replace(/^A:\n/, "");
+        const cleanQuestion = questionPart.replace(/^Q:\n/, "").replace(/\n\n$/, "");
+        const questionBlock = `Q:\n${this.wrapHtmlWithCollapseIfNeeded(cleanQuestion, config.collapse)}\n`;
+        const answerBlock = `A:\n${this.wrapHtmlWithCollapseIfNeeded(cleanAnswer, config.collapse)}`;
+        const finalText = questionBlock + answerBlock + poweredByText;
 
-        /* ---------- 链接预览开关 ---------- */
-        if (subn === "preview") {
-          const a0 = (args[0] || "").toLowerCase();
-          if (a0 === "on") {
-            Store.data.linkPreview = true;
-            await Store.writeSoon();
-            await msg.edit({ text: "✅ 已开启链接预览", parseMode: "html" });
-            return;
-          }
-          if (a0 === "off") {
-            Store.data.linkPreview = false;
-            await Store.writeSoon();
-            await msg.edit({ text: "✅ 已关闭链接预览", parseMode: "html" });
-            return;
-          }
-          const current = Store.data.linkPreview !== false;
-          await msg.edit({ text: `🔗 链接预览: ${current ? "开启" : "关闭"}\n\n用法: <code>ai preview on|off</code>`, parseMode: "html" });
-          return;
-        }
+        return await this.sendHtml(msg, finalText, replyToId, false);
+      }
+      const finalText = this.wrapHtmlWithCollapseIfNeeded(text, config.collapse) + poweredByText;
+      return await this.sendHtml(msg, finalText, replyToId, false);
+    }
 
-        /* ---------- 对话 / 搜索 ---------- */
-        if (subn === "chat" || subn === "search" || !subn || isUnknownBareQuery) {
-          const replyMsg = await msg.getReplyMessage();
-          const isSearch = subn === "search";
-          const plain = (((isUnknownBareQuery ? [sub, ...args] : args).join(" ") || "").trim());
+    const qa = text.match(/Q:\n([\s\S]+?)\n\nA:\n([\s\S]+)/);
+    if (!qa) {
+      token?.throwIfAborted();
+      const finalText = this.wrapHtmlWithCollapseIfNeeded(text, config.collapse) + poweredByText;
+      return await this.sendHtml(msg, finalText, replyToId, false);
+    }
 
-          // 仿照 temp/ai (10).ts 的逻辑处理上下文
-          let question = plain;
-          let context = "";
+    const [, question, answer] = qa;
+    const answerText = answer.replace(/^A:\n/, "");
+    const chunks: string[] = [];
+    let current = "";
 
-          // 尝试智能获取媒体（支持图片、GIF、Sticker等）
-          // 如果有回复消息，优先用回复消息的媒体；否则尝试当前消息
-          const mediaTarget = replyMsg && (replyMsg as any).media ? replyMsg : ((msg as any).media ? msg : null);
-          const mediaData = mediaTarget ? await downloadMessageMediaAsData(mediaTarget) : null;
-          const hasImage = !!mediaData;
-
-          if (replyMsg) {
-            // 优先使用被引用的部分，如果没有则使用整条消息
-            context = extractQuoteOrReplyText(msg, replyMsg).trim();
-            // 如果回复的是图片消息但没有文字内容，补充说明
-            if (!context && hasImage && mediaTarget === replyMsg) {
-              context = "[用户引用了一张图片]";
-            }
-          }
-
-          // 如果用户没有输入问题（只发了 .ai），则直接把引用消息当作问题
-          if (!question && context) {
-            question = context;
-            context = ""; // 避免重复，既然当作问题了就不用作上下文了
-          }
-
-          if (!question && !hasImage) {
-            await msg.edit({ text: "❌ 请输入内容或回复一条消息", parseMode: "html" });
-            return;
-          }
-
-          // 构建最终发给 AI 的内容 (Prompt)
-          // 格式：
-          // 引用消息:
-          // [内容]
-          //
-          // 用户消息:
-          // [内容]
-          let q = question;
-          if (context) {
-            q = `引用消息:\n${context}\n\n用户消息:\n${question}`;
-          }
-          await msg.edit({ text: "🔄 处理中...", parseMode: "html" });
-          const pre = await preflight(isSearch ? "search" : "chat");
-          if (!pre) return;
-          const { m, p, compat } = pre;
-
-          let content = "";
-          let usedModel = m.model;
-          if (hasImage && mediaData) {
-            try {
-              const b64 = mediaData.buffer.toString("base64");
-              const processedPrompt = applyPresetPrompt(q || "描述这张图片");
-              // 传入 mime 以支持不同格式（虽然目前转为 PNG 或原格式）
-              content = await chatVision(p, compat, m.model, b64, processedPrompt, mediaData.mime);
-            } catch (e: any) {
-              await msg.edit({ text: `❌ 处理图片失败：${html(mapError(e, "vision"))}`, parseMode: "html" });
-              return;
-            }
-          } else {
-            const res = await callChat(isSearch ? "search" : "chat", q, msg);
-            content = res.content;
-            usedModel = res.model;
-          }
-
-          // 处理 AI 响应：提取内嵌图片，清理思考标签
-          const processed = processAIResponse(content);
-          const replyToId = replyMsg?.id || 0;
-          const footTxt = footer(usedModel, isSearch ? "with Search" : "");
-
-          // 如果响应中包含内嵌图片，先发送图片
-          if (processed.images.length > 0) {
-            for (const img of processed.images) {
-              try {
-                const buf = Buffer.from(img.data, "base64");
-                const caption = img.alt ? `🖼️ ${html(img.alt)}` : `🖼️ AI 生成的图片`;
-                await sendImageFile(msg, buf, caption + footTxt, replyToId, img.mime);
-              } catch {
-                // 图片发送失败，继续处理
-              }
-            }
-            // 如果只有图片没有其他文字内容，删除原消息并返回
-            const textContent = processed.text.replace(/\[图片\]/g, "").replace(/\[图片数据\]/g, "").trim();
-            if (!textContent || textContent.length < 10) {
-              try { await msg.delete({ revoke: true }); } catch { /* 忽略删除失败 */ }
-              return;
-            }
-            // 如果还有文字内容，继续处理
-            content = processed.text;
-          } else {
-            // 即使没有图片也要清理思考标签
-            content = processed.text;
-          }
-
-          const full = formatQA(q || "(图片)", content);
-
-          if (Store.data.telegraph.enabled && Store.data.telegraph.limit > 0 && full.length > Store.data.telegraph.limit) {
-            const tgContent = `Q: ${q || "(图片)"}\n\nA: ${content}`;
-            const urls = await createTGPage("TeleBox AI", tgContent);
-            if (urls.length > 0) {
-              // 保存历史记录（倒序插入，保持时间顺序）
-              for (let i = urls.length - 1; i >= 0; i--) {
-                Store.data.telegraph.posts.unshift({ title: (q || "图片").slice(0, 30) || "AI", url: urls[i], createdAt: nowISO() });
-              }
-              Store.data.telegraph.posts = Store.data.telegraph.posts.slice(0, 10);
-              await Store.writeSoon();
-
-              const links = urls.map((u, i) => {
-                const num = urls.length > 1 ? (['一', '二', '三', '四', '五', '六', '七', '八', '九', '十'][i] || (i + 1)) : '';
-                return `🔗 <a href="${u}">点我阅读内容${num}</a>`;
-              }).join("\n\n");
-              const linkText = `📰 内容较长，Telegraph观感更好喔:\n\n${links}`;
-
-              const tgMsg = `Q:\n${q || "(图片)"}\n\nA:\n${linkText}\n${footTxt}`;
-              try { await msg.delete({ revoke: true }); } catch { /* 忽略删除失败 */ }
-              if (msg.client) {
-                await msg.client.sendMessage(msg.peerId, {
-                  message: tgMsg,
-                  parseMode: "html",
-                  replyTo: replyToId || undefined,
-                  linkPreview: Store.data.linkPreview !== false
-                });
-              }
-              return;
-            }
-          }
-          // 发送结果并删除原消息
-          try { await msg.delete({ revoke: true }); } catch { /* 忽略删除失败 */ }
-          const chunks = buildChunks(full, Store.data.collapse, footTxt);
-          if (msg.client && chunks.length > 0) {
-            const peer = msg.peerId;
-            for (const chunk of chunks) {
-              await msg.client.sendMessage(peer, {
-                message: chunk,
-                parseMode: "html",
-                replyTo: replyToId || undefined
-              });
-            }
-          }
-          return;
-        }
-
-        /* ---------- 生图 ---------- */
-        if (subn === "image") {
-          const replyMsg = await msg.getReplyMessage();
-          const fullText = (msg as any).text || (msg as any).message || "";
-          const imagePromptMatch = fullText.match(/^[.\-\/!]ai\s+(?:image|img|i)\s+([\s\S]*)$/im);
-          const userInput = (imagePromptMatch ? imagePromptMatch[1].trim() : args.join(" ").trim());
-          const replyContent = extractQuoteOrReplyText(msg, replyMsg).trim();
-
-          // 检查是否有回复的图片（图生图模式）
-          const mediaTarget = replyMsg && (replyMsg as any).media ? replyMsg : null;
-          const mediaData = mediaTarget ? await downloadMessageMediaAsData(mediaTarget) : null;
-          const hasSourceImage = !!mediaData;
-
-          // 结合用户输入和引用内容
-          let prm = "";
-          if (userInput) {
-            prm = userInput;
-          } else if (replyContent && !hasSourceImage) {
-            prm = replyContent;
-          } else if (hasSourceImage) {
-            prm = "请基于这张图片进行创作";
-          }
-          if (!prm && !hasSourceImage) {
-            await msg.edit({ text: "❌ 请输入提示词", parseMode: "html" });
-            return;
-          }
-          const pre = await preflight("image");
-          if (!pre) return;
-          const { m, p, compat } = pre;
-          const replyToId = replyMsg?.id || 0;
-
-          await msg.edit({ text: hasSourceImage ? "🎨 图生图处理中..." : "🎨 生成中...", parseMode: "html" });
-
-          if (compat === "openai") {
-            // OpenAI 兼容模式：支持图生图
-            const sourceImage = hasSourceImage && mediaData ? {
-              data: mediaData.buffer.toString("base64"),
-              mime: mediaData.mime
-            } : undefined;
-            const b64 = await imageOpenAI(p, m.model, prm, sourceImage);
-            if (!b64) {
-              await msg.edit({ text: "❌ 图片生成失败：服务无有效输出", parseMode: "html" });
-              return;
-            }
-            const buf = Buffer.from(b64, "base64");
-            const caption = hasSourceImage ? `🖼️ AI 图生图` : `🖼️ AI 生成图片`;
-            await sendImageFile(msg, buf, caption + footer(m.model), replyToId);
-            await msg.delete();
-            return;
-          } else if (compat === "gemini") {
-            try {
-              // 如果有源图片，传入图生图模式
-              const sourceImage = hasSourceImage && mediaData ? {
-                data: mediaData.buffer.toString("base64"),
-                mime: mediaData.mime
-              } : undefined;
-              const { image, text, mime } = await imageGemini(p, m.model, prm, sourceImage);
-              if (image) {
-                const caption = hasSourceImage ? `🖼️ AI 图生图` : `🖼️ AI 生成图片`;
-                await sendImageFile(msg, image, caption + footer(m.model), replyToId, mime);
-                await msg.delete();
-                return;
-              }
-              if (text) {
-                const textOut = formatQA(prm, text);
-                await sendLongAuto(msg, textOut, replyToId, { collapse: Store.data.collapse }, footer(m.model));
-                await msg.delete();
-                return;
-              }
-              await msg.edit({ text: "❌ 图片生成失败：服务无有效输出", parseMode: "html" });
-              return;
-            } catch (e: any) {
-              await msg.edit({ text: `❌ 图片生成失败：${html(mapError(e, "image"))}`, parseMode: "html" });
-              return;
-            }
-          } else {
-            await msg.edit({ text: "❌ 当前服务商不支持图片生成功能", parseMode: "html" });
-            return;
-          }
-        }
-
-        /* ---------- 语音回答 ---------- */
-        if (subn === "audio" || subn === "searchaudio") {
-          const replyMsg = await msg.getReplyMessage();
-          const plain = (args.join(" ") || "").trim();
-
-          // 仿照 temp/ai (10).ts 的逻辑处理上下文 (Voice版)
-          let question = plain;
-          let context = "";
-
-          if (replyMsg) {
-            context = extractQuoteOrReplyText(msg, replyMsg).trim();
-          }
-
-          if (!question && context) {
-            question = context;
-            context = "";
-          }
-
-          if (!question) { await msg.edit({ text: "❌ 请输入内容或回复一条消息", parseMode: "html" }); return; }
-
-          // 构建 Prompt
-          let q = question;
-          if (context) {
-            q = `引用消息:\n${context}\n\n用户消息:\n${question}`;
-          }
-          await msg.edit({ text: "🔄 处理中...", parseMode: "html" });
-          const res = await callChat(subn === "searchaudio" ? "search" : "chat", q, msg);
-          await executeTTS(msg, res.content, replyMsg?.id || 0);
-          return;
-        }
-
-
-        /* ---------- TTS ---------- */
-        if (subn === "tts") {
-          const replyMsg = await msg.getReplyMessage();
-          const t = (args.join(" ") || "").trim() || extractQuoteOrReplyText(msg, replyMsg).trim();
-          if (!t) { await msg.edit({ text: "❌ 请输入文本", parseMode: "html" }); return; }
-          await executeTTS(msg, t, replyMsg?.id || 0);
-          return;
-        }
-
-        /* ---------- 兜底 ---------- */
-        await msg.edit({ text: "❌ 未知子命令", parseMode: "html" });
-        return;
-      } catch (e: any) {
-        await msg.edit({ text: `❌ 出错：${html(mapError(e, subn))}`, parseMode: "html" });
-        return;
+    for (const line of answerText.split("\n")) {
+      token?.throwIfAborted();
+      const testLength = (current + line + "\n").length;
+      if (testLength > 4050 && current) {
+        chunks.push(current);
+        current = line;
+      } else {
+        current += (current ? "\n" : "") + line;
       }
     }
-  };
+    if (current) chunks.push(current);
 
-  // 资源清理方法 - 防止内存泄漏
-  async cleanup(): Promise<void> {
-    // 真实资源清理：释放插件持有的定时器、监听器、运行时状态或临时资源。
+    token?.throwIfAborted();
+
+    const firstMessageContent =
+      `Q:\n${this.wrapHtmlWithCollapseIfNeeded(question, config.collapse)}\n` +
+      `A:\n${this.wrapHtmlWithCollapseIfNeeded(chunks[0], config.collapse)}`;
+
+    const firstMessage = await this.sendHtml(msg, firstMessageContent, replyToId);
+
+    for (let idx = 1; idx < chunks.length; idx++) {
+      if (token?.aborted) break;
+      await sleep(500, token);
+      if (token?.aborted) break;
+
+      const isLast = idx === chunks.length - 1;
+      const wrapped = this.wrapHtmlWithCollapseIfNeeded(chunks[idx], config.collapse);
+      const prefix = `📋 <b>续 (${idx}/${chunks.length - 1}):</b>\n\n`;
+      const finalMessage = prefix + wrapped + (isLast ? poweredByText : "");
+
+      await this.sendHtml(msg, finalMessage, firstMessage.id, false);
+    }
+
+    return firstMessage;
+  }
+
+  async sendImages(
+    msg: Api.Message,
+    images: AIImage[],
+    prompt: string,
+    replyToId?: number,
+    token?: AbortToken
+  ): Promise<void> {
+    const config = (await this.configManagerPromise).getConfig();
+    await this.sendMedia(msg, images, prompt, replyToId, token, {
+      previewEnabled: config.imagePreview,
+      poweredByTag: config.currentImageTag,
+      collapse: config.collapse,
+      directory: "ai_images",
+      filePrefix: "ai",
+      getExtension: getImageExtensionForMime,
+      resolve: (image, mediaToken) => resolveAIImageData(image, this.httpClient, mediaToken),
+    });
+  }
+
+  async sendVideos(
+    msg: Api.Message,
+    videos: AIVideo[],
+    prompt: string,
+    replyToId?: number,
+    token?: AbortToken
+  ): Promise<void> {
+    const config = (await this.configManagerPromise).getConfig();
+    await this.sendMedia(msg, videos, prompt, replyToId, token, {
+      previewEnabled: config.videoPreview,
+      poweredByTag: config.currentVideoTag,
+      collapse: config.collapse,
+      directory: "ai_videos",
+      filePrefix: "ai_video",
+      rawFilePrefix: "ai_video_raw",
+      getExtension: getVideoExtensionForMime,
+      resolve: (video, mediaToken) => resolveAIVideoData(video, this.httpClient, mediaToken),
+      prepareForSend: (rawPath, finalPath) => ensureVideoHasAudio(rawPath, finalPath),
+    });
+  }
+
+  private async sendMedia<T extends AIImage | AIVideo>(
+    msg: Api.Message,
+    mediaItems: T[],
+    prompt: string,
+    replyToId: number | undefined,
+    token: AbortToken | undefined,
+    options: {
+      previewEnabled: boolean;
+      poweredByTag: string;
+      collapse: boolean;
+      directory: string;
+      filePrefix: string;
+      rawFilePrefix?: string;
+      getExtension: (mimeType: string) => string;
+      resolve: (item: T, mediaToken?: AbortToken) => Promise<{ data?: Buffer; mimeType: string } | null>;
+      prepareForSend?: (rawPath: string, finalPath: string) => Promise<string>;
+    }
+  ): Promise<void> {
+    if (!mediaItems.length) return;
+
+    const peerId = msg.chatId || msg.peerId;
+    const promptText = htmlEscape(prompt);
+    const promptBlock = options.collapse ? `<blockquote expandable>${promptText}</blockquote>` : promptText;
+    const poweredByText = `\n<i>🍀Powered by ${options.poweredByTag}</i>`;
+    const caption = promptBlock + poweredByText;
+    const mediaDir = createDirectoryInAssets(options.directory);
+    const timestamp = Date.now();
+
+    for (let i = 0; i < mediaItems.length; i++) {
+      const item = mediaItems[i];
+      token?.throwIfAborted();
+
+      const resolved = await options.resolve(item, token);
+      if (!resolved?.data) continue;
+
+      const extension = options.getExtension(resolved.mimeType);
+      const rawPrefix = options.rawFilePrefix ?? options.filePrefix;
+      const rawName = `${rawPrefix}_${timestamp}_${i}${extension}`;
+      const finalName = `${options.filePrefix}_${timestamp}_${i}${extension}`;
+      const rawPath = path.join(mediaDir, rawName);
+      const finalPath = path.join(mediaDir, finalName);
+
+      try {
+        await fs.promises.writeFile(rawPath, resolved.data);
+        const pathToSend = options.prepareForSend
+          ? await options.prepareForSend(rawPath, finalPath)
+          : rawPath;
+
+        if (!msg.client) {
+          throw new Error("客户端未初始化");
+        }
+
+        await msg.client.sendFile(peerId, {
+          file: pathToSend,
+          forceDocument: !options.previewEnabled,
+          caption,
+          parseMode: "html",
+          replyTo: replyToId,
+        });
+      } finally {
+        const cleanupTargets = options.prepareForSend ? [rawPath, finalPath] : [rawPath];
+        for (const p of cleanupTargets) {
+          fs.unlink(p, () => { });
+        }
+      }
+    }
+  }
+
+  private async ensureTGToken(config: DB, token?: AbortToken): Promise<string> {
+    if (config.telegraphToken) return config.telegraphToken;
+    if (this.telegraphTokenPromise) return this.telegraphTokenPromise;
+
+    this.telegraphTokenPromise = (async () => {
+      const response = await this.httpClient.request(
+        {
+          url: "https://api.telegra.ph/createAccount",
+          method: "POST",
+          data: { short_name: "TeleBoxAI", author_name: "TeleBox" },
+        },
+        token
+      );
+
+      const tgToken = response.data?.result?.access_token;
+      if (!tgToken) throw new Error("Telegraph账户创建失败");
+
+      const configManager = await this.configManagerPromise;
+      await configManager.updateConfig((cfg) => {
+        cfg.telegraphToken = tgToken;
+      });
+
+      return tgToken;
+    })();
+
     try {
-      // 清理 Store 写入定时器
-      if (Store._writeTimer) {
-        clearTimeout(Store._writeTimer);
-        Store._writeTimer = null;
+      return await this.telegraphTokenPromise;
+    } finally {
+      this.telegraphTokenPromise = null;
+    }
+  }
+
+  private wrapHtmlWithCollapseIfNeeded(html: string, collapse: boolean): string {
+    return collapse ? `<blockquote expandable>${html}</blockquote>` : html;
+  }
+
+  private async sendHtml(
+    msg: Api.Message,
+    html: string,
+    replyToId?: number,
+    linkPreview?: boolean
+  ): Promise<Api.Message> {
+    return await MessageSender.sendNew(
+      msg,
+      html,
+      { parseMode: "html", ...(linkPreview === undefined ? {} : { linkPreview }) },
+      replyToId
+    );
+  }
+}
+
+interface ConfigChangeListener {
+  onConfigChanged(config: DB): void | Promise<void>;
+}
+
+class ConfigManager {
+  private static instancePromise: Promise<ConfigManager> | null = null;
+  private listeners: ConfigChangeListener[] = [];
+  private currentConfig: DB;
+  private db: Low<DB> | null = null;
+  private baseDir: string = "";
+  private file: string = "";
+
+  private writeQueue: Promise<void> = Promise.resolve();
+
+  private constructor() {
+    this.currentConfig = this.getDefaultConfig();
+  }
+
+  private getDefaultConfig(): DB {
+    return {
+      configs: {},
+      currentChatTag: "",
+      currentChatModel: "",
+      currentSearchTag: "",
+      currentSearchModel: "",
+      currentImageTag: "",
+      currentImageModel: "",
+      currentVideoTag: "",
+      currentVideoModel: "",
+      imagePreview: true,
+      videoPreview: true,
+      videoAudio: false,
+      videoDuration: 5,
+      prompt: "",
+      collapse: true,
+      timeout: 30,
+      telegraphToken: "",
+      telegraph: { enabled: false, limit: 5, list: [] },
+    };
+  }
+
+  static getInstance(): Promise<ConfigManager> {
+    if (ConfigManager.instancePromise) {
+      return ConfigManager.instancePromise;
+    }
+
+    ConfigManager.instancePromise = (async () => {
+      const instance = new ConfigManager();
+      await instance.init();
+      return instance;
+    })();
+
+    return ConfigManager.instancePromise;
+  }
+
+  private async init(): Promise<void> {
+    if (this.db) return;
+
+    this.baseDir = createDirectoryInAssets("ai");
+    this.file = path.join(this.baseDir, "config.json");
+    this.db = await JSONFilePreset<DB>(this.file, this.getDefaultConfig());
+
+    await this.writeQueue;
+    await this.db.read();
+    this.currentConfig = { ...this.db.data };
+    const before = JSON.stringify(this.currentConfig);
+    this.ensureDefaults();
+    const after = JSON.stringify(this.currentConfig);
+    if (before !== after) {
+      this.db.data = { ...this.currentConfig };
+      await this.db.write();
+    }
+  }
+
+  getConfig(): DB {
+    return { ...this.currentConfig };
+  }
+
+  async updateConfig(updater: (config: DB) => void): Promise<void> {
+    this.writeQueue = this.writeQueue.then(async () => {
+      const oldSnapshot: DB = JSON.parse(JSON.stringify(this.currentConfig));
+      updater(this.currentConfig);
+
+      const hasChanged = JSON.stringify(oldSnapshot) !== JSON.stringify(this.currentConfig);
+
+      if (!hasChanged) {
+        return;
       }
-      // 清理模型刷新防抖定时器
-      if (refreshDebounceTimer) {
-        clearTimeout(refreshDebounceTimer);
-        refreshDebounceTimer = null;
+
+      if (this.db) {
+        this.db.data = { ...this.currentConfig };
+        await this.db.write();
       }
-      // 清理兼容性解析缓存
-      compatResolving.clear();
-      // 清理 Anthropic 版本缓存
-      anthropicVersionCache.clear();
+      await this.notifyListeners(this.currentConfig);
+    });
+    return this.writeQueue;
+  }
+
+  registerListener(listener: ConfigChangeListener): void {
+    this.listeners.push(listener);
+  }
+
+  unregisterListener(listener: ConfigChangeListener): void {
+    const idx = this.listeners.indexOf(listener);
+    if (idx > -1) this.listeners.splice(idx, 1);
+  }
+
+  async destroy(): Promise<void> {
+    this.listeners = [];
+    ConfigManager.instancePromise = null;
+    this.db = null;
+  }
+
+  private ensureDefaults(): void {
+    const cfg = this.currentConfig;
+
+    if (!cfg.currentSearchTag && cfg.currentChatTag) cfg.currentSearchTag = cfg.currentChatTag;
+    if (!cfg.currentSearchModel && cfg.currentChatModel) cfg.currentSearchModel = cfg.currentChatModel;
+    if (!cfg.currentImageTag && cfg.currentChatTag) cfg.currentImageTag = cfg.currentChatTag;
+    if (!cfg.currentImageModel && cfg.currentChatModel) cfg.currentImageModel = cfg.currentChatModel;
+    if (!cfg.currentVideoTag && cfg.currentChatTag) cfg.currentVideoTag = cfg.currentChatTag;
+    if (!cfg.currentVideoModel && cfg.currentChatModel) cfg.currentVideoModel = cfg.currentChatModel;
+
+    if (typeof cfg.imagePreview !== "boolean") cfg.imagePreview = true;
+    if (typeof cfg.videoPreview !== "boolean") cfg.videoPreview = true;
+    if (typeof cfg.videoAudio !== "boolean") cfg.videoAudio = false;
+    if (typeof cfg.videoDuration !== "number" || !Number.isFinite(cfg.videoDuration)) cfg.videoDuration = 5;
+    if (cfg.videoDuration < 5 || cfg.videoDuration > 20) cfg.videoDuration = 5;
+    if (typeof cfg.collapse !== "boolean") cfg.collapse = true;
+    if (typeof cfg.timeout !== "number" || !Number.isFinite(cfg.timeout) || cfg.timeout <= 0) {
+      cfg.timeout = 30;
+    }
+
+    if (!cfg.telegraph || typeof cfg.telegraph !== "object") {
+      cfg.telegraph = { enabled: false, limit: 5, list: [] };
+    } else {
+      if (typeof cfg.telegraph.enabled !== "boolean") cfg.telegraph.enabled = false;
+      if (typeof cfg.telegraph.limit !== "number" || cfg.telegraph.limit <= 0) cfg.telegraph.limit = 5;
+      if (!Array.isArray(cfg.telegraph.list)) {
+        cfg.telegraph.list = [];
+      } else {
+        cfg.telegraph.list = cfg.telegraph.list.filter(
+          (item): item is TelegraphItem =>
+            !!item && typeof item.url === "string" && typeof item.title === "string" && typeof item.createdAt === "string"
+        );
+      }
+    }
+  }
+
+  private async notifyListeners(newConfig: DB): Promise<void> {
+    for (const listener of this.listeners) await listener.onConfigChanged(newConfig);
+  }
+}
+
+const resolveAuthMode = (
+  profile: ProviderProfile,
+  modeConfig: ProviderModeConfig,
+  config?: ProviderConfig
+): AuthMode => {
+  if (modeConfig.authMode) return modeConfig.authMode;
+  if (profile.authMode) return profile.authMode;
+  const host = config ? getProviderHost(config.url) : null;
+  if (host === "generativelanguage.googleapis.com") return "query-key";
+  return "bearer";
+};
+
+const applyAuthConfig = (
+  authMode: AuthMode,
+  config: ProviderConfig,
+  url: string,
+  headers: Record<string, string>
+): { url: string; headers: Record<string, string> } => {
+  if (authMode === "query-key") {
+    try {
+      const u = new URL(url);
+      if (!u.searchParams.has("key")) u.searchParams.set("key", config.key);
+      return { url: u.toString(), headers };
     } catch {
-      // 清理失败时静默处理
+      return { url, headers };
+    }
+  }
+  return {
+    url,
+    headers: {
+      ...headers,
+      Authorization: `Bearer ${config.key}`,
+    },
+  };
+};
+
+const normalizeOpenAIBaseUrl = (url: string): string => {
+  try {
+    const u = new URL(url);
+
+    if (u.hostname.includes("gateway.ai.cloudflare.com")) {
+      const openAiIndex = u.pathname.indexOf("/openai");
+      if (openAiIndex >= 0) {
+        u.pathname = u.pathname.slice(0, openAiIndex + "/openai".length);
+      }
+      u.search = "";
+      return u.toString();
+    }
+
+    const stripSuffixes = [
+      "/chat/completions",
+      "/completions",
+      "/responses",
+      "/messages",
+      "/images/generations",
+    ];
+    for (const s of stripSuffixes) {
+      if (u.pathname.endsWith(s)) {
+        u.pathname = u.pathname.slice(0, -s.length);
+        break;
+      }
+    }
+
+    const apiV1Index = u.pathname.indexOf("/api/v1");
+    if (apiV1Index >= 0) {
+      u.pathname = u.pathname.slice(0, apiV1Index + "/api/v1".length);
+      u.search = "";
+      return u.toString();
+    }
+
+    const v1Index = u.pathname.indexOf("/v1");
+    if (v1Index >= 0) {
+      u.pathname = u.pathname.slice(0, v1Index + "/v1".length);
+      u.search = "";
+      return u.toString();
+    }
+
+    u.pathname = "/v1";
+    u.search = "";
+    return u.toString();
+  } catch {
+    return url;
+  }
+};
+
+const normalizeGeminiBaseUrl = (url: string): string => {
+  try {
+    const u = new URL(url);
+    u.pathname = u.pathname.replace(/\/+$/, "");
+    if (u.pathname === "" || u.pathname === "/") {
+      u.pathname = "/v1beta";
+    }
+    if (!u.pathname.startsWith("/v1beta")) {
+      u.pathname = "/v1beta";
+    }
+    u.search = "";
+    u.hash = "";
+    return u.toString();
+  } catch {
+    return url;
+  }
+};
+
+const parseOpenAIChatResponse = (data: any): { text: string; images: AIImage[] } => {
+  const message = data?.choices?.[0]?.message;
+  if (!message) return { text: "AI回复为空", images: [] };
+
+  if (typeof message.content === "string") {
+    return { text: message.content || "AI回复为空", images: [] };
+  }
+
+  if (Array.isArray(message.content)) {
+    const textSegments: string[] = [];
+    const images: AIImage[] = [];
+    for (const part of message.content as AIContentPart[]) {
+      if (part.type === "text") textSegments.push(part.text);
+      if (part.type === "image_url") {
+        const dataUrl = parseDataUrl(part.image_url.url);
+        if (dataUrl) images.push({ data: dataUrl.data, mimeType: dataUrl.mimeType });
+        else images.push({ url: part.image_url.url, mimeType: "image/jpeg" });
+      }
+    }
+    const text = textSegments.join("\n").trim();
+    return { text, images };
+  }
+
+  return { text: "AI回复为空", images: [] };
+};
+
+const parseOpenAIStyleImageResponse = (data: any): AIImage[] => {
+  const images: AIImage[] = [];
+  const list = data?.data || [];
+  for (const item of list) {
+    if (item?.b64_json) {
+      images.push({ data: Buffer.from(item.b64_json, "base64"), mimeType: "image/png" });
+    } else if (item?.url) {
+      images.push({ url: item.url, mimeType: "image/png" });
+    }
+  }
+  return images;
+};
+
+const buildDoubaoVideoUrl = (data: any): string | null => {
+  return (
+    data?.data?.result?.video_url ||
+    data?.data?.output?.video_url ||
+    data?.data?.video_url ||
+    data?.video_url ||
+    data?.content?.video_url ||
+    data?.data?.content?.video_url ||
+    null
+  );
+};
+
+const buildGeminiVideoApiUrl = (baseUrl: string, model: string, key: string, endpoint?: string): string => {
+  const urlObj = new URL(baseUrl);
+  const finalModel = model || "veo-2.0-generate-001";
+  const endpointTemplate = endpoint || "v1beta/models/{model}:generateVideos";
+  urlObj.pathname = endpointTemplate.replace("{model}", finalModel).replace(/^\/+/, "/");
+  urlObj.searchParams.set("key", key);
+  return urlObj.toString();
+};
+
+const buildGeminiOperationUrl = (baseOrigin: string, name: string, key: string): string => {
+  const urlObj = new URL(baseOrigin);
+  const cleanName = name.replace(/^\/+/, "");
+  const path = cleanName.startsWith("v1beta/") ? cleanName : `v1beta/${cleanName}`;
+  urlObj.pathname = `/${path}`;
+  urlObj.searchParams.set("key", key);
+  return urlObj.toString();
+};
+
+const extractGeminiOperationError = (data: any): string => {
+  const err = data?.error || data?.data?.error;
+  if (!err) return "";
+  if (typeof err === "string") return err;
+  if (typeof err.message === "string") return err.message;
+  if (typeof err.status === "string") return err.status;
+  if (Array.isArray(err.details) && err.details.length > 0) {
+    const detail = err.details[0];
+    if (typeof detail?.message === "string") return detail.message;
+  }
+  return "视频生成失败";
+};
+
+const extractGeminiVideoResult = (data: any): { uri?: string; bytes?: string } | null => {
+  const response = data?.response ?? data?.data?.response ?? data;
+  const sampleUri =
+    response?.generateVideoResponse?.generatedSamples?.[0]?.video?.uri ||
+    response?.generate_video_response?.generated_samples?.[0]?.video?.uri;
+  if (sampleUri) return { uri: sampleUri };
+
+  const videoBytes =
+    response?.generatedVideos?.[0]?.video?.videoBytes ||
+    response?.generated_videos?.[0]?.video?.video_bytes ||
+    response?.generatedVideos?.[0]?.video?.video_bytes ||
+    response?.generated_videos?.[0]?.video?.videoBytes;
+  if (videoBytes) return { bytes: videoBytes };
+
+  return null;
+};
+
+const buildGeminiParts = async (
+  prompt: string,
+  images: AIContentPart[],
+  httpClient: HttpClient,
+  token?: AbortToken
+): Promise<Array<Record<string, any>>> => {
+  const parts: Array<Record<string, any>> = [];
+  if (prompt.trim()) parts.push({ text: prompt });
+
+  const resolvedImages = await resolveImageInputs(images, httpClient, token, { allowFailures: true });
+  for (const image of resolvedImages) {
+    parts.push({
+      inlineData: {
+        data: image.data.toString("base64"),
+        mimeType: image.mimeType,
+      },
+    });
+  }
+
+  return parts;
+};
+
+class FeatureRegistry {
+  private features = new Map<string, FeatureHandler>();
+
+  register(handler: FeatureHandler): void {
+    this.features.set(handler.command.toLowerCase(), handler);
+  }
+
+  getHandler(command: string): FeatureHandler | undefined {
+    return this.features.get(command.toLowerCase());
+  }
+}
+
+class MiddlewarePipeline {
+  private middlewares: Middleware[] = [];
+
+  use(middleware: Middleware): void {
+    this.middlewares.push(middleware);
+  }
+
+  async execute<T>(
+    input: T,
+    finalHandler: (input: T, token?: AbortToken) => Promise<any>,
+    token?: AbortToken
+  ): Promise<any> {
+    const exec = async (idx: number, curInput: T, curToken?: AbortToken): Promise<any> => {
+      if (idx >= this.middlewares.length) return await finalHandler(curInput, curToken);
+      const mw = this.middlewares[idx];
+      return await mw.process(curInput, (nextInput, nextToken) => exec(idx + 1, nextInput, nextToken), curToken);
+    };
+    return await exec(0, input, token);
+  }
+}
+
+class TimeoutMiddleware implements Middleware {
+  private configManagerPromise: Promise<ConfigManager>;
+
+  constructor(configManagerPromise: Promise<ConfigManager>) {
+    this.configManagerPromise = configManagerPromise;
+  }
+
+  async process<T>(
+    input: T,
+    next: (input: T, token?: AbortToken) => Promise<any>,
+    token?: AbortToken
+  ): Promise<any> {
+    const config = (await this.configManagerPromise).getConfig();
+    const timeoutMs = config.timeout * 1000;
+
+    const timeoutController = new AbortController();
+    const timeoutId = setTimeout(() => timeoutController.abort(`请求超时: ${timeoutMs}ms`), timeoutMs);
+
+    try {
+      const combined = this.combine(timeoutController, token);
+      combined.signal.addEventListener("abort", () => clearTimeout(timeoutId), { once: true });
+      return await next(input, combined);
+    } finally {
+      clearTimeout(timeoutId);
+    }
+  }
+
+  private combine(timeoutController: AbortController, externalToken?: AbortToken): AbortToken {
+    const controller = new AbortController();
+
+    if (timeoutController.signal.aborted) controller.abort(timeoutController.signal.reason);
+    else
+      timeoutController.signal.addEventListener("abort", () => controller.abort(timeoutController.signal.reason), {
+        once: true,
+      });
+
+    if (externalToken) {
+      if (externalToken.aborted) controller.abort(externalToken.reason);
+      else
+        externalToken.signal.addEventListener("abort", () => controller.abort(externalToken.reason), {
+          once: true,
+        });
+    }
+
+    return {
+      get aborted() {
+        return controller.signal.aborted;
+      },
+      get reason() {
+        return controller.signal.reason?.toString();
+      },
+      get signal() {
+        return controller.signal;
+      },
+      abort(reason?: string) {
+        controller.abort(reason);
+      },
+      throwIfAborted() {
+        if (controller.signal.aborted) {
+          throw new UserError(controller.signal.reason?.toString() || "操作已取消");
+        }
+      },
+    };
+  }
+}
+
+class HttpClient {
+  private axiosInstance: AxiosInstance;
+  private middlewarePipeline: MiddlewarePipeline;
+
+  constructor(configManagerPromise: Promise<ConfigManager>) {
+    const keepAliveAgent = {
+      httpAgent: new http.Agent({ keepAlive: true }),
+      httpsAgent: new https.Agent({ keepAlive: true }),
+    };
+    this.axiosInstance = axios.create(keepAliveAgent);
+
+    this.middlewarePipeline = new MiddlewarePipeline();
+    this.middlewarePipeline.use(new TimeoutMiddleware(configManagerPromise));
+  }
+
+  async request<T = any>(requestConfig: AxiosRequestConfig, token?: AbortToken): Promise<AxiosResponse<T>> {
+    return await this.middlewarePipeline.execute(
+      requestConfig,
+      async (config: AxiosRequestConfig, pipelineToken?: AbortToken) => {
+        const finalConfig: AxiosRequestConfig = {
+          ...config,
+          signal: pipelineToken?.signal ?? config.signal,
+        };
+        return await this.axiosInstance(finalConfig);
+      },
+      token
+    );
+  }
+}
+
+class AIService implements ConfigChangeListener {
+  private configManager?: ConfigManager;
+  private configManagerPromise: Promise<ConfigManager>;
+  private activeTokens: Set<AbortToken> = new Set();
+  private httpClient: HttpClient;
+  private strategyHandlers: Record<ProviderStrategy, StrategyHandler>;
+
+  constructor(configManagerPromise: Promise<ConfigManager>, httpClient: HttpClient) {
+    this.configManagerPromise = configManagerPromise;
+    this.httpClient = httpClient;
+    this.strategyHandlers = this.createStrategyHandlers();
+
+    this.initConfigListener();
+  }
+
+  private async initConfigListener(): Promise<void> {
+    this.configManager = await this.configManagerPromise;
+    this.configManager.registerListener(this);
+  }
+
+  private async getConfigManager(): Promise<ConfigManager> {
+    if (this.configManager) return this.configManager;
+    this.configManager = await this.configManagerPromise;
+    return this.configManager;
+  }
+
+  async onConfigChanged(_config: DB): Promise<void> { }
+
+  private async getCurrentProviderConfig(
+    type: "chat" | "search" | "image" | "video"
+  ): Promise<{ providerConfig: ProviderConfig; model: string; config: DB }> {
+    const configManager = await this.getConfigManager();
+    const config = configManager.getConfig();
+
+    const tag =
+      type === "chat"
+        ? config.currentChatTag
+        : type === "search"
+          ? config.currentSearchTag
+          : type === "image"
+            ? config.currentImageTag
+            : config.currentVideoTag;
+
+    const model =
+      type === "chat"
+        ? config.currentChatModel
+        : type === "search"
+          ? config.currentSearchModel
+          : type === "image"
+            ? config.currentImageModel
+            : config.currentVideoModel;
+
+    if (!tag || !model || !config.configs[tag]) {
+      throw new UserError("请先配置API并设置模型");
+    }
+
+    return { providerConfig: config.configs[tag], model, config };
+  }
+
+  private resolveMode(
+    providerConfig: ProviderConfig,
+    mode: ProviderMode,
+    model: string
+  ): { profile: ProviderProfile; modeConfig: ProviderModeConfig } {
+    const profile = getProviderProfile(providerConfig.url);
+    const modeConfig = resolveModeConfig(profile, mode, model);
+    if (!modeConfig) {
+      throw new UserError(`当前${profile.id}提供商不支持${mode}模式`);
+    }
+    return { profile, modeConfig };
+  }
+
+  private applyImageDefaults(
+    request: Record<string, any>,
+    providerConfig: ProviderConfig,
+    model: string,
+    modeConfig: ProviderModeConfig
+  ): void {
+    if (modeConfig.imageDefaults?.size) request.size = modeConfig.imageDefaults.size;
+    if (modeConfig.imageDefaults?.quality) request.quality = modeConfig.imageDefaults.quality;
+    if (modeConfig.imageDefaults?.responseFormat) {
+      request.responseFormat = modeConfig.imageDefaults.responseFormat;
+      request.response_format = modeConfig.imageDefaults.responseFormat;
+    }
+    if (modeConfig.imageDefaults?.extraParams) Object.assign(request, modeConfig.imageDefaults.extraParams);
+
+    const host = getProviderHost(providerConfig.url);
+    if (host === "api.openai.com") {
+      if (!model.startsWith("gpt-") && !model.includes("chatgpt-image")) {
+        request.responseFormat = "b64_json";
+        request.response_format = "b64_json";
+      }
+      if (!request.size) request.size = "auto";
+      if (model.startsWith("dall-e-3")) {
+        request.quality = "hd";
+      } else if (model.startsWith("gpt-image")) {
+        request.quality = "high";
+      }
+    }
+  }
+
+  private applyVideoDefaults(request: Record<string, any>, modeConfig: ProviderModeConfig): void {
+    if (modeConfig.videoDefaults?.responseFormat) {
+      request.responseFormat = modeConfig.videoDefaults.responseFormat;
+      request.response_format = modeConfig.videoDefaults.responseFormat;
+    }
+    if (modeConfig.videoDefaults?.extraParams) Object.assign(request, modeConfig.videoDefaults.extraParams);
+  }
+
+  private createStrategyHandlers(): Record<ProviderStrategy, StrategyHandler> {
+    return {
+      "openai-rest": {
+        chat: async (ctx) =>
+          this.callOpenAIChatOrSearch(
+            ctx.providerConfig,
+            ctx.model,
+            ctx.question,
+            ctx.images,
+            ctx.modeConfig,
+            ctx.config.prompt || "",
+            ctx.token
+          ),
+        search: async (ctx) =>
+          this.callOpenAIChatOrSearch(
+            ctx.providerConfig,
+            ctx.model,
+            ctx.question,
+            ctx.images,
+            ctx.modeConfig,
+            ctx.config.prompt || "",
+            ctx.token,
+            true
+          ),
+        image: async (ctx) =>
+          this.generateImageWithOpenAIRest(
+            ctx.providerConfig,
+            ctx.model,
+            ctx.prompt,
+            ctx.image,
+            ctx.modeConfig,
+            ctx.token
+          ),
+        video: async (ctx) =>
+          this.generateVideoWithOpenAIRest(
+            ctx.providerConfig,
+            ctx.model,
+            ctx.prompt,
+            ctx.images,
+            ctx.imageMode,
+            ctx.modeConfig,
+            ctx.token
+          ),
+      },
+      "gemini-rest": {
+        chat: async (ctx) =>
+          this.callGeminiChatOrSearch(
+            ctx.providerConfig,
+            ctx.model,
+            ctx.question,
+            ctx.images,
+            ctx.modeConfig,
+            ctx.config.prompt || "",
+            ctx.token
+          ),
+        search: async (ctx) =>
+          this.callGeminiChatOrSearch(
+            ctx.providerConfig,
+            ctx.model,
+            ctx.question,
+            ctx.images,
+            ctx.modeConfig,
+            ctx.config.prompt || "",
+            ctx.token,
+            true
+          ),
+        image: async (ctx) =>
+          this.generateGeminiImageRest(
+            ctx.providerConfig,
+            ctx.model,
+            ctx.prompt,
+            ctx.modeConfig,
+            ctx.image,
+            ctx.token
+          ),
+      },
+      "doubao-rest": {
+        image: async (ctx) =>
+          this.generateImageWithDoubao(
+            ctx.providerConfig,
+            ctx.model,
+            ctx.prompt,
+            ctx.image,
+            ctx.modeConfig,
+            ctx.token
+          ),
+        video: async (ctx) =>
+          this.generateVideoWithDoubao(
+            ctx.providerConfig,
+            ctx.model,
+            ctx.prompt,
+            ctx.images,
+            ctx.imageMode,
+            ctx.config.videoAudio,
+            ctx.config.videoDuration,
+            ctx.modeConfig,
+            ctx.token
+          ),
+      },
+      "gemini-image-rest": {
+        image: async (ctx) =>
+          this.generateGeminiImageRest(
+            ctx.providerConfig,
+            ctx.model,
+            ctx.prompt,
+            ctx.modeConfig,
+            ctx.image,
+            ctx.token
+          ),
+      },
+      "gemini-video-rest": {
+        video: async (ctx) =>
+          this.generateGeminiVideo(
+            ctx.providerConfig,
+            ctx.model,
+            ctx.prompt,
+            ctx.images,
+            ctx.config.videoAudio,
+            ctx.config.videoDuration,
+            ctx.modeConfig,
+            ctx.token
+          ),
+      },
+    };
+  }
+
+  private async callOpenAIChatOrSearch(
+    providerConfig: ProviderConfig,
+    model: string,
+    question: string,
+    images: AIContentPart[],
+    modeConfig: ProviderModeConfig,
+    systemPrompt: string,
+    token?: AbortToken,
+    isSearch = false
+  ): Promise<{ text: string; sources: Array<{ url: string; title?: string }>; images: AIImage[] }> {
+    const baseUrl = resolveBaseUrl(providerConfig, modeConfig);
+    const url = resolveEndpointUrl(baseUrl, modeConfig.endpoint || "chat/completions");
+    const authMode = resolveAuthMode(getProviderProfile(providerConfig.url), modeConfig, providerConfig);
+
+    const imageUrlPolicy = modeConfig.imageUrlPolicy ?? "any";
+    const safeImages =
+      imageUrlPolicy === "data-only"
+        ? images.filter((part) => part.type === "image_url" && !!parseDataUrl(part.image_url.url))
+        : images;
+
+    const authConfig = applyAuthConfig(authMode, providerConfig, url, { "Content-Type": "application/json" });
+
+    const sys = (systemPrompt || "").trim();
+
+    const messages: any[] = [];
+    if (sys) messages.push({ role: "system", content: sys });
+
+    let userContent: any = [];
+    if (question.trim()) userContent.push({ type: "text", text: question.trim() });
+
+    for (const img of safeImages) {
+      if (img.type === "image_url") {
+        userContent.push(img);
+      }
+    }
+
+    if (userContent.length === 0) userContent = question;
+    else if (userContent.length === 1 && userContent[0].type === "text") userContent = userContent[0].text;
+
+    messages.push({
+      role: "user",
+      content: userContent,
+    });
+
+    const data: any = {
+      model,
+      messages,
+      stream: false,
+    };
+
+    if (isSearch) {
+      data.tools = [
+        {
+          type: "web_search",
+          web_search: {
+            searchContextSize: "high"
+          }
+        }
+      ];
+      data.web_search_options = { search_context_size: "high" };
+    }
+
+    const response = await this.httpClient.request(
+      {
+        url: authConfig.url,
+        method: "POST",
+        headers: authConfig.headers,
+        data,
+      },
+      token
+    );
+
+    const parsed = parseOpenAIChatResponse(response.data);
+
+    let sources: Array<{ url: string; title?: string }> = [];
+    if (isSearch) {
+      const msg = response.data?.choices?.[0]?.message;
+      if (msg?.annotations) {
+        sources = msg.annotations
+          .filter((a: any) => a.type === "url_citation" || a.url_citation)
+          .map((a: any) => ({
+            url: a.url_citation?.url || a.url,
+            title: a.url_citation?.title || a.title
+          }))
+          .filter((a: any) => !!a.url);
+      } else if (msg?.citations) {
+        sources = msg.citations.map((c: any) => ({ url: c.url, title: c.title })).filter((c: any) => !!c.url);
+      } else if (response.data?.citations) {
+        sources = response.data.citations.map((c: any) => ({ url: c.url, title: c.title })).filter((c: any) => !!c.url);
+      }
+    }
+
+    return { text: parsed.text, images: parsed.images, sources };
+  }
+
+  private async callGeminiChatOrSearch(
+    providerConfig: ProviderConfig,
+    model: string,
+    question: string,
+    images: AIContentPart[],
+    modeConfig: ProviderModeConfig,
+    systemPrompt: string,
+    token?: AbortToken,
+    isSearch = false
+  ): Promise<{ text: string; sources: Array<{ url: string; title?: string }>; images: AIImage[] }> {
+    const baseUrl = resolveBaseUrl(providerConfig, modeConfig);
+    const endpoint = (modeConfig.endpoint || "models/{model}:generateContent").replace("{model}", model);
+    const url = resolveEndpointUrl(baseUrl, endpoint);
+
+    const authMode = resolveAuthMode(getProviderProfile(providerConfig.url), modeConfig, providerConfig);
+    const authConfig = applyAuthConfig(authMode, providerConfig, url, { "Content-Type": "application/json" });
+
+    const parts = await buildGeminiParts(question, images, this.httpClient, token);
+
+    const data: any = {
+      contents: [{ role: "user", parts }]
+    };
+
+    if (systemPrompt?.trim()) {
+      data.systemInstruction = {
+        role: "system",
+        parts: [{ text: systemPrompt.trim() }]
+      };
+    }
+
+    if (isSearch) {
+      data.tools = [{ googleSearch: {} }];
+    }
+
+    const response = await this.httpClient.request(
+      {
+        url: authConfig.url,
+        method: "POST",
+        headers: authConfig.headers,
+        data,
+      },
+      token
+    );
+
+    const root = response.data?.response ?? response.data?.data ?? response.data;
+    const candidate = root?.candidates?.[0];
+    const cparts = candidate?.content?.parts ?? [];
+
+    let text = "";
+    let extractedImages: AIImage[] = [];
+
+    for (const p of cparts) {
+      if (p.text) text += p.text;
+      const inline = p.inlineData || p.inline_data;
+      if (inline?.data) {
+        extractedImages.push({
+          data: Buffer.from(inline.data, "base64"),
+          mimeType: inline.mimeType || inline.mime_type || "image/png",
+        });
+      }
+    }
+
+    let sources: Array<{ url: string; title?: string }> = [];
+    if (isSearch) {
+      const groundingMetadata = candidate?.groundingMetadata || candidate?.grounding_metadata;
+      const groundingChunks = groundingMetadata?.groundingChunks || groundingMetadata?.grounding_chunks || [];
+      for (const chunk of groundingChunks) {
+        const web = chunk.web || chunk.web_chunk;
+        if (web?.uri) {
+          sources.push({ url: web.uri, title: web.title });
+        }
+      }
+    }
+
+    return { text: text.trim() || "AI回复为空", images: extractedImages, sources };
+  }
+
+  private async generateImageWithDoubao(
+    providerConfig: ProviderConfig,
+    model: string,
+    prompt: string,
+    image: AIImage | undefined,
+    modeConfig: ProviderModeConfig,
+    token?: AbortToken
+  ): Promise<AIImage[]> {
+    const baseUrl = resolveBaseUrl(providerConfig, modeConfig);
+
+    const data: Record<string, any> = {
+      prompt,
+      model,
+    };
+    if (image) {
+      if (!image.data) throw new Error("无法解析图片数据");
+      data.image = `data:${image.mimeType};base64,${image.data.toString("base64")}`;
+    }
+    if (modeConfig.imageDefaults?.size) data.size = modeConfig.imageDefaults.size;
+    if (modeConfig.imageDefaults?.responseFormat) data.response_format = modeConfig.imageDefaults.responseFormat;
+    if (modeConfig.imageDefaults?.extraParams) Object.assign(data, modeConfig.imageDefaults.extraParams);
+
+    const endpoint = modeConfig.endpoint || "api/v3/images/generations";
+    const authMode = resolveAuthMode(getProviderProfile(providerConfig.url), modeConfig, providerConfig);
+    const authConfig = applyAuthConfig(authMode, providerConfig, resolveEndpointUrl(baseUrl, endpoint), {
+      "Content-Type": "application/json",
+    });
+    const response = await this.httpClient.request(
+      {
+        url: authConfig.url,
+        method: "POST",
+        headers: authConfig.headers,
+        data,
+      },
+      token
+    );
+
+    return parseOpenAIStyleImageResponse(response.data);
+  }
+
+  private async generateImageWithOpenAIRest(
+    providerConfig: ProviderConfig,
+    model: string,
+    prompt: string,
+    image: AIImage | undefined,
+    modeConfig: ProviderModeConfig,
+    token?: AbortToken
+  ): Promise<AIImage[]> {
+    const baseUrl = resolveBaseUrl(providerConfig, modeConfig);
+    let endpoint = modeConfig.endpoint || "images/generations";
+    const authMode = resolveAuthMode(getProviderProfile(providerConfig.url), modeConfig, providerConfig);
+
+    const requestModel = model;
+
+    let data: any;
+    let headers: Record<string, string> = {};
+
+    if (image && image.data) {
+      const dataUri = `data:${image.mimeType};base64,${image.data.toString("base64")}`;
+      
+      if (model.includes("gpt-image") || model.includes("chatgpt-image") || model.includes("dall-e")) {
+        endpoint = modeConfig.endpoint || "images/edits";
+        data = {
+          model: requestModel,
+          prompt,
+          images: [
+            {
+              image_url: dataUri,
+            },
+          ],
+        };
+        this.applyImageDefaults(data, providerConfig, requestModel, modeConfig);
+        headers["Content-Type"] = "application/json";
+      } else {
+        endpoint = modeConfig.endpoint || "images/edits";
+        const fields: Record<string, any> = {
+          model: requestModel,
+          prompt,
+        };
+        this.applyImageDefaults(fields, providerConfig, requestModel, modeConfig);
+
+        const boundary = "----WebKitFormBoundary" + Math.random().toString(36).substring(2);
+        const chunks: Buffer[] = [];
+
+        for (const [key, value] of Object.entries(fields)) {
+          if (value !== undefined && value !== null) {
+            chunks.push(Buffer.from(`--${boundary}\r\n`));
+            chunks.push(Buffer.from(`Content-Disposition: form-data; name="${key}"\r\n\r\n`));
+            chunks.push(Buffer.from(`${value}\r\n`));
+          }
+        }
+
+        chunks.push(Buffer.from(`--${boundary}\r\n`));
+        chunks.push(Buffer.from(`Content-Disposition: form-data; name="image"; filename="image.png"\r\n`));
+        chunks.push(Buffer.from(`Content-Type: ${image.mimeType || "image/png"}\r\n\r\n`));
+        chunks.push(image.data);
+        chunks.push(Buffer.from(`\r\n--${boundary}--\r\n`));
+
+        data = Buffer.concat(chunks);
+        headers["Content-Type"] = `multipart/form-data; boundary=${boundary}`;
+      }
+    } else {
+      endpoint = modeConfig.endpoint || "images/generations";
+      data = {
+        model: requestModel,
+        prompt,
+      };
+      this.applyImageDefaults(data, providerConfig, requestModel, modeConfig);
+      headers["Content-Type"] = "application/json";
+    }
+
+    const authConfig = applyAuthConfig(authMode, providerConfig, resolveEndpointUrl(baseUrl, endpoint), headers);
+
+    const response = await this.httpClient.request(
+      {
+        url: authConfig.url,
+        method: "POST",
+        headers: authConfig.headers,
+        data,
+      },
+      token
+    );
+
+    return parseOpenAIStyleImageResponse(response.data);
+  }
+
+  private async generateVideoWithOpenAIRest(
+    providerConfig: ProviderConfig,
+    model: string,
+    prompt: string,
+    images: AIContentPart[],
+    imageMode: VideoImageMode,
+    modeConfig: ProviderModeConfig,
+    token?: AbortToken
+  ): Promise<AIVideo[]> {
+    const baseUrl = resolveBaseUrl(providerConfig, modeConfig);
+    const url = resolveEndpointUrl(baseUrl, modeConfig.endpoint || "chat/completions");
+    const authMode = resolveAuthMode(getProviderProfile(providerConfig.url), modeConfig, providerConfig);
+
+    const authConfig = applyAuthConfig(authMode, providerConfig, url, { "Content-Type": "application/json" });
+
+    const content: any[] = [];
+    if (prompt.trim()) {
+      content.push({ type: "text", text: prompt.trim() });
+    }
+
+    const safeImages = images.filter((part) => part.type === "image_url" && !!parseDataUrl(part.image_url.url));
+    for (const img of safeImages) {
+      content.push(img);
+    }
+
+    let userContent: any = content;
+    if (content.length === 1 && content[0].type === "text") {
+      userContent = content[0].text;
+    } else if (content.length === 0) {
+      userContent = prompt || "Generate a video";
+    }
+
+    const data: any = {
+      model,
+      messages: [{ role: "user", content: userContent }],
+      stream: false,
+    };
+
+    const response = await this.httpClient.request(
+      {
+        url: authConfig.url,
+        method: "POST",
+        headers: authConfig.headers,
+        data,
+      },
+      token
+    );
+
+    let replyText = "";
+    if (typeof response.data === "string") {
+      const lines = response.data.split('\n');
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (trimmed.startsWith("data: ") && trimmed !== "data: [DONE]") {
+          try {
+            const parsed = JSON.parse(trimmed.slice(6));
+            replyText += parsed.choices?.[0]?.delta?.content || parsed.choices?.[0]?.message?.content || "";
+          } catch (e) {}
+        }
+      }
+      if (!replyText) replyText = response.data;
+    } else {
+      replyText = response.data?.choices?.[0]?.message?.content || "";
+    }
+
+    if (!replyText) {
+      throw new Error("视频生成失败，AI返回为空");
+    }
+
+    const match = replyText.match(/(https?:\/\/[^\s"'>]+\.(?:mp4|webm))/i);
+    if (match && match[1]) {
+      const isWebm = match[1].toLowerCase().endsWith('.webm');
+      return [{ url: match[1], mimeType: isWebm ? "video/webm" : "video/mp4" }];
+    }
+
+    throw new Error(`未能从返回结果中提取到视频链接。\nAI返回: ${replyText}`);
+  }
+
+  private buildDoubaoVideoContent(
+    prompt: string,
+    images: AIContentPart[],
+    imageMode: VideoImageMode
+  ): Array<Record<string, any>> {
+    const content: Array<Record<string, any>> = [];
+    const trimmedPrompt = prompt.trim();
+    if (trimmedPrompt) {
+      content.push({ type: "text", text: trimmedPrompt });
+    }
+
+    const imageParts = images.filter((part) => part.type === "image_url" && !!parseDataUrl(part.image_url.url));
+    const imageCount = imageParts.length;
+
+    for (const [index, part] of imageParts.entries()) {
+      if (part.type !== "image_url") continue;
+      const item: Record<string, any> = {
+        type: "image_url",
+        image_url: { url: part.image_url.url },
+      };
+      if (imageMode === "first") {
+        item.role = "first_frame";
+      } else if (imageMode === "firstlast") {
+        item.role = index === 0 ? "first_frame" : "last_frame";
+      } else if (imageMode === "reference") {
+        item.role = "reference_image";
+      } else if (imageCount === 2) {
+        item.role = index === 0 ? "first_frame" : "last_frame";
+      } else if (imageCount > 2) {
+        item.role = "reference_image";
+      }
+      content.push(item);
+    }
+
+    return content;
+  }
+
+  private async generateGeminiImageRest(
+    providerConfig: ProviderConfig,
+    model: string,
+    prompt: string,
+    modeConfig: ProviderModeConfig,
+    image?: AIImage,
+    token?: AbortToken
+  ): Promise<AIImage[]> {
+    const baseUrl = resolveBaseUrl(providerConfig, modeConfig);
+
+    if (model.includes("imagen")) {
+      const endpoint = `v1beta/models/${model}:predict`;
+      const url = resolveEndpointUrl(baseUrl, endpoint);
+      const authMode = resolveAuthMode(getProviderProfile(providerConfig.url), modeConfig, providerConfig);
+      const authConfig = applyAuthConfig(authMode, providerConfig, url, { "Content-Type": "application/json" });
+
+      const data: any = {
+        instances: [{ prompt: prompt || "" }],
+        parameters: {
+          sampleCount: 1,
+          outputOptions: { mimeType: "image/png" }
+        }
+      };
+
+      const response = await this.httpClient.request({
+        url: authConfig.url,
+        method: "POST",
+        headers: authConfig.headers,
+        data,
+      }, token);
+
+      const predictions = response.data?.predictions || [];
+      const images: AIImage[] = [];
+      for (const p of predictions) {
+        if (p.bytesBase64Encoded) {
+          images.push({ data: Buffer.from(p.bytesBase64Encoded, "base64"), mimeType: p.mimeType || "image/png" });
+        }
+      }
+      if (images.length === 0) throw new Error("图片生成失败");
+      return images;
+    }
+
+    const endpoint = (modeConfig.endpoint || "models/{model}:generateContent").replace("{model}", model);
+    const url = resolveEndpointUrl(baseUrl, endpoint);
+
+    const authMode = resolveAuthMode(getProviderProfile(providerConfig.url), modeConfig, providerConfig);
+    const authConfig = applyAuthConfig(authMode, providerConfig, url, { "Content-Type": "application/json" });
+
+    const parts: any[] = [];
+    if (prompt?.trim()) parts.push({ text: prompt.trim() });
+
+    if (image?.data) {
+      parts.push({
+        inlineData: {
+          data: image.data.toString("base64"),
+          mimeType: image.mimeType || "image/png",
+        },
+      });
+    }
+
+    const response = await this.httpClient.request(
+      {
+        url: authConfig.url,
+        method: "POST",
+        headers: authConfig.headers,
+        data: {
+          contents: [{ parts }],
+        },
+      },
+      token
+    );
+
+    const root = response.data?.response ?? response.data?.data ?? response.data;
+    const candidates = root?.candidates ?? [];
+    const images: AIImage[] = [];
+
+    for (const c of candidates) {
+      const cparts = c?.content?.parts ?? [];
+      for (const p of cparts) {
+        const inline = p?.inlineData || p?.inline_data;
+        if (inline?.data) {
+          images.push({
+            data: Buffer.from(inline.data, "base64"),
+            mimeType: inline.mimeType || inline.mime_type || "image/png",
+          });
+        }
+      }
+    }
+
+    if (images.length === 0) {
+      throw new Error("未在 candidates[].content.parts[].inlineData 中找到图片数据");
+    }
+
+    return images;
+  }
+
+  private async generateGeminiVideo(
+    providerConfig: ProviderConfig,
+    model: string,
+    prompt: string,
+    images: AIContentPart[],
+    videoAudio: boolean,
+    videoDuration: number,
+    modeConfig: ProviderModeConfig,
+    token?: AbortToken
+  ): Promise<AIVideo[]> {
+    const baseUrl = resolveBaseUrl(providerConfig, modeConfig);
+    const apiUrl = buildGeminiVideoApiUrl(baseUrl, model, providerConfig.key, modeConfig.endpoint);
+    const parts = await buildGeminiParts(prompt, images, this.httpClient, token);
+
+    const response = await this.httpClient.request(
+      {
+        url: apiUrl,
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        data: {
+          contents: [
+            {
+              parts,
+            },
+          ],
+          videoGenerationConfig: {
+            numberOfVideos: 1,
+            durationSeconds: videoDuration,
+            enableAudio: videoAudio,
+          },
+        },
+      },
+      token
+    );
+
+    const directResult = extractGeminiVideoResult(response.data);
+    if (directResult?.bytes) {
+      return [{ data: Buffer.from(directResult.bytes, "base64"), mimeType: "video/mp4" }];
+    }
+
+    if (directResult?.uri) {
+      const download = await this.httpClient.request(
+        {
+          url: directResult.uri,
+          method: "GET",
+          responseType: "arraybuffer",
+        },
+        token
+      );
+      const contentType = download.headers?.["content-type"]?.split(";")[0] || "video/mp4";
+      return [{ data: Buffer.from(download.data), mimeType: contentType }];
+    }
+
+    const operationName = response.data?.name;
+    if (!operationName || typeof operationName !== "string") {
+      throw new Error("视频生成失败");
+    }
+
+    const baseOrigin = normalizeGeminiBaseUrl(providerConfig.url);
+    const operation = await pollTask<any>(
+      async (abortToken) => {
+        const url = buildGeminiOperationUrl(baseOrigin, operationName, providerConfig.key);
+        const opResponse = await this.httpClient.request(
+          {
+            url,
+            method: "GET",
+            headers: { "Content-Type": "application/json" },
+          },
+          abortToken
+        );
+        return opResponse.data;
+      },
+      (data): TaskPollResult<any> => {
+        if (!data || data.done !== true) {
+          return { status: "pending" };
+        }
+        if (data.error) {
+          return { status: "failed", errorMessage: extractGeminiOperationError(data) };
+        }
+        return { status: "succeeded", result: data };
+      },
+      {
+        maxAttempts: 303,
+        intervalMs: 2000,
+      },
+      token
+    );
+
+    const finalResult = extractGeminiVideoResult(operation);
+    if (finalResult?.bytes) {
+      return [{ data: Buffer.from(finalResult.bytes, "base64"), mimeType: "video/mp4" }];
+    }
+    if (finalResult?.uri) {
+      const download = await this.httpClient.request(
+        {
+          url: finalResult.uri,
+          method: "GET",
+          responseType: "arraybuffer",
+        },
+        token
+      );
+      const contentType = download.headers?.["content-type"]?.split(";")[0] || "video/mp4";
+      return [{ data: Buffer.from(download.data), mimeType: contentType }];
+    }
+
+    throw new Error("视频生成失败");
+  }
+
+  private async generateVideoWithDoubao(
+    providerConfig: ProviderConfig,
+    model: string,
+    prompt: string,
+    images: AIContentPart[],
+    imageMode: VideoImageMode,
+    videoAudio: boolean,
+    videoDuration: number,
+    modeConfig: ProviderModeConfig,
+    token?: AbortToken
+  ): Promise<AIVideo[]> {
+    const baseUrl = resolveBaseUrl(providerConfig, modeConfig);
+
+    const content = this.buildDoubaoVideoContent(prompt, images, imageMode);
+    const data: Record<string, any> = {
+      model,
+      content,
+      generateAudio: videoAudio,
+      duration: videoDuration,
+    };
+    this.applyVideoDefaults(data, modeConfig);
+
+    const endpoint = modeConfig.endpoint || "api/v3/contents/generations/tasks";
+    const authMode = resolveAuthMode(getProviderProfile(providerConfig.url), modeConfig, providerConfig);
+    const authConfig = applyAuthConfig(authMode, providerConfig, resolveEndpointUrl(baseUrl, endpoint), {
+      "Content-Type": "application/json",
+    });
+    const response = await this.httpClient.request(
+      {
+        url: authConfig.url,
+        method: "POST",
+        headers: authConfig.headers,
+        data,
+      },
+      token
+    );
+
+    const taskId =
+      response.data?.task_id ||
+      response.data?.data?.task_id ||
+      response.data?.data?.id ||
+      response.data?.id;
+    if (!taskId) throw new Error("视频生成任务创建失败");
+
+    const videoUrl = await pollTask<string>(
+      async (abortToken) => {
+        const pollUrl = resolveEndpointUrl(baseUrl, `${endpoint}/${taskId}`);
+        const authConfig = applyAuthConfig(authMode, providerConfig, pollUrl, {});
+        const pollResponse = await this.httpClient.request(
+          {
+            url: authConfig.url,
+            method: "GET",
+            headers: authConfig.headers,
+          },
+          abortToken
+        );
+        return pollResponse.data;
+      },
+      (data): TaskPollResult<string> => {
+        const statusRaw = data?.status || data?.data?.status;
+        if (statusRaw === "failed") {
+          return { status: "failed", errorMessage: "视频生成失败" };
+        }
+
+        const url = buildDoubaoVideoUrl(data);
+        if (url) {
+          return { status: "succeeded", result: url };
+        }
+
+        return { status: "pending" };
+      },
+      {
+        maxAttempts: 303,
+        intervalMs: 2000,
+      },
+      token
+    );
+
+    return [{ url: videoUrl, mimeType: "video/mp4" }];
+  }
+
+  createAbortToken(): AbortToken {
+    const token = createAbortToken();
+    this.activeTokens.add(token);
+    token.signal.addEventListener("abort", () => this.activeTokens.delete(token), { once: true });
+    return token;
+  }
+
+  releaseToken(token: AbortToken): void {
+    this.activeTokens.delete(token);
+  }
+
+  cancelAllOperations(reason?: string): void {
+    const tokens = Array.from(this.activeTokens);
+    this.activeTokens.clear();
+    for (const token of tokens) {
+      if (!token.aborted) token.abort(reason || "操作已取消");
+    }
+  }
+
+  async destroy(): Promise<void> {
+    this.cancelAllOperations("服务已停止");
+    if (this.configManager) this.configManager.unregisterListener(this);
+  }
+
+  async callAI(
+    question: string,
+    images: AIContentPart[] = [],
+    token?: AbortToken
+  ): Promise<{ text: string; images: AIImage[] }> {
+    const { providerConfig, model, config } = await this.getCurrentProviderConfig("chat");
+    const { modeConfig } = this.resolveMode(providerConfig, "chat", model);
+    const handler = this.strategyHandlers[modeConfig.strategy]?.chat;
+    if (!handler) throw new UserError("当前提供商不支持聊天");
+    return await handler({ providerConfig, model, config, modeConfig, question, images, token });
+  }
+
+  async callSearch(
+    question: string,
+    images: AIContentPart[] = [],
+    token?: AbortToken
+  ): Promise<{ text: string; sources: Array<{ url: string; title?: string }> }> {
+    const { providerConfig, model, config } = await this.getCurrentProviderConfig("search");
+    const { modeConfig } = this.resolveMode(providerConfig, "search", model);
+    const handler = this.strategyHandlers[modeConfig.strategy]?.search;
+    if (!handler) throw new UserError("当前提供商不支持搜索模式");
+    return await handler({ providerConfig, model, config, modeConfig, question, images, token });
+  }
+
+  async generateImage(prompt: string, token?: AbortToken): Promise<AIImage[]> {
+    const { providerConfig, model, config } = await this.getCurrentProviderConfig("image");
+    const { modeConfig } = this.resolveMode(providerConfig, "image", model);
+    const handler = this.strategyHandlers[modeConfig.strategy]?.image;
+    if (!handler) throw new UserError("当前提供商不支持图片生成");
+    return await handler({ providerConfig, model, config, modeConfig, prompt, token });
+  }
+
+  async editImage(prompt: string, image: AIImage, token?: AbortToken): Promise<AIImage[]> {
+    const { providerConfig, model, config } = await this.getCurrentProviderConfig("image");
+    const { modeConfig } = this.resolveMode(providerConfig, "image", model);
+
+    if (!modeConfig.supportsEdit) {
+      throw new UserError("当前提供商未启用图片编辑支持");
+    }
+
+    if (!image.data) {
+      throw new Error("无法解析图片数据");
+    }
+
+    const handler = this.strategyHandlers[modeConfig.strategy]?.image;
+    if (!handler) throw new UserError("当前提供商不支持图片编辑");
+    return await handler({ providerConfig, model, config, modeConfig, prompt, image, token });
+  }
+
+  async generateVideo(
+    prompt: string,
+    images: AIContentPart[],
+    imageMode: VideoImageMode = "auto",
+    token?: AbortToken
+  ): Promise<AIVideo[]> {
+    const { providerConfig, model, config } = await this.getCurrentProviderConfig("video");
+    const { modeConfig } = this.resolveMode(providerConfig, "video", model);
+    const handler = this.strategyHandlers[modeConfig.strategy]?.video;
+    if (!handler) throw new UserError("当前提供商不支持视频生成");
+    return await handler({ providerConfig, model, config, modeConfig, prompt, images, imageMode, token });
+  }
+}
+
+abstract class BaseFeatureHandler implements FeatureHandler {
+  abstract readonly name: string;
+  abstract readonly command: string;
+  abstract readonly description: string;
+  abstract execute(msg: Api.Message, args: string[], prefixes: string[]): Promise<void>;
+
+  protected configManagerPromise: Promise<ConfigManager>;
+
+  protected constructor(configManagerPromise: Promise<ConfigManager>) {
+    this.configManagerPromise = configManagerPromise;
+  }
+
+  protected async getConfigManager(): Promise<ConfigManager> {
+    return await this.configManagerPromise;
+  }
+
+  protected async getConfig(): Promise<DB> {
+    const configManager = await this.getConfigManager();
+    return configManager.getConfig();
+  }
+
+  protected async editMessage(msg: Api.Message, text: string, parseMode: string = "html"): Promise<void> {
+    await MessageSender.sendOrEdit(msg, text, { parseMode });
+  }
+}
+
+class ConfigFeature extends BaseFeatureHandler {
+  readonly name = "配置管理";
+  readonly command = "config";
+  readonly description = "管理API配置";
+
+  constructor(configManagerPromise: Promise<ConfigManager>) {
+    super(configManagerPromise);
+  }
+
+  async execute(msg: Api.Message, args: string[], _prefixes: string[]): Promise<void> {
+    const configManager = await this.getConfigManager();
+    const config = configManager.getConfig();
+
+    if (args.length < 2) {
+      const list =
+        Object.values(config.configs)
+          .map((c) => `🏷️ <code>${c.tag}</code> - ${c.url}`)
+          .join("\n") || "暂无配置";
+      await this.editMessage(msg, `📋 <b>API配置列表:</b>\n\n⚙️ 配置:\n${list}`);
+      return;
+    }
+
+    const action = args[1].toLowerCase();
+    if (action === "add") {
+      requireUser(args.length >= 5, "参数格式错误");
+      await this.addConfig(msg, args, configManager);
+      return;
+    }
+    if (action === "del") {
+      requireUser(args.length >= 3, "参数格式错误");
+      await this.deleteConfig(msg, args, configManager);
+      return;
+    }
+    throw new UserError("参数格式错误");
+  }
+
+  private async addConfig(msg: Api.Message, args: string[], configManager: ConfigManager): Promise<void> {
+    requireUser(!!(msg as any).savedPeerId, "出于安全考虑，禁止在公开场景添加/修改API密钥");
+    const key = args[args.length - 1];
+    const url = args[args.length - 2];
+    const tag = args.slice(2, -2).join(" ").trim();
+    requireUser(!!tag, "参数格式错误");
+
+    try {
+      const u = new URL(url);
+      if (!["http:", "https:"].includes(u.protocol)) throw new Error("bad protocol");
+    } catch {
+      throw new UserError("无效的URL格式");
+    }
+
+    requireUser(!!key.trim(), "API密钥不能为空");
+    requireUser(key.length >= 10, "API密钥长度过短");
+
+    await configManager.updateConfig((cfg) => {
+      cfg.configs[tag] = { tag, url, key };
+    });
+
+    await this.editMessage(
+      msg,
+      "✅ API配置已添加:\n\n" +
+      `🏷️ 标签: <code>${tag}</code>\n` +
+      `🔗 地址: <code>${url}</code>\n` +
+      `🔑 密钥: <code>${key}</code>`
+    );
+  }
+
+  private async deleteConfig(msg: Api.Message, args: string[], configManager: ConfigManager): Promise<void> {
+    const delTag = args[2];
+    const config = configManager.getConfig();
+
+    requireUser(!!config.configs[delTag], "配置不存在");
+
+    await configManager.updateConfig((cfg) => {
+      delete cfg.configs[delTag];
+      if (cfg.currentChatTag === delTag) {
+        cfg.currentChatTag = "";
+        cfg.currentChatModel = "";
+      }
+      if (cfg.currentImageTag === delTag) {
+        cfg.currentImageTag = "";
+        cfg.currentImageModel = "";
+      }
+      if (cfg.currentVideoTag === delTag) {
+        cfg.currentVideoTag = "";
+        cfg.currentVideoModel = "";
+      }
+    });
+
+    await this.editMessage(msg, `✅ 已删除配置: ${delTag}`);
+  }
+}
+
+class ModelFeature extends BaseFeatureHandler {
+  readonly name = "模型管理";
+  readonly command = "model";
+  readonly description = "设置AI模型";
+
+  constructor(configManagerPromise: Promise<ConfigManager>) {
+    super(configManagerPromise);
+  }
+
+  async execute(msg: Api.Message, args: string[], _prefixes: string[]): Promise<void> {
+    const configManager = await this.getConfigManager();
+    const config = configManager.getConfig();
+
+    if (args.length < 2) {
+      await this.editMessage(
+        msg,
+        `🤖 <b>当前AI配置:</b>\n\n` +
+        `💬 chat配置: <code>${config.currentChatTag || "未设置"}</code>\n` +
+        `🧠 chat模型: <code>${config.currentChatModel || "未设置"}</code>\n` +
+        `🔎 search配置: <code>${config.currentSearchTag || "未设置"}</code>\n` +
+        `📚 search模型: <code>${config.currentSearchModel || "未设置"}</code>\n` +
+        `🖼️ image配置: <code>${config.currentImageTag || "未设置"}</code>\n` +
+        `🎨 image模型: <code>${config.currentImageModel || "未设置"}</code>\n` +
+        `🎬 video配置: <code>${config.currentVideoTag || "未设置"}</code>\n` +
+        `📹 video模型: <code>${config.currentVideoModel || "未设置"}</code>`
+      );
+      return;
+    }
+
+    const mode = args[1]?.toLowerCase();
+    requireUser(mode === "chat" || mode === "search" || mode === "image" || mode === "video", "参数格式错误");
+    requireUser(args.length >= 4, "参数不足");
+
+    const model = args[args.length - 1];
+    const tag = args.slice(2, -1).join(" ").trim();
+    requireUser(!!config.configs[tag], `配置标签 "${tag}" 不存在`);
+
+    await configManager.updateConfig((cfg) => {
+      if (mode === "chat") {
+        cfg.currentChatTag = tag;
+        cfg.currentChatModel = model;
+      } else if (mode === "search") {
+        cfg.currentSearchTag = tag;
+        cfg.currentSearchModel = model;
+      } else if (mode === "video") {
+        cfg.currentVideoTag = tag;
+        cfg.currentVideoModel = model;
+      } else {
+        cfg.currentImageTag = tag;
+        cfg.currentImageModel = model;
+      }
+    });
+
+    const modeLabel =
+      mode === "chat" ? "chat模型" : mode === "search" ? "search模型" : mode === "image" ? "image模型" : "video模型";
+    await this.editMessage(
+      msg,
+      `✅ ${modeLabel}已切换到:\n\n🏷️ 配置: <code>${tag}</code>\n🧠 模型: <code>${model}</code>`
+    );
+  }
+}
+
+class PromptFeature extends BaseFeatureHandler {
+  readonly name = "提示词管理";
+  readonly command = "prompt";
+  readonly description = "管理提示词";
+
+  constructor(configManagerPromise: Promise<ConfigManager>) {
+    super(configManagerPromise);
+  }
+
+  async execute(msg: Api.Message, args: string[], _prefixes: string[]): Promise<void> {
+    const configManager = await this.getConfigManager();
+    const config = configManager.getConfig();
+
+    if (args.length < 2) {
+      await this.editMessage(msg, `💭 <b>当前提示词:</b>\n\n📝 内容: <code>${config.prompt || "未设置"}</code>`);
+      return;
+    }
+
+    const action = args[1].toLowerCase();
+    if (action === "set") {
+      requireUser(args.length >= 3, "参数格式错误");
+      await configManager.updateConfig((cfg) => {
+        cfg.prompt = args.slice(2).join(" ");
+      });
+      await this.editMessage(msg, `✅ 提示词已设置:\n\n<code>${args.slice(2).join(" ")}</code>`);
+      return;
+    }
+
+    if (action === "del") {
+      await configManager.updateConfig((cfg) => {
+        cfg.prompt = "";
+      });
+      await this.editMessage(msg, "✅ 提示词已删除");
+      return;
+    }
+
+    throw new UserError("参数格式错误");
+  }
+}
+
+class CollapseFeature extends BaseFeatureHandler {
+  readonly name = "折叠设置";
+  readonly command = "collapse";
+  readonly description = "设置消息折叠";
+
+  constructor(configManagerPromise: Promise<ConfigManager>) {
+    super(configManagerPromise);
+  }
+
+  async execute(msg: Api.Message, args: string[], _prefixes: string[]): Promise<void> {
+    const configManager = await this.getConfigManager();
+    const config = configManager.getConfig();
+
+    if (args.length < 2) {
+      await this.editMessage(
+        msg,
+        `📖 <b>消息折叠状态:</b>\n\n📄 当前状态: ${config.collapse ? "开启" : "关闭"}`
+      );
+      return;
+    }
+
+    const state = args[1].toLowerCase();
+    requireUser(state === "on" || state === "off", "参数必须是 on 或 off");
+
+    await configManager.updateConfig((cfg) => {
+      cfg.collapse = state === "on";
+    });
+
+    await this.editMessage(msg, `✅ 引用折叠已${state === "on" ? "开启" : "关闭"}`);
+  }
+}
+
+class TelegraphFeature extends BaseFeatureHandler {
+  readonly name = "Telegraph管理";
+  readonly command = "telegraph";
+  readonly description = "管理Telegraph";
+
+  constructor(configManagerPromise: Promise<ConfigManager>) {
+    super(configManagerPromise);
+  }
+
+  async execute(msg: Api.Message, args: string[], _prefixes: string[]): Promise<void> {
+    const configManager = await this.getConfigManager();
+    const config = configManager.getConfig();
+
+    if (args.length < 2) {
+      await this.showTelegraphStatus(msg, config);
+      return;
+    }
+
+    const action = args[1].toLowerCase();
+    if (action === "on") {
+      await this.enableTelegraph(msg, configManager);
+      return;
+    }
+    if (action === "off") {
+      await this.disableTelegraph(msg, configManager);
+      return;
+    }
+    if (action === "limit") {
+      requireUser(args.length >= 3, "参数格式错误");
+      await this.setTelegraphLimit(msg, args, configManager);
+      return;
+    }
+    if (action === "del") {
+      requireUser(args.length >= 3, "参数格式错误");
+      await this.deleteTelegraphItem(msg, args, configManager);
+      return;
+    }
+    await this.showTelegraphStatus(msg, config);
+  }
+
+  private async showTelegraphStatus(msg: Api.Message, config: DB): Promise<void> {
+    let status =
+      `📰 <b>Telegraph状态:</b>\n\n` +
+      `🌐 当前状态: ${config.telegraph.enabled ? "开启" : "关闭"}\n` +
+      `📊 限制数量: <code>${config.telegraph.limit}</code>\n` +
+      `📈 记录数量: <code>${config.telegraph.list.length}/${config.telegraph.limit}</code>`;
+
+    if (config.telegraph.list.length > 0) {
+      status += "\n\n";
+      config.telegraph.list.forEach((item, index) => {
+        status += `${index + 1}. <a href="${item.url}">🔗 ${item.title}</a>\n`;
+      });
+    }
+
+    await this.editMessage(msg, status);
+  }
+
+  private async enableTelegraph(msg: Api.Message, configManager: ConfigManager): Promise<void> {
+    await configManager.updateConfig((cfg) => {
+      cfg.telegraph.enabled = true;
+    });
+    await this.editMessage(msg, "✅ Telegraph已开启");
+  }
+
+  private async disableTelegraph(msg: Api.Message, configManager: ConfigManager): Promise<void> {
+    await configManager.updateConfig((cfg) => {
+      cfg.telegraph.enabled = false;
+    });
+    await this.editMessage(msg, "✅ Telegraph已关闭");
+  }
+
+  private async setTelegraphLimit(msg: Api.Message, args: string[], configManager: ConfigManager): Promise<void> {
+    const limit = parseInt(args[2]);
+    requireUser(!isNaN(limit) && limit > 0, "限制数量必须大于0");
+
+    await configManager.updateConfig((cfg) => {
+      cfg.telegraph.limit = limit;
+    });
+
+    await this.editMessage(msg, `✅ Telegraph限制已设置为 ${limit}`);
+  }
+
+  private async deleteTelegraphItem(msg: Api.Message, args: string[], configManager: ConfigManager): Promise<void> {
+    const del = args[2];
+    const config = configManager.getConfig();
+
+    if (del.toLowerCase() === "all") {
+      await configManager.updateConfig((cfg) => {
+        cfg.telegraph.list = [];
+      });
+      await this.editMessage(msg, "✅ 已删除所有记录");
+      return;
+    }
+
+    const idx = parseInt(del) - 1;
+    requireUser(
+      !isNaN(idx) && idx >= 0 && idx < config.telegraph.list.length,
+      `序号超出范围 (1-${config.telegraph.list.length})`
+    );
+
+    await configManager.updateConfig((cfg) => {
+      cfg.telegraph.list.splice(idx, 1);
+    });
+
+    await this.editMessage(msg, `✅ 已删除第 ${idx + 1} 项`);
+  }
+}
+
+class TimeoutFeature extends BaseFeatureHandler {
+  readonly name = "超时设置";
+  readonly command = "timeout";
+  readonly description = "设置请求超时";
+
+  constructor(configManagerPromise: Promise<ConfigManager>) {
+    super(configManagerPromise);
+  }
+
+  async execute(msg: Api.Message, args: string[], _prefixes: string[]): Promise<void> {
+    const configManager = await this.getConfigManager();
+    const config = configManager.getConfig();
+
+    if (args.length < 2) {
+      await this.editMessage(
+        msg,
+        `⏱️ <b>当前超时设置:</b>\n\n⏰ 超时时间: <code>${config.timeout} 秒</code>`
+      );
+      return;
+    }
+
+    const timeout = parseInt(args[1]);
+    requireUser(!isNaN(timeout) && timeout >= 1 && timeout <= 600, "超时时间必须在1-600秒之间");
+
+    await configManager.updateConfig((cfg) => {
+      cfg.timeout = timeout;
+    });
+
+    await this.editMessage(msg, `✅ 超时时间已设置为 ${timeout} 秒`);
+  }
+}
+
+class QuestionFeature extends BaseFeatureHandler {
+  readonly name = "AI提问";
+  readonly command = "";
+  readonly description = "向AI提问";
+
+  private aiService: AIService;
+  private messageUtils: MessageUtils;
+  private activeToken?: AbortToken;
+
+  constructor(aiService: AIService, configManagerPromise: Promise<ConfigManager>, httpClient: HttpClient) {
+    super(configManagerPromise);
+    this.aiService = aiService;
+    this.messageUtils = new MessageUtils(configManagerPromise, httpClient);
+  }
+
+  cancelCurrentOperation(): void {
+    if (this.activeToken && !this.activeToken.aborted) this.activeToken.abort("操作被取消");
+    this.activeToken = undefined;
+  }
+
+  private async runQuestion(msg: Api.Message, question: string, trigger?: Api.Message): Promise<void> {
+    this.cancelCurrentOperation();
+
+    const token = this.aiService.createAbortToken();
+    this.activeToken = token;
+
+    try {
+      await this.handleQuestion(msg, question, trigger, token);
+    } finally {
+      this.activeToken = undefined;
+      this.aiService.releaseToken(token);
+    }
+  }
+
+  async execute(msg: Api.Message, args: string[], _prefixes: string[]): Promise<void> {
+    const question = args.join(" ").trim();
+    await this.runQuestion(msg, question);
+  }
+
+  async askFromReply(msg: Api.Message, trigger?: Api.Message): Promise<void> {
+    const replyMsg = await msg.getReplyMessage();
+    requireUser(!!replyMsg, "至少需要一条提示");
+    const question = getMessageText(replyMsg).trim();
+    await this.runQuestion(msg, question, trigger);
+  }
+
+  async handleQuestion(msg: Api.Message, question: string, trigger?: Api.Message, token?: AbortToken): Promise<void> {
+    const config = await this.getConfig();
+
+    if (!config.currentChatTag || !config.currentChatModel || !config.configs[config.currentChatTag]) {
+      const prefixes = getPrefixes();
+      throw new UserError(
+        `请先配置API并设置模型\n使用 ${prefixes[0]}ai config add <tag> <url> <key> 和 ${prefixes[0]}ai model chat <tag> <model-path>`
+      );
+    }
+
+    token?.throwIfAborted();
+
+    await sendProcessing(msg, "chat");
+
+    const replyMsg = await msg.getReplyMessage();
+    let context = getMessageText(replyMsg);
+    const replyToId = replyMsg?.id;
+    const imageParts = [...(await getMessageImageParts(replyMsg)), ...(await getMessageImageParts(msg))];
+
+    const normalizedQuestion = question.trim();
+    const normalizedContext = context.trim();
+    if (normalizedQuestion && normalizedContext && normalizedQuestion === normalizedContext) {
+      context = "";
+    }
+
+    const userText = context ? `上下文:\n${context}\n\n问题:\n${question}` : question;
+
+    const response = await this.aiService.callAI(userText, imageParts, token);
+    const answer = response.text || "AI回复为空";
+
+    const collapseSafe = config.collapse;
+    const htmlAnswer = TelegramFormatter.markdownToHtml(answer, { collapseSafe });
+    const safeQuestion = htmlEscape(question);
+    const formattedAnswer = `Q:\n${safeQuestion}\n\nA:\n${htmlAnswer}`;
+
+    token?.throwIfAborted();
+
+    if (config.telegraph.enabled && formattedAnswer.length > 4050) {
+      await this.handleLongContentWithTelegraph(msg, question, answer, replyToId, token);
+    } else {
+      await this.messageUtils.sendLongMessage(msg, formattedAnswer, replyToId, token, {
+        poweredByTag: config.currentChatTag,
+      });
+    }
+    await deleteMessageOrGroup(msg);
+  }
+
+  private async handleLongContentWithTelegraph(
+    msg: Api.Message,
+    question: string,
+    rawAnswer: string,
+    replyToId?: number,
+    token?: AbortToken
+  ): Promise<void> {
+    const configManager = await this.getConfigManager();
+    const config = configManager.getConfig();
+
+    const telegraphMarkdown = `**Q:**\n${question}\n\n**A:**\n${rawAnswer}\n`;
+    const telegraphResult = await this.messageUtils.createTelegraphPage(telegraphMarkdown, question, token);
+
+    const poweredByText = `\n<i>🍀Powered by ${config.currentChatTag}</i>`;
+    const safeQuestion = htmlEscape(question);
+    const questionBlock = config.collapse
+      ? `Q:\n<blockquote expandable>${safeQuestion}</blockquote>\n`
+      : `Q:\n${safeQuestion}\n`;
+    const answerBlock = config.collapse
+      ? `A:\n<blockquote expandable>📰内容比较长，Telegraph观感更好喔:\n🔗 <a href="${telegraphResult.url}">点我阅读内容</a></blockquote>${poweredByText}`
+      : `A:\n📰内容比较长，Telegraph观感更好喔:\n🔗 <a href="${telegraphResult.url}">点我阅读内容</a>${poweredByText}`;
+
+    await MessageSender.sendNew(msg, questionBlock + answerBlock, { parseMode: "html", linkPreview: false }, replyToId);
+
+    await configManager.updateConfig((cfg) => {
+      cfg.telegraph.list.push(telegraphResult);
+      if (cfg.telegraph.list.length > cfg.telegraph.limit) cfg.telegraph.list.shift();
+    });
+  }
+}
+
+class SearchFeature extends BaseFeatureHandler {
+  readonly name = "联网搜索";
+  readonly command = "search";
+  readonly description = "使用联网能力搜索并回答";
+
+  private aiService: AIService;
+  private messageUtils: MessageUtils;
+
+  constructor(aiService: AIService, configManagerPromise: Promise<ConfigManager>, httpClient: HttpClient) {
+    super(configManagerPromise);
+    this.aiService = aiService;
+    this.messageUtils = new MessageUtils(configManagerPromise, httpClient);
+  }
+
+  async execute(msg: Api.Message, args: string[], _prefixes: string[]): Promise<void> {
+    const prefixes = getPrefixes();
+    const config = await this.getConfig();
+
+    const promptInput = args.slice(1).join(" ").trim();
+
+    const replyMsg = await msg.getReplyMessage();
+    requireUser(!!promptInput || !!replyMsg, "至少需要一条提示");
+
+    if (!config.currentSearchTag || !config.currentSearchModel || !config.configs[config.currentSearchTag]) {
+      throw new UserError(
+        `请先配置API并设置模型\n使用 ${prefixes[0]}ai config add <tag> <url> <key> 和 ${prefixes[0]}ai model search <tag> <model-path>`
+      );
+    }
+
+    await sendProcessing(msg, "search");
+
+    const replyToId = replyMsg?.id;
+
+    let context = getMessageText(replyMsg);
+    const imageParts = [...(await getMessageImageParts(replyMsg)), ...(await getMessageImageParts(msg))];
+
+    const normalizedPrompt = promptInput.trim();
+    const normalizedContext = (context || "").trim();
+
+    if (normalizedPrompt && normalizedContext && normalizedPrompt === normalizedContext) {
+      context = "";
+    }
+
+    const userText = context ? `上下文:\n${context}\n\n问题:\n${promptInput}` : promptInput;
+
+    const token = this.aiService.createAbortToken();
+    try {
+      const { text, sources } = await this.aiService.callSearch(userText, imageParts, token);
+
+      const sourcesText =
+        sources && sources.length > 0
+          ? "\n\n<b>🔗 Sources</b>\n" +
+          sources
+            .slice(0, 8)
+            .map((s, i) => {
+              const safeUrl = htmlEscape(s.url);
+              const safeTitle = htmlEscape(s.title || s.url);
+              return `${i + 1}. <a href="${safeUrl}">${safeTitle}</a>`;
+            })
+            .join("\n")
+          : "";
+
+      const collapseSafe = config.collapse;
+      const htmlAnswer = TelegramFormatter.markdownToHtml(text || "AI回复为空", { collapseSafe });
+
+      const safeQuestion = htmlEscape(promptInput);
+      const formatted = `Q:\n${safeQuestion}\n\nA:\n${htmlAnswer}${sourcesText}`;
+
+      if (config.telegraph.enabled && formatted.length > 4050) {
+        const telegraphMarkdown =
+          `**Q:**\n${promptInput}\n\n**A:**\n${text || "AI回复为空"}\n\n` +
+          (sources && sources.length
+            ? `**Sources:**\n` + sources.slice(0, 20).map((s, i) => `${i + 1}. ${s.title || s.url}\n${s.url}`).join("\n")
+            : "");
+
+        const telegraphResult = await this.messageUtils.createTelegraphPage(telegraphMarkdown, promptInput, token);
+
+        const poweredByText = `\n<i>🍀Powered by ${config.currentSearchTag}</i>`;
+        const qBlock = config.collapse
+          ? `Q:\n<blockquote expandable>${safeQuestion}</blockquote>\n`
+          : `Q:\n${safeQuestion}\n`;
+        const aBlock = config.collapse
+          ? `A:\n<blockquote expandable>📰内容较长，Telegraph 观感更好：\n🔗 <a href="${telegraphResult.url}">点我阅读内容</a></blockquote>${poweredByText}`
+          : `A:\n📰内容较长，Telegraph 观感更好：\n🔗 <a href="${telegraphResult.url}">点我阅读内容</a>${poweredByText}`;
+
+        await MessageSender.sendNew(msg, qBlock + aBlock, { parseMode: "html", linkPreview: false }, replyToId);
+
+        const configManager = await this.getConfigManager();
+        await configManager.updateConfig((cfg) => {
+          cfg.telegraph.list.push(telegraphResult);
+          if (cfg.telegraph.list.length > cfg.telegraph.limit) cfg.telegraph.list.shift();
+        });
+      } else {
+        await this.messageUtils.sendLongMessage(msg, formatted, replyToId, token, {
+          poweredByTag: config.currentSearchTag,
+        });
+      }
+
+      await deleteMessageOrGroup(msg);
+    } finally {
+      this.aiService.releaseToken(token);
     }
   }
 }
 
-export default new AiPlugin();
+class ImageFeature extends BaseFeatureHandler {
+  readonly name = "图片生成";
+  readonly command = "image";
+  readonly description = "生成图片";
+
+  private aiService: AIService;
+  private messageUtils: MessageUtils;
+  private httpClient: HttpClient;
+
+  constructor(aiService: AIService, configManagerPromise: Promise<ConfigManager>, httpClient: HttpClient) {
+    super(configManagerPromise);
+    this.aiService = aiService;
+    this.messageUtils = new MessageUtils(configManagerPromise, httpClient);
+    this.httpClient = httpClient;
+  }
+
+  async execute(msg: Api.Message, args: string[], _prefixes: string[]): Promise<void> {
+    const prefixes = getPrefixes();
+    const configManager = await this.getConfigManager();
+    const config = configManager.getConfig();
+    const replyMsg = await msg.getReplyMessage();
+    const replyToId = replyMsg?.id;
+
+    const subCommand = args[1]?.toLowerCase();
+    if (subCommand === "preview") {
+      const state = args[2]?.toLowerCase();
+      if (!state) {
+        await this.editMessage(
+          msg,
+          `🖼️ <b>图片预览状态:</b>\n\n📄 当前状态: ${config.imagePreview ? "开启" : "关闭"}`
+        );
+        return;
+      }
+      requireUser(state === "on" || state === "off", "参数必须是 on 或 off");
+      await configManager.updateConfig((cfg) => {
+        cfg.imagePreview = state === "on";
+      });
+      await this.editMessage(msg, `✅ 图片预览已${state === "on" ? "开启" : "关闭"}`);
+      return;
+    }
+
+    const promptInput = args.slice(1).join(" ").trim();
+    const replyText = getMessageText(replyMsg).trim();
+    const replyImageParts = await getMessageImageParts(replyMsg);
+    const messageImageParts = await getMessageImageParts(msg);
+    const imageParts = [...replyImageParts, ...messageImageParts];
+
+    const hasPrompt = !!promptInput || !!replyText;
+    requireUser(hasPrompt, "至少需要一条文字提示");
+
+    if (!config.currentImageTag || !config.currentImageModel || !config.configs[config.currentImageTag]) {
+      throw new UserError(
+        `请先配置API并设置模型\n使用 ${prefixes[0]}ai config add <tag> <url> <key> 和 ${prefixes[0]}ai model image <tag> <model-path>`
+      );
+    }
+
+    const token = this.aiService.createAbortToken();
+    await sendProcessing(msg, "image");
+
+    try {
+      let prompt = "";
+      if (promptInput && replyText && replyImageParts.length === 0) {
+        prompt = `${replyText}\n\n${promptInput}`;
+      } else if (promptInput && replyImageParts.length > 0) {
+        prompt = promptInput;
+      } else if (promptInput) {
+        prompt = promptInput;
+      } else {
+        prompt = replyText;
+      }
+
+      let images: AIImage[] = [];
+      if (imageParts.length > 0) {
+        let inputImage = await resolveImagePart(imageParts, this.httpClient, token);
+        if (!inputImage?.data) throw new Error("无法解析图片数据");
+        if (inputImage.data && inputImage.mimeType !== "image/png") {
+          try {
+            const pngBuffer = await sharp(inputImage.data).png().toBuffer();
+            inputImage = { data: pngBuffer, mimeType: "image/png" };
+          } catch { }
+        }
+        images = await this.aiService.editImage(prompt, inputImage, token);
+      } else {
+        images = await this.aiService.generateImage(prompt, token);
+      }
+      if (images.length === 0) throw new Error("AI回复为空");
+      await this.messageUtils.sendImages(msg, images, prompt, replyToId, token);
+      await deleteMessageOrGroup(msg);
+    } finally {
+      this.aiService.releaseToken(token);
+    }
+  }
+}
+
+class VideoFeature extends BaseFeatureHandler {
+  readonly name = "视频生成";
+  readonly command = "video";
+  readonly description = "生成视频";
+
+  private aiService: AIService;
+  private messageUtils: MessageUtils;
+
+  constructor(aiService: AIService, configManagerPromise: Promise<ConfigManager>, httpClient: HttpClient) {
+    super(configManagerPromise);
+    this.aiService = aiService;
+    this.messageUtils = new MessageUtils(configManagerPromise, httpClient);
+  }
+
+  async execute(msg: Api.Message, args: string[], _prefixes: string[]): Promise<void> {
+    const prefixes = getPrefixes();
+    const configManager = await this.getConfigManager();
+    const config = configManager.getConfig();
+    const replyMsg = await msg.getReplyMessage();
+    const replyToId = replyMsg?.id;
+
+    const subCommand = args[1]?.toLowerCase();
+    let imageMode: VideoImageMode = "auto";
+    let promptStartIndex = 1;
+    if (subCommand === "preview") {
+      const state = args[2]?.toLowerCase();
+      if (!state) {
+        await this.editMessage(
+          msg,
+          `🎬 <b>视频预览状态:</b>\n\n📄 当前状态: ${config.videoPreview ? "开启" : "关闭"}`
+        );
+        return;
+      }
+      requireUser(state === "on" || state === "off", "参数必须是 on 或 off");
+      await configManager.updateConfig((cfg) => {
+        cfg.videoPreview = state === "on";
+      });
+      await this.editMessage(msg, `✅ 视频预览已${state === "on" ? "开启" : "关闭"}`);
+      return;
+    }
+    if (subCommand === "audio") {
+      const state = args[2]?.toLowerCase();
+      if (!state) {
+        await this.editMessage(
+          msg,
+          `🔊 <b>视频音频状态:</b>\n\n📄 当前状态: ${config.videoAudio ? "开启" : "关闭"}`
+        );
+        return;
+      }
+      requireUser(state === "on" || state === "off", "参数必须是 on 或 off");
+      await configManager.updateConfig((cfg) => {
+        cfg.videoAudio = state === "on";
+      });
+      await this.editMessage(msg, `✅ 视频音频已${state === "on" ? "开启" : "关闭"}`);
+      return;
+    }
+    if (subCommand === "duration") {
+      const duration = parseInt(args[2]);
+      if (!args[2]) {
+        await this.editMessage(
+          msg,
+          `⏱️ <b>视频时长:</b>\n\n⏰ 当前时长: <code>${config.videoDuration} 秒</code>`
+        );
+        return;
+      }
+      requireUser(!isNaN(duration) && duration >= 5 && duration <= 20, "时长必须是 5-20 的整数");
+      await configManager.updateConfig((cfg) => {
+        cfg.videoDuration = duration;
+      });
+      await this.editMessage(msg, `✅ 视频时长已设置为 ${duration} 秒`);
+      return;
+    }
+    if (subCommand === "first") {
+      imageMode = "first";
+      promptStartIndex = 2;
+    } else if (subCommand === "firstlast") {
+      imageMode = "firstlast";
+      promptStartIndex = 2;
+    }
+
+    const promptInput = args.slice(promptStartIndex).join(" ").trim();
+    const replyText = getMessageText(replyMsg).trim();
+
+    const replyImageParts = await getMessageImageParts(replyMsg);
+    const messageImageParts = await getMessageImageParts(msg);
+
+    let finalPrompt = "";
+    if (promptInput && replyText && replyImageParts.length === 0) {
+      finalPrompt = `${replyText}\n\n${promptInput}`;
+    } else if (promptInput && replyImageParts.length > 0) {
+      finalPrompt = promptInput;
+    } else if (promptInput) {
+      finalPrompt = promptInput;
+    } else {
+      finalPrompt = replyText;
+    }
+
+    const allImageParts = [...replyImageParts, ...messageImageParts];
+    const hasPrompt = !!finalPrompt.trim();
+
+    requireUser(hasPrompt || allImageParts.length > 0, "至少需要一条提示");
+
+    if (!config.currentVideoTag || !config.currentVideoModel || !config.configs[config.currentVideoTag]) {
+      throw new UserError(
+        `请先配置API并设置模型\n使用 ${prefixes[0]}ai config add <tag> <url> <key> 和 ${prefixes[0]}ai model video <tag> <model-path>`
+      );
+    }
+
+    const token = this.aiService.createAbortToken();
+    await sendProcessing(msg, "video");
+
+    try {
+      let imageParts = allImageParts;
+
+      if (imageMode === "firstlast" && allImageParts.length < 2) {
+        if (allImageParts.length === 1) {
+          imageMode = "first";
+        } else if (hasPrompt) {
+          imageMode = "auto";
+          imageParts = [];
+        }
+      }
+
+      if (imageMode === "first" && allImageParts.length < 1) {
+        if (hasPrompt) {
+          imageMode = "auto";
+          imageParts = [];
+        }
+      }
+      if (imageMode === "first") {
+        imageParts = allImageParts.slice(0, 1);
+      } else if (imageMode === "firstlast") {
+        imageParts = allImageParts.slice(0, 2);
+      } else if (allImageParts.length > 0) {
+        imageMode = "reference";
+        imageParts = allImageParts.slice(0, 4);
+      }
+
+      const videos = await this.aiService.generateVideo(finalPrompt, imageParts, imageMode, token);
+      if (videos.length === 0) throw new Error("AI回复为空");
+      await this.messageUtils.sendVideos(msg, videos, finalPrompt, replyToId, token);
+      await deleteMessageOrGroup(msg);
+    } finally {
+      this.aiService.releaseToken(token);
+    }
+  }
+}
+
+class AIPlugin extends Plugin {
+  name = "ai";
+
+  private cleanedUp = false;
+
+  private aiService: AIService;
+  private httpClient: HttpClient;
+  private featureRegistry: FeatureRegistry;
+  private questionFeature: QuestionFeature;
+  private configManagerPromise: Promise<ConfigManager>;
+
+  constructor() {
+    super();
+    this.configManagerPromise = ConfigManager.getInstance();
+    this.httpClient = new HttpClient(this.configManagerPromise);
+    this.aiService = new AIService(this.configManagerPromise, this.httpClient);
+    this.featureRegistry = new FeatureRegistry();
+    this.questionFeature = new QuestionFeature(this.aiService, this.configManagerPromise, this.httpClient);
+    this.registerFeatures();
+  }
+
+  private getMainPrefix(): string {
+    const prefixes = getPrefixes();
+    return prefixes[0] || "";
+  }
+
+  private registerFeatures(): void {
+    this.featureRegistry.register(new ConfigFeature(this.configManagerPromise));
+    this.featureRegistry.register(new ModelFeature(this.configManagerPromise));
+    this.featureRegistry.register(new PromptFeature(this.configManagerPromise));
+    this.featureRegistry.register(new CollapseFeature(this.configManagerPromise));
+    this.featureRegistry.register(new TelegraphFeature(this.configManagerPromise));
+    this.featureRegistry.register(new TimeoutFeature(this.configManagerPromise));
+    this.featureRegistry.register(new SearchFeature(this.aiService, this.configManagerPromise, this.httpClient));
+    this.featureRegistry.register(new ImageFeature(this.aiService, this.configManagerPromise, this.httpClient));
+    this.featureRegistry.register(new VideoFeature(this.aiService, this.configManagerPromise, this.httpClient));
+  }
+
+  description = async (): Promise<string> => {
+    const mainPrefix = this.getMainPrefix();
+    const config = (await this.configManagerPromise).getConfig();
+
+    const baseDescription = `<b>🤖 智能AI助手</b>
+
+<b>⚙️ API配置:</b>
+• <code>${mainPrefix}ai config add &lt;tag&gt; &lt;url&gt; &lt;key&gt;</code> - 添加API配置
+• <code>${mainPrefix}ai config del &lt;tag&gt;</code> - 删除API配置
+
+<b>🧠 模型设置:</b>
+• <code>${mainPrefix}ai model chat &lt;tag&gt; &lt;model-path&gt;</code> - 设置聊天模型
+• <code>${mainPrefix}ai model search &lt;tag&gt; &lt;model-path&gt;</code> - 设置搜索模型
+• <code>${mainPrefix}ai model image &lt;tag&gt; &lt;model-path&gt;</code> - 设置图片模型
+• <code>${mainPrefix}ai model video &lt;tag&gt; &lt;model-path&gt;</code> - 设置视频模型
+
+<b>💬 提问:</b>
+• <code>${mainPrefix}ai &lt;input&gt;</code> - 向AI发起提问
+• <code>${mainPrefix}ai search &lt;input&gt;</code> - 联网搜索并回答
+• <code>${mainPrefix}ai image &lt;prompt&gt;</code> - 文生/编辑图片
+• <code>${mainPrefix}ai video &lt;prompt&gt;</code> - 文生/参考图生成视频
+• <code>${mainPrefix}ai video first &lt;prompt&gt;</code> - 首帧生成视频
+• <code>${mainPrefix}ai video firstlast &lt;prompt&gt;</code> - 首尾帧生成视频
+
+<b>✍️ 提示词:</b>
+• <code>${mainPrefix}ai prompt set &lt;input&gt;</code> - 设置提示词
+• <code>${mainPrefix}ai prompt del</code> - 删除提示词
+
+<b>🧩 消息设置:</b>
+• <code>${mainPrefix}ai image preview on|off</code> - 开/关图片预览
+• <code>${mainPrefix}ai video preview on|off</code> - 开/关视频预览
+• <code>${mainPrefix}ai video audio on|off</code> - 开/关视频音频
+• <code>${mainPrefix}ai collapse on|off</code> - 开/关消息折叠
+• <code>${mainPrefix}ai video duration &lt;sec&gt;</code> - 视频输出时长
+• <code>${mainPrefix}ai timeout &lt;sec&gt;</code> - 设置超时时间
+
+<b>📰 Telegraph:</b>
+• <code>${mainPrefix}ai telegraph on</code> - 开启Telegraph
+• <code>${mainPrefix}ai telegraph off</code> - 关闭Telegraph
+• <code>${mainPrefix}ai telegraph limit &lt;integer&gt;</code> - 设置容量
+• <code>${mainPrefix}ai telegraph del &lt;number/all&gt;</code> - 删除记录
+
+<b>📌 使用说明:</b>
+• 不携带参数可进行查询
+• 回复消息可进行补充提问
+`;
+    if (!config.collapse) return baseDescription;
+    return `<blockquote expandable>${baseDescription}</blockquote>`;
+  };
+
+  cmdHandlers: Record<string, (msg: Api.Message, trigger?: Api.Message) => Promise<void>> = {
+    ai: async (msg: Api.Message, trigger?: Api.Message) => {
+      try {
+        const prefixes = getPrefixes();
+        const args = getMessageText(msg).trim().split(/\s+/).slice(1);
+
+        if (args.length === 0) {
+          await this.questionFeature.askFromReply(msg, trigger);
+          return;
+        }
+
+        const sub = args[0].toLowerCase();
+        if (sub === "help" || sub === "?") {
+          const description = await this.description();
+          await MessageSender.sendOrEdit(trigger || msg, description, { parseMode: "html" });
+          return;
+        }
+        const handler = this.featureRegistry.getHandler(sub);
+
+        if (handler) await handler.execute(msg, args, prefixes);
+        else await this.questionFeature.execute(msg, args, prefixes);
+      } catch (error: any) {
+        await sendErrorMessage(msg, error, trigger);
+      }
+    },
+  };
+
+  async cleanup(): Promise<void> {
+    if (this.cleanedUp) {
+      return;
+    }
+    this.cleanedUp = true;
+
+    this.questionFeature.cancelCurrentOperation();
+    await this.aiService.destroy();
+    const configManager = await this.configManagerPromise;
+    await configManager.destroy();
+  }
+}
+
+export default new AIPlugin();

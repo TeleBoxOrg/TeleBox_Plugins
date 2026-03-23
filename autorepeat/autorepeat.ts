@@ -365,6 +365,14 @@ class AutoRepeatManager {
       this.saveDailyHistory(); // 保存新的天数和空的记录
     }
   }
+
+  static cleanup(): void {
+    this.recentMessages.clear();
+    this.dailyHistory.clear();
+    this.enabledGroups.clear();
+    this.lastCleanup = 0;
+    this.lastDayCheck = 0;
+  }
 }
 
 // 初始化
@@ -664,6 +672,7 @@ class CommandHandlers {
 // ==================== 插件主类 ====================
 class AutoRepeatPlugin extends Plugin {
   cleanup(): void {
+    AutoRepeatManager.cleanup();
   }
   // 修改类名
   description: string = HELP_TEXT;

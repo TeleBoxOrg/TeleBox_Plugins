@@ -45,6 +45,7 @@ const prefixes = getPrefixes();
 const mainPrefix = prefixes[0];
 const pluginName = "music";
 const commandName = `${mainPrefix}${pluginName}`;
+const pendingCleanupTimers = new Set<ReturnType<typeof setTimeout>>();
 
 // ==================== Configuration ====================
 const CONFIG = {
@@ -400,6 +401,11 @@ class ConfigManager {
       console.error(`[music] 删除配置失败 ${key}:`, error);
       return false;
     }
+  }
+
+  static cleanup(): void {
+    this.db = null;
+    this.initialized = false;
   }
 }
 
@@ -1751,6 +1757,12 @@ class Downloader {
 // ==================== Main Plugin ====================
 class MusicPlugin extends Plugin {
   cleanup(): void {
+    for (const timer of pendingCleanupTimers) {
+      clearTimeout(timer);
+    }
+    pendingCleanupTimers.clear();
+    ConfigManager.cleanup();
+    MusicPlugin.initialized = false;
   }
 
   private static initialized = false;
@@ -2234,6 +2246,7 @@ ${apiKey ? "✅" : "⚪"} <b>AI搜索:</b> ${apiKey ? "已启用" : "未配置"}
       await statusMsg.delete();
 
       const timer = setTimeout(() => {
+        pendingCleanupTimers.delete(timer);
         try {
           if (
             downloadResult.audioPath &&
@@ -2251,6 +2264,7 @@ ${apiKey ? "✅" : "⚪"} <b>AI搜索:</b> ${apiKey ? "已启用" : "未配置"}
           console.log("[music] 清理临时文件失败:", error);
         }
       }, 5000);
+      pendingCleanupTimers.add(timer);
       if (timer.unref) timer.unref();
     } catch (error: any) {
       if (statusMsg) {

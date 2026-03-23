@@ -12,8 +12,13 @@ const mainPrefix = prefixes[0];
 
 class AutoDelPlugin extends Plugin {
   cleanup(): void {
-    // 引用重置：清空实例级 db / cache / manager 引用，便于 reload 后重新初始化。
+    if (this.db) {
+      try {
+        this.db.close();
+      } catch {}
+    }
     this.db = null;
+    this.settings.clear();
   }
 
   description: string = `🕒 <b>定时自动删除消息</b><br/><br/>

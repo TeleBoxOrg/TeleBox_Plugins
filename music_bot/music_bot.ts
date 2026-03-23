@@ -211,7 +211,7 @@ function getRemarkFromMsg(msg: Api.Message | string, n: number): string {
 
 class MusicBotPlugin extends Plugin {
   cleanup(): void {
-    // 当前插件不持有需要在 reload 时额外释放的长期资源。
+    botReady.clear();
   }
 
   description: string = `\n多音源音乐搜索\n${help_text}`;

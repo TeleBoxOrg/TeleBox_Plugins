@@ -1728,7 +1728,12 @@ const lottery = async (msg: Api.Message) => {
 
 class LotteryPlugin extends Plugin {
   cleanup(): void {
-    // 当前插件不持有需要在 reload 时额外释放的长期资源。
+    if (db) {
+      try {
+        db.close();
+      } catch {}
+      db = null as any;
+    }
   }
 
   description: string = help_text;

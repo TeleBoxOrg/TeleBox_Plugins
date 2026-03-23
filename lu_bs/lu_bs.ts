@@ -37,8 +37,8 @@ const HELP_TEXT = `🕒 <b>鲁小迅整点报时</b>
 
 class LuBsPlugin extends Plugin {
   cleanup(): void {
-    // 引用重置：清空实例级 db / cache / manager 引用，便于 reload 后重新初始化。
     this.db = null;
+    this.stickerSet = null;
   }
 
   private db: any = null;
