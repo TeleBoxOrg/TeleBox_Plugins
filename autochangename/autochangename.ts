@@ -1,6 +1,6 @@
 /**
  * 自动昵称更新插件 v2.2 - 极简模块化重构版
- * @description 支持定时自动更新昵称，显示时间、随机文本或两者组合
+ * @description 支持定时自动更新昵称，显示时间、随机文本、天气或它们的组合
  */
 
 import { Plugin } from "@utils/pluginBase";
@@ -46,13 +46,18 @@ const help_text = `🤖 <b>自动昵称更新插件 v2.2</b>
 <b>🎨 显示配置（NEW）：</b>
 • <code>${mainPrefix}acn emoji on/off</code> - 开启/关闭时钟emoji 🕐
 • <code>${mainPrefix}acn showtz on/off</code> - 开启/关闭时区显示 GMT+8
-• <code>${mainPrefix}acn tzformat GMT/UTC/city</code> - 设置时区格式(GMT/UTC/城市名/自定义)
+• <code>${mainPrefix}acn tzformat GMT/UTC/simp</code> - 设置时区格式(GMT/UTC/时区缩写/自定义)
 • <code>${mainPrefix}acn order</code> - 查看当前显示顺序
-• <code>${mainPrefix}acn order name,text,time,emoji</code> - 自定义显示顺序
+• <code>${mainPrefix}acn order name,text,time,weather,emoji</code> - 自定义显示顺序
 • <code>${mainPrefix}acn config</code> - 查看所有配置项
+• <code>${mainPrefix}acn style</code> - 查看当前文字样式与预览
 
 <b>⚙️ 高级设置：</b>
 • <code>${mainPrefix}acn tz Asia/Shanghai</code> - 设置为北京时间
+• <code>${mainPrefix}acn weather on/off</code> - 开启/关闭天气显示
+• <code>${mainPrefix}acn weather set &lt;地点&gt;</code> - 设置天气地点并启用天气
+• <code>${mainPrefix}acn weather</code> - 查看天气配置及当前预览
+• <code>${mainPrefix}acn style italic/double/sans/mono/outline</code> - 切换昵称文字样式
 • <code>${mainPrefix}acn tz America/New_York</code> - 设置为纽约时间
 • <code>${mainPrefix}acn timezone</code> - 查看可用时区列表
 • <code>${mainPrefix}acn update</code> 或 <code>${mainPrefix}acn now</code> - 立即更新一次昵称
@@ -62,15 +67,17 @@ const help_text = `🤖 <b>自动昵称更新插件 v2.2</b>
 • <b>time模式</b>: 张三 09:30
 • <b>text模式</b>: 张三 摸鱼中
 • <b>both模式</b>: 张三 摸鱼中 09:30
-• <b>开启emoji/时区后</b>: 张三 09:30 GMT+8 🕐
+• <b>开启emoji/时区/天气后</b>: 张三 09:30 ☀️ 23°C GMT+8 🕐
+• <b>开启花体样式后</b>: 𝟭𝟮𝟯𝗮𝗯𝗰 / 𝟙𝟚𝟛𝕒𝕓𝕔
 
 <b>🔧 自定义显示顺序示例：</b>
-• <code>name,text,time,emoji</code> → 张三 摸鱼中 09:30 🕐
-• <code>text,time,emoji,name</code> → 摸鱼中 09:30 🕐 张三
-• <code>name,emoji,time,text</code> → 张三 🕐 09:30 摸鱼中
+• <code>name,text,time,weather,emoji</code> → 张三 摸鱼中 09:30 ☀️ 23°C 🕐
+• <code>text,time,weather,name</code> → 摸鱼中 09:30 ☀️ 23°C 张三
+• <code>name,emoji,time,weather,text</code> → 张三 🕐 09:30 ☀️ 23°C 摸鱼中
 
 <b>💡 使用技巧：</b>
 • 昵称每分钟自动更新一次
+• 天气信息会缓存 30 分钟，避免频繁请求天气接口
 • 文案会按添加顺序循环显示
 • 支持全球所有标准时区
 • 文案最长50字符，建议简短有趣
@@ -105,7 +112,33 @@ interface UserSettings {
   show_clock_emoji?: boolean;
   show_timezone?: boolean;
   display_order?: string;
-  timezone_format?: string;  // 自定义时区格式："GMT" | "UTC" | "city" | "offset" | "custom:xxx"
+  timezone_format?: string;  // 自定义时区格式："GMT" | "UTC" | "SIMP" | "offset" | "custom:xxx"
+  weather_enabled?: boolean;
+  weather_location?: string;
+  weather_compact?: string;
+  weather_cache_ts?: number;
+  text_style?: "normal" | "italic" | "double" | "sans" | "mono" | "outline";
+}
+
+type TextStyleMode = NonNullable<UserSettings["text_style"]>;
+
+interface WeatherGeocodingResponse {
+  results?: Array<{
+    name: string;
+    latitude: number;
+    longitude: number;
+    country: string;
+    country_code: string;
+    admin1?: string;
+    admin2?: string;
+  }>;
+}
+
+interface WeatherForecastResponse {
+  current?: {
+    temperature_2m: number;
+    weather_code: number;
+  };
 }
 
 interface ConfigData {
@@ -180,9 +213,459 @@ class NameManager {
   private isUpdating = false;
   private profileCache: { data: any; timestamp: number } | null = null;
   private readonly CACHE_TTL = 60000;
+  private readonly timezoneAbbreviationMap: Record<string, string> = {
+    'Africa/Abidjan': 'GMT',
+    'Africa/Accra': 'GMT',
+    'Africa/Addis_Ababa': 'EAT',
+    'Africa/Algiers': 'CET',
+    'Africa/Asmara': 'EAT',
+    'Africa/Bamako': 'GMT',
+    'Africa/Bangui': 'WAT',
+    'Africa/Banjul': 'GMT',
+    'Africa/Bissau': 'GMT',
+    'Africa/Blantyre': 'CAT',
+    'Africa/Brazzaville': 'WAT',
+    'Africa/Cairo': 'EET',
+    'Africa/Casablanca': 'WET',
+    'Africa/Ceuta': 'CET',
+    'Africa/Dakar': 'GMT',
+    'Africa/Dar_es_Salaam': 'EAT',
+    'Africa/Djibouti': 'EAT',
+    'Africa/Douala': 'WAT',
+    'Africa/El_Aaiun': 'WET',
+    'Africa/Freetown': 'GMT',
+    'Africa/Gaborone': 'CAT',
+    'Africa/Harare': 'CAT',
+    'Africa/Johannesburg': 'SAST',
+    'Africa/Juba': 'CAT',
+    'Africa/Kampala': 'EAT',
+    'Africa/Khartoum': 'CAT',
+    'Africa/Kigali': 'CAT',
+    'Africa/Kinshasa': 'WAT',
+    'Africa/Lagos': 'WAT',
+    'Africa/Libreville': 'WAT',
+    'Africa/Lome': 'GMT',
+    'Africa/Luanda': 'WAT',
+    'Africa/Lubumbashi': 'CAT',
+    'Africa/Lusaka': 'CAT',
+    'Africa/Malabo': 'WAT',
+    'Africa/Maputo': 'CAT',
+    'Africa/Maseru': 'SAST',
+    'Africa/Mbabane': 'SAST',
+    'Africa/Mogadishu': 'EAT',
+    'Africa/Monrovia': 'GMT',
+    'Africa/Nairobi': 'EAT',
+    'Africa/Ndjamena': 'WAT',
+    'Africa/Niamey': 'WAT',
+    'Africa/Nouakchott': 'GMT',
+    'Africa/Ouagadougou': 'GMT',
+    'Africa/Porto-Novo': 'WAT',
+    'Africa/Sao_Tome': 'GMT',
+    'Africa/Tripoli': 'EET',
+    'Africa/Tunis': 'CET',
+    'Africa/Windhoek': 'CAT',
+    'America/Adak': 'HST',
+    'America/Anchorage': 'AKST',
+    'America/Anguilla': 'AST',
+    'America/Antigua': 'AST',
+    'America/Araguaina': 'BRT',
+    'America/Argentina/Buenos_Aires': 'ART',
+    'America/Argentina/Catamarca': 'ART',
+    'America/Argentina/Cordoba': 'ART',
+    'America/Argentina/Mendoza': 'ART',
+    'America/Aruba': 'AST',
+    'America/Asuncion': 'PYT',
+    'America/Atikokan': 'EST',
+    'America/Bahia': 'BRT',
+    'America/Bahia_Banderas': 'CST',
+    'America/Barbados': 'AST',
+    'America/Belem': 'BRT',
+    'America/Belize': 'CST',
+    'America/Blanc-Sablon': 'AST',
+    'America/Boa_Vista': 'AMT',
+    'America/Bogota': 'COT',
+    'America/Boise': 'MST',
+    'America/Cambridge_Bay': 'MST',
+    'America/Campo_Grande': 'AMT',
+    'America/Cancun': 'EST',
+    'America/Caracas': 'VET',
+    'America/Cayenne': 'GFT',
+    'America/Cayman': 'EST',
+    'America/Chicago': 'CST',
+    'America/Chihuahua': 'MST',
+    'America/Ciudad_Juarez': 'MST',
+    'America/Costa_Rica': 'CST',
+    'America/Creston': 'MST',
+    'America/Cuiaba': 'AMT',
+    'America/Curacao': 'AST',
+    'America/Danmarkshavn': 'GMT',
+    'America/Dawson': 'MST',
+    'America/Dawson_Creek': 'MST',
+    'America/Denver': 'MST',
+    'America/Detroit': 'EST',
+    'America/Dominica': 'AST',
+    'America/Edmonton': 'MST',
+    'America/Eirunepe': 'ACT',
+    'America/El_Salvador': 'CST',
+    'America/Fort_Nelson': 'MST',
+    'America/Fortaleza': 'BRT',
+    'America/Glace_Bay': 'AST',
+    'America/Goose_Bay': 'AST',
+    'America/Grand_Turk': 'EST',
+    'America/Guatemala': 'CST',
+    'America/Guayaquil': 'ECT',
+    'America/Guyana': 'GYT',
+    'America/Halifax': 'AST',
+    'America/Havana': 'CST',
+    'America/Hermosillo': 'MST',
+    'America/Indiana/Indianapolis': 'EST',
+    'America/Indiana/Knox': 'CST',
+    'America/Indiana/Marengo': 'EST',
+    'America/Indiana/Petersburg': 'EST',
+    'America/Indiana/Tell_City': 'CST',
+    'America/Indiana/Vevay': 'EST',
+    'America/Indiana/Vincennes': 'EST',
+    'America/Indiana/Winamac': 'EST',
+    'America/Inuvik': 'MST',
+    'America/Iqaluit': 'EST',
+    'America/Jamaica': 'EST',
+    'America/Juneau': 'AKST',
+    'America/Kentucky/Louisville': 'EST',
+    'America/Kentucky/Monticello': 'EST',
+    'America/Kralendijk': 'AST',
+    'America/La_Paz': 'BOT',
+    'America/Lima': 'PET',
+    'America/Los_Angeles': 'PST',
+    'America/Maceio': 'BRT',
+    'America/Managua': 'CST',
+    'America/Manaus': 'AMT',
+    'America/Martinique': 'AST',
+    'America/Matamoros': 'CST',
+    'America/Mazatlan': 'MST',
+    'America/Menominee': 'CST',
+    'America/Merida': 'CST',
+    'America/Metlakatla': 'AKST',
+    'America/Mexico_City': 'CST',
+    'America/Miquelon': 'PMST',
+    'America/Moncton': 'AST',
+    'America/Monterrey': 'CST',
+    'America/Montevideo': 'UYT',
+    'America/Nassau': 'EST',
+    'America/New_York': 'EST',
+    'America/Nipigon': 'EST',
+    'America/Nome': 'AKST',
+    'America/Noronha': 'FNT',
+    'America/North_Dakota/Beulah': 'CST',
+    'America/North_Dakota/Center': 'CST',
+    'America/North_Dakota/New_Salem': 'CST',
+    'America/Nuuk': 'WGT',
+    'America/Ojinaga': 'CST',
+    'America/Panama': 'EST',
+    'America/Paramaribo': 'SRT',
+    'America/Phoenix': 'MST',
+    'America/Port_of_Spain': 'AST',
+    'America/Port-au-Prince': 'EST',
+    'America/Porto_Velho': 'AMT',
+    'America/Puerto_Rico': 'AST',
+    'America/Punta_Arenas': 'CLT',
+    'America/Rainy_River': 'CST',
+    'America/Rankin_Inlet': 'CST',
+    'America/Recife': 'BRT',
+    'America/Regina': 'CST',
+    'America/Resolute': 'CST',
+    'America/Rio_Branco': 'ACT',
+    'America/Santarem': 'BRT',
+    'America/Santiago': 'CLT',
+    'America/Santo_Domingo': 'AST',
+    'America/Sao_Paulo': 'BRT',
+    'America/Scoresbysund': 'EGT',
+    'America/Sitka': 'AKST',
+    'America/St_Johns': 'NST',
+    'America/Swift_Current': 'CST',
+    'America/Tegucigalpa': 'CST',
+    'America/Thule': 'AST',
+    'America/Thunder_Bay': 'EST',
+    'America/Tijuana': 'PST',
+    'America/Toronto': 'EST',
+    'America/Tortola': 'AST',
+    'America/Vancouver': 'PST',
+    'America/Whitehorse': 'MST',
+    'America/Winnipeg': 'CST',
+    'America/Yakutat': 'AKST',
+    'America/Yellowknife': 'MST',
+    'Antarctica/Casey': 'AWST',
+    'Antarctica/Davis': 'DAVT',
+    'Antarctica/DumontDUrville': 'DDUT',
+    'Antarctica/Macquarie': 'AEST',
+    'Antarctica/Mawson': 'MAWT',
+    'Antarctica/McMurdo': 'NZST',
+    'Antarctica/Palmer': 'CLT',
+    'Antarctica/Rothera': 'ROT',
+    'Antarctica/South_Pole': 'NZST',
+    'Antarctica/Syowa': 'SYOT',
+    'Antarctica/Troll': 'UTC',
+    'Antarctica/Vostok': 'VOST',
+    'Asia/Aden': 'AST',
+    'Asia/Almaty': 'ALMT',
+    'Asia/Amman': 'EET',
+    'Asia/Anadyr': 'ANAT',
+    'Asia/Aqtau': 'AQTT',
+    'Asia/Aqtobe': 'AQTT',
+    'Asia/Ashgabat': 'TMT',
+    'Asia/Atyrau': 'AQTT',
+    'Asia/Baghdad': 'AST',
+    'Asia/Bahrain': 'AST',
+    'Asia/Baku': 'AZT',
+    'Asia/Bangkok': 'ICT',
+    'Asia/Barnaul': 'KRAT',
+    'Asia/Beirut': 'EET',
+    'Asia/Bishkek': 'KGT',
+    'Asia/Brunei': 'BNT',
+    'Asia/Calcutta': 'IST',
+    'Asia/Chita': 'YAKT',
+    'Asia/Choibalsan': 'CHOT',
+    'Asia/Chongqing': 'CST',
+    'Asia/Colombo': 'IST',
+    'Asia/Damascus': 'EET',
+    'Asia/Dhaka': 'BDT',
+    'Asia/Dili': 'TLT',
+    'Asia/Dubai': 'GST',
+    'Asia/Dushanbe': 'TJT',
+    'Asia/Famagusta': 'EET',
+    'Asia/Gaza': 'EET',
+    'Asia/Harbin': 'CST',
+    'Asia/Hebron': 'EET',
+    'Asia/Ho_Chi_Minh': 'ICT',
+    'Asia/Hong_Kong': 'HKT',
+    'Asia/Hovd': 'HOVT',
+    'Asia/Irkutsk': 'IRKT',
+    'Asia/Istanbul': 'TRT',
+    'Asia/Jakarta': 'WIB',
+    'Asia/Jayapura': 'WIT',
+    'Asia/Jerusalem': 'IST',
+    'Asia/Kabul': 'AFT',
+    'Asia/Kamchatka': 'PETT',
+    'Asia/Karachi': 'PKT',
+    'Asia/Kashgar': 'XJT',
+    'Asia/Kathmandu': 'NPT',
+    'Asia/Khandyga': 'YAKT',
+    'Asia/Kolkata': 'IST',
+    'Asia/Krasnoyarsk': 'KRAT',
+    'Asia/Kuala_Lumpur': 'MYT',
+    'Asia/Kuching': 'MYT',
+    'Asia/Kuwait': 'AST',
+    'Asia/Macao': 'CST',
+    'Asia/Magadan': 'MAGT',
+    'Asia/Makassar': 'WITA',
+    'Asia/Manila': 'PST',
+    'Asia/Muscat': 'GST',
+    'Asia/Nicosia': 'EET',
+    'Asia/Novokuznetsk': 'KRAT',
+    'Asia/Novosibirsk': 'NOVT',
+    'Asia/Omsk': 'OMST',
+    'Asia/Oral': 'ORAT',
+    'Asia/Phnom_Penh': 'ICT',
+    'Asia/Pontianak': 'WIB',
+    'Asia/Pyongyang': 'KST',
+    'Asia/Qatar': 'AST',
+    'Asia/Qostanay': 'QYZT',
+    'Asia/Qyzylorda': 'QYZT',
+    'Asia/Rangoon': 'MMT',
+    'Asia/Riyadh': 'AST',
+    'Asia/Sakhalin': 'SAKT',
+    'Asia/Samarkand': 'UZT',
+    'Asia/Seoul': 'KST',
+    'Asia/Shanghai': 'CST',
+    'Asia/Singapore': 'SGT',
+    'Asia/Srednekolymsk': 'SRET',
+    'Asia/Taipei': 'CST',
+    'Asia/Tashkent': 'UZT',
+    'Asia/Tbilisi': 'GET',
+    'Asia/Tehran': 'IRST',
+    'Asia/Tel_Aviv': 'IST',
+    'Asia/Thimphu': 'BTT',
+    'Asia/Tokyo': 'JST',
+    'Asia/Tomsk': 'TOMT',
+    'Asia/Ulaanbaatar': 'ULAT',
+    'Asia/Urumqi': 'XJT',
+    'Asia/Ust-Nera': 'VLAT',
+    'Asia/Vientiane': 'ICT',
+    'Asia/Vladivostok': 'VLAT',
+    'Asia/Yakutsk': 'YAKT',
+    'Asia/Yangon': 'MMT',
+    'Asia/Yekaterinburg': 'YEKT',
+    'Asia/Yerevan': 'AMT',
+    'Atlantic/Azores': 'AZOT',
+    'Atlantic/Bermuda': 'AST',
+    'Atlantic/Canary': 'WET',
+    'Atlantic/Cape_Verde': 'CVT',
+    'Atlantic/Faeroe': 'WET',
+    'Atlantic/Faroe': 'WET',
+    'Atlantic/Jan_Mayen': 'CET',
+    'Atlantic/Madeira': 'WET',
+    'Atlantic/Reykjavik': 'GMT',
+    'Atlantic/South_Georgia': 'GST',
+    'Atlantic/St_Helena': 'GMT',
+    'Atlantic/Stanley': 'FKST',
+    'Arctic/Longyearbyen': 'CET',
+    'Australia/ACT': 'AEST',
+    'Australia/Adelaide': 'ACST',
+    'Australia/Brisbane': 'AEST',
+    'Australia/Broken_Hill': 'ACST',
+    'Australia/Canberra': 'AEST',
+    'Australia/Currie': 'AEST',
+    'Australia/Darwin': 'ACST',
+    'Australia/Eucla': 'ACWST',
+    'Australia/Hobart': 'AEST',
+    'Australia/LHI': 'LHST',
+    'Australia/Lindeman': 'AEST',
+    'Australia/Lord_Howe': 'LHST',
+    'Australia/Melbourne': 'AEST',
+    'Australia/North': 'ACST',
+    'Australia/NSW': 'AEST',
+    'Australia/Perth': 'AWST',
+    'Australia/Queensland': 'AEST',
+    'Australia/South': 'ACST',
+    'Australia/Sydney': 'AEST',
+    'Australia/Tasmania': 'AEST',
+    'Australia/Victoria': 'AEST',
+    'Australia/West': 'AWST',
+    'Australia/Yancowinna': 'ACST',
+    'Europe/Andorra': 'CET',
+    'Europe/Astrakhan': 'SAMT',
+    'Europe/Athens': 'EET',
+    'Europe/Belgrade': 'CET',
+    'Europe/Berlin': 'CET',
+    'Europe/Brussels': 'CET',
+    'Europe/Bucharest': 'EET',
+    'Europe/Budapest': 'CET',
+    'Europe/Chisinau': 'EET',
+    'Europe/Dublin': 'GMT',
+    'Europe/Gibraltar': 'CET',
+    'Europe/Helsinki': 'EET',
+    'Europe/Istanbul': 'TRT',
+    'Europe/Kaliningrad': 'EET',
+    'Europe/Kirov': 'MSK',
+    'Europe/Kyiv': 'EET',
+    'Europe/Lisbon': 'WET',
+    'Europe/London': 'GMT',
+    'Europe/Madrid': 'CET',
+    'Europe/Malta': 'CET',
+    'Europe/Minsk': 'MSK',
+    'Europe/Moscow': 'MSK',
+    'Europe/Paris': 'CET',
+    'Europe/Prague': 'CET',
+    'Europe/Riga': 'EET',
+    'Europe/Rome': 'CET',
+    'Europe/Samara': 'SAMT',
+    'Europe/Saratov': 'SAMT',
+    'Europe/Simferopol': 'MSK',
+    'Europe/Sofia': 'EET',
+    'Europe/Tallinn': 'EET',
+    'Europe/Tirane': 'CET',
+    'Europe/Ulyanovsk': 'SAMT',
+    'Europe/Vienna': 'CET',
+    'Europe/Vilnius': 'EET',
+    'Europe/Volgograd': 'MSK',
+    'Europe/Warsaw': 'CET',
+    'Europe/Zurich': 'CET',
+    'Indian/Chagos': 'IOT',
+    'Indian/Christmas': 'CXT',
+    'Indian/Cocos': 'CCT',
+    'Indian/Kerguelen': 'TFT',
+    'Indian/Maldives': 'MVT',
+    'Indian/Mauritius': 'MUT',
+    'Indian/Mayotte': 'EAT',
+    'Indian/Reunion': 'RET',
+    'Pacific/Apia': 'WST',
+    'Pacific/Auckland': 'NZST',
+    'Pacific/Bougainville': 'BST',
+    'Pacific/Chatham': 'CHAST',
+    'Pacific/Easter': 'EASST',
+    'Pacific/Efate': 'VUT',
+    'Pacific/Fakaofo': 'TKT',
+    'Pacific/Fiji': 'FJT',
+    'Pacific/Galapagos': 'GALT',
+    'Pacific/Gambier': 'GAMT',
+    'Pacific/Guadalcanal': 'SBT',
+    'Pacific/Guam': 'ChST',
+    'Pacific/Honolulu': 'HST',
+    'Pacific/Kanton': 'PHOT',
+    'Pacific/Kiritimati': 'LINT',
+    'Pacific/Kosrae': 'KOST',
+    'Pacific/Kwajalein': 'MHT',
+    'Pacific/Marquesas': 'MART',
+    'Pacific/Nauru': 'NRT',
+    'Pacific/Niue': 'NUT',
+    'Pacific/Norfolk': 'NFT',
+    'Pacific/Noumea': 'NCT',
+    'Pacific/Pago_Pago': 'SST',
+    'Pacific/Palau': 'PWT',
+    'Pacific/Pitcairn': 'PST',
+    'Pacific/Port_Moresby': 'PGT',
+    'Pacific/Rarotonga': 'CKT',
+    'Pacific/Tahiti': 'TAHT',
+    'Pacific/Tarawa': 'GILT',
+    'Pacific/Tongatapu': 'TOT',
+    'Pacific/Wake': 'WAKT',
+    'Pacific/Wallis': 'WFT',
+    'UTC': 'UTC',
+    'Etc/UTC': 'UTC',
+    'Etc/GMT': 'GMT'
+  };
+  private readonly offsetAbbreviationFallbacks: Record<string, string> = {
+    '+00:00': 'GMT',
+    '+01:00': 'CET',
+    '+02:00': 'EET',
+    '+03:00': 'MSK',
+    '+04:00': 'GST',
+    '+05:00': 'PKT',
+    '+05:30': 'IST',
+    '+05:45': 'NPT',
+    '+06:00': 'BST',
+    '+06:30': 'MMT',
+    '+07:00': 'ICT',
+    '+08:00': 'CST',
+    '+08:45': 'ACWST',
+    '+09:00': 'JST',
+    '+09:30': 'ACST',
+    '+10:00': 'AEST',
+    '+10:30': 'LHST',
+    '+11:00': 'AEDT',
+    '+12:00': 'NZST',
+    '+13:00': 'NZDT',
+    '+14:00': 'LINT',
+    '-01:00': 'AZOT',
+    '-02:00': 'GST',
+    '-03:00': 'ART',
+    '-03:30': 'NST',
+    '-04:00': 'AST',
+    '-05:00': 'EST',
+    '-06:00': 'CST',
+    '-07:00': 'MST',
+    '-08:00': 'PST',
+    '-09:00': 'AKST',
+    '-10:00': 'HST',
+    '-11:00': 'SST',
+    '-12:00': 'AoE'
+  };
 
   static getInstance(): NameManager {
     return NameManager.instance ??= new NameManager();
+  }
+
+  private getOffsetKey(sign: string, hours: number, minutes: number): string {
+    return `${sign}${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}`;
+  }
+
+  private getTimezoneAbbreviation(timezone: string, sign: string, hours: number, minutes: number): string {
+    const exact = this.timezoneAbbreviationMap[timezone];
+    if (exact) {
+      return exact;
+    }
+
+    const offsetKey = this.getOffsetKey(sign, hours, minutes);
+    return this.offsetAbbreviationFallbacks[offsetKey] || `GMT${offsetKey}`;
   }
 
   async getCurrentProfile(): Promise<{ firstName: string; lastName: string } | null> {
@@ -220,7 +703,12 @@ class NameManager {
       show_clock_emoji: false,  // 默认关闭时钟emoji
       show_timezone: false,     // 默认关闭时区显示  
       timezone_format: "GMT",  // 默认时区格式
-      display_order: "name,time"  // 默认只显示姓名和时间
+      display_order: "name,time", // 默认只显示姓名和时间
+      weather_enabled: false,
+      weather_location: "",
+      weather_compact: "",
+      weather_cache_ts: 0,
+      text_style: "normal"
     };
 
     return await DataManager.saveUserSettings(settings);
@@ -259,6 +747,205 @@ class NameManager {
     } catch { return '🕐'; }
   }
 
+  private getDoubleStruckUpper(char: string): string {
+    const map: Record<string, string> = {
+      A: '𝔸', B: '𝔹', C: 'ℂ', D: '𝔻', E: '𝔼', F: '𝔽', G: '𝔾', H: 'ℍ', I: '𝕀', J: '𝕁',
+      K: '𝕂', L: '𝕃', M: '𝕄', N: 'ℕ', O: '𝕆', P: 'ℙ', Q: 'ℚ', R: 'ℝ', S: '𝕊', T: '𝕋',
+      U: '𝕌', V: '𝕍', W: '𝕎', X: '𝕏', Y: '𝕐', Z: 'ℤ'
+    };
+    return map[char] || char;
+  }
+
+  private stylizeChar(char: string, style: TextStyleMode): string {
+    if (style === "normal") return char;
+
+    const code = char.codePointAt(0);
+    if (code === undefined) return char;
+
+    if (style === "italic") {
+      if (char >= '0' && char <= '9') return String.fromCodePoint(0x1D7CE + (code - 0x30));
+      if (char >= 'A' && char <= 'Z') return String.fromCodePoint(0x1D400 + (code - 0x41));
+      if (char >= 'a' && char <= 'z') return String.fromCodePoint(0x1D41A + (code - 0x61));
+      return char;
+    }
+
+    if (style === "double") {
+      if (char >= '0' && char <= '9') return String.fromCodePoint(0x1D7D8 + (code - 0x30));
+      if (char >= 'A' && char <= 'Z') return this.getDoubleStruckUpper(char);
+      if (char >= 'a' && char <= 'z') return String.fromCodePoint(0x1D552 + (code - 0x61));
+      return char;
+    }
+
+    if (style === "sans") {
+      if (char >= '0' && char <= '9') return String.fromCodePoint(0x1D7EC + (code - 0x30));
+      if (char >= 'A' && char <= 'Z') return String.fromCodePoint(0x1D5D4 + (code - 0x41));
+      if (char >= 'a' && char <= 'z') return String.fromCodePoint(0x1D5EE + (code - 0x61));
+      return char;
+    }
+
+    if (style === "mono") {
+      if (char >= '0' && char <= '9') return String.fromCodePoint(0x1D7F6 + (code - 0x30));
+      if (char >= 'A' && char <= 'Z') return String.fromCodePoint(0x1D670 + (code - 0x41));
+      if (char >= 'a' && char <= 'z') return String.fromCodePoint(0x1D68A + (code - 0x61));
+      return char;
+    }
+
+    if (style === "outline") {
+      if (char >= '0' && char <= '9') return String.fromCodePoint(0x1D7E2 + (code - 0x30));
+      if (char >= 'A' && char <= 'Z') return String.fromCodePoint(0x1D5A0 + (code - 0x41));
+      if (char >= 'a' && char <= 'z') return String.fromCodePoint(0x1D5BA + (code - 0x61));
+      return char;
+    }
+
+    return char;
+  }
+
+  applyTextStyle(text: string, style?: TextStyleMode): string {
+    const finalStyle = style || "normal";
+    if (finalStyle === "normal" || !text) {
+      return text;
+    }
+
+    return Array.from(text).map(char => this.stylizeChar(char, finalStyle)).join("");
+  }
+
+  private async normalizeWeatherLocation(location: string): Promise<string> {
+    const normalized = location.trim();
+    if (!normalized || !/[\u4e00-\u9fa5]/.test(normalized)) {
+      return normalized;
+    }
+
+    const quickMap: Record<string, string> = {
+      "北京": "Beijing",
+      "上海": "Shanghai",
+      "广州": "Guangzhou",
+      "深圳": "Shenzhen",
+      "成都": "Chengdu",
+      "杭州": "Hangzhou",
+      "武汉": "Wuhan",
+      "西安": "Xi'an",
+      "重庆": "Chongqing",
+      "南京": "Nanjing",
+      "天津": "Tianjin",
+      "苏州": "Suzhou",
+      "香港": "Hong Kong",
+      "澳门": "Macau",
+      "台北": "Taipei",
+      "东京": "Tokyo",
+      "首尔": "Seoul",
+      "曼谷": "Bangkok",
+      "新加坡": "Singapore",
+      "伦敦": "London",
+      "巴黎": "Paris",
+      "柏林": "Berlin",
+      "纽约": "New York",
+      "洛杉矶": "Los Angeles",
+      "旧金山": "San Francisco",
+      "悉尼": "Sydney",
+      "墨尔本": "Melbourne"
+    };
+
+    if (quickMap[normalized]) {
+      return quickMap[normalized];
+    }
+
+    try {
+      const translateModule = await import("@vitalets/google-translate-api");
+      const translate = translateModule.translate || translateModule.default;
+      if (typeof translate !== "function") {
+        return normalized;
+      }
+
+      const result = await translate(normalized, {
+        to: "en"
+      });
+      const translated = typeof result === "string" ? result : result?.text;
+
+      return typeof translated === "string" && translated.trim() ? translated.trim() : normalized;
+    } catch {
+      return normalized;
+    }
+  }
+
+  private weatherCodeEmoji(code: number): string {
+    const map: Record<number, string> = {
+      0: '☀️', 1: '🌤️', 2: '⛅', 3: '☁️', 45: '🌫️', 48: '🌫️',
+      51: '🌦️', 53: '🌦️', 55: '🌧️', 56: '🌨️', 57: '🌨️',
+      61: '🌧️', 63: '🌧️', 65: '🌧️', 66: '🌨️', 67: '🌨️',
+      71: '❄️', 73: '❄️', 75: '❄️', 77: '🌨️',
+      80: '🌦️', 81: '🌧️', 82: '⛈️', 85: '🌨️', 86: '🌨️', 95: '⛈️', 96: '⛈️', 99: '⛈️'
+    };
+    return map[code] || '🌤️';
+  }
+
+  public async getWeatherCompact(settings: UserSettings): Promise<string> {
+    const rawLocation = settings.weather_location?.trim() || "";
+    if (!rawLocation) {
+      return "";
+    }
+
+    const now = Date.now();
+    const successTtl = 30 * 60 * 1000;
+    const failureTtl = 5 * 60 * 1000;
+    const cachedCompact = settings.weather_compact || "";
+    const cacheTs = typeof settings.weather_cache_ts === "number" ? settings.weather_cache_ts : 0;
+    const cacheAge = cacheTs > 0 ? now - cacheTs : Number.POSITIVE_INFINITY;
+
+    if ((cachedCompact && cacheAge < successTtl) || (!cachedCompact && cacheTs > 0 && cacheAge < failureTtl)) {
+      return cachedCompact;
+    }
+
+    try {
+      const axios = (await import("axios")).default;
+      const geocodingName = await this.normalizeWeatherLocation(rawLocation);
+
+      const geoResp = await axios.get<WeatherGeocodingResponse>("https://geocoding-api.open-meteo.com/v1/search", {
+        params: {
+          name: geocodingName,
+          count: 5,
+          language: "zh",
+          format: "json"
+        },
+        timeout: 10000
+      });
+
+      const results = geoResp.data?.results || [];
+      if (results.length === 0) throw new Error("城市未找到");
+
+      const loc = results[0];
+      const locationNameParts: string[] = [];
+      if (loc.name) locationNameParts.push(loc.name);
+      if (loc.admin1 && loc.admin1 !== loc.name) locationNameParts.push(loc.admin1);
+      if (loc.country) locationNameParts.push(loc.country);
+      const wResp = await axios.get<WeatherForecastResponse>("https://api.open-meteo.com/v1/forecast", {
+        params: {
+          latitude: loc.latitude,
+          longitude: loc.longitude,
+          current: "temperature_2m,weather_code",
+          timezone: "auto"
+        },
+        timeout: 10000
+      });
+
+      const current = wResp.data.current;
+      if (!current) throw new Error("天气数据不可用");
+      const temp = Math.round(current.temperature_2m);
+      const emoji = this.weatherCodeEmoji(current.weather_code);
+      const compact = `${emoji} ${temp}°C`;
+
+      settings.weather_compact = compact;
+      settings.weather_cache_ts = now;
+      await DataManager.saveUserSettings(settings);
+      return compact;
+    } catch {
+      // 发生错误时缓存空文本，避免频繁重试
+      settings.weather_compact = "";
+      settings.weather_cache_ts = now;
+      try { await DataManager.saveUserSettings(settings); } catch { /* ignore */ }
+      return "";
+    }
+  }
+
   // 获取时区显示格式（支持自定义格式）
   getTimezoneDisplay(timezone: string, format?: string): string {
     try {
@@ -290,28 +977,8 @@ class NameManager {
                 return minutes > 0 ? `GMT${sign}${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}` : `GMT${sign}${hours}`;
               case 'UTC':
                 return minutes > 0 ? `UTC${sign}${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}` : `UTC${sign}${hours}`;
-              case 'city':
-                // 常见城市映射
-                const cityMap: Record<string, string> = {
-                  'Asia/Shanghai': '北京',
-                  'Asia/Tokyo': '东京',
-                  'Asia/Seoul': '首尔',
-                  'Asia/Hong_Kong': '香港',
-                  'Asia/Singapore': '新加坡',
-                  'Asia/Kolkata': '新德里',
-                  'Asia/Kathmandu': '加德满都',
-                  'Australia/Adelaide': '阿德莱德',
-                  'Australia/Darwin': '达尔文',
-                  'America/New_York': '纽约',
-                  'America/Los_Angeles': '洛杉矶',
-                  'America/Chicago': '芝加哥',
-                  'America/Denver': '丹佛',
-                  'Europe/London': '伦敦',
-                  'Europe/Paris': '巴黎',
-                  'Europe/Berlin': '柏林',
-                  'Europe/Moscow': '莫斯科'
-                };
-                return cityMap[timezone] || (minutes > 0 ? `GMT${sign}${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}` : `GMT${sign}${hours}`);
+              case 'SIMP':
+                return this.getTimezoneAbbreviation(timezone, sign, hours, minutes);
               case 'offset':
                 return `${sign}${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}`;
               default:
@@ -367,7 +1034,8 @@ class NameManager {
       time: currentTime,
       text: '',
       emoji: settings.show_clock_emoji ? this.getClockEmoji(settings.timezone) : '',
-      timezone: settings.show_timezone ? this.getTimezoneDisplay(settings.timezone, settings.timezone_format) : ''
+      timezone: settings.show_timezone ? this.getTimezoneDisplay(settings.timezone, settings.timezone_format) : '',
+      weather: ''
     };
     
     // 调试日志：显示各组件值
@@ -381,15 +1049,22 @@ class NameManager {
       }
     }
 
+    // 读取天气（若启用）并填充组件
+    if (settings.weather_enabled && settings.weather_location) {
+      const weatherText = await this.getWeatherCompact(settings);
+      components.weather = weatherText;
+    }
+
     // 根据模式决定显示哪些组件
     let displayComponents: string[] = [];
     
+    // 将 weather 组件加入显示序列（若开启则在需要的位置显示，未启用时为空字符串会被过滤）
     if (settings.mode === "time") {
-      displayComponents = ['name', 'time', 'timezone', 'emoji'];
+      displayComponents = ['name', 'time', 'timezone', 'weather', 'emoji'];
     } else if (settings.mode === "text") {
-      displayComponents = ['name', 'text', 'timezone', 'emoji'];
+      displayComponents = ['name', 'text', 'time', 'timezone', 'weather', 'emoji'];
     } else { // both
-      displayComponents = ['name', 'text', 'time', 'timezone', 'emoji'];
+      displayComponents = ['name', 'text', 'time', 'timezone', 'weather', 'emoji'];
     }
 
     // 根据用户自定义顺序重新排列组件
@@ -414,6 +1089,19 @@ class NameManager {
         customOrder.push('emoji');
         console.log(`[AutoChangeName] 自动添加emoji到顺序: [${customOrder.join(', ')}]`);
       }
+
+      if (settings.weather_enabled && settings.weather_location && !customOrder.includes('weather')) {
+        const timezoneIndex = customOrder.indexOf('timezone');
+        const timeIndex = customOrder.indexOf('time');
+        if (timezoneIndex !== -1) {
+          customOrder.splice(timezoneIndex + 1, 0, 'weather');
+        } else if (timeIndex !== -1) {
+          customOrder.splice(timeIndex + 1, 0, 'weather');
+        } else {
+          customOrder.push('weather');
+        }
+        console.log(`[AutoChangeName] 自动添加weather到顺序: [${customOrder.join(', ')}]`);
+      }
       
       // 过滤出在当前模式下应该显示的组件
       const validOrder = customOrder.filter(comp => displayComponents.includes(comp));
@@ -433,7 +1121,13 @@ class NameManager {
       .map(comp => {
         const value = components[comp];
         console.log(`[AutoChangeName] 组件 ${comp}: "${value}" (长度: ${value ? value.length : 0})`);
-        return value;
+        if (!value || value.length === 0) {
+          return "";
+        }
+
+        return comp === 'name'
+          ? value
+          : this.applyTextStyle(value, settings.text_style || "normal");
       })
       .filter(part => part && part.length > 0);
     
@@ -744,9 +1438,17 @@ class AutoChangeNamePlugin extends Plugin {
             await this.handleDisplayOrder(msg, userId, args.slice(1));
             break;
 
-          case "config":
-            await this.handleShowConfig(msg, userId);
-            break;
+            case "config":
+              await this.handleShowConfig(msg, userId);
+              break;
+            
+            case "weather":
+              await this.handleWeather(msg, userId, args.slice(1));
+              break;
+
+            case "style":
+              await this.handleTextStyle(msg, userId, args.slice(1));
+              break;
             
           case "tzformat":
             await this.handleTimezoneFormat(msg, userId, args.slice(1));
@@ -1238,7 +1940,7 @@ class AutoChangeNamePlugin extends Plugin {
     
     if (!format) {
       await msg.edit({
-        text: `🌐 <b>时区显示格式设置</b>\n\n当前格式: <code>${settings.timezone_format || 'GMT'}</code>\n\n<b>可用格式：</b>\n• <code>GMT</code> - 显示 GMT+8\n• <code>UTC</code> - 显示 UTC+8\n• <code>city</code> - 显示城市名（如：北京）\n• <code>offset</code> - 显示 +8:00\n• <code>custom:自定义文字</code> - 自定义显示\n\n<b>使用示例：</b>\n<code>${mainPrefix}acn tzformat GMT</code>\n<code>${mainPrefix}acn tzformat city</code>\n<code>${mainPrefix}acn tzformat custom:北京时间</code>`,
+        text: `🌐 <b>时区显示格式设置</b>\n\n当前格式: <code>${settings.timezone_format || 'GMT'}</code>\n\n<b>可用格式：</b>\n• <code>GMT</code> - 显示 GMT+8\n• <code>UTC</code> - 显示 UTC+8\n• <code>simp</code> - 显示时区缩写（如：HKT / CST / JST）\n• <code>offset</code> - 显示 +8:00\n• <code>custom:自定义文字</code> - 自定义显示\n\n<b>使用示例：</b>\n<code>${mainPrefix}acn tzformat GMT</code>\n<code>${mainPrefix}acn tzformat simp</code>\n<code>${mainPrefix}acn tzformat custom:北京时间</code>`,
         parseMode: "html"
       });
       return;
@@ -1248,9 +1950,9 @@ class AutoChangeNamePlugin extends Plugin {
     let finalFormat = format;
     if (format.startsWith('custom:')) {
       finalFormat = args.join(' ');
-    } else if (!['gmt', 'utc', 'city', 'offset'].includes(format)) {
+    } else if (!['gmt', 'utc', 'simp', 'offset'].includes(format)) {
       await msg.edit({
-        text: `❌ <b>无效格式</b>\n\n请使用: GMT, UTC, city, offset 或 custom:自定义`,
+        text: `❌ <b>无效格式</b>\n\n请使用: GMT, UTC, simp, offset 或 custom:自定义`,
         parseMode: "html"
       });
       return;
@@ -1273,6 +1975,192 @@ class AutoChangeNamePlugin extends Plugin {
     }
   }
 
+  private async handleTextStyle(msg: Api.Message, userId: number, args: string[]): Promise<void> {
+    const settings = await DataManager.getUserSettings(userId);
+    if (!settings) {
+      await msg.edit({
+        text: `❌ 请先使用 <code>${mainPrefix}acn save</code> 保存昵称`,
+        parseMode: "html"
+      });
+      return;
+    }
+
+    const styleArg = (args[0] || "").toLowerCase();
+    const styleAliases: Record<string, TextStyleMode> = {
+      normal: "normal",
+      italic: "italic",
+      bold: "italic",
+      double: "double",
+      sans: "sans",
+      mono: "mono",
+      outline: "outline",
+      style1: "italic",
+      style2: "double",
+      style3: "sans",
+      style4: "mono",
+      style5: "outline"
+    };
+    const validStyles: TextStyleMode[] = ["normal", "italic", "double", "sans", "mono", "outline"];
+    const styleExamples: Record<TextStyleMode, string> = {
+      normal: "123abc",
+      italic: "𝟏𝟐𝟑𝐚𝐛𝐜",
+      double: "𝟙𝟚𝟛𝕒𝕓𝕔",
+      sans: "𝟭𝟮𝟯𝗮𝗯𝗰",
+      mono: "𝟷𝟸𝟹𝚊𝚋𝚌",
+      outline: "𝟣𝟤𝟥𝖺𝖻𝖼"
+    };
+    const resolvedStyle = styleAliases[styleArg];
+
+    if (!styleArg || styleArg === "help" || styleArg === "h") {
+      const currentStyle = settings.text_style || "normal";
+      const preview = nameManager.applyTextStyle("123abc ABC", currentStyle);
+      await msg.edit({
+        text: `🎨 <b>文字样式设置</b>
+
+当前样式: <code>${currentStyle}</code>
+当前预览: <code>${htmlEscape(preview)}</code>
+
+可用样式：
+• <code>normal</code> - ${htmlEscape(styleExamples.normal)}
+• <code>italic</code> - ${htmlEscape(styleExamples.italic)}
+• <code>double</code> - ${htmlEscape(styleExamples.double)}
+• <code>sans</code> - ${htmlEscape(styleExamples.sans)}
+• <code>mono</code> - ${htmlEscape(styleExamples.mono)}
+• <code>outline</code> - ${htmlEscape(styleExamples.outline)}
+
+使用方法：
+• <code>${mainPrefix}acn style italic</code>
+• <code>${mainPrefix}acn style normal</code>`,
+        parseMode: "html"
+      });
+      return;
+    }
+
+    if (!resolvedStyle || !validStyles.includes(resolvedStyle)) {
+      await msg.edit({
+        text: `❌ <b>无效的样式名称</b>
+
+可用样式: <code>normal, italic, double, sans, mono, outline</code>
+兼容旧名称: <code>style1 ~ style5</code>`,
+        parseMode: "html"
+      });
+      return;
+    }
+
+    settings.text_style = resolvedStyle;
+    const success = await DataManager.saveUserSettings(settings);
+    if (!success) {
+      await msg.edit({ text: "❌ 样式设置保存失败", parseMode: "html" });
+      return;
+    }
+
+    if (settings.is_enabled) {
+      await nameManager.updateUserProfile(userId, true);
+    }
+
+    const preview = nameManager.applyTextStyle("123abc ABC", settings.text_style);
+    await msg.edit({
+      text: `✅ <b>文字样式已更新</b>
+
+当前样式: <code>${settings.text_style}</code>
+预览: <code>${htmlEscape(preview)}</code>`,
+      parseMode: "html"
+    });
+  }
+
+  private async handleWeather(msg: Api.Message, userId: number, args: string[]): Promise<void> {
+    const settings = await DataManager.getUserSettings(userId);
+    if (!settings) {
+      await msg.edit({
+        text: `❌ 请先使用 <code>${mainPrefix}acn save</code> 保存昵称`,
+        parseMode: "html"
+      });
+      return;
+    }
+
+    const arg0 = (args[0] || "").toLowerCase();
+    if (!arg0 || arg0 === "help" || arg0 === "h") {
+      const preview = await nameManager.getWeatherCompact(settings);
+      await msg.edit({
+        text: `🌤️ <b>天气配置</b>
+
+• 当前开关: <code>${settings.weather_enabled ? "开启" : "关闭"}</code>
+• 地点: <code>${htmlEscape(settings.weather_location || "(未设置)")}</code>${preview ? `
+• 当前预览: <code>${htmlEscape(preview)}</code>` : ""}
+
+使用方法：
+• <code>${mainPrefix}acn weather set 北京</code>
+• <code>${mainPrefix}acn weather 北京</code>
+• <code>${mainPrefix}acn weather on/off</code>`,
+        parseMode: "html"
+      });
+      return;
+    }
+
+    if (arg0 === "on" || arg0 === "enable" || arg0 === "true") {
+      if (!settings.weather_location?.trim()) {
+        await msg.edit({
+          text: `❌ <b>请先设置天气地点</b>\n\n使用 <code>${mainPrefix}acn weather set 北京</code> 或 <code>${mainPrefix}acn weather 北京</code>`,
+          parseMode: "html"
+        });
+        return;
+      }
+
+      settings.weather_enabled = true;
+      const success = await DataManager.saveUserSettings(settings);
+      if (success && settings.is_enabled) {
+        await nameManager.updateUserProfile(userId, true);
+      }
+      const preview = await nameManager.getWeatherCompact(settings);
+      await msg.edit({
+        text: `✅ <b>天气显示已开启</b>\n\n地点: <code>${htmlEscape(settings.weather_location || "(未设置)")}</code>${preview ? `\n预览: <code>${htmlEscape(preview)}</code>` : ""}`,
+        parseMode: "html"
+      });
+      return;
+    }
+
+    if (arg0 === "off" || arg0 === "disable" || arg0 === "false") {
+      settings.weather_enabled = false;
+      const success = await DataManager.saveUserSettings(settings);
+      if (success) {
+        if (settings.is_enabled) {
+          await nameManager.updateUserProfile(userId, true);
+        }
+        await msg.edit({
+          text: `✅ <b>天气显示已关闭</b>`,
+          parseMode: "html"
+        });
+      } else {
+        await msg.edit({ text: "❌ 设置保存失败", parseMode: "html" });
+      }
+      return;
+    }
+
+    const locationInput = (arg0 === "set" ? args.slice(1) : args).join(" ").trim();
+    if (locationInput.length === 0) {
+      await msg.edit({ text: `❌ <b>未提供天气地点</b>\n\n请使用 <code>${mainPrefix}acn weather set 北京</code>`, parseMode: "html"});
+      return;
+    }
+
+    settings.weather_location = locationInput;
+    settings.weather_enabled = true;
+    settings.weather_compact = "";
+    settings.weather_cache_ts = 0;
+    const success = await DataManager.saveUserSettings(settings);
+    if (success) {
+      if (settings.is_enabled) {
+        await nameManager.updateUserProfile(userId, true);
+      }
+      const preview = await nameManager.getWeatherCompact(settings);
+      await msg.edit({
+        text: `✅ <b>天气配置已更新</b>\n\n地点: <code>${htmlEscape(locationInput)}</code>\n天气显示: <code>已开启</code>${preview ? `\n预览: <code>${htmlEscape(preview)}</code>` : ""}`,
+        parseMode: "html"
+      });
+    } else {
+      await msg.edit({ text: "❌ 天气配置保存失败", parseMode: "html" });
+    }
+  }
+
   // 处理显示顺序设置
   private async handleDisplayOrder(msg: Api.Message, userId: number, args: string[]): Promise<void> {
     const settings = await DataManager.getUserSettings(userId);
@@ -1286,16 +2174,16 @@ class AutoChangeNamePlugin extends Plugin {
 
     if (args.length === 0) {
       // 显示当前顺序
-      const currentOrder = settings.display_order || "name,text,time,emoji";
+      const currentOrder = settings.display_order || "name,time";
       const orderExamples = [
-        "• <code>name,text,time,emoji</code> → 张三 摸鱼中 09:30 🕐",
-        "• <code>text,time,emoji,name</code> → 摸鱼中 09:30 🕐 张三",
-        "• <code>name,emoji,time,text</code> → 张三 🕐 09:30 摸鱼中",
-        "• <code>emoji,time,text,name</code> → 🕐 09:30 摸鱼中 张三"
+        "• <code>name,text,time,timezone,weather,emoji</code> → 张三 摸鱼中 09:30 GMT+8 ☀️ 23°C 🕐",
+        "• <code>text,time,timezone,weather,name</code> → 摸鱼中 09:30 GMT+8 ☀️ 23°C 张三",
+        "• <code>name,emoji,time,timezone,weather,text</code> → 张三 🕐 09:30 GMT+8 ☀️ 23°C 摸鱼中",
+        "• <code>emoji,time,timezone,weather,text,name</code> → 🕐 09:30 GMT+8 ☀️ 23°C 摸鱼中 张三"
       ].join("\n");
 
       await msg.edit({
-        text: `📋 <b>显示顺序设置</b>\n\n当前顺序: <code>${htmlEscape(currentOrder)}</code>\n\n<b>可用组件：</b>\n• <code>name</code> - 您的昵称\n• <code>text</code> - 随机文案\n• <code>time</code> - 当前时间\n• <code>emoji</code> - 时钟表情\n• <code>timezone</code> - 时区显示\n\n<b>设置示例：</b>\n${orderExamples}\n\n使用 <code>${mainPrefix}acn order 组件1,组件2,...</code> 自定义顺序`,
+        text: `📋 <b>显示顺序设置</b>\n\n当前顺序: <code>${htmlEscape(currentOrder)}</code>\n\n<b>可用组件：</b>\n• <code>name</code> - 您的昵称\n• <code>text</code> - 随机文案\n• <code>time</code> - 当前时间\n• <code>weather</code> - 当前天气\n• <code>emoji</code> - 时钟表情\n• <code>timezone</code> - 时区显示\n\n<b>设置示例：</b>\n${orderExamples}\n\n使用 <code>${mainPrefix}acn order 组件1,组件2,...</code> 自定义顺序`,
         parseMode: "html"
       });
       return;
@@ -1303,14 +2191,14 @@ class AutoChangeNamePlugin extends Plugin {
 
     // 设置新顺序
     const newOrder = args.join("").toLowerCase();
-    const validComponents = ["name", "text", "time", "emoji", "timezone"];
+    const validComponents = ["name", "text", "time", "weather", "emoji", "timezone"];
     const components = newOrder.split(",").map(s => s.trim());
     
     // 验证组件名称
     const invalidComponents = components.filter(comp => !validComponents.includes(comp));
     if (invalidComponents.length > 0) {
       await msg.edit({
-        text: `❌ <b>无效的组件名称</b>\n\n无效组件: <code>${htmlEscape(invalidComponents.join(", "))}</code>\n\n有效组件: <code>name, text, time, emoji, timezone</code>`,
+        text: `❌ <b>无效的组件名称</b>\n\n无效组件: <code>${htmlEscape(invalidComponents.join(", "))}</code>\n\n有效组件: <code>name, text, time, weather, emoji, timezone</code>`,
         parseMode: "html"
       });
       return;
@@ -1347,6 +2235,10 @@ class AutoChangeNamePlugin extends Plugin {
     const currentTime = nameManager.formatTime(settings.timezone);
     const clockEmoji = nameManager.getClockEmoji(settings.timezone);
     const tzDisplay = nameManager.getTimezoneDisplay(settings.timezone, settings.timezone_format);
+    const weatherPreview = settings.weather_enabled && settings.weather_location
+      ? await nameManager.getWeatherCompact(settings)
+      : settings.weather_compact || "";
+    const styledPreview = nameManager.applyTextStyle("123abc ABC", settings.text_style || "normal");
 
     const configText = `🔧 <b>当前配置状态</b>\n\n` +
       `<b>基础设置：</b>\n` +
@@ -1358,7 +2250,11 @@ class AutoChangeNamePlugin extends Plugin {
       `• 时钟Emoji: <code>${settings.show_clock_emoji ? "开启" : "关闭"}</code> ${settings.show_clock_emoji ? clockEmoji : ""}\n` +
       `• 时区显示: <code>${settings.show_timezone ? "开启" : "关闭"}</code> ${settings.show_timezone ? tzDisplay : ""}\n` +
       `• 时区格式: <code>${settings.timezone_format || "GMT"}</code>\n` +
-      `• 显示顺序: <code>${settings.display_order || "name,text,time,emoji"}</code>\n\n` +
+      `• 文字样式: <code>${settings.text_style || "normal"}</code>（预览: ${htmlEscape(styledPreview)}）\n` +
+      `• 显示顺序: <code>${settings.display_order || "name,time"}</code>\n` +
+      `• 天气显示: <code>${settings.weather_enabled ? "开启" : "关闭"}</code> ${settings.weather_enabled && settings.weather_location ? `（地点: ${htmlEscape(settings.weather_location)}）` : ""}\n` +
+      `• 天气地点: <code>${htmlEscape(settings.weather_location || "(未设置)")}</code>\n` +
+      `• 天气预览: <code>${htmlEscape(weatherPreview || "(暂无)")}</code>\n\n` +
       `<b>文案设置：</b>\n` +
       `• 文案数量: <code>${texts.length}</code>\n` +
       `• 当前索引: <code>${settings.text_index}</code>\n\n` +
@@ -1471,6 +2367,7 @@ export const __test__ = {
   formatTime: nameManager.formatTime.bind(nameManager),
   getClockEmoji: nameManager.getClockEmoji.bind(nameManager),
   getTimezoneDisplay: nameManager.getTimezoneDisplay.bind(nameManager),
+  applyTextStyle: nameManager.applyTextStyle.bind(nameManager),
   generateNewName: nameManager.generateNewName.bind(nameManager)
 };
 
