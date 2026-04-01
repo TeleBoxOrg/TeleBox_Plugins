@@ -1,7 +1,4 @@
-/**
- * 自动昵称更新插件 v2.2 - 极简模块化重构版
- * @description 支持定时自动更新昵称，显示时间、随机文本、天气或它们的组合
- */
+/*自动昵称更新插件 v3*/
 
 import { Plugin } from "@utils/pluginBase";
 import { getGlobalClient } from "@utils/globalClient";
@@ -21,83 +18,125 @@ const htmlEscape = (text: string): string =>
   text.replace(/[&<>"']/g, m => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#x27;'}[m] || m));
 
 // 帮助文本定义（必需）
-const help_text = `🤖 <b>自动昵称更新插件 v2.2</b>
+const help_text = `🤖 <b>自动昵称更新插件 v3</b>
 
 让您的昵称动起来！自动显示时间或个性文案 ⏰
 
 <b>📌 快速开始（按顺序执行）：</b>
-1️⃣ <code>${mainPrefix}acn save</code> - 保存您当前的昵称（首次使用必须）
-2️⃣ <code>${mainPrefix}acn on/off</code> - 开启或关闭自动更新功能
-3️⃣ <code>${mainPrefix}acn mode</code> - 切换显示模式（时间/文案/混合）
+1️⃣ <code>${mainPrefix}acn save</code> - 保存当前昵称（首次使用必须）
+2️⃣ <code>${mainPrefix}acn on/off</code> - 开启或关闭自动更新
+3️⃣ <code>${mainPrefix}acn mode</code> - 切换显示模式
+4️⃣ 等待一分钟，昵称会自动更新
 
-<b>🎯 基础命令：</b>
-• <code>${mainPrefix}acn save</code> - 保存当前昵称为原始昵称
-• <code>${mainPrefix}acn on/off</code> 或 <code>${mainPrefix}acn enable/disable</code> - 开启或关闭自动更新
-• <code>${mainPrefix}acn mode</code> - 循环切换显示模式
-• <code>${mainPrefix}acn status</code> - 查看当前运行状态
+<b>🔧 基础操作：</b>
+<blockquote expandable>• <code>${mainPrefix}acn save</code>
+  保存您当前的昵称为"原始昵称"。这是所有动态更新的基础
+  保存后，插件会以此为基准，在每次更新时加上时间、文案等内容
+  ⚠️ 建议在"干净"昵称下执行（不含时间等动态内容）
+• <code>${mainPrefix}acn on</code> / <code>off</code>
+  开启或关闭自动昵称更新功能
+  开启后每分钟自动更新一次，关闭后昵称保持当前状态不变
+• <code>${mainPrefix}acn enable</code> / <code>disable</code>
+  同上（别名命令）
+• <code>${mainPrefix}acn mode</code>
+  循环切换显示模式：time → text → both → time
+  • <code>time</code> - 只显示昵称 + 时间（如：张三 09:30）
+  • <code>text</code> - 只显示昵称 + 文案（如：张三 摸鱼中）
+  • <code>both</code> - 显示昵称 + 文案 + 时间（如：张三 摸鱼中 09:30）
+• <code>${mainPrefix}acn update</code> / <code>now</code>
+  立即手动更新一次昵称，不等下一分钟
+• <code>${mainPrefix}acn reset</code>
+  恢复原始昵称并停止自动更新（不删除配置）
+• <code>${mainPrefix}acn status</code>
+  查看插件运行状态：自动更新是否运行、启用的用户数量</blockquote>
+<b>🌍 时区管理：</b>
+<blockquote expandable>• <code>${mainPrefix}acn tz Asia/Shanghai</code>
+  设置您的时区。参数为 IANA 时区标识符
+  常用时区：Asia/Shanghai（北京）、America/New_York（纽约）、Europe/London（伦敦）等
+• <code>${mainPrefix}acn tz list</code>
+  查看常用时区列表，方便复制使用
+• <code>${mainPrefix}acn tz show on</code> / <code>off</code>
+  控制昵称中是否显示时区信息（如 GMT+8）
+  开启后昵称示例：张三 09:30 GMT+8
+• <code>${mainPrefix}acn tz format GMT</code>
+  设置时区的显示格式，可选值：
+  • <code>GMT</code> - 显示 GMT+8（默认）
+  • <code>UTC</code> - 显示 UTC+8
+  • <code>simp</code> - 显示时区缩写，如 HKT / CST / EDT
+  • <code>offset</code> - 显示纯偏移量，如 +8:00
+  • <code>custom:文字</code> - 自定义显示文字，如 custom:北京时间
+• <code>${mainPrefix}acn timezone</code>
+  等同于 <code>${mainPrefix}acn tz</code>（旧命令）
+• <code>${mainPrefix}acn showtz on/off</code>
+  等同于 <code>${mainPrefix}acn tz show on/off</code>（旧命令）
+• <code>${mainPrefix}acn tzformat GMT</code>
+  等同于 <code>${mainPrefix}acn tz format GMT</code>（旧命令）</blockquote>
+<b>🎨 外观设置：</b>
+<blockquote expandable>• <code>${mainPrefix}acn emoji on</code> / <code>off</code>
+  开启或关闭时钟 emoji（🕐🕑🕒...）
+  时钟 emoji 会根据当前小时自动匹配对应的钟面
+• <code>${mainPrefix}acn show</code>
+  查看或管理昵称中的显示组件（时间/文案/天气等，这个设置和模块是否开启互相影响）
+  可用组件：time（时间）、text（文案）、weather（天气）、emoji（表情）、timezone（时区）
+• <code>${mainPrefix}acn show time on/off</code>
+  开启或关闭时间显示
+• <code>${mainPrefix}acn show text on/off</code>
+  开启或关闭随机文案显示
+• <code>${mainPrefix}acn show weather on/off</code>
+  开启或关闭天气显示
+• <code>${mainPrefix}acn show reset</code>
+  重置显示组件为当前模式的默认值
+• <code>${mainPrefix}acn style italic</code>
+  切换昵称中动态内容的文字样式
+  可选：normal（默认）/ italic / double / sans / mono / outline
+  样式效果示例：
+  • normal: 123abc
+  • italic: 𝟏𝟐𝟑𝐚𝐛𝐜
+  • double: 𝟙𝟚𝟛𝕒𝕓𝕔
+  • sans: 𝟭𝟮𝟯𝗮𝗯𝗰
+  • mono: 𝟷𝟸𝟹𝚊𝚋𝚌
+  • outline: 𝟣𝟤𝟥𝖺𝖻𝖼
+• <code>${mainPrefix}acn order</code>
+  查看当前组件的显示顺序
+• <code>${mainPrefix}acn order name,text,time,weather,emoji</code>
+  自定义昵称中各组件的排列顺序
+  可用组件：name（昵称）、text（文案）、time（时间）、weather（天气）、emoji（时钟表情）、timezone（时区）</blockquote>
+<b>📝 文案管理：</b>
+<blockquote expandable>• <code>${mainPrefix}acn text add 摸鱼中</code>
+  添加一条随机文案。支持多行批量添加（每行一条）
+  文案最长 50 字符，建议简短有趣
+  添加的文案会在 text/both 模式下随机循环显示
+• <code>${mainPrefix}acn text del 1</code>
+  删除指定序号的文案（序号从 1 开始）
+• <code>${mainPrefix}acn text list</code>
+  查看所有已添加的文案列表及序号
+• <code>${mainPrefix}acn text clear</code>
+  清空所有文案</blockquote>
+<b>🌤️ 天气显示：</b>
+<blockquote expandable>• <code>${mainPrefix}acn weather set 北京</code>
+  设置天气地点并自动开启天气显示
+  地点支持中文城市名或英文名（如 Beijing）
+• <code>${mainPrefix}acn weather on</code> / <code>off</code>
+  手动开启或关闭天气显示（需先设置地点）
+• <code>${mainPrefix}acn weather</code>
+  查看当前天气配置：地点、开关状态、预览
+• 天气信息会缓存 30 分钟，避免频繁请求天气接口</blockquote>
 
-<b>📝 文案管理（让昵称更有个性）：</b>
-• <code>${mainPrefix}acn text add 摸鱼中</code> - 添加一条随机文案
-• <code>${mainPrefix}acn text add</code> + 多行歌词 - 支持真正多行文本批量添加
-• <code>${mainPrefix}acn text del 1</code> - 删除第1条文案
-• <code>${mainPrefix}acn text list</code> - 查看所有文案列表
-• <code>${mainPrefix}acn text clear</code> - 清空所有文案
-
-<b>🎨 显示配置（NEW）：</b>
-• <code>${mainPrefix}acn emoji on/off</code> - 开启/关闭时钟emoji 🕐
-• <code>${mainPrefix}acn showtz on/off</code> - 开启/关闭时区显示 GMT+8
-• <code>${mainPrefix}acn tzformat GMT/UTC/simp</code> - 设置时区格式(GMT/UTC/时区缩写/自定义)
-• <code>${mainPrefix}acn order</code> - 查看当前显示顺序
-• <code>${mainPrefix}acn order name,text,time,weather,emoji</code> - 自定义显示顺序
-• <code>${mainPrefix}acn config</code> - 查看所有配置项
-• <code>${mainPrefix}acn style</code> - 查看当前文字样式与预览
-
-<b>⚙️ 高级设置：</b>
-• <code>${mainPrefix}acn tz Asia/Shanghai</code> - 设置为北京时间
-• <code>${mainPrefix}acn weather on/off</code> - 开启/关闭天气显示
-• <code>${mainPrefix}acn weather set &lt;地点&gt;</code> - 设置天气地点并启用天气
-• <code>${mainPrefix}acn weather</code> - 查看天气配置及当前预览
-• <code>${mainPrefix}acn style italic/double/sans/mono/outline</code> - 切换昵称文字样式
-• <code>${mainPrefix}acn tz America/New_York</code> - 设置为纽约时间
-• <code>${mainPrefix}acn timezone</code> - 查看可用时区列表
-• <code>${mainPrefix}acn update</code> 或 <code>${mainPrefix}acn now</code> - 立即更新一次昵称
-• <code>${mainPrefix}acn reset</code> - 恢复原始昵称并停止更新
-
-<b>📊 显示模式说明（默认只显示时间）：</b>
-• <b>time模式</b>: 张三 09:30
-• <b>text模式</b>: 张三 摸鱼中
-• <b>both模式</b>: 张三 摸鱼中 09:30
-• <b>开启emoji/时区/天气后</b>: 张三 09:30 ☀️ 23°C GMT+8 🕐
-• <b>开启花体样式后</b>: 𝟭𝟮𝟯𝗮𝗯𝗰 / 𝟙𝟚𝟛𝕒𝕓𝕔
-
-<b>🔧 自定义显示顺序示例：</b>
-• <code>name,text,time,weather,emoji</code> → 张三 摸鱼中 09:30 ☀️ 23°C 🕐
-• <code>text,time,weather,name</code> → 摸鱼中 09:30 ☀️ 23°C 张三
-• <code>name,emoji,time,weather,text</code> → 张三 🕐 09:30 ☀️ 23°C 摸鱼中
+<b>📊 查看配置：</b>
+• <code>${mainPrefix}acn status</code>
+  查看插件运行状态（自动更新是否运行、启用用户数）
+• <code>${mainPrefix}acn config</code>
+  查看您的完整配置状态，包括所有设置项的当前值
 
 <b>💡 使用技巧：</b>
-• 昵称每分钟自动更新一次
-• 天气信息会缓存 30 分钟，避免频繁请求天气接口
+• 昵称每分钟自动更新一次，天气每半小时自动更新一次
 • 文案会按添加顺序循环显示
-• 支持全球所有标准时区
-• 文案最长50字符，建议简短有趣
 • 被限流时会自动暂停，无需手动干预
-• 时钟emoji会根据当前时间显示对应的钟面
 
 <b>❓ 遇到问题？</b>
 • 使用 <code>${mainPrefix}acn status</code> 检查运行状态
 • 使用 <code>${mainPrefix}acn reset</code> 重置所有设置
-• 重新执行 <code>${mainPrefix}acn save</code> 保存昵称
-
-<b>示例流程：</b>
-<code>${mainPrefix}acn save</code>
-<code>${mainPrefix}acn text add 工作中</code>
-<code>${mainPrefix}acn text add 休息中</code>
-<code>${mainPrefix}acn emoji on/off</code> (开启或关闭时钟emoji)
-<code>${mainPrefix}acn showtz on/off</code> (显示或隐藏时区)
-<code>${mainPrefix}acn order text,time,emoji,name</code> (自定义顺序)
-<code>${mainPrefix}acn mode</code> (切换到both模式)
-<code>${mainPrefix}acn on/off</code>`;
+• 重新执行 <code>${mainPrefix}acn save</code> 保存昵称`;
 
 // === 类型定义 ===
 interface UserSettings {
@@ -118,9 +157,12 @@ interface UserSettings {
   weather_compact?: string;
   weather_cache_ts?: number;
   text_style?: "normal" | "italic" | "double" | "sans" | "mono" | "outline";
+  displayComponents?: string[];
 }
 
 type TextStyleMode = NonNullable<UserSettings["text_style"]>;
+
+type SeasonalAbbreviation = { standard: string; daylight: string };
 
 interface WeatherGeocodingResponse {
   results?: Array<{
@@ -213,6 +255,7 @@ class NameManager {
   private isUpdating = false;
   private profileCache: { data: any; timestamp: number } | null = null;
   private readonly CACHE_TTL = 60000;
+  readonly validDisplayComponents = ["name", "text", "time", "weather", "emoji", "timezone"];
   private readonly timezoneAbbreviationMap: Record<string, string> = {
     'Africa/Abidjan': 'GMT',
     'Africa/Accra': 'GMT',
@@ -650,6 +693,47 @@ class NameManager {
     '-12:00': 'AoE'
   };
 
+  private readonly seasonalTimezoneAbbreviationMap: Record<string, SeasonalAbbreviation> = {
+    'America/Anchorage': { standard: 'AKST', daylight: 'AKDT' },
+    'America/Chicago': { standard: 'CST', daylight: 'CDT' },
+    'America/Denver': { standard: 'MST', daylight: 'MDT' },
+    'America/Detroit': { standard: 'EST', daylight: 'EDT' },
+    'America/Halifax': { standard: 'AST', daylight: 'ADT' },
+    'America/Los_Angeles': { standard: 'PST', daylight: 'PDT' },
+    'America/New_York': { standard: 'EST', daylight: 'EDT' },
+    'America/Santiago': { standard: 'CLT', daylight: 'CLST' },
+    'America/St_Johns': { standard: 'NST', daylight: 'NDT' },
+    'America/Toronto': { standard: 'EST', daylight: 'EDT' },
+    'America/Vancouver': { standard: 'PST', daylight: 'PDT' },
+    'America/Winnipeg': { standard: 'CST', daylight: 'CDT' },
+
+    'Atlantic/Azores': { standard: 'AZOT', daylight: 'AZOST' },
+    'Atlantic/Bermuda': { standard: 'AST', daylight: 'ADT' },
+
+    'Australia/Adelaide': { standard: 'ACST', daylight: 'ACDT' },
+    'Australia/Hobart': { standard: 'AEST', daylight: 'AEDT' },
+    'Australia/Melbourne': { standard: 'AEST', daylight: 'AEDT' },
+    'Australia/Sydney': { standard: 'AEST', daylight: 'AEDT' },
+
+    'Europe/Athens': { standard: 'EET', daylight: 'EEST' },
+    'Europe/Berlin': { standard: 'CET', daylight: 'CEST' },
+    'Europe/Brussels': { standard: 'CET', daylight: 'CEST' },
+    'Europe/Dublin': { standard: 'GMT', daylight: 'IST' },
+    'Europe/Helsinki': { standard: 'EET', daylight: 'EEST' },
+    'Europe/Lisbon': { standard: 'WET', daylight: 'WEST' },
+    'Europe/London': { standard: 'GMT', daylight: 'BST' },
+    'Europe/Madrid': { standard: 'CET', daylight: 'CEST' },
+    'Europe/Paris': { standard: 'CET', daylight: 'CEST' },
+    'Europe/Prague': { standard: 'CET', daylight: 'CEST' },
+    'Europe/Rome': { standard: 'CET', daylight: 'CEST' },
+    'Europe/Vienna': { standard: 'CET', daylight: 'CEST' },
+    'Europe/Warsaw': { standard: 'CET', daylight: 'CEST' },
+    'Europe/Zurich': { standard: 'CET', daylight: 'CEST' },
+
+    'Pacific/Auckland': { standard: 'NZST', daylight: 'NZDT' },
+    'Pacific/Chatham': { standard: 'CHAST', daylight: 'CHADT' }
+  };
+
   static getInstance(): NameManager {
     return NameManager.instance ??= new NameManager();
   }
@@ -658,7 +742,85 @@ class NameManager {
     return `${sign}${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}`;
   }
 
+  private getIntlTimezoneAbbreviation(timezone: string): string | null {
+    try {
+      const parts = new Intl.DateTimeFormat('en-US', {
+        timeZone: timezone,
+        timeZoneName: 'short'
+      }).formatToParts(new Date());
+
+      const abbreviation = parts.find(part => part.type === 'timeZoneName')?.value?.trim();
+      if (!abbreviation) {
+        return null;
+      }
+
+      if (/^GMT[+-]/.test(abbreviation)) {
+        return null;
+      }
+
+      return abbreviation;
+    } catch {
+      return null;
+    }
+  }
+
+  private getOffsetMinutesForDate(timezone: string, date: Date): number | null {
+    try {
+      const parts = new Intl.DateTimeFormat('en', {
+        timeZone: timezone,
+        timeZoneName: 'longOffset'
+      }).formatToParts(date);
+
+      const offsetPart = parts.find(part => part.type === 'timeZoneName')?.value;
+      if (!offsetPart) {
+        return null;
+      }
+
+      const match = offsetPart.match(/GMT([+-])(\d{2}):(\d{2})/);
+      if (!match) {
+        return null;
+      }
+
+      const sign = match[1] === '+' ? 1 : -1;
+      const hours = parseInt(match[2], 10);
+      const minutes = parseInt(match[3], 10);
+      return sign * (hours * 60 + minutes);
+    } catch {
+      return null;
+    }
+  }
+
+  private getSeasonalTimezoneAbbreviation(timezone: string): string | null {
+    const abbreviations = this.seasonalTimezoneAbbreviationMap[timezone];
+    if (!abbreviations) {
+      return null;
+    }
+
+    const now = new Date();
+    const year = now.getUTCFullYear();
+    const januaryOffset = this.getOffsetMinutesForDate(timezone, new Date(Date.UTC(year, 0, 1, 12, 0, 0)));
+    const julyOffset = this.getOffsetMinutesForDate(timezone, new Date(Date.UTC(year, 6, 1, 12, 0, 0)));
+    const currentOffset = this.getOffsetMinutesForDate(timezone, now);
+
+    if (januaryOffset === null || julyOffset === null || currentOffset === null || januaryOffset === julyOffset) {
+      return null;
+    }
+
+    const daylightOffset = Math.max(januaryOffset, julyOffset);
+    return currentOffset === daylightOffset ? abbreviations.daylight : abbreviations.standard;
+  }
+
   private getTimezoneAbbreviation(timezone: string, sign: string, hours: number, minutes: number): string {
+    const intlAbbreviation = this.getIntlTimezoneAbbreviation(timezone);
+    if (intlAbbreviation) {
+      return intlAbbreviation;
+    }
+
+    const seasonalAbbreviation = this.getSeasonalTimezoneAbbreviation(timezone);
+    if (seasonalAbbreviation) {
+      return seasonalAbbreviation;
+    }
+
     const exact = this.timezoneAbbreviationMap[timezone];
     if (exact) {
       return exact;
@@ -1018,7 +1180,28 @@ class NameManager {
       
     } catch (error) {
       console.error('[AutoChangeName] 时区计算失败:', error);
-      return 'GMT+8';  // 默认返回 GMT+8
+      return 'GMT+8';
+    }
+  }
+
+  private getDefaultDisplayOrder(mode: string): string[] {
+    switch (mode) {
+      case "time": return ["name", "time"];
+      case "text": return ["name", "text", "time"];
+      case "both": return ["name", "text", "time"];
+      default: return ["name", "time"];
+    }
+  }
+
+  private getEnabledComponents(settings: UserSettings): string[] {
+    if (settings.displayComponents && settings.displayComponents.length > 0) {
+      return settings.displayComponents;
+    }
+    switch (settings.mode) {
+      case "time": return ["time"];
+      case "text": return ["text", "time"];
+      case "both": return ["text", "time"];
+      default: return ["time"];
     }
   }
 
@@ -1028,7 +1211,6 @@ class NameManager {
     const cleanLastName = settings.original_last_name;
     const currentTime = this.formatTime(settings.timezone);
     
-    // 准备各个组件
     const components: { [key: string]: string } = {
       name: cleanFirstName,
       time: currentTime,
@@ -1037,11 +1219,7 @@ class NameManager {
       timezone: settings.show_timezone ? this.getTimezoneDisplay(settings.timezone, settings.timezone_format) : '',
       weather: ''
     };
-    
-    // 调试日志：显示各组件值
-    console.log(`[AutoChangeName] 组件值: name="${components.name}", time="${components.time}", emoji="${components.emoji}", timezone="${components.timezone}"`);
 
-    // 获取随机文本
     if (settings.mode === "text" || settings.mode === "both") {
       const texts = await DataManager.getRandomTexts();
       if (texts.length > 0) {
@@ -1049,76 +1227,44 @@ class NameManager {
       }
     }
 
-    // 读取天气（若启用）并填充组件
     if (settings.weather_enabled && settings.weather_location) {
       const weatherText = await this.getWeatherCompact(settings);
       components.weather = weatherText;
     }
 
-    // 根据模式决定显示哪些组件
-    let displayComponents: string[] = [];
+    const enabledComponents = this.getEnabledComponents(settings);
     
-    // 将 weather 组件加入显示序列（若开启则在需要的位置显示，未启用时为空字符串会被过滤）
-    if (settings.mode === "time") {
-      displayComponents = ['name', 'time', 'timezone', 'weather', 'emoji'];
-    } else if (settings.mode === "text") {
-      displayComponents = ['name', 'text', 'time', 'timezone', 'weather', 'emoji'];
-    } else { // both
-      displayComponents = ['name', 'text', 'time', 'timezone', 'weather', 'emoji'];
-    }
-
-    // 根据用户自定义顺序重新排列组件
+    let displayOrder: string[];
     if (settings.display_order) {
-      let customOrder = settings.display_order.split(',').map(s => s.trim());
-      console.log(`[AutoChangeName] 用户自定义顺序: [${customOrder.join(', ')}]`);
-      
-      // 自动修复：如果开启了时区但display_order中没有timezone，自动添加
-      if (settings.show_timezone && !customOrder.includes('timezone')) {
-        // 在time后面添加timezone
-        const timeIndex = customOrder.indexOf('time');
-        if (timeIndex !== -1) {
-          customOrder.splice(timeIndex + 1, 0, 'timezone');
-        } else {
-          customOrder.push('timezone');
-        }
-        console.log(`[AutoChangeName] 自动添加timezone到顺序: [${customOrder.join(', ')}]`);
-      }
-      
-      // 自动修复：如果开启了emoji但display_order中没有emoji，自动添加
-      if (settings.show_clock_emoji && !customOrder.includes('emoji')) {
-        customOrder.push('emoji');
-        console.log(`[AutoChangeName] 自动添加emoji到顺序: [${customOrder.join(', ')}]`);
-      }
-
-      if (settings.weather_enabled && settings.weather_location && !customOrder.includes('weather')) {
-        const timezoneIndex = customOrder.indexOf('timezone');
-        const timeIndex = customOrder.indexOf('time');
-        if (timezoneIndex !== -1) {
-          customOrder.splice(timezoneIndex + 1, 0, 'weather');
-        } else if (timeIndex !== -1) {
-          customOrder.splice(timeIndex + 1, 0, 'weather');
-        } else {
-          customOrder.push('weather');
-        }
-        console.log(`[AutoChangeName] 自动添加weather到顺序: [${customOrder.join(', ')}]`);
-      }
-      
-      // 过滤出在当前模式下应该显示的组件
-      const validOrder = customOrder.filter(comp => displayComponents.includes(comp));
-      console.log(`[AutoChangeName] 有效的自定义顺序: [${validOrder.join(', ')}]`);
-      
-      if (validOrder.length > 0) {
-        displayComponents = validOrder;
-      } else {
-        console.log('[AutoChangeName] 自定义顺序无效，使用默认顺序');
-      }
+      displayOrder = settings.display_order.split(',').map(s => s.trim());
+    } else {
+      displayOrder = this.getDefaultDisplayOrder(settings.mode);
     }
-
-    // 组合最终显示文本（只获取有值的组件内容）
-    console.log(`[AutoChangeName] 显示组件顺序: [${displayComponents.join(', ')}]`);
     
-    const finalParts = displayComponents
-      .map(comp => {
+    if (settings.show_timezone && !displayOrder.includes('timezone')) {
+      const idx = displayOrder.indexOf('time');
+      if (idx !== -1) displayOrder.splice(idx + 1, 0, 'timezone');
+      else displayOrder.push('timezone');
+    }
+    if (settings.show_clock_emoji && !displayOrder.includes('emoji')) {
+      displayOrder.push('emoji');
+    }
+    if (settings.weather_enabled && settings.weather_location && !displayOrder.includes('weather')) {
+      const tzi = displayOrder.indexOf('timezone');
+      const ti = displayOrder.indexOf('time');
+      if (tzi !== -1) displayOrder.splice(tzi + 1, 0, 'weather');
+      else if (ti !== -1) displayOrder.splice(ti + 1, 0, 'weather');
+      else displayOrder.push('weather');
+    }
+    
+    displayOrder = displayOrder.filter(comp =>
+      comp === 'name' || enabledComponents.includes(comp)
+    );
+    console.log(`[AutoChangeName] 显示顺序: [${displayOrder.join(', ')}]`);
+    console.log(`[AutoChangeName] 显示组件顺序: [${displayOrder.join(', ')}]`);
+    
+    const finalParts = displayOrder
+      .map((comp: string) => {
         const value = components[comp];
         console.log(`[AutoChangeName] 组件 ${comp}: "${value}" (长度: ${value ? value.length : 0})`);
         if (!value || value.length === 0) {
@@ -1129,7 +1275,7 @@ class NameManager {
           ? value
           : this.applyTextStyle(value, settings.text_style || "normal");
       })
-      .filter(part => part && part.length > 0);
+      .filter((part: string) => part && part.length > 0);
     
     console.log(`[AutoChangeName] 过滤后的组件: ["${finalParts.join('", "')}"]`);
     const finalName = finalParts.join(' ');
@@ -1305,6 +1451,18 @@ class NameManager {
 // 获取管理器实例（单例模式，防止内存泄漏）
 const nameManager = NameManager.getInstance();
 
+async function requireSettings(userId: number, msg: Api.Message): Promise<UserSettings | null> {
+  const settings = await DataManager.getUserSettings(userId);
+  if (!settings) {
+    await msg.edit({
+      text: `❌ 请先使用 <code>${mainPrefix}acn save</code> 保存昵称`,
+      parseMode: "html"
+    });
+    return null;
+  }
+  return settings;
+}
+
 // 插件类
 class AutoChangeNamePlugin extends Plugin {
   cleanup(): void {
@@ -1337,6 +1495,7 @@ class AutoChangeNamePlugin extends Plugin {
         if (msg.fromId && msg.fromId.className === 'PeerChannel') {
           isChannelMessage = true;
           await msg.edit({
+            text: `⚠️ <b>不支持在频道中使用此命令</b>\n\n请在私聊中发送命令来管理动态昵称。`,
             parseMode: "html"
           });
           return;
@@ -1351,6 +1510,7 @@ class AutoChangeNamePlugin extends Plugin {
         
         if (!userId || isNaN(userId)) {
           await msg.edit({
+            text: `❌ <b>无法识别您的身份</b>\n\n请确保在私聊中使用此命令。`,
             parseMode: "html"
           });
           return;
@@ -1370,6 +1530,7 @@ class AutoChangeNamePlugin extends Plugin {
         // 对于非save、help、status命令，检查是否需要引导
         if (isFirstTime && !["save", "help", "h", "status"].includes(sub)) {
           await msg.edit({
+            text: `⚠️ <b>请先保存昵称</b>\n\n您还没有保存过昵称。\n\n请先执行 <code>${mainPrefix}acn save</code> 保存您的当前昵称。`,
             parseMode: "html"
           });
           return;
@@ -1438,24 +1599,29 @@ class AutoChangeNamePlugin extends Plugin {
             await this.handleDisplayOrder(msg, userId, args.slice(1));
             break;
 
-            case "config":
-              await this.handleShowConfig(msg, userId);
-              break;
-            
-            case "weather":
-              await this.handleWeather(msg, userId, args.slice(1));
-              break;
+          case "config":
+            await this.handleShowConfig(msg, userId);
+            break;
 
-            case "style":
-              await this.handleTextStyle(msg, userId, args.slice(1));
-              break;
-            
+          case "weather":
+            await this.handleWeather(msg, userId, args.slice(1));
+            break;
+
+          case "style":
+            await this.handleTextStyle(msg, userId, args.slice(1));
+            break;
+
+          case "show":
+            await this.handleShow(msg, userId, args.slice(1));
+            break;
+
           case "tzformat":
             await this.handleTimezoneFormat(msg, userId, args.slice(1));
             break;
 
           default:
             await msg.edit({
+              text: `❌ <b>未知命令</b>\n\n未知的子命令: <code>${htmlEscape(sub)}</code>\n\n输入 <code>${mainPrefix}acn</code> 或 <code>${mainPrefix}acn help</code> 查看帮助。`,
               parseMode: "html"
             });
         }
@@ -1536,6 +1702,7 @@ class AutoChangeNamePlugin extends Plugin {
 
       // 首次使用，提供详细的引导
       await msg.edit({
+        text: `⚠️ <b>请先保存昵称</b>\n\n在开启自动更新之前，请先执行:\n\n<code>${mainPrefix}acn save</code>\n\n这将保存您当前的昵称作为基准。`,
         parseMode: "html"
       });
       return;
@@ -1620,6 +1787,102 @@ class AutoChangeNamePlugin extends Plugin {
       text: `✅ <b>显示模式已切换</b>\n\n📝 当前模式: <code>${settings.mode}</code>\n\n模式说明：\n• <code>time</code> - 只显示昵称+时间\n• <code>text</code> - 只显示昵称+文案\n• <code>both</code> - 显示昵称+文案+时间`,
       parseMode: "html"
     });
+  }
+
+  // 处理显示组件管理
+  private async handleShow(msg: Api.Message, userId: number, args: string[]): Promise<void> {
+    const settings = await requireSettings(userId, msg);
+    if (!settings) return;
+
+    const action = (args[0] || "").toLowerCase();
+    const target = (args[1] || "").toLowerCase();
+
+    const allComponents = ["time", "text", "weather", "emoji", "timezone"] as const;
+    const defaultByMode: Record<string, string[]> = {
+      time: ["time"],
+      text: ["text", "time"],
+      both: ["text", "time"]
+    };
+
+    if (!action || action === "help" || action === "h") {
+      const current = settings.displayComponents || defaultByMode[settings.mode] || ["time"];
+      const statusLines = [
+        `• <code>time</code> ${current.includes("time") ? "✅ 开启" : "❌ 关闭"}`,
+        `• <code>text</code> ${current.includes("text") ? "✅ 开启" : "❌ 关闭"}`,
+        `• <code>weather</code> ${current.includes("weather") ? "✅ 开启" : "❌ 关闭"}`,
+        `• <code>emoji</code> ${settings.show_clock_emoji ? "✅ 开启" : "❌ 关闭"}`,
+        `• <code>timezone</code> ${settings.show_timezone ? "✅ 开启" : "❌ 关闭"}`,
+      ];
+
+      await msg.edit({
+        text: `🎛️ <b>显示组件管理</b>\n\n当前组件: <code>${current.join(", ")}</code>\n\n<b>组件状态：</b>\n${statusLines.join("\n")}\n\n<b>使用说明：</b>\n• <code>${mainPrefix}acn show</code> — 查看当前组件状态\n• <code>${mainPrefix}acn show time on/off</code> — 显示或隐藏时间\n• <code>${mainPrefix}acn show text on/off</code> — 显示或隐藏文案\n• <code>${mainPrefix}acn show weather on/off</code> — 显示或隐藏天气\n• <code>${mainPrefix}acn emoji on/off</code> — 时钟表情\n• <code>${mainPrefix}acn showtz on/off</code> — 时区显示\n• <code>${mainPrefix}acn show reset</code> — 重置为模式默认值`,
+        parseMode: "html"
+      });
+      return;
+    }
+
+    if (action === "reset") {
+      settings.displayComponents = undefined;
+      const success = await DataManager.saveUserSettings(settings);
+      if (success) {
+        if (settings.is_enabled) {
+          await nameManager.updateUserProfile(userId, true);
+        }
+        const defaults = defaultByMode[settings.mode] || ["time"];
+        await msg.edit({
+          text: `✅ <b>已重置为默认值</b>\n\n当前模式 (<code>${settings.mode}</code>) 的默认组件: <code>${defaults.join(", ")}</code>`,
+          parseMode: "html"
+        });
+      } else {
+        await msg.edit({ text: "❌ 设置保存失败", parseMode: "html" });
+      }
+      return;
+    }
+
+    const toggleableComponents = ["time", "text", "weather"] as const;
+    if (!toggleableComponents.includes(action as typeof toggleableComponents[number])) {
+      await msg.edit({
+        text: `❌ <b>acn show 仅支持管理 time/text/weather</b>\n\nemoji 和 timezone 请使用：\n• <code>${mainPrefix}acn emoji on/off</code>\n• <code>${mainPrefix}acn showtz on/off</code>`,
+        parseMode: "html"
+      });
+      return;
+    }
+
+    if (target !== "on" && target !== "off") {
+      await msg.edit({
+        text: `❌ <b>请指定 on 或 off</b>\n\n使用方法: <code>${mainPrefix}acn show ${action} on/off</code>`,
+        parseMode: "html"
+      });
+      return;
+    }
+
+    const current = settings.displayComponents
+      ? [...settings.displayComponents]
+      : [...(defaultByMode[settings.mode] || ["time"])];
+
+    if (target === "on") {
+      if (!current.includes(action)) {
+        current.push(action);
+      }
+      settings.displayComponents = current;
+    } else {
+      const filtered = current.filter(c => c !== action);
+      settings.displayComponents = filtered.length > 0 ? filtered : undefined;
+    }
+
+    const success = await DataManager.saveUserSettings(settings);
+    if (success) {
+      if (settings.is_enabled) {
+        await nameManager.updateUserProfile(userId, true);
+      }
+      const shown = settings.displayComponents || (defaultByMode[settings.mode] || ["time"]);
+      await msg.edit({
+        text: `✅ <b>组件已${target === "on" ? "开启" : "关闭"}</b>\n\n当前组件: <code>${shown.join(", ")}</code>`,
+        parseMode: "html"
+      });
+    } else {
+      await msg.edit({ text: "❌ 设置保存失败", parseMode: "html" });
+    }
   }
 
   // 处理状态查询
@@ -1758,9 +2021,18 @@ class AutoChangeNamePlugin extends Plugin {
     }
   }
 
-  // 处理时区设置
   private async handleTimezone(msg: Api.Message, userId: number, args: string[]): Promise<void> {
     if (args.length === 0) {
+      await msg.edit({
+        text: `🌍 <b>时区管理</b>\n\n<b>可用子命令：</b>\n• <code>${mainPrefix}acn tz Asia/Shanghai</code> — 设置时区\n• <code>${mainPrefix}acn tz list</code> — 查看常用时区列表\n• <code>${mainPrefix}acn tz show on/off</code> — 显示 / 隐藏昵称中的时区信息\n• <code>${mainPrefix}acn tz format GMT</code> — 设置时区显示格式\n\n<b>时区格式可选值：</b>\n• <code>GMT</code> — GMT+8\n• <code>UTC</code> — UTC+8\n• <code>simp</code> — 时区缩写（如 HKT / CST / EDT）\n• <code>offset</code> — +8:00\n• <code>custom:文字</code> — 自定义显示`,
+        parseMode: "html"
+      });
+      return;
+    }
+
+    const sub = (args[0] || "").toLowerCase();
+
+    if (sub === "list") {
       const commonTimezones = [
         "Asia/Shanghai", "Asia/Tokyo", "Asia/Seoul", "Asia/Hong_Kong",
         "Asia/Singapore", "Europe/London", "Europe/Paris", "Europe/Berlin",
@@ -1769,23 +2041,38 @@ class AutoChangeNamePlugin extends Plugin {
       const timezoneList = commonTimezones.map(tz => `• <code>${tz}</code>`).join("\n");
 
       await msg.edit({
-        text: `🕐 <b>时区设置</b>\n\n请指定时区，例如：\n<code>${mainPrefix}acn tz Asia/Shanghai</code>\n\n常用时区：\n${timezoneList}`,
+        text: `🌍 <b>常用时区列表</b>\n\n${timezoneList}\n\n使用 <code>${mainPrefix}acn tz &lt;时区&gt;</code> 设置时区`,
         parseMode: "html"
       });
       return;
     }
 
-    const settings = await DataManager.getUserSettings(userId);
-    if (!settings) {
-      await msg.edit({
-        text: `❌ 请先使用 <code>${mainPrefix}acn save</code> 保存昵称`,
-        parseMode: "html"
-      });
+    if (sub === "show") {
+      await this.handleTimezoneToggle(msg, userId, args.slice(1));
       return;
     }
+
+    if (sub === "format") {
+      await this.handleTimezoneFormat(msg, userId, args.slice(1));
+      return;
+    }
+
+    if (sub === "set") {
+      if (args.length < 2) {
+        await msg.edit({
+          text: `❌ <b>未提供时区</b>\n\n使用 <code>${mainPrefix}acn tz Asia/Shanghai</code> 设置时区`,
+          parseMode: "html"
+        });
+        return;
+      }
+      args = args.slice(1);
+    }
+
+    const settings = await requireSettings(userId, msg);
+    if (!settings) return;
 
     const newTimezone = args.join(" ").trim();
-    
+
     // 验证时区是否有效
     try {
       new Date().toLocaleString("en-US", { timeZone: newTimezone });
@@ -1816,14 +2103,8 @@ class AutoChangeNamePlugin extends Plugin {
 
   // 处理立即更新
   private async handleUpdate(msg: Api.Message, userId: number): Promise<void> {
-    const settings = await DataManager.getUserSettings(userId);
-    if (!settings) {
-      await msg.edit({
-        text: `❌ 请先使用 <code>${mainPrefix}acn save</code> 保存昵称`,
-        parseMode: "html"
-      });
-      return;
-    }
+    const settings = await requireSettings(userId, msg);
+    if (!settings) return;
 
     // 检查是否已保存原始昵称
     if (!settings.original_first_name) {
@@ -1848,14 +2129,8 @@ class AutoChangeNamePlugin extends Plugin {
 
   // 处理emoji开关
   private async handleEmojiToggle(msg: Api.Message, userId: number, args: string[]): Promise<void> {
-    const settings = await DataManager.getUserSettings(userId);
-    if (!settings) {
-      await msg.edit({
-        text: `❌ 请先使用 <code>${mainPrefix}acn save</code> 保存昵称`,
-        parseMode: "html"
-      });
-      return;
-    }
+    const settings = await requireSettings(userId, msg);
+    if (!settings) return;
 
     const action = args[0]?.toLowerCase();
     if (action === "on") {
@@ -1887,14 +2162,8 @@ class AutoChangeNamePlugin extends Plugin {
 
   // 处理时区显示开关
   private async handleTimezoneToggle(msg: Api.Message, userId: number, args: string[]): Promise<void> {
-    const settings = await DataManager.getUserSettings(userId);
-    if (!settings) {
-      await msg.edit({
-        text: `❌ 请先使用 <code>${mainPrefix}acn save</code> 保存昵称`,
-        parseMode: "html"
-      });
-      return;
-    }
+    const settings = await requireSettings(userId, msg);
+    if (!settings) return;
 
     const action = args[0]?.toLowerCase();
     if (action === "on") {
@@ -1927,14 +2196,8 @@ class AutoChangeNamePlugin extends Plugin {
 
   // 处理时区格式设置
   private async handleTimezoneFormat(msg: Api.Message, userId: number, args: string[]): Promise<void> {
-    const settings = await DataManager.getUserSettings(userId);
-    if (!settings) {
-      await msg.edit({
-        text: `❌ 请先使用 <code>${mainPrefix}acn save</code> 保存昵称`,
-        parseMode: "html"
-      });
-      return;
-    }
+    const settings = await requireSettings(userId, msg);
+    if (!settings) return;
 
     const format = args[0]?.toLowerCase();
     
@@ -1976,14 +2239,8 @@ class AutoChangeNamePlugin extends Plugin {
   }
 
   private async handleTextStyle(msg: Api.Message, userId: number, args: string[]): Promise<void> {
-    const settings = await DataManager.getUserSettings(userId);
-    if (!settings) {
-      await msg.edit({
-        text: `❌ 请先使用 <code>${mainPrefix}acn save</code> 保存昵称`,
-        parseMode: "html"
-      });
-      return;
-    }
+    const settings = await requireSettings(userId, msg);
+    if (!settings) return;
 
     const styleArg = (args[0] || "").toLowerCase();
     const styleAliases: Record<string, TextStyleMode> = {
@@ -2069,14 +2326,8 @@ class AutoChangeNamePlugin extends Plugin {
   }
 
   private async handleWeather(msg: Api.Message, userId: number, args: string[]): Promise<void> {
-    const settings = await DataManager.getUserSettings(userId);
-    if (!settings) {
-      await msg.edit({
-        text: `❌ 请先使用 <code>${mainPrefix}acn save</code> 保存昵称`,
-        parseMode: "html"
-      });
-      return;
-    }
+    const settings = await requireSettings(userId, msg);
+    if (!settings) return;
 
     const arg0 = (args[0] || "").toLowerCase();
     if (!arg0 || arg0 === "help" || arg0 === "h") {
@@ -2163,14 +2414,8 @@ class AutoChangeNamePlugin extends Plugin {
 
   // 处理显示顺序设置
   private async handleDisplayOrder(msg: Api.Message, userId: number, args: string[]): Promise<void> {
-    const settings = await DataManager.getUserSettings(userId);
-    if (!settings) {
-      await msg.edit({
-        text: `❌ 请先使用 <code>${mainPrefix}acn save</code> 保存昵称`,
-        parseMode: "html"
-      });
-      return;
-    }
+    const settings = await requireSettings(userId, msg);
+    if (!settings) return;
 
     if (args.length === 0) {
       // 显示当前顺序
@@ -2222,14 +2467,8 @@ class AutoChangeNamePlugin extends Plugin {
 
   // 显示当前配置
   private async handleShowConfig(msg: Api.Message, userId: number): Promise<void> {
-    const settings = await DataManager.getUserSettings(userId);
-    if (!settings) {
-      await msg.edit({
-        text: `❌ 请先使用 <code>${mainPrefix}acn save</code> 保存昵称`,
-        parseMode: "html"
-      });
-      return;
-    }
+    const settings = await requireSettings(userId, msg);
+    if (!settings) return;
 
     const texts = await DataManager.getRandomTexts();
     const currentTime = nameManager.formatTime(settings.timezone);
@@ -2240,27 +2479,34 @@ class AutoChangeNamePlugin extends Plugin {
       : settings.weather_compact || "";
     const styledPreview = nameManager.applyTextStyle("123abc ABC", settings.text_style || "normal");
 
-    const configText = `🔧 <b>当前配置状态</b>\n\n` +
-      `<b>基础设置：</b>\n` +
-      `• 自动更新: <code>${settings.is_enabled ? "开启" : "关闭"}</code>\n` +
-      `• 显示模式: <code>${settings.mode}</code>\n` +
-      `• 时区: <code>${settings.timezone}</code>\n` +
-      `• 当前时间: <code>${currentTime}</code>\n\n` +
-      `<b>显示选项：</b>\n` +
-      `• 时钟Emoji: <code>${settings.show_clock_emoji ? "开启" : "关闭"}</code> ${settings.show_clock_emoji ? clockEmoji : ""}\n` +
-      `• 时区显示: <code>${settings.show_timezone ? "开启" : "关闭"}</code> ${settings.show_timezone ? tzDisplay : ""}\n` +
-      `• 时区格式: <code>${settings.timezone_format || "GMT"}</code>\n` +
-      `• 文字样式: <code>${settings.text_style || "normal"}</code>（预览: ${htmlEscape(styledPreview)}）\n` +
-      `• 显示顺序: <code>${settings.display_order || "name,time"}</code>\n` +
-      `• 天气显示: <code>${settings.weather_enabled ? "开启" : "关闭"}</code> ${settings.weather_enabled && settings.weather_location ? `（地点: ${htmlEscape(settings.weather_location)}）` : ""}\n` +
-      `• 天气地点: <code>${htmlEscape(settings.weather_location || "(未设置)")}</code>\n` +
-      `• 天气预览: <code>${htmlEscape(weatherPreview || "(暂无)")}</code>\n\n` +
-      `<b>文案设置：</b>\n` +
-      `• 文案数量: <code>${texts.length}</code>\n` +
-      `• 当前索引: <code>${settings.text_index}</code>\n\n` +
-      `<b>原始昵称：</b>\n` +
-      `• 姓名: <code>${htmlEscape(settings.original_first_name || "(空)")}</code>\n` +
-      `• 姓氏: <code>${htmlEscape(settings.original_last_name || "(空)")}</code>`;
+    const configText = `🔧 <b>当前配置</b>
+
+<b>⚙️ 基础设置</b>
+• 自动更新: <code>${settings.is_enabled ? "开启" : "关闭"}</code>
+• 显示模式: <code>${settings.mode}</code>
+• 显示组件: <code>${(settings.displayComponents || []).join(", ")}</code>
+• 时区: <code>${settings.timezone}</code>
+• 当前时间: <code>${currentTime}</code>
+
+<b>🎨 显示选项</b>
+• 时钟Emoji: <code>${settings.show_clock_emoji ? "开启" : "关闭"}</code>${settings.show_clock_emoji ? ` ${clockEmoji}` : ""}
+• 时区显示: <code>${settings.show_timezone ? "开启" : "关闭"}</code>${settings.show_timezone ? ` ${tzDisplay}` : ""}
+• 时区格式: <code>${settings.timezone_format || "GMT"}</code>
+• 文字样式: <code>${settings.text_style || "normal"}</code>（预览: ${htmlEscape(styledPreview)}）
+• 显示顺序: <code>${settings.display_order || "无（使用默认值）"}</code>
+
+<b>🌤️ 天气</b>
+• 天气显示: <code>${settings.weather_enabled ? "开启" : "关闭"}</code>
+• 天气地点: <code>${htmlEscape(settings.weather_location || "(未设置)")}</code>
+• 天气预览: <code>${htmlEscape(weatherPreview || "(暂无)")}</code>
+
+<b>📝 文案</b>
+• 文案数量: <code>${texts.length}</code>
+• 当前索引: <code>${settings.text_index}</code>
+
+<b>👤 原始昵称</b>
+• 姓名: <code>${htmlEscape(settings.original_first_name || "(空)")}</code>
+• 姓氏: <code>${htmlEscape(settings.original_last_name || "(空)")}</code>`;
 
     await msg.edit({ text: configText, parseMode: "html" });
   }
