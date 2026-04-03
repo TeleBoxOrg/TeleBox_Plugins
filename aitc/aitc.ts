@@ -158,6 +158,41 @@ const htmlEscape = (text: string): string =>
       })[char] || char,
   );
 
+const decodeHtmlEntities = (text: string): string =>
+  text
+    .replace(/&#(\d+);/g, (_match, code) => {
+      const value = Number.parseInt(code, 10);
+      return Number.isFinite(value) ? String.fromCodePoint(value) : _match;
+    })
+    .replace(/&#x([0-9a-f]+);/gi, (_match, code) => {
+      const value = Number.parseInt(code, 16);
+      return Number.isFinite(value) ? String.fromCodePoint(value) : _match;
+    })
+    .replace(/&(amp|lt|gt|quot|apos|nbsp);/gi, (match, entity) => {
+      switch (entity.toLowerCase()) {
+        case "amp":
+          return "&";
+        case "lt":
+          return "<";
+        case "gt":
+          return ">";
+        case "quot":
+          return '"';
+        case "apos":
+          return "'";
+        case "nbsp":
+          return " ";
+        default:
+          return match;
+      }
+    });
+
+const sanitizePlainText = (text: string): string =>
+  decodeHtmlEntities(text)
+    // Strip control characters that Telegram may render poorly while preserving common whitespace.
+    .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, "")
+    .replace(/\r\n/g, "\n");
+
 const trimTrailingSlash = (url: string): string => url.replace(/\/+$/, "");
 
 const clampTemperature = (value: number, fallback: number): number => {
@@ -181,6 +216,12 @@ async function handleAitcCommand(msg: Api.Message): Promise<void> {
     msg.edit({
       text,
       parseMode: "html",
+      linkPreview: false,
+    });
+
+  const replyPlainText = async (text: string) =>
+    msg.edit({
+      text: sanitizePlainText(text),
       linkPreview: false,
     });
 
@@ -433,7 +474,7 @@ async function handleAitcCommand(msg: Api.Message): Promise<void> {
     }
 
     const translated = content.trim();
-    await replyWith(htmlEscape(translated));
+    await replyPlainText(translated);
   } catch (error: any) {
     console.error("aitc plugin openai error", error);
     let message = "请求失败，请稍后重试";
