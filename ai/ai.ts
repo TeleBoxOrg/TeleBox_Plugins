@@ -24,6 +24,7 @@ interface ProviderConfig {
   url: string;
   key: string;
   stream: boolean;
+  responses: boolean;
 }
 
 interface TelegraphItem {
@@ -412,6 +413,18 @@ const resolveEndpointUrl = (baseUrl: string, endpoint?: string): string => {
   return new URL(cleaned, base).toString();
 };
 
+const resolveResponsesEndpointUrl = (
+  providerConfig: ProviderConfig,
+  modeConfig: ProviderModeConfig,
+): string => {
+  const baseUrl = resolveBaseUrl(providerConfig, modeConfig);
+  const currentUrl = modeConfig.endpoint
+    ? resolveEndpointUrl(baseUrl, modeConfig.endpoint)
+    : baseUrl;
+  const responsesBaseUrl = normalizeOpenAIBaseUrl(currentUrl);
+  return resolveEndpointUrl(responsesBaseUrl, "responses");
+};
+
 const getMessageText = (m?: Api.Message | null): string => {
   if (!m) return "";
   const text = (m as any).message ?? (m as any).text ?? "";
@@ -429,6 +442,39 @@ const buildUserContent = (
   const parts: AIContentPart[] = [];
   if (text.trim()) parts.push({ type: "text", text });
   parts.push(...images);
+  return parts;
+};
+
+const buildResponsesInputContent = (
+  text: string,
+  images: AIContentPart[],
+): Array<
+  | { type: "input_text"; text: string }
+  | {
+      type: "input_image";
+      image_url: string;
+    }
+> => {
+  const parts: Array<
+    | { type: "input_text"; text: string }
+    | {
+        type: "input_image";
+        image_url: string;
+      }
+  > = [];
+
+  if (text.trim()) {
+    parts.push({ type: "input_text", text: text.trim() });
+  }
+
+  for (const part of images) {
+    if (part.type !== "image_url") continue;
+    parts.push({
+      type: "input_image",
+      image_url: part.image_url.url,
+    });
+  }
+
   return parts;
 };
 
@@ -1511,6 +1557,7 @@ class ConfigManager {
     } else {
       for (const provider of Object.values(cfg.configs)) {
         if (typeof provider.stream !== "boolean") provider.stream = false;
+        if (typeof provider.responses !== "boolean") provider.responses = false;
       }
     }
 
@@ -1879,6 +1926,170 @@ const aggregateOpenAIResponses = (
   return { text, images, sources };
 };
 
+const collectResponsesSources = (
+  item: any,
+): Array<{ url: string; title?: string }> => {
+  const sources: Array<{ url: string; title?: string }> = [];
+  const seen = new Set<string>();
+
+  const appendSource = (url?: string, title?: string) => {
+    if (!url || seen.has(url)) return;
+    seen.add(url);
+    sources.push({ url, title });
+  };
+
+  const appendAnnotations = (annotations: any[] | undefined) => {
+    if (!Array.isArray(annotations)) return;
+    for (const entry of annotations) {
+      if (entry?.type !== "url_citation") continue;
+      appendSource(entry?.url, entry?.title);
+    }
+  };
+
+  const appendActionSources = (action: any) => {
+    const sourceList = Array.isArray(action?.sources)
+      ? action.sources
+      : Array.isArray(action)
+        ? action
+        : [];
+    for (const entry of sourceList) {
+      if (typeof entry?.url !== "string") continue;
+      appendSource(entry.url, entry.title);
+    }
+  };
+
+  if (item?.type === "message") {
+    for (const part of item.content || []) {
+      appendAnnotations(part?.annotations);
+    }
+  }
+
+  if (item?.type === "web_search_call") {
+    if (Array.isArray(item?.action)) {
+      for (const action of item.action) appendActionSources(action);
+    } else {
+      appendActionSources(item?.action);
+    }
+  }
+
+  return sources;
+};
+
+const parseResponsesOutputContent = (
+  item: any,
+): {
+  text: string;
+  images: AIImage[];
+  sources: Array<{ url: string; title?: string }>;
+} => {
+  const textSegments: string[] = [];
+  const images: AIImage[] = [];
+  const sources = collectResponsesSources(item);
+
+  if (item?.type !== "message") {
+    return { text: "", images, sources };
+  }
+
+  for (const part of item.content || []) {
+    if (part?.type === "output_text" && typeof part.text === "string") {
+      textSegments.push(part.text);
+      continue;
+    }
+    if (part?.type === "image_url" && part.image_url?.url) {
+      const dataUrl = parseDataUrl(part.image_url.url);
+      if (dataUrl) {
+        images.push({ data: dataUrl.data, mimeType: dataUrl.mimeType });
+      } else {
+        images.push({ url: part.image_url.url, mimeType: "image/jpeg" });
+      }
+    }
+  }
+
+  return {
+    text: textSegments.join("\n").trim(),
+    images,
+    sources,
+  };
+};
+
+const aggregateResponsesApiPayloads = (
+  payloads: any[],
+): {
+  text: string;
+  images: AIImage[];
+  sources: Array<{ url: string; title?: string }>;
+} => {
+  const deltaTexts: string[] = [];
+  let fallbackText = "";
+  let fallbackImages: AIImage[] = [];
+  const sources: Array<{ url: string; title?: string }> = [];
+  const seenSources = new Set<string>();
+
+  const appendSources = (entries: Array<{ url: string; title?: string }>) => {
+    for (const entry of entries) {
+      if (seenSources.has(entry.url)) continue;
+      seenSources.add(entry.url);
+      sources.push(entry);
+    }
+  };
+
+  const appendItem = (item: any) => {
+    const parsed = parseResponsesOutputContent(item);
+    if (parsed.text) fallbackText = parsed.text;
+    if (parsed.images.length > 0) fallbackImages = parsed.images;
+    appendSources(parsed.sources);
+  };
+
+  for (const payload of payloads) {
+    if (
+      payload?.type === "response.output_text.delta" &&
+      typeof payload.delta === "string"
+    ) {
+      deltaTexts.push(payload.delta);
+    }
+
+    if (
+      payload?.type === "response.output_text.done" &&
+      typeof payload.text === "string" &&
+      deltaTexts.length === 0
+    ) {
+      fallbackText = payload.text.trim();
+    }
+
+    if (payload?.type === "response.content_part.done") {
+      appendSources(
+        collectResponsesSources({
+          type: "message",
+          content: [payload.part],
+        }),
+      );
+    }
+
+    if (payload?.item) appendItem(payload.item);
+
+    const response =
+      payload?.response?.object === "response"
+        ? payload.response
+        : payload?.object === "response"
+          ? payload
+          : null;
+    if (!response?.output || !Array.isArray(response.output)) continue;
+
+    for (const item of response.output) {
+      appendItem(item);
+    }
+  }
+
+  return {
+    text:
+      (deltaTexts.length > 0
+        ? deltaTexts.join("").trim()
+        : fallbackText.trim()) || "AI 回复为空",
+    images: fallbackImages,
+    sources,
+  };
+};
+
 const parseOpenAIResponsePayloads = (raw: string): any[] => {
   const payloads: any[] = [];
   let sawDataLine = false;
@@ -1920,12 +2131,26 @@ const parseOpenAIResponseData = async (
     !(data instanceof Uint8Array) &&
     !isAsyncIterable(data)
   ) {
+    if (data?.object === "response") {
+      return aggregateResponsesApiPayloads([data]);
+    }
     return aggregateOpenAIResponses([data]);
   }
 
   const raw = await readResponseBodyAsText(data);
   const payloads = parseOpenAIResponsePayloads(raw);
-  if (payloads.length > 0) return aggregateOpenAIResponses(payloads);
+  if (payloads.length > 0) {
+    const hasResponsesPayload = payloads.some(
+      (payload) =>
+        payload?.object === "response" ||
+        payload?.response?.object === "response" ||
+        (typeof payload?.type === "string" &&
+          payload.type.startsWith("response.")),
+    );
+    return hasResponsesPayload
+      ? aggregateResponsesApiPayloads(payloads)
+      : aggregateOpenAIResponses(payloads);
+  }
 
   return { text: raw.trim() || "AI 回复为空", images: [], sources: [] };
 };
@@ -2448,11 +2673,12 @@ class AIService implements ConfigChangeListener {
     sources: Array<{ url: string; title?: string }>;
     images: AIImage[];
   }> {
-    const baseUrl = resolveBaseUrl(providerConfig, modeConfig);
-    const url = resolveEndpointUrl(
-      baseUrl,
-      modeConfig.endpoint || "chat/completions",
-    );
+    const url = providerConfig.responses
+      ? resolveResponsesEndpointUrl(providerConfig, modeConfig)
+      : resolveEndpointUrl(
+          resolveBaseUrl(providerConfig, modeConfig),
+          modeConfig.endpoint || "chat/completions",
+        );
     const authMode = resolveAuthMode(
       getProviderProfile(providerConfig.url),
       modeConfig,
@@ -2473,45 +2699,63 @@ class AIService implements ConfigChangeListener {
     });
 
     const sys = (systemPrompt || "").trim();
+    let data: any;
 
-    const messages: any[] = [];
-    if (sys) messages.push({ role: "system", content: sys });
-
-    let userContent: any = [];
-    if (question.trim())
-      userContent.push({ type: "text", text: question.trim() });
-
-    for (const img of safeImages) {
-      if (img.type === "image_url") {
-        userContent.push(img);
+    if (providerConfig.responses) {
+      const inputContent = buildResponsesInputContent(question, safeImages);
+      data = {
+        model,
+        input:
+          inputContent.length > 0
+            ? [{ role: "user", content: inputContent }]
+            : question,
+        stream: providerConfig.stream,
+      };
+      if (sys) data.instructions = sys;
+      if (isSearch) {
+        data.tools = [{ type: "web_search" }];
+        data.include = ["web_search_call.action.sources"];
       }
-    }
+    } else {
+      const messages: any[] = [];
+      if (sys) messages.push({ role: "system", content: sys });
 
-    if (userContent.length === 0) userContent = question;
-    else if (userContent.length === 1 && userContent[0].type === "text")
-      userContent = userContent[0].text;
+      let userContent: any = [];
+      if (question.trim())
+        userContent.push({ type: "text", text: question.trim() });
 
-    messages.push({
-      role: "user",
-      content: userContent,
-    });
+      for (const img of safeImages) {
+        if (img.type === "image_url") {
+          userContent.push(img);
+        }
+      }
 
-    const data: any = {
-      model,
-      messages,
-      stream: providerConfig.stream,
-    };
+      if (userContent.length === 0) userContent = question;
+      else if (userContent.length === 1 && userContent[0].type === "text")
+        userContent = userContent[0].text;
 
-    if (isSearch) {
-      data.tools = [
-        {
-          type: "web_search",
-          web_search: {
-            searchContextSize: "high",
+      messages.push({
+        role: "user",
+        content: userContent,
+      });
+
+      data = {
+        model,
+        messages,
+        stream: providerConfig.stream,
+      };
+
+      if (isSearch) {
+        data.tools = [
+          {
+            type: "web_search",
+            web_search: {
+              searchContextSize: "high",
+            },
           },
-        },
-      ];
-      data.web_search_options = { search_context_size: "high" };
+        ];
+        data.web_search_options = { search_context_size: "high" };
+      }
     }
 
     const response = await this.httpClient.request(
@@ -3468,7 +3712,7 @@ class ConfigFeature extends BaseFeatureHandler {
         Object.values(config.configs)
           .map(
             (c) =>
-              `🏷️ <code>${c.tag}</code> - ${c.url}\n🌊 Stream: <code>${c.stream ? "on" : "off"}</code>`,
+              `🏷️ <code>${c.tag}</code> - ${c.url}\n🌊 Stream: <code>${c.stream ? "on" : "off"}</code>\n🧠 Responses(chat/search): <code>${c.responses ? "on" : "off"}</code>`,
           )
           .join("\n") || "暂无配置";
       await this.editMessage(
@@ -3492,6 +3736,11 @@ class ConfigFeature extends BaseFeatureHandler {
     if (action === "stream") {
       requireUser(args.length >= 4, "参数不足");
       await this.setStream(msg, args, configManager);
+      return;
+    }
+    if (action === "responses") {
+      requireUser(args.length >= 4, "参数不足");
+      await this.setResponses(msg, args, configManager);
       return;
     }
     throw new UserError("参数格式错误");
@@ -3523,7 +3772,13 @@ class ConfigFeature extends BaseFeatureHandler {
     requireUser(key.length >= 10, "API 密钥长度过短");
 
     await configManager.updateConfig((cfg) => {
-      cfg.configs[tag] = { tag, url, key, stream: false };
+      cfg.configs[tag] = {
+        tag,
+        url,
+        key,
+        stream: false,
+        responses: false,
+      };
     });
 
     await this.editMessage(
@@ -3532,7 +3787,8 @@ class ConfigFeature extends BaseFeatureHandler {
         `🏷️ 标签: <code>${tag}</code>\n` +
         `🔗 地址: <code>${url}</code>\n` +
         `🔑 密钥: <code>${key}</code>\n` +
-        `🌊 Stream: <code>off</code>`,
+        `🌊 Stream: <code>off</code>\n` +
+        `🧠 Responses(chat/search): <code>off</code>`,
     );
   }
 
@@ -3557,6 +3813,30 @@ class ConfigFeature extends BaseFeatureHandler {
     await this.editMessage(
       msg,
       `✅ 已将配置 <code>${tag}</code> 的 Stream 设置为 <code>${enabled ? "on" : "off"}</code>`,
+    );
+  }
+
+  private async setResponses(
+    msg: Api.Message,
+    args: string[],
+    configManager: ConfigManager,
+  ): Promise<void> {
+    const state = args[args.length - 1]?.toLowerCase();
+    const tag = args.slice(2, -1).join(" ").trim();
+    const config = configManager.getConfig();
+
+    requireUser(!!tag, "参数格式错误");
+    requireUser(state === "on" || state === "off", "参数必须是 on 或 off");
+    requireUser(!!config.configs[tag], "配置不存在");
+
+    const enabled = state === "on";
+    await configManager.updateConfig((cfg) => {
+      cfg.configs[tag].responses = enabled;
+    });
+
+    await this.editMessage(
+      msg,
+      `✅ 已将配置 <code>${tag}</code> 的 Responses(chat/search) 模式设置为 <code>${enabled ? "on" : "off"}</code>`,
     );
   }
 
@@ -4623,9 +4903,10 @@ class AIPlugin extends Plugin {
     const baseDescription = `<b>🤖 智能 AI 助手</b>
 
 <b>⚙️ API 配置:</b>
-• <code>${mainPrefix}ai config add tag&gt; url key</code> - 添加 API 配置
+• <code>${mainPrefix}ai config add tag url key</code> - 添加 API 配置
 • <code>${mainPrefix}ai config del tag</code> - 删除 API 配置
 • <code>${mainPrefix}ai config stream tag on|off</code> - 设置 API 流式传输
+• <code>${mainPrefix}ai config responses tag on|off</code> - 设置 chat/search 的 Responses 模式
 
 <b>🧠 模型设置:</b>
 • <code>${mainPrefix}ai model chat tag model-path</code> - 设置聊天模型
