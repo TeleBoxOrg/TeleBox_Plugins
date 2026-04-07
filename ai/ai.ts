@@ -23,6 +23,7 @@ interface ProviderConfig {
   tag: string;
   url: string;
   key: string;
+  type?: ProviderType;
   stream: boolean;
   responses: boolean;
 }
@@ -108,6 +109,18 @@ type AuthMode = "bearer" | "query-key";
 
 type ProviderMode = "chat" | "search" | "image" | "video";
 
+const PROVIDER_TYPES = [
+  "openai-compatible",
+  "openai",
+  "gemini",
+  "doubao",
+  "moonshot",
+  "local-cliproxy",
+] as const;
+
+type ProviderType = (typeof PROVIDER_TYPES)[number];
+const PROVIDER_TYPE_OPTIONS = PROVIDER_TYPES.join("/");
+
 type ProviderStrategy =
   | "openai-rest"
   | "gemini-rest"
@@ -150,7 +163,7 @@ type ProviderModeConfig = {
 };
 
 type ProviderProfile = {
-  id: string;
+  id: ProviderType;
   authMode?: AuthMode;
   modes: Partial<Record<ProviderMode, ProviderModeConfig>>;
 };
@@ -198,22 +211,46 @@ type StrategyHandler = {
   video?: (ctx: VideoContext) => Promise<AIVideo[]>;
 };
 
-const hosts = (
+const DEFAULT_PROVIDER_TYPE: ProviderType = "openai";
+
+const mapHostsToProviderType = (
   hostList: string[],
-  profile: ProviderProfile,
-): Record<string, ProviderProfile> => {
-  const out: Record<string, ProviderProfile> = {};
+  providerType: ProviderType,
+): Record<string, ProviderType> => {
+  const out: Record<string, ProviderType> = {};
   for (const h of hostList) {
     const host = h.trim();
     if (!host) continue;
-    out[host] = profile;
+    out[host] = providerType;
   }
   return out;
 };
 
-const PROVIDER_PROFILES: Record<string, ProviderProfile> = {
-  "generativelanguage.googleapis.com": {
-    id: "gemini",
+const createProviderProfile = (
+  id: ProviderType,
+  options: Omit<ProviderProfile, "id">,
+): ProviderProfile => ({
+  id,
+  ...options,
+});
+
+const createOpenAIProfile = (
+  id: "openai-compatible" | "openai",
+): ProviderProfile =>
+  createProviderProfile(id, {
+    authMode: "bearer",
+    modes: {
+      chat: { strategy: "openai-rest" },
+      search: { strategy: "openai-rest" },
+      image: { strategy: "openai-rest", supportsEdit: true },
+      video: { strategy: "openai-rest", endpoint: "chat/completions" },
+    },
+  });
+
+const PROVIDER_PROFILES: Record<ProviderType, ProviderProfile> = {
+  "openai-compatible": createOpenAIProfile("openai-compatible"),
+  openai: createOpenAIProfile("openai"),
+  gemini: createProviderProfile("gemini", {
     authMode: "query-key",
     modes: {
       chat: { strategy: "gemini-rest" },
@@ -225,9 +262,8 @@ const PROVIDER_PROFILES: Record<string, ProviderProfile> = {
         endpoint: "v1beta/models/{model}:generateVideos",
       },
     },
-  },
-  "ark.cn-beijing.volces.com": {
-    id: "doubao",
+  }),
+  doubao: createProviderProfile("doubao", {
     authMode: "bearer",
     modes: {
       chat: {
@@ -259,26 +295,14 @@ const PROVIDER_PROFILES: Record<string, ProviderProfile> = {
         },
       },
     },
-  },
-  "api.openai.com": {
-    id: "openai",
-    authMode: "bearer",
-    modes: {
-      chat: { strategy: "openai-rest" },
-      search: { strategy: "openai-rest" },
-      image: { strategy: "openai-rest", supportsEdit: true },
-      video: { strategy: "openai-rest", endpoint: "chat/completions" },
-    },
-  },
-  "api.moonshot.cn": {
-    id: "moonshot",
+  }),
+  moonshot: createProviderProfile("moonshot", {
     authMode: "bearer",
     modes: {
       chat: { strategy: "openai-rest" },
     },
-  },
-  ...hosts(["127.0.0.1", "api.abjj.de"], {
-    id: "local-cliproxy",
+  }),
+  "local-cliproxy": createProviderProfile("local-cliproxy", {
     authMode: "query-key",
     modes: {
       chat: { strategy: "openai-rest", baseUrlType: "openai" },
@@ -311,16 +335,16 @@ const PROVIDER_PROFILES: Record<string, ProviderProfile> = {
   }),
 };
 
-const DEFAULT_PROVIDER_PROFILE: ProviderProfile = {
-  id: "openai-compatible",
-  authMode: "bearer",
-  modes: {
-    chat: { strategy: "openai-rest" },
-    search: { strategy: "openai-rest" },
-    image: { strategy: "openai-rest", supportsEdit: true },
-    video: { strategy: "openai-rest", endpoint: "chat/completions" },
-  },
+const PROVIDER_HOST_TYPES: Record<string, ProviderType> = {
+  "generativelanguage.googleapis.com": "gemini",
+  "ark.cn-beijing.volces.com": "doubao",
+  "api.openai.com": "openai",
+  "api.moonshot.cn": "moonshot",
+  ...mapHostsToProviderType(["127.0.0.1", "api.abjj.de"], "local-cliproxy"),
 };
+
+const DEFAULT_PROVIDER_PROFILE: ProviderProfile =
+  PROVIDER_PROFILES[DEFAULT_PROVIDER_TYPE];
 
 const getProviderHost = (url: string): string | null => {
   try {
@@ -330,10 +354,47 @@ const getProviderHost = (url: string): string | null => {
   }
 };
 
-const getProviderProfile = (url: string): ProviderProfile => {
-  const host = getProviderHost(url);
-  if (!host) return DEFAULT_PROVIDER_PROFILE;
-  return PROVIDER_PROFILES[host] ?? DEFAULT_PROVIDER_PROFILE;
+const isHttpUrl = (url: string): boolean => {
+  try {
+    const u = new URL(url);
+    return u.protocol === "http:" || u.protocol === "https:";
+  } catch {
+    return false;
+  }
+};
+
+const isProviderType = (value: string): value is ProviderType =>
+  (PROVIDER_TYPES as readonly string[]).includes(value);
+
+const normalizeProviderType = (value: unknown): ProviderType | undefined => {
+  if (typeof value !== "string") return undefined;
+  const normalized = value.trim().toLowerCase();
+  return isProviderType(normalized) ? normalized : undefined;
+};
+
+const resolveProviderType = (
+  providerConfig?: Pick<ProviderConfig, "url" | "type"> | null,
+): ProviderType => {
+  const configuredType = normalizeProviderType(providerConfig?.type);
+  if (configuredType) return configuredType;
+  const host = providerConfig?.url ? getProviderHost(providerConfig.url) : null;
+  if (!host) return DEFAULT_PROVIDER_TYPE;
+  return PROVIDER_HOST_TYPES[host] ?? DEFAULT_PROVIDER_TYPE;
+};
+
+const getProviderProfile = (
+  providerConfig?: Pick<ProviderConfig, "url" | "type"> | null,
+): ProviderProfile => PROVIDER_PROFILES[resolveProviderType(providerConfig)];
+
+const isOpenAIProviderType = (providerType: ProviderType): boolean =>
+  providerType === "openai" || providerType === "openai-compatible";
+
+const formatProviderTypeLabel = (
+  providerConfig: Pick<ProviderConfig, "url" | "type">,
+): string => {
+  const configuredType = normalizeProviderType(providerConfig.type);
+  if (configuredType) return configuredType;
+  return `auto -> ${resolveProviderType(providerConfig)}`;
 };
 
 const mergeDefaults = <T extends { extraParams?: Record<string, any> }>(
@@ -1556,6 +1617,7 @@ class ConfigManager {
       cfg.configs = {};
     } else {
       for (const provider of Object.values(cfg.configs)) {
+        provider.type = normalizeProviderType(provider.type);
         if (typeof provider.stream !== "boolean") provider.stream = false;
         if (typeof provider.responses !== "boolean") provider.responses = false;
       }
@@ -1626,8 +1688,7 @@ const resolveAuthMode = (
 ): AuthMode => {
   if (modeConfig.authMode) return modeConfig.authMode;
   if (profile.authMode) return profile.authMode;
-  const host = config ? getProviderHost(config.url) : null;
-  if (host === "generativelanguage.googleapis.com") return "query-key";
+  if (config && resolveProviderType(config) === "gemini") return "query-key";
   return "bearer";
 };
 
@@ -2481,7 +2542,7 @@ class AIService implements ConfigChangeListener {
     mode: ProviderMode,
     model: string,
   ): { profile: ProviderProfile; modeConfig: ProviderModeConfig } {
-    const profile = getProviderProfile(providerConfig.url);
+    const profile = getProviderProfile(providerConfig);
     const modeConfig = resolveModeConfig(profile, mode, model);
     if (!modeConfig) {
       throw new UserError(`当前 ${profile.id} 提供商不支持 ${mode} 模式`);
@@ -2506,8 +2567,7 @@ class AIService implements ConfigChangeListener {
     if (modeConfig.imageDefaults?.extraParams)
       Object.assign(request, modeConfig.imageDefaults.extraParams);
 
-    const host = getProviderHost(providerConfig.url);
-    if (host === "api.openai.com") {
+    if (isOpenAIProviderType(resolveProviderType(providerConfig))) {
       if (!model.startsWith("gpt-") && !model.includes("chatgpt-image")) {
         request.responseFormat = "b64_json";
         request.response_format = "b64_json";
@@ -2680,7 +2740,7 @@ class AIService implements ConfigChangeListener {
           modeConfig.endpoint || "chat/completions",
         );
     const authMode = resolveAuthMode(
-      getProviderProfile(providerConfig.url),
+      getProviderProfile(providerConfig),
       modeConfig,
       providerConfig,
     );
@@ -2798,7 +2858,7 @@ class AIService implements ConfigChangeListener {
     const url = resolveEndpointUrl(baseUrl, endpoint);
 
     const authMode = resolveAuthMode(
-      getProviderProfile(providerConfig.url),
+      getProviderProfile(providerConfig),
       modeConfig,
       providerConfig,
     );
@@ -2907,7 +2967,7 @@ class AIService implements ConfigChangeListener {
 
     const endpoint = modeConfig.endpoint || "api/v3/images/generations";
     const authMode = resolveAuthMode(
-      getProviderProfile(providerConfig.url),
+      getProviderProfile(providerConfig),
       modeConfig,
       providerConfig,
     );
@@ -2943,7 +3003,7 @@ class AIService implements ConfigChangeListener {
     const baseUrl = resolveBaseUrl(providerConfig, modeConfig);
     let endpoint = modeConfig.endpoint || "images/generations";
     const authMode = resolveAuthMode(
-      getProviderProfile(providerConfig.url),
+      getProviderProfile(providerConfig),
       modeConfig,
       providerConfig,
     );
@@ -3062,7 +3122,7 @@ class AIService implements ConfigChangeListener {
       modeConfig.endpoint || "chat/completions",
     );
     const authMode = resolveAuthMode(
-      getProviderProfile(providerConfig.url),
+      getProviderProfile(providerConfig),
       modeConfig,
       providerConfig,
     );
@@ -3176,7 +3236,7 @@ class AIService implements ConfigChangeListener {
       const endpoint = `v1beta/models/${model}:predict`;
       const url = resolveEndpointUrl(baseUrl, endpoint);
       const authMode = resolveAuthMode(
-        getProviderProfile(providerConfig.url),
+        getProviderProfile(providerConfig),
         modeConfig,
         providerConfig,
       );
@@ -3222,7 +3282,7 @@ class AIService implements ConfigChangeListener {
     const url = resolveEndpointUrl(baseUrl, endpoint);
 
     const authMode = resolveAuthMode(
-      getProviderProfile(providerConfig.url),
+      getProviderProfile(providerConfig),
       modeConfig,
       providerConfig,
     );
@@ -3442,7 +3502,7 @@ class AIService implements ConfigChangeListener {
 
     const endpoint = modeConfig.endpoint || "api/v3/contents/generations/tasks";
     const authMode = resolveAuthMode(
-      getProviderProfile(providerConfig.url),
+      getProviderProfile(providerConfig),
       modeConfig,
       providerConfig,
     );
@@ -3712,7 +3772,7 @@ class ConfigFeature extends BaseFeatureHandler {
         Object.values(config.configs)
           .map(
             (c) =>
-              `🏷️ <code>${c.tag}</code> - ${c.url}\n🌊 Stream: <code>${c.stream ? "on" : "off"}</code>\n🧠 Responses(chat/search): <code>${c.responses ? "on" : "off"}</code>`,
+              `🏷️ <code>${c.tag}</code> - ${c.url}\n🧩 Type: <code>${formatProviderTypeLabel(c)}</code>\n🌊 Stream: <code>${c.stream ? "on" : "off"}</code>\n🧠 Responses(chat/search): <code>${c.responses ? "on" : "off"}</code>`,
           )
           .join("\n") || "暂无配置";
       await this.editMessage(
@@ -3743,7 +3803,53 @@ class ConfigFeature extends BaseFeatureHandler {
       await this.setResponses(msg, args, configManager);
       return;
     }
+    if (action === "type") {
+      requireUser(args.length >= 4, "参数不足");
+      await this.setProviderType(msg, args, configManager);
+      return;
+    }
     throw new UserError("参数格式错误");
+  }
+
+  private parseProviderType(value: string): ProviderType {
+    const providerType = normalizeProviderType(value);
+    requireUser(!!providerType, `type 必须是 ${PROVIDER_TYPE_OPTIONS}`);
+    if (!providerType) throw new UserError("无效的 provider type");
+    return providerType;
+  }
+
+  private parseAddConfigArgs(args: string[]): {
+    tag: string;
+    url: string;
+    key: string;
+    type?: ProviderType;
+  } {
+    const rawArgs = args.slice(2);
+    let urlIndex = -1;
+    for (let i = rawArgs.length - 2; i >= 1; i--) {
+      const trailingCount = rawArgs.length - i - 1;
+      if (trailingCount > 2) continue;
+      if (!isHttpUrl(rawArgs[i])) continue;
+      urlIndex = i;
+      break;
+    }
+
+    requireUser(urlIndex > 0, "参数格式错误");
+
+    const tag = rawArgs.slice(0, urlIndex).join(" ").trim();
+    const url = rawArgs[urlIndex];
+    const tail = rawArgs.slice(urlIndex + 1);
+    requireUser(
+      !!tag && (tail.length === 1 || tail.length === 2),
+      "参数格式错误",
+    );
+
+    return {
+      tag,
+      url,
+      key: tail[0],
+      type: tail[1] ? this.parseProviderType(tail[1]) : undefined,
+    };
   }
 
   private async addConfig(
@@ -3755,18 +3861,7 @@ class ConfigFeature extends BaseFeatureHandler {
       !!(msg as any).savedPeerId,
       "出于安全考虑，禁止在公开场景添加/修改 API 密钥",
     );
-    const key = args[args.length - 1];
-    const url = args[args.length - 2];
-    const tag = args.slice(2, -2).join(" ").trim();
-    requireUser(!!tag, "参数格式错误");
-
-    try {
-      const u = new URL(url);
-      if (!["http:", "https:"].includes(u.protocol))
-        throw new Error("bad protocol");
-    } catch {
-      throw new UserError("无效的 URL 格式");
-    }
+    const { tag, url, key, type } = this.parseAddConfigArgs(args);
 
     requireUser(!!key.trim(), "API 密钥不能为空");
     requireUser(key.length >= 10, "API 密钥长度过短");
@@ -3776,6 +3871,7 @@ class ConfigFeature extends BaseFeatureHandler {
         tag,
         url,
         key,
+        type,
         stream: false,
         responses: false,
       };
@@ -3786,6 +3882,7 @@ class ConfigFeature extends BaseFeatureHandler {
       "✅ API 配置已添加:\n\n" +
         `🏷️ 标签: <code>${tag}</code>\n` +
         `🔗 地址: <code>${url}</code>\n` +
+        `🧩 Type: <code>${formatProviderTypeLabel({ url, type })}</code>\n` +
         `🔑 密钥: <code>${key}</code>\n` +
         `🌊 Stream: <code>off</code>\n` +
         `🧠 Responses(chat/search): <code>off</code>`,
@@ -3837,6 +3934,28 @@ class ConfigFeature extends BaseFeatureHandler {
     await this.editMessage(
       msg,
       `✅ 已将配置 <code>${tag}</code> 的 Responses(chat/search) 模式设置为 <code>${enabled ? "on" : "off"}</code>`,
+    );
+  }
+
+  private async setProviderType(
+    msg: Api.Message,
+    args: string[],
+    configManager: ConfigManager,
+  ): Promise<void> {
+    const type = this.parseProviderType(args[args.length - 1] || "");
+    const tag = args.slice(2, -1).join(" ").trim();
+    const config = configManager.getConfig();
+
+    requireUser(!!tag, "参数格式错误");
+    requireUser(!!config.configs[tag], "配置不存在");
+
+    await configManager.updateConfig((cfg) => {
+      cfg.configs[tag].type = type;
+    });
+
+    await this.editMessage(
+      msg,
+      `✅ 已将配置 <code>${tag}</code> 的 Type 设置为 <code>${type}</code>`,
     );
   }
 
@@ -4279,7 +4398,7 @@ class QuestionFeature extends BaseFeatureHandler {
     ) {
       const prefixes = getPrefixes();
       throw new UserError(
-        `请先配置 API 并设置模型\n使用 ${prefixes[0]}ai config add <tag> <url> <key> 和 ${prefixes[0]}ai model chat <tag> <model-path>`,
+        `请先配置 API 并设置模型\n使用 ${prefixes[0]}ai config add <tag> <url> <key> [type] 和 ${prefixes[0]}ai model chat <tag> <model-path>`,
       );
     }
 
@@ -4421,7 +4540,7 @@ class SearchFeature extends BaseFeatureHandler {
       !config.configs[config.currentSearchTag]
     ) {
       throw new UserError(
-        `请先配置 API 并设置模型\n使用 ${prefixes[0]}ai config add <tag> <url> <key> 和 ${prefixes[0]}ai model search <tag> <model-path>`,
+        `请先配置 API 并设置模型\n使用 ${prefixes[0]}ai config add <tag> <url> <key> [type] 和 ${prefixes[0]}ai model search <tag> <model-path>`,
       );
     }
 
@@ -4604,7 +4723,7 @@ class ImageFeature extends BaseFeatureHandler {
       !config.configs[config.currentImageTag]
     ) {
       throw new UserError(
-        `请先配置 API 并设置模型\n使用 ${prefixes[0]}ai config add <tag> <url> <key> 和 ${prefixes[0]}ai model image <tag> <model-path>`,
+        `请先配置 API 并设置模型\n使用 ${prefixes[0]}ai config add <tag> <url> <key> [type] 和 ${prefixes[0]}ai model image <tag> <model-path>`,
       );
     }
 
@@ -4775,7 +4894,7 @@ class VideoFeature extends BaseFeatureHandler {
       !config.configs[config.currentVideoTag]
     ) {
       throw new UserError(
-        `请先配置 API 并设置模型\n使用 ${prefixes[0]}ai config add <tag> <url> <key> 和 ${prefixes[0]}ai model video <tag> <model-path>`,
+        `请先配置 API 并设置模型\n使用 ${prefixes[0]}ai config add <tag> <url> <key> [type] 和 ${prefixes[0]}ai model video <tag> <model-path>`,
       );
     }
 
@@ -4903,10 +5022,12 @@ class AIPlugin extends Plugin {
     const baseDescription = `<b>🤖 智能 AI 助手</b>
 
 <b>⚙️ API 配置:</b>
-• <code>${mainPrefix}ai config add tag url key</code> - 添加 API 配置
+• <code>${mainPrefix}ai config add tag url key [type]</code> - 添加 API 配置
 • <code>${mainPrefix}ai config del tag</code> - 删除 API 配置
+• <code>${mainPrefix}ai config type tag openai-compatible|openai|gemini|doubao|moonshot|local-cliproxy</code> - 设置 API 类型. 若不设置, 自动按 URL 特征自动识别
 • <code>${mainPrefix}ai config stream tag on|off</code> - 设置 API 流式传输
 • <code>${mainPrefix}ai config responses tag on|off</code> - 设置 chat/search 的 Responses 模式
+• <code>type</code> 可选值: <code>${PROVIDER_TYPE_OPTIONS}</code>
 
 <b>🧠 模型设置:</b>
 • <code>${mainPrefix}ai model chat tag model-path</code> - 设置聊天模型
