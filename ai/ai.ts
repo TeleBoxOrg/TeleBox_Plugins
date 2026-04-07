@@ -9,7 +9,11 @@ import { TelegraphFormatter } from "@utils/telegraphFormatter";
 import { execFile } from "child_process";
 import fs from "fs";
 import * as path from "path";
-import axios, { type AxiosInstance, type AxiosRequestConfig, type AxiosResponse } from "axios";
+import axios, {
+  type AxiosInstance,
+  type AxiosRequestConfig,
+  type AxiosResponse,
+} from "axios";
 import sharp from "sharp";
 import http from "http";
 import https from "https";
@@ -19,6 +23,7 @@ interface ProviderConfig {
   tag: string;
   url: string;
   key: string;
+  stream: boolean;
 }
 
 interface TelegraphItem {
@@ -92,7 +97,7 @@ interface Middleware {
   process<T>(
     input: T,
     next: (input: T, token?: AbortToken) => Promise<any>,
-    token?: AbortToken
+    token?: AbortToken,
   ): Promise<any>;
 }
 
@@ -184,14 +189,17 @@ type VideoContext = {
 
 type StrategyHandler = {
   chat?: (ctx: ChatContext) => Promise<{ text: string; images: AIImage[] }>;
-  search?: (ctx: ChatContext) => Promise<{ text: string; sources: Array<{ url: string; title?: string }> }>;
+  search?: (ctx: ChatContext) => Promise<{
+    text: string;
+    sources: Array<{ url: string; title?: string }>;
+  }>;
   image?: (ctx: ImageContext) => Promise<AIImage[]>;
   video?: (ctx: VideoContext) => Promise<AIVideo[]>;
 };
 
 const hosts = (
   hostList: string[],
-  profile: ProviderProfile
+  profile: ProviderProfile,
 ): Record<string, ProviderProfile> => {
   const out: Record<string, ProviderProfile> = {};
   for (const h of hostList) {
@@ -268,37 +276,38 @@ const PROVIDER_PROFILES: Record<string, ProviderProfile> = {
       chat: { strategy: "openai-rest" },
     },
   },
-  ...hosts(
-    ["127.0.0.1", "api.abjj.de"],
-    {
-      id: "local-cliproxy",
-      authMode: "query-key",
-      modes: {
-        chat: { strategy: "openai-rest", baseUrlType: "openai" },
-        search: {
-          strategy: "openai-rest",
-          baseUrlType: "openai",
-          modelRules: [
-            {
-              match: { type: "includes", value: "gemini" },
-              override: {
-                strategy: "gemini-rest",
-                baseUrlType: "gemini"
-              }
-            }
-          ]
-        },
-        image: {
-          strategy: "gemini-image-rest",
-          baseUrlType: "gemini",
-          endpoint: "models/{model}:generateContent",
-          authMode: "query-key",
-          supportsEdit: true,
-        },
-        video: { strategy: "openai-rest", baseUrlType: "openai", endpoint: "chat/completions" },
+  ...hosts(["127.0.0.1", "api.abjj.de"], {
+    id: "local-cliproxy",
+    authMode: "query-key",
+    modes: {
+      chat: { strategy: "openai-rest", baseUrlType: "openai" },
+      search: {
+        strategy: "openai-rest",
+        baseUrlType: "openai",
+        modelRules: [
+          {
+            match: { type: "includes", value: "gemini" },
+            override: {
+              strategy: "gemini-rest",
+              baseUrlType: "gemini",
+            },
+          },
+        ],
+      },
+      image: {
+        strategy: "gemini-image-rest",
+        baseUrlType: "gemini",
+        endpoint: "models/{model}:generateContent",
+        authMode: "query-key",
+        supportsEdit: true,
+      },
+      video: {
+        strategy: "openai-rest",
+        baseUrlType: "openai",
+        endpoint: "chat/completions",
       },
     },
-  ),
+  }),
 };
 
 const DEFAULT_PROVIDER_PROFILE: ProviderProfile = {
@@ -326,7 +335,10 @@ const getProviderProfile = (url: string): ProviderProfile => {
   return PROVIDER_PROFILES[host] ?? DEFAULT_PROVIDER_PROFILE;
 };
 
-const mergeDefaults = <T extends { extraParams?: Record<string, any> }>(a?: T, b?: T): T | undefined => {
+const mergeDefaults = <T extends { extraParams?: Record<string, any> }>(
+  a?: T,
+  b?: T,
+): T | undefined => {
   if (!a && !b) return undefined;
   return {
     ...(a || {}),
@@ -353,7 +365,7 @@ const matchModelRule = (model: string, rule: ModelMatchRule): boolean => {
 const resolveModeConfig = (
   profile: ProviderProfile,
   mode: ProviderMode,
-  model: string
+  model: string,
 ): ProviderModeConfig | undefined => {
   const base = profile.modes[mode];
   if (!base) return undefined;
@@ -364,14 +376,20 @@ const resolveModeConfig = (
   return {
     ...base,
     ...ruleOverrides,
-    imageDefaults: mergeDefaults(base.imageDefaults, ruleOverrides.imageDefaults),
-    videoDefaults: mergeDefaults(base.videoDefaults, ruleOverrides.videoDefaults),
+    imageDefaults: mergeDefaults(
+      base.imageDefaults,
+      ruleOverrides.imageDefaults,
+    ),
+    videoDefaults: mergeDefaults(
+      base.videoDefaults,
+      ruleOverrides.videoDefaults,
+    ),
   };
 };
 
 const resolveBaseUrl = (
   providerConfig: ProviderConfig,
-  modeConfig: ProviderModeConfig
+  modeConfig: ProviderModeConfig,
 ): string => {
   const baseType = modeConfig.baseUrlType ?? "raw";
   if (baseType === "origin") {
@@ -403,7 +421,10 @@ const getMessageText = (m?: Api.Message | null): string => {
 const htmlEscape = (text: string): string =>
   text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 
-const buildUserContent = (text: string, images: AIContentPart[]): string | AIContentPart[] => {
+const buildUserContent = (
+  text: string,
+  images: AIContentPart[],
+): string | AIContentPart[] => {
   if (images.length === 0) return text;
   const parts: AIContentPart[] = [];
   if (text.trim()) parts.push({ type: "text", text });
@@ -423,10 +444,16 @@ const extractErrorMessage = (error: any): string => {
           : "";
 
   if ((msgText + reasonText).includes("请求超时")) return "请求超时";
-  if (error?.name === "AbortError" || msgText.toLowerCase().includes("aborted")) return "操作已取消";
+  if (error?.name === "AbortError" || msgText.toLowerCase().includes("aborted"))
+    return "操作已取消";
   if (error?.code === "ECONNABORTED") return "请求超时";
   if (error?.response?.status === 429) return "请求过于频繁，请稍后重试";
-  return error?.response?.data?.error?.message || error?.response?.data?.message || msgText || "未知错误";
+  return (
+    error?.response?.data?.error?.message ||
+    error?.response?.data?.message ||
+    msgText ||
+    "未知错误"
+  );
 };
 
 class UserError extends Error {
@@ -443,17 +470,18 @@ const requireUser = (condition: any, message: string): void => {
 type ProcessingKind = "chat" | "search" | "image" | "video";
 
 const PROCESSING_TEXT: Record<ProcessingKind, string> = {
-  chat: "💬 <b>正在处理chat任务</b>",
-  search: "🔎 <b>正在处理search任务</b>",
-  image: "🖼️ <b>正在处理image任务</b>",
-  video: "🎬 <b>正在处理video任务</b>",
+  chat: "💬 <b>正在处理 chat 任务</b>",
+  search: "🔎 <b>正在处理 search 任务</b>",
+  image: "🖼️ <b>正在处理 image 任务</b>",
+  video: "🎬 <b>正在处理 video 任务</b>",
 };
 
 const formatErrorForDisplay = (error: any): string => {
   if (
     error instanceof UserError ||
     error?.name === "AbortError" ||
-    (typeof error?.message === "string" && error.message.toLowerCase().includes("aborted"))
+    (typeof error?.message === "string" &&
+      error.message.toLowerCase().includes("aborted"))
   ) {
     const extracted = extractErrorMessage(error);
     if (extracted === "请求超时") return `❌ <b>错误:</b> 请求超时`;
@@ -463,21 +491,36 @@ const formatErrorForDisplay = (error: any): string => {
   return `❌ <b>错误:</b> ${extractErrorMessage(error)}`;
 };
 
-const sendProcessing = async (msg: Api.Message, kind: ProcessingKind): Promise<void> => {
-  await MessageSender.sendOrEdit(msg, PROCESSING_TEXT[kind], { parseMode: "html" });
+const sendProcessing = async (
+  msg: Api.Message,
+  kind: ProcessingKind,
+): Promise<void> => {
+  await MessageSender.sendOrEdit(msg, PROCESSING_TEXT[kind], {
+    parseMode: "html",
+  });
 };
 
-const sendErrorMessage = async (msg: Api.Message, error: any, trigger?: Api.Message): Promise<void> => {
-  await MessageSender.sendOrEdit(trigger || msg, formatErrorForDisplay(error), { parseMode: "html" });
+const sendErrorMessage = async (
+  msg: Api.Message,
+  error: any,
+  trigger?: Api.Message,
+): Promise<void> => {
+  await MessageSender.sendOrEdit(trigger || msg, formatErrorForDisplay(error), {
+    parseMode: "html",
+  });
 };
 
-const parseDataUrl = (url: string): { mimeType: string; data: Buffer } | null => {
+const parseDataUrl = (
+  url: string,
+): { mimeType: string; data: Buffer } | null => {
   const match = url.match(/^data:([^;]+);base64,(.+)$/);
   if (!match) return null;
   return { mimeType: match[1], data: Buffer.from(match[2], "base64") };
 };
 
-const normalizeDownloadedMedia = async (downloaded: any): Promise<Buffer | null> => {
+const normalizeDownloadedMedia = async (
+  downloaded: any,
+): Promise<Buffer | null> => {
   if (!downloaded) return null;
   if (Buffer.isBuffer(downloaded)) return downloaded;
   if (typeof downloaded === "string" && downloaded.length > 0) {
@@ -517,7 +560,7 @@ const resolveImageInputs = async (
   parts: AIContentPart[],
   httpClient: HttpClient,
   token?: AbortToken,
-  options?: { allowFailures?: boolean }
+  options?: { allowFailures?: boolean },
 ): Promise<ResolvedImageData[]> => {
   const resolved: ResolvedImageData[] = [];
   const allowFailures = options?.allowFailures ?? false;
@@ -530,7 +573,11 @@ const resolveImageInputs = async (
       continue;
     }
     try {
-      const image = await resolveAIImageData({ url: part.image_url.url, mimeType: "image/jpeg" }, httpClient, token);
+      const image = await resolveAIImageData(
+        { url: part.image_url.url, mimeType: "image/jpeg" },
+        httpClient,
+        token,
+      );
       if (image?.data) {
         resolved.push({ data: image.data, mimeType: image.mimeType });
         if (!allowFailures) break;
@@ -545,14 +592,19 @@ const resolveImageInputs = async (
 const resolveImagePart = async (
   parts: AIContentPart[],
   httpClient: HttpClient,
-  token?: AbortToken
+  token?: AbortToken,
 ): Promise<AIImage | null> => {
-  const resolved = await resolveImageInputs(parts, httpClient, token, { allowFailures: false });
+  const resolved = await resolveImageInputs(parts, httpClient, token, {
+    allowFailures: false,
+  });
   if (!resolved.length) return null;
   return { data: resolved[0].data, mimeType: resolved[0].mimeType };
 };
 
-const collectImagePartsFromSingleMessage = async (msg: Api.Message, out: AIContentPart[]): Promise<void> => {
+const collectImagePartsFromSingleMessage = async (
+  msg: Api.Message,
+  out: AIContentPart[],
+): Promise<void> => {
   if (!msg.media || !msg.client) return;
 
   if (msg.media instanceof Api.MessageMediaPhoto) {
@@ -564,7 +616,10 @@ const collectImagePartsFromSingleMessage = async (msg: Api.Message, out: AIConte
     return;
   }
 
-  if (msg.media instanceof Api.MessageMediaDocument && msg.media.document instanceof Api.Document) {
+  if (
+    msg.media instanceof Api.MessageMediaDocument &&
+    msg.media.document instanceof Api.Document
+  ) {
     const doc = msg.media.document;
     const docMime = doc.mimeType || "";
     const isAnimated =
@@ -572,7 +627,9 @@ const collectImagePartsFromSingleMessage = async (msg: Api.Message, out: AIConte
       docMime === "video/webm" ||
       docMime === "application/x-tgsticker" ||
       docMime === "application/x-tg-sticker" ||
-      doc.attributes?.some((attr) => attr instanceof Api.DocumentAttributeAnimated);
+      doc.attributes?.some(
+        (attr) => attr instanceof Api.DocumentAttributeAnimated,
+      );
 
     const thumb = getDocumentThumb(doc);
 
@@ -618,7 +675,9 @@ const collectImagePartsFromSingleMessage = async (msg: Api.Message, out: AIConte
   }
 };
 
-const getMessageImageParts = async (msg?: Api.Message): Promise<AIContentPart[]> => {
+const getMessageImageParts = async (
+  msg?: Api.Message,
+): Promise<AIContentPart[]> => {
   if (!msg?.client) return [];
 
   const parts: AIContentPart[] = [];
@@ -687,13 +746,13 @@ const deleteMessageOrGroup = async (msg: Api.Message): Promise<void> => {
       return;
     }
     await msg.delete();
-  } catch { }
+  } catch {}
 };
 
 const resolveAIImageData = async (
   image: AIImage,
   httpClient: HttpClient,
-  token?: AbortToken
+  token?: AbortToken,
 ): Promise<AIImage | null> => {
   if (image.data) return image;
   if (!image.url) return null;
@@ -703,9 +762,12 @@ const resolveAIImageData = async (
       method: "GET",
       responseType: "arraybuffer",
     },
-    token
+    token,
   );
-  const contentType = response.headers?.["content-type"]?.split(";")[0] || image.mimeType || "image/jpeg";
+  const contentType =
+    response.headers?.["content-type"]?.split(";")[0] ||
+    image.mimeType ||
+    "image/jpeg";
   return { data: Buffer.from(response.data), mimeType: contentType };
 };
 
@@ -718,7 +780,7 @@ const getVideoExtensionForMime = (mimeType: string): string => {
 const resolveAIVideoData = async (
   video: AIVideo,
   httpClient: HttpClient,
-  token?: AbortToken
+  token?: AbortToken,
 ): Promise<AIVideo | null> => {
   if (video.data) return video;
   if (!video.url) return null;
@@ -728,9 +790,12 @@ const resolveAIVideoData = async (
       method: "GET",
       responseType: "arraybuffer",
     },
-    token
+    token,
   );
-  const contentType = response.headers?.["content-type"]?.split(";")[0] || video.mimeType || "video/mp4";
+  const contentType =
+    response.headers?.["content-type"]?.split(";")[0] ||
+    video.mimeType ||
+    "video/mp4";
   return { data: Buffer.from(response.data), mimeType: contentType };
 };
 
@@ -755,7 +820,10 @@ const videoHasAudioTrack = async (filePath: string): Promise<boolean> => {
   }
 };
 
-const ensureVideoHasAudio = async (inputPath: string, outputPath: string): Promise<string> => {
+const ensureVideoHasAudio = async (
+  inputPath: string,
+  outputPath: string,
+): Promise<string> => {
   try {
     const hasAudio = await videoHasAudioTrack(inputPath);
     if (hasAudio) {
@@ -803,7 +871,9 @@ const createAbortToken = (): AbortToken => {
     },
     throwIfAborted() {
       if (controller.signal.aborted) {
-        throw new UserError(controller.signal.reason?.toString() || "操作已取消");
+        throw new UserError(
+          controller.signal.reason?.toString() || "操作已取消",
+        );
       }
     },
   };
@@ -830,7 +900,8 @@ const sleep = (ms: number, token?: AbortToken): Promise<void> => {
       cleanup();
       reject(new UserError(token?.reason?.toString() || "操作已取消"));
     };
-    if (token?.signal) token.signal.addEventListener("abort", abortHandler, { once: true });
+    if (token?.signal)
+      token.signal.addEventListener("abort", abortHandler, { once: true });
   });
 };
 
@@ -838,7 +909,7 @@ const retryWithFixedDelay = async <T>(
   operation: () => Promise<T>,
   maxRetries: number = 2,
   delayMs: number = 1000,
-  token?: AbortToken
+  token?: AbortToken,
 ): Promise<T> => {
   let lastError: any;
   for (let i = 0; i < maxRetries; i++) {
@@ -859,7 +930,11 @@ const retryWithFixedDelay = async <T>(
 const isRetryableError = (error: any): boolean => {
   if (!error) return false;
   if (error.name === "AbortError") return false;
-  if (typeof error.message === "string" && error.message.toLowerCase().includes("aborted")) return false;
+  if (
+    typeof error.message === "string" &&
+    error.message.toLowerCase().includes("aborted")
+  )
+    return false;
 
   const status = error.response?.status;
   if (typeof status === "number") {
@@ -894,7 +969,7 @@ const pollTask = async <T>(
   fetchJob: TaskFetchFn,
   parseResult: TaskParseFn<T>,
   options: TaskPollOptions = {},
-  token?: AbortToken
+  token?: AbortToken,
 ): Promise<T> => {
   const maxAttempts = options.maxAttempts ?? 303;
   const intervalMs = options.intervalMs ?? 2000;
@@ -902,7 +977,12 @@ const pollTask = async <T>(
   for (let i = 0; i < maxAttempts; i++) {
     token?.throwIfAborted();
 
-    const data = await retryWithFixedDelay(() => fetchJob(token), 2, 1000, token);
+    const data = await retryWithFixedDelay(
+      () => fetchJob(token),
+      2,
+      1000,
+      token,
+    );
     const result = parseResult(data);
 
     if (result.status === "failed") {
@@ -927,14 +1007,39 @@ interface MessageOptions {
   linkPreview?: boolean;
 }
 
+const getEditErrorText = (error: any): string => {
+  const parts = [
+    typeof error?.errorMessage === "string" ? error.errorMessage : "",
+    typeof error?.message === "string" ? error.message : "",
+  ].filter(Boolean);
+  return parts.join(" ");
+};
+
+const isMessageNotModifiedError = (error: any): boolean =>
+  getEditErrorText(error).includes("MESSAGE_NOT_MODIFIED");
+
+const shouldFallbackToReplyOnEditError = (error: any): boolean => {
+  const text = getEditErrorText(error);
+  return (
+    text.includes("MESSAGE_ID_INVALID") ||
+    text.includes("MESSAGE_AUTHOR_REQUIRED")
+  );
+};
+
 class MessageSender {
-  static async sendOrEdit(msg: Api.Message, text: string, options?: MessageOptions): Promise<Api.Message> {
+  static async sendOrEdit(
+    msg: Api.Message,
+    text: string,
+    options?: MessageOptions,
+  ): Promise<Api.Message> {
     try {
       const edited = await msg.edit({ text, ...options });
       if (edited) return edited;
     } catch (error: any) {
-      const msgText = typeof error?.message === "string" ? error.message : "";
-      if (msgText.includes("MESSAGE_ID_INVALID") || msgText.includes("400")) {
+      if (isMessageNotModifiedError(error)) {
+        return msg;
+      }
+      if (shouldFallbackToReplyOnEditError(error)) {
         const replied = await msg.reply({ message: text, ...options });
         if (replied) return replied;
       }
@@ -950,7 +1055,7 @@ class MessageSender {
     msg: Api.Message,
     text: string,
     options?: MessageOptions,
-    replyToId?: number
+    replyToId?: number,
   ): Promise<Api.Message> {
     if (!msg.client) {
       throw new Error("客户端未初始化");
@@ -969,18 +1074,26 @@ class MessageUtils {
   private httpClient: HttpClient;
   private telegraphTokenPromise: Promise<string> | null = null;
 
-  constructor(configManagerPromise: Promise<ConfigManager>, httpClient: HttpClient) {
+  constructor(
+    configManagerPromise: Promise<ConfigManager>,
+    httpClient: HttpClient,
+  ) {
     this.configManagerPromise = configManagerPromise;
     this.httpClient = httpClient;
   }
 
-  async createTelegraphPage(markdown: string, titleSource?: string, token?: AbortToken): Promise<TelegraphItem> {
+  async createTelegraphPage(
+    markdown: string,
+    titleSource?: string,
+    token?: AbortToken,
+  ): Promise<TelegraphItem> {
     const configManager = await this.configManagerPromise;
     const config = configManager.getConfig();
 
     const tgToken = await this.ensureTGToken(config, token);
     const rawTitle = (titleSource || "").replace(/\s+/g, " ").trim();
-    const shortTitle = rawTitle.length > 24 ? `${rawTitle.slice(0, 24)}…` : rawTitle;
+    const shortTitle =
+      rawTitle.length > 24 ? `${rawTitle.slice(0, 24)}…` : rawTitle;
     const title = shortTitle || `Telegraph - ${new Date().toLocaleString()}`;
     const nodes = TelegraphFormatter.toNodes(markdown);
 
@@ -995,11 +1108,11 @@ class MessageUtils {
           return_content: false,
         },
       },
-      token
+      token,
     );
 
     const url = response.data?.result?.url;
-    if (!url) throw new Error(response.data?.error || "Telegraph页面创建失败");
+    if (!url) throw new Error(response.data?.error || "Telegraph 页面创建失败");
 
     return { url, title, createdAt: new Date().toISOString() };
   }
@@ -1009,7 +1122,7 @@ class MessageUtils {
     text: string,
     replyToId?: number,
     token?: AbortToken,
-    options?: { poweredByTag?: string }
+    options?: { poweredByTag?: string },
   ): Promise<Api.Message> {
     token?.throwIfAborted();
 
@@ -1017,7 +1130,9 @@ class MessageUtils {
     const config = configManager.getConfig();
 
     const poweredByTag = (options?.poweredByTag ?? config.currentChatTag) || "";
-    const poweredByText = poweredByTag ? `\n<i>🍀Powered by ${poweredByTag}</i>` : "";
+    const poweredByText = poweredByTag
+      ? `\n<i>🍀Powered by ${poweredByTag}</i>`
+      : "";
 
     if (text.length <= 4050) {
       token?.throwIfAborted();
@@ -1027,21 +1142,27 @@ class MessageUtils {
         const questionPart = parts[0];
         const answerPart = parts[1];
         const cleanAnswer = answerPart.replace(/^A:\n/, "");
-        const cleanQuestion = questionPart.replace(/^Q:\n/, "").replace(/\n\n$/, "");
+        const cleanQuestion = questionPart
+          .replace(/^Q:\n/, "")
+          .replace(/\n\n$/, "");
         const questionBlock = `Q:\n${this.wrapHtmlWithCollapseIfNeeded(cleanQuestion, config.collapse)}\n`;
         const answerBlock = `A:\n${this.wrapHtmlWithCollapseIfNeeded(cleanAnswer, config.collapse)}`;
         const finalText = questionBlock + answerBlock + poweredByText;
 
         return await this.sendHtml(msg, finalText, replyToId, false);
       }
-      const finalText = this.wrapHtmlWithCollapseIfNeeded(text, config.collapse) + poweredByText;
+      const finalText =
+        this.wrapHtmlWithCollapseIfNeeded(text, config.collapse) +
+        poweredByText;
       return await this.sendHtml(msg, finalText, replyToId, false);
     }
 
     const qa = text.match(/Q:\n([\s\S]+?)\n\nA:\n([\s\S]+)/);
     if (!qa) {
       token?.throwIfAborted();
-      const finalText = this.wrapHtmlWithCollapseIfNeeded(text, config.collapse) + poweredByText;
+      const finalText =
+        this.wrapHtmlWithCollapseIfNeeded(text, config.collapse) +
+        poweredByText;
       return await this.sendHtml(msg, finalText, replyToId, false);
     }
 
@@ -1068,7 +1189,11 @@ class MessageUtils {
       `Q:\n${this.wrapHtmlWithCollapseIfNeeded(question, config.collapse)}\n` +
       `A:\n${this.wrapHtmlWithCollapseIfNeeded(chunks[0], config.collapse)}`;
 
-    const firstMessage = await this.sendHtml(msg, firstMessageContent, replyToId);
+    const firstMessage = await this.sendHtml(
+      msg,
+      firstMessageContent,
+      replyToId,
+    );
 
     for (let idx = 1; idx < chunks.length; idx++) {
       if (token?.aborted) break;
@@ -1076,7 +1201,10 @@ class MessageUtils {
       if (token?.aborted) break;
 
       const isLast = idx === chunks.length - 1;
-      const wrapped = this.wrapHtmlWithCollapseIfNeeded(chunks[idx], config.collapse);
+      const wrapped = this.wrapHtmlWithCollapseIfNeeded(
+        chunks[idx],
+        config.collapse,
+      );
       const prefix = `📋 <b>续 (${idx}/${chunks.length - 1}):</b>\n\n`;
       const finalMessage = prefix + wrapped + (isLast ? poweredByText : "");
 
@@ -1091,7 +1219,7 @@ class MessageUtils {
     images: AIImage[],
     prompt: string,
     replyToId?: number,
-    token?: AbortToken
+    token?: AbortToken,
   ): Promise<void> {
     const config = (await this.configManagerPromise).getConfig();
     await this.sendMedia(msg, images, prompt, replyToId, token, {
@@ -1101,7 +1229,8 @@ class MessageUtils {
       directory: "ai_images",
       filePrefix: "ai",
       getExtension: getImageExtensionForMime,
-      resolve: (image, mediaToken) => resolveAIImageData(image, this.httpClient, mediaToken),
+      resolve: (image, mediaToken) =>
+        resolveAIImageData(image, this.httpClient, mediaToken),
     });
   }
 
@@ -1110,7 +1239,7 @@ class MessageUtils {
     videos: AIVideo[],
     prompt: string,
     replyToId?: number,
-    token?: AbortToken
+    token?: AbortToken,
   ): Promise<void> {
     const config = (await this.configManagerPromise).getConfig();
     await this.sendMedia(msg, videos, prompt, replyToId, token, {
@@ -1121,8 +1250,10 @@ class MessageUtils {
       filePrefix: "ai_video",
       rawFilePrefix: "ai_video_raw",
       getExtension: getVideoExtensionForMime,
-      resolve: (video, mediaToken) => resolveAIVideoData(video, this.httpClient, mediaToken),
-      prepareForSend: (rawPath, finalPath) => ensureVideoHasAudio(rawPath, finalPath),
+      resolve: (video, mediaToken) =>
+        resolveAIVideoData(video, this.httpClient, mediaToken),
+      prepareForSend: (rawPath, finalPath) =>
+        ensureVideoHasAudio(rawPath, finalPath),
     });
   }
 
@@ -1140,15 +1271,20 @@ class MessageUtils {
       filePrefix: string;
       rawFilePrefix?: string;
       getExtension: (mimeType: string) => string;
-      resolve: (item: T, mediaToken?: AbortToken) => Promise<{ data?: Buffer; mimeType: string } | null>;
+      resolve: (
+        item: T,
+        mediaToken?: AbortToken,
+      ) => Promise<{ data?: Buffer; mimeType: string } | null>;
       prepareForSend?: (rawPath: string, finalPath: string) => Promise<string>;
-    }
+    },
   ): Promise<void> {
     if (!mediaItems.length) return;
 
     const peerId = msg.chatId || msg.peerId;
     const promptText = htmlEscape(prompt);
-    const promptBlock = options.collapse ? `<blockquote expandable>${promptText}</blockquote>` : promptText;
+    const promptBlock = options.collapse
+      ? `<blockquote expandable>${promptText}</blockquote>`
+      : promptText;
     const poweredByText = `\n<i>🍀Powered by ${options.poweredByTag}</i>`;
     const caption = promptBlock + poweredByText;
     const mediaDir = createDirectoryInAssets(options.directory);
@@ -1186,9 +1322,11 @@ class MessageUtils {
           replyTo: replyToId,
         });
       } finally {
-        const cleanupTargets = options.prepareForSend ? [rawPath, finalPath] : [rawPath];
+        const cleanupTargets = options.prepareForSend
+          ? [rawPath, finalPath]
+          : [rawPath];
         for (const p of cleanupTargets) {
-          fs.unlink(p, () => { });
+          fs.unlink(p, () => {});
         }
       }
     }
@@ -1205,11 +1343,11 @@ class MessageUtils {
           method: "POST",
           data: { short_name: "TeleBoxAI", author_name: "TeleBox" },
         },
-        token
+        token,
       );
 
       const tgToken = response.data?.result?.access_token;
-      if (!tgToken) throw new Error("Telegraph账户创建失败");
+      if (!tgToken) throw new Error("Telegraph 账户创建失败");
 
       const configManager = await this.configManagerPromise;
       await configManager.updateConfig((cfg) => {
@@ -1226,7 +1364,10 @@ class MessageUtils {
     }
   }
 
-  private wrapHtmlWithCollapseIfNeeded(html: string, collapse: boolean): string {
+  private wrapHtmlWithCollapseIfNeeded(
+    html: string,
+    collapse: boolean,
+  ): string {
     return collapse ? `<blockquote expandable>${html}</blockquote>` : html;
   }
 
@@ -1234,13 +1375,16 @@ class MessageUtils {
     msg: Api.Message,
     html: string,
     replyToId?: number,
-    linkPreview?: boolean
+    linkPreview?: boolean,
   ): Promise<Api.Message> {
     return await MessageSender.sendNew(
       msg,
       html,
-      { parseMode: "html", ...(linkPreview === undefined ? {} : { linkPreview }) },
-      replyToId
+      {
+        parseMode: "html",
+        ...(linkPreview === undefined ? {} : { linkPreview }),
+      },
+      replyToId,
     );
   }
 }
@@ -1328,7 +1472,8 @@ class ConfigManager {
       const oldSnapshot: DB = JSON.parse(JSON.stringify(this.currentConfig));
       updater(this.currentConfig);
 
-      const hasChanged = JSON.stringify(oldSnapshot) !== JSON.stringify(this.currentConfig);
+      const hasChanged =
+        JSON.stringify(oldSnapshot) !== JSON.stringify(this.currentConfig);
 
       if (!hasChanged) {
         return;
@@ -1361,48 +1506,76 @@ class ConfigManager {
   private ensureDefaults(): void {
     const cfg = this.currentConfig;
 
-    if (!cfg.currentSearchTag && cfg.currentChatTag) cfg.currentSearchTag = cfg.currentChatTag;
-    if (!cfg.currentSearchModel && cfg.currentChatModel) cfg.currentSearchModel = cfg.currentChatModel;
-    if (!cfg.currentImageTag && cfg.currentChatTag) cfg.currentImageTag = cfg.currentChatTag;
-    if (!cfg.currentImageModel && cfg.currentChatModel) cfg.currentImageModel = cfg.currentChatModel;
-    if (!cfg.currentVideoTag && cfg.currentChatTag) cfg.currentVideoTag = cfg.currentChatTag;
-    if (!cfg.currentVideoModel && cfg.currentChatModel) cfg.currentVideoModel = cfg.currentChatModel;
+    if (!cfg.configs || typeof cfg.configs !== "object") {
+      cfg.configs = {};
+    } else {
+      for (const provider of Object.values(cfg.configs)) {
+        if (typeof provider.stream !== "boolean") provider.stream = false;
+      }
+    }
+
+    if (!cfg.currentSearchTag && cfg.currentChatTag)
+      cfg.currentSearchTag = cfg.currentChatTag;
+    if (!cfg.currentSearchModel && cfg.currentChatModel)
+      cfg.currentSearchModel = cfg.currentChatModel;
+    if (!cfg.currentImageTag && cfg.currentChatTag)
+      cfg.currentImageTag = cfg.currentChatTag;
+    if (!cfg.currentImageModel && cfg.currentChatModel)
+      cfg.currentImageModel = cfg.currentChatModel;
+    if (!cfg.currentVideoTag && cfg.currentChatTag)
+      cfg.currentVideoTag = cfg.currentChatTag;
+    if (!cfg.currentVideoModel && cfg.currentChatModel)
+      cfg.currentVideoModel = cfg.currentChatModel;
 
     if (typeof cfg.imagePreview !== "boolean") cfg.imagePreview = true;
     if (typeof cfg.videoPreview !== "boolean") cfg.videoPreview = true;
     if (typeof cfg.videoAudio !== "boolean") cfg.videoAudio = false;
-    if (typeof cfg.videoDuration !== "number" || !Number.isFinite(cfg.videoDuration)) cfg.videoDuration = 5;
+    if (
+      typeof cfg.videoDuration !== "number" ||
+      !Number.isFinite(cfg.videoDuration)
+    )
+      cfg.videoDuration = 5;
     if (cfg.videoDuration < 5 || cfg.videoDuration > 20) cfg.videoDuration = 5;
     if (typeof cfg.collapse !== "boolean") cfg.collapse = true;
-    if (typeof cfg.timeout !== "number" || !Number.isFinite(cfg.timeout) || cfg.timeout <= 0) {
+    if (
+      typeof cfg.timeout !== "number" ||
+      !Number.isFinite(cfg.timeout) ||
+      cfg.timeout <= 0
+    ) {
       cfg.timeout = 30;
     }
 
     if (!cfg.telegraph || typeof cfg.telegraph !== "object") {
       cfg.telegraph = { enabled: false, limit: 5, list: [] };
     } else {
-      if (typeof cfg.telegraph.enabled !== "boolean") cfg.telegraph.enabled = false;
-      if (typeof cfg.telegraph.limit !== "number" || cfg.telegraph.limit <= 0) cfg.telegraph.limit = 5;
+      if (typeof cfg.telegraph.enabled !== "boolean")
+        cfg.telegraph.enabled = false;
+      if (typeof cfg.telegraph.limit !== "number" || cfg.telegraph.limit <= 0)
+        cfg.telegraph.limit = 5;
       if (!Array.isArray(cfg.telegraph.list)) {
         cfg.telegraph.list = [];
       } else {
         cfg.telegraph.list = cfg.telegraph.list.filter(
           (item): item is TelegraphItem =>
-            !!item && typeof item.url === "string" && typeof item.title === "string" && typeof item.createdAt === "string"
+            !!item &&
+            typeof item.url === "string" &&
+            typeof item.title === "string" &&
+            typeof item.createdAt === "string",
         );
       }
     }
   }
 
   private async notifyListeners(newConfig: DB): Promise<void> {
-    for (const listener of this.listeners) await listener.onConfigChanged(newConfig);
+    for (const listener of this.listeners)
+      await listener.onConfigChanged(newConfig);
   }
 }
 
 const resolveAuthMode = (
   profile: ProviderProfile,
   modeConfig: ProviderModeConfig,
-  config?: ProviderConfig
+  config?: ProviderConfig,
 ): AuthMode => {
   if (modeConfig.authMode) return modeConfig.authMode;
   if (profile.authMode) return profile.authMode;
@@ -1415,7 +1588,7 @@ const applyAuthConfig = (
   authMode: AuthMode,
   config: ProviderConfig,
   url: string,
-  headers: Record<string, string>
+  headers: Record<string, string>,
 ): { url: string; headers: Record<string, string> } => {
   if (authMode === "query-key") {
     try {
@@ -1502,30 +1675,48 @@ const normalizeGeminiBaseUrl = (url: string): string => {
   }
 };
 
-const parseOpenAIChatResponse = (data: any): { text: string; images: AIImage[] } => {
-  const message = data?.choices?.[0]?.message;
-  if (!message) return { text: "AI回复为空", images: [] };
+const parseOpenAIChatResponse = (
+  data: any,
+): { text: string; images: AIImage[] } => {
+  const parseContent = (content: any): { text: string; images: AIImage[] } => {
+    if (typeof content === "string") {
+      return { text: content || "AI 回复为空", images: [] };
+    }
 
-  if (typeof message.content === "string") {
-    return { text: message.content || "AI回复为空", images: [] };
-  }
+    const parts = Array.isArray(content)
+      ? content
+      : content && typeof content === "object"
+        ? [content]
+        : [];
 
-  if (Array.isArray(message.content)) {
+    if (parts.length === 0) return { text: "AI 回复为空", images: [] };
+
     const textSegments: string[] = [];
     const images: AIImage[] = [];
-    for (const part of message.content as AIContentPart[]) {
-      if (part.type === "text") textSegments.push(part.text);
-      if (part.type === "image_url") {
+    for (const part of parts) {
+      if (
+        (part.type === "text" || part.type === "output_text") &&
+        typeof part.text === "string"
+      ) {
+        textSegments.push(part.text);
+      }
+      if (part.type === "image_url" && part.image_url?.url) {
         const dataUrl = parseDataUrl(part.image_url.url);
-        if (dataUrl) images.push({ data: dataUrl.data, mimeType: dataUrl.mimeType });
+        if (dataUrl)
+          images.push({ data: dataUrl.data, mimeType: dataUrl.mimeType });
         else images.push({ url: part.image_url.url, mimeType: "image/jpeg" });
       }
     }
-    const text = textSegments.join("\n").trim();
-    return { text, images };
-  }
 
-  return { text: "AI回复为空", images: [] };
+    return {
+      text: textSegments.join("\n").trim() || "AI 回复为空",
+      images,
+    };
+  };
+
+  const message = data?.choices?.[0]?.message;
+  if (!message) return { text: "AI 回复为空", images: [] };
+  return parseContent(message.content);
 };
 
 const parseOpenAIStyleImageResponse = (data: any): AIImage[] => {
@@ -1533,12 +1724,210 @@ const parseOpenAIStyleImageResponse = (data: any): AIImage[] => {
   const list = data?.data || [];
   for (const item of list) {
     if (item?.b64_json) {
-      images.push({ data: Buffer.from(item.b64_json, "base64"), mimeType: "image/png" });
+      images.push({
+        data: Buffer.from(item.b64_json, "base64"),
+        mimeType: "image/png",
+      });
     } else if (item?.url) {
       images.push({ url: item.url, mimeType: "image/png" });
     }
   }
   return images;
+};
+
+const isAsyncIterable = (value: any): value is AsyncIterable<any> =>
+  !!value && typeof value[Symbol.asyncIterator] === "function";
+
+const readResponseBodyAsText = async (data: any): Promise<string> => {
+  if (typeof data === "string") return data;
+  if (Buffer.isBuffer(data)) return data.toString("utf8");
+  if (data instanceof Uint8Array) return Buffer.from(data).toString("utf8");
+  if (!isAsyncIterable(data)) return "";
+
+  let body = "";
+  for await (const chunk of data) {
+    if (typeof chunk === "string") {
+      body += chunk;
+    } else if (Buffer.isBuffer(chunk)) {
+      body += chunk.toString("utf8");
+    } else if (chunk instanceof Uint8Array) {
+      body += Buffer.from(chunk).toString("utf8");
+    } else if (chunk !== undefined && chunk !== null) {
+      body += String(chunk);
+    }
+  }
+
+  return body;
+};
+
+const collectOpenAISources = (
+  data: any,
+): Array<{ url: string; title?: string }> => {
+  const sources: Array<{ url: string; title?: string }> = [];
+  const seen = new Set<string>();
+
+  const appendEntries = (entries: any[] | undefined, isAnnotation = false) => {
+    if (!Array.isArray(entries)) return;
+    for (const entry of entries) {
+      const url = isAnnotation
+        ? entry?.url_citation?.url || entry?.url
+        : entry?.url;
+      const title = isAnnotation
+        ? entry?.url_citation?.title || entry?.title
+        : entry?.title;
+      if (!url || seen.has(url)) continue;
+      seen.add(url);
+      sources.push({ url, title });
+    }
+  };
+
+  const choice = data?.choices?.[0];
+
+  appendEntries(data?.citations);
+  appendEntries(choice?.citations);
+  appendEntries(choice?.message?.citations);
+  appendEntries(choice?.delta?.citations);
+
+  appendEntries(
+    (data?.annotations || []).filter(
+      (entry: any) => entry?.type === "url_citation" || entry?.url_citation,
+    ),
+    true,
+  );
+  appendEntries(
+    (choice?.message?.annotations || []).filter(
+      (entry: any) => entry?.type === "url_citation" || entry?.url_citation,
+    ),
+    true,
+  );
+  appendEntries(
+    (choice?.delta?.annotations || []).filter(
+      (entry: any) => entry?.type === "url_citation" || entry?.url_citation,
+    ),
+    true,
+  );
+
+  return sources;
+};
+
+const aggregateOpenAIResponses = (
+  payloads: any[],
+): {
+  text: string;
+  images: AIImage[];
+  sources: Array<{ url: string; title?: string }>;
+} => {
+  const deltaTexts: string[] = [];
+  const deltaImages: AIImage[] = [];
+  let fallbackText = "";
+  let fallbackImages: AIImage[] = [];
+  const sources: Array<{ url: string; title?: string }> = [];
+  const seenSources = new Set<string>();
+
+  const appendSources = (entries: Array<{ url: string; title?: string }>) => {
+    for (const entry of entries) {
+      if (seenSources.has(entry.url)) continue;
+      seenSources.add(entry.url);
+      sources.push(entry);
+    }
+  };
+
+  for (const payload of payloads) {
+    const choice = payload?.choices?.[0];
+
+    if (choice?.delta?.content !== undefined) {
+      const parsedDelta = parseOpenAIChatResponse({
+        choices: [{ message: { content: choice.delta.content } }],
+      });
+      if (parsedDelta.text && parsedDelta.text !== "AI 回复为空") {
+        deltaTexts.push(parsedDelta.text);
+      }
+      if (parsedDelta.images.length > 0) {
+        deltaImages.push(...parsedDelta.images);
+      }
+    }
+
+    const fallbackContent =
+      choice?.message?.content ?? choice?.content ?? payload?.content;
+    if (fallbackContent !== undefined) {
+      const parsedFallback = parseOpenAIChatResponse({
+        choices: [{ message: { content: fallbackContent } }],
+      });
+      if (parsedFallback.text && parsedFallback.text !== "AI 回复为空") {
+        fallbackText = parsedFallback.text;
+      }
+      if (parsedFallback.images.length > 0) {
+        fallbackImages = parsedFallback.images;
+      }
+    } else if (typeof choice?.text === "string" && choice.text.trim()) {
+      fallbackText = choice.text.trim();
+      fallbackImages = [];
+    } else if (typeof payload?.text === "string" && payload.text.trim()) {
+      fallbackText = payload.text.trim();
+      fallbackImages = [];
+    }
+
+    appendSources(collectOpenAISources(payload));
+  }
+
+  const text =
+    (deltaTexts.length > 0
+      ? deltaTexts.join("").trim()
+      : fallbackText.trim()) || "AI 回复为空";
+  const images = deltaImages.length > 0 ? deltaImages : fallbackImages;
+
+  return { text, images, sources };
+};
+
+const parseOpenAIResponsePayloads = (raw: string): any[] => {
+  const payloads: any[] = [];
+  let sawDataLine = false;
+
+  for (const line of raw.split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (!trimmed.startsWith("data:")) continue;
+    sawDataLine = true;
+
+    const body = trimmed.slice(5).trim();
+    if (!body || body === "[DONE]") continue;
+
+    try {
+      payloads.push(JSON.parse(body));
+    } catch {}
+  }
+
+  if (payloads.length > 0 || sawDataLine) return payloads;
+
+  try {
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : [parsed];
+  } catch {
+    return [];
+  }
+};
+
+const parseOpenAIResponseData = async (
+  data: any,
+): Promise<{
+  text: string;
+  images: AIImage[];
+  sources: Array<{ url: string; title?: string }>;
+}> => {
+  if (
+    data &&
+    typeof data === "object" &&
+    !Buffer.isBuffer(data) &&
+    !(data instanceof Uint8Array) &&
+    !isAsyncIterable(data)
+  ) {
+    return aggregateOpenAIResponses([data]);
+  }
+
+  const raw = await readResponseBodyAsText(data);
+  const payloads = parseOpenAIResponsePayloads(raw);
+  if (payloads.length > 0) return aggregateOpenAIResponses(payloads);
+
+  return { text: raw.trim() || "AI 回复为空", images: [], sources: [] };
 };
 
 const buildDoubaoVideoUrl = (data: any): string | null => {
@@ -1553,19 +1942,32 @@ const buildDoubaoVideoUrl = (data: any): string | null => {
   );
 };
 
-const buildGeminiVideoApiUrl = (baseUrl: string, model: string, key: string, endpoint?: string): string => {
+const buildGeminiVideoApiUrl = (
+  baseUrl: string,
+  model: string,
+  key: string,
+  endpoint?: string,
+): string => {
   const urlObj = new URL(baseUrl);
   const finalModel = model || "veo-2.0-generate-001";
   const endpointTemplate = endpoint || "v1beta/models/{model}:generateVideos";
-  urlObj.pathname = endpointTemplate.replace("{model}", finalModel).replace(/^\/+/, "/");
+  urlObj.pathname = endpointTemplate
+    .replace("{model}", finalModel)
+    .replace(/^\/+/, "/");
   urlObj.searchParams.set("key", key);
   return urlObj.toString();
 };
 
-const buildGeminiOperationUrl = (baseOrigin: string, name: string, key: string): string => {
+const buildGeminiOperationUrl = (
+  baseOrigin: string,
+  name: string,
+  key: string,
+): string => {
   const urlObj = new URL(baseOrigin);
   const cleanName = name.replace(/^\/+/, "");
-  const path = cleanName.startsWith("v1beta/") ? cleanName : `v1beta/${cleanName}`;
+  const path = cleanName.startsWith("v1beta/")
+    ? cleanName
+    : `v1beta/${cleanName}`;
   urlObj.pathname = `/${path}`;
   urlObj.searchParams.set("key", key);
   return urlObj.toString();
@@ -1584,7 +1986,9 @@ const extractGeminiOperationError = (data: any): string => {
   return "视频生成失败";
 };
 
-const extractGeminiVideoResult = (data: any): { uri?: string; bytes?: string } | null => {
+const extractGeminiVideoResult = (
+  data: any,
+): { uri?: string; bytes?: string } | null => {
   const response = data?.response ?? data?.data?.response ?? data;
   const sampleUri =
     response?.generateVideoResponse?.generatedSamples?.[0]?.video?.uri ||
@@ -1605,12 +2009,14 @@ const buildGeminiParts = async (
   prompt: string,
   images: AIContentPart[],
   httpClient: HttpClient,
-  token?: AbortToken
+  token?: AbortToken,
 ): Promise<Array<Record<string, any>>> => {
   const parts: Array<Record<string, any>> = [];
   if (prompt.trim()) parts.push({ text: prompt });
 
-  const resolvedImages = await resolveImageInputs(images, httpClient, token, { allowFailures: true });
+  const resolvedImages = await resolveImageInputs(images, httpClient, token, {
+    allowFailures: true,
+  });
   for (const image of resolvedImages) {
     parts.push({
       inlineData: {
@@ -1645,12 +2051,21 @@ class MiddlewarePipeline {
   async execute<T>(
     input: T,
     finalHandler: (input: T, token?: AbortToken) => Promise<any>,
-    token?: AbortToken
+    token?: AbortToken,
   ): Promise<any> {
-    const exec = async (idx: number, curInput: T, curToken?: AbortToken): Promise<any> => {
-      if (idx >= this.middlewares.length) return await finalHandler(curInput, curToken);
+    const exec = async (
+      idx: number,
+      curInput: T,
+      curToken?: AbortToken,
+    ): Promise<any> => {
+      if (idx >= this.middlewares.length)
+        return await finalHandler(curInput, curToken);
       const mw = this.middlewares[idx];
-      return await mw.process(curInput, (nextInput, nextToken) => exec(idx + 1, nextInput, nextToken), curToken);
+      return await mw.process(
+        curInput,
+        (nextInput, nextToken) => exec(idx + 1, nextInput, nextToken),
+        curToken,
+      );
     };
     return await exec(0, input, token);
   }
@@ -1666,38 +2081,55 @@ class TimeoutMiddleware implements Middleware {
   async process<T>(
     input: T,
     next: (input: T, token?: AbortToken) => Promise<any>,
-    token?: AbortToken
+    token?: AbortToken,
   ): Promise<any> {
     const config = (await this.configManagerPromise).getConfig();
     const timeoutMs = config.timeout * 1000;
 
     const timeoutController = new AbortController();
-    const timeoutId = setTimeout(() => timeoutController.abort(`请求超时: ${timeoutMs}ms`), timeoutMs);
+    const timeoutId = setTimeout(
+      () => timeoutController.abort(`请求超时: ${timeoutMs}ms`),
+      timeoutMs,
+    );
 
     try {
       const combined = this.combine(timeoutController, token);
-      combined.signal.addEventListener("abort", () => clearTimeout(timeoutId), { once: true });
+      combined.signal.addEventListener("abort", () => clearTimeout(timeoutId), {
+        once: true,
+      });
       return await next(input, combined);
     } finally {
       clearTimeout(timeoutId);
     }
   }
 
-  private combine(timeoutController: AbortController, externalToken?: AbortToken): AbortToken {
+  private combine(
+    timeoutController: AbortController,
+    externalToken?: AbortToken,
+  ): AbortToken {
     const controller = new AbortController();
 
-    if (timeoutController.signal.aborted) controller.abort(timeoutController.signal.reason);
+    if (timeoutController.signal.aborted)
+      controller.abort(timeoutController.signal.reason);
     else
-      timeoutController.signal.addEventListener("abort", () => controller.abort(timeoutController.signal.reason), {
-        once: true,
-      });
+      timeoutController.signal.addEventListener(
+        "abort",
+        () => controller.abort(timeoutController.signal.reason),
+        {
+          once: true,
+        },
+      );
 
     if (externalToken) {
       if (externalToken.aborted) controller.abort(externalToken.reason);
       else
-        externalToken.signal.addEventListener("abort", () => controller.abort(externalToken.reason), {
-          once: true,
-        });
+        externalToken.signal.addEventListener(
+          "abort",
+          () => controller.abort(externalToken.reason),
+          {
+            once: true,
+          },
+        );
     }
 
     return {
@@ -1715,7 +2147,9 @@ class TimeoutMiddleware implements Middleware {
       },
       throwIfAborted() {
         if (controller.signal.aborted) {
-          throw new UserError(controller.signal.reason?.toString() || "操作已取消");
+          throw new UserError(
+            controller.signal.reason?.toString() || "操作已取消",
+          );
         }
       },
     };
@@ -1737,7 +2171,10 @@ class HttpClient {
     this.middlewarePipeline.use(new TimeoutMiddleware(configManagerPromise));
   }
 
-  async request<T = any>(requestConfig: AxiosRequestConfig, token?: AbortToken): Promise<AxiosResponse<T>> {
+  async request<T = any>(
+    requestConfig: AxiosRequestConfig,
+    token?: AbortToken,
+  ): Promise<AxiosResponse<T>> {
     return await this.middlewarePipeline.execute(
       requestConfig,
       async (config: AxiosRequestConfig, pipelineToken?: AbortToken) => {
@@ -1747,7 +2184,7 @@ class HttpClient {
         };
         return await this.axiosInstance(finalConfig);
       },
-      token
+      token,
     );
   }
 }
@@ -1759,7 +2196,10 @@ class AIService implements ConfigChangeListener {
   private httpClient: HttpClient;
   private strategyHandlers: Record<ProviderStrategy, StrategyHandler>;
 
-  constructor(configManagerPromise: Promise<ConfigManager>, httpClient: HttpClient) {
+  constructor(
+    configManagerPromise: Promise<ConfigManager>,
+    httpClient: HttpClient,
+  ) {
     this.configManagerPromise = configManagerPromise;
     this.httpClient = httpClient;
     this.strategyHandlers = this.createStrategyHandlers();
@@ -1778,10 +2218,10 @@ class AIService implements ConfigChangeListener {
     return this.configManager;
   }
 
-  async onConfigChanged(_config: DB): Promise<void> { }
+  async onConfigChanged(_config: DB): Promise<void> {}
 
   private async getCurrentProviderConfig(
-    type: "chat" | "search" | "image" | "video"
+    type: "chat" | "search" | "image" | "video",
   ): Promise<{ providerConfig: ProviderConfig; model: string; config: DB }> {
     const configManager = await this.getConfigManager();
     const config = configManager.getConfig();
@@ -1805,7 +2245,7 @@ class AIService implements ConfigChangeListener {
             : config.currentVideoModel;
 
     if (!tag || !model || !config.configs[tag]) {
-      throw new UserError("请先配置API并设置模型");
+      throw new UserError("请先配置 API 并设置模型");
     }
 
     return { providerConfig: config.configs[tag], model, config };
@@ -1814,12 +2254,12 @@ class AIService implements ConfigChangeListener {
   private resolveMode(
     providerConfig: ProviderConfig,
     mode: ProviderMode,
-    model: string
+    model: string,
   ): { profile: ProviderProfile; modeConfig: ProviderModeConfig } {
     const profile = getProviderProfile(providerConfig.url);
     const modeConfig = resolveModeConfig(profile, mode, model);
     if (!modeConfig) {
-      throw new UserError(`当前${profile.id}提供商不支持${mode}模式`);
+      throw new UserError(`当前 ${profile.id} 提供商不支持 ${mode} 模式`);
     }
     return { profile, modeConfig };
   }
@@ -1828,15 +2268,18 @@ class AIService implements ConfigChangeListener {
     request: Record<string, any>,
     providerConfig: ProviderConfig,
     model: string,
-    modeConfig: ProviderModeConfig
+    modeConfig: ProviderModeConfig,
   ): void {
-    if (modeConfig.imageDefaults?.size) request.size = modeConfig.imageDefaults.size;
-    if (modeConfig.imageDefaults?.quality) request.quality = modeConfig.imageDefaults.quality;
+    if (modeConfig.imageDefaults?.size)
+      request.size = modeConfig.imageDefaults.size;
+    if (modeConfig.imageDefaults?.quality)
+      request.quality = modeConfig.imageDefaults.quality;
     if (modeConfig.imageDefaults?.responseFormat) {
       request.responseFormat = modeConfig.imageDefaults.responseFormat;
       request.response_format = modeConfig.imageDefaults.responseFormat;
     }
-    if (modeConfig.imageDefaults?.extraParams) Object.assign(request, modeConfig.imageDefaults.extraParams);
+    if (modeConfig.imageDefaults?.extraParams)
+      Object.assign(request, modeConfig.imageDefaults.extraParams);
 
     const host = getProviderHost(providerConfig.url);
     if (host === "api.openai.com") {
@@ -1853,12 +2296,16 @@ class AIService implements ConfigChangeListener {
     }
   }
 
-  private applyVideoDefaults(request: Record<string, any>, modeConfig: ProviderModeConfig): void {
+  private applyVideoDefaults(
+    request: Record<string, any>,
+    modeConfig: ProviderModeConfig,
+  ): void {
     if (modeConfig.videoDefaults?.responseFormat) {
       request.responseFormat = modeConfig.videoDefaults.responseFormat;
       request.response_format = modeConfig.videoDefaults.responseFormat;
     }
-    if (modeConfig.videoDefaults?.extraParams) Object.assign(request, modeConfig.videoDefaults.extraParams);
+    if (modeConfig.videoDefaults?.extraParams)
+      Object.assign(request, modeConfig.videoDefaults.extraParams);
   }
 
   private createStrategyHandlers(): Record<ProviderStrategy, StrategyHandler> {
@@ -1872,7 +2319,7 @@ class AIService implements ConfigChangeListener {
             ctx.images,
             ctx.modeConfig,
             ctx.config.prompt || "",
-            ctx.token
+            ctx.token,
           ),
         search: async (ctx) =>
           this.callOpenAIChatOrSearch(
@@ -1883,7 +2330,7 @@ class AIService implements ConfigChangeListener {
             ctx.modeConfig,
             ctx.config.prompt || "",
             ctx.token,
-            true
+            true,
           ),
         image: async (ctx) =>
           this.generateImageWithOpenAIRest(
@@ -1892,7 +2339,7 @@ class AIService implements ConfigChangeListener {
             ctx.prompt,
             ctx.image,
             ctx.modeConfig,
-            ctx.token
+            ctx.token,
           ),
         video: async (ctx) =>
           this.generateVideoWithOpenAIRest(
@@ -1902,7 +2349,7 @@ class AIService implements ConfigChangeListener {
             ctx.images,
             ctx.imageMode,
             ctx.modeConfig,
-            ctx.token
+            ctx.token,
           ),
       },
       "gemini-rest": {
@@ -1914,7 +2361,7 @@ class AIService implements ConfigChangeListener {
             ctx.images,
             ctx.modeConfig,
             ctx.config.prompt || "",
-            ctx.token
+            ctx.token,
           ),
         search: async (ctx) =>
           this.callGeminiChatOrSearch(
@@ -1925,7 +2372,7 @@ class AIService implements ConfigChangeListener {
             ctx.modeConfig,
             ctx.config.prompt || "",
             ctx.token,
-            true
+            true,
           ),
         image: async (ctx) =>
           this.generateGeminiImageRest(
@@ -1934,7 +2381,7 @@ class AIService implements ConfigChangeListener {
             ctx.prompt,
             ctx.modeConfig,
             ctx.image,
-            ctx.token
+            ctx.token,
           ),
       },
       "doubao-rest": {
@@ -1945,7 +2392,7 @@ class AIService implements ConfigChangeListener {
             ctx.prompt,
             ctx.image,
             ctx.modeConfig,
-            ctx.token
+            ctx.token,
           ),
         video: async (ctx) =>
           this.generateVideoWithDoubao(
@@ -1957,7 +2404,7 @@ class AIService implements ConfigChangeListener {
             ctx.config.videoAudio,
             ctx.config.videoDuration,
             ctx.modeConfig,
-            ctx.token
+            ctx.token,
           ),
       },
       "gemini-image-rest": {
@@ -1968,7 +2415,7 @@ class AIService implements ConfigChangeListener {
             ctx.prompt,
             ctx.modeConfig,
             ctx.image,
-            ctx.token
+            ctx.token,
           ),
       },
       "gemini-video-rest": {
@@ -1981,7 +2428,7 @@ class AIService implements ConfigChangeListener {
             ctx.config.videoAudio,
             ctx.config.videoDuration,
             ctx.modeConfig,
-            ctx.token
+            ctx.token,
           ),
       },
     };
@@ -1995,19 +2442,35 @@ class AIService implements ConfigChangeListener {
     modeConfig: ProviderModeConfig,
     systemPrompt: string,
     token?: AbortToken,
-    isSearch = false
-  ): Promise<{ text: string; sources: Array<{ url: string; title?: string }>; images: AIImage[] }> {
+    isSearch = false,
+  ): Promise<{
+    text: string;
+    sources: Array<{ url: string; title?: string }>;
+    images: AIImage[];
+  }> {
     const baseUrl = resolveBaseUrl(providerConfig, modeConfig);
-    const url = resolveEndpointUrl(baseUrl, modeConfig.endpoint || "chat/completions");
-    const authMode = resolveAuthMode(getProviderProfile(providerConfig.url), modeConfig, providerConfig);
+    const url = resolveEndpointUrl(
+      baseUrl,
+      modeConfig.endpoint || "chat/completions",
+    );
+    const authMode = resolveAuthMode(
+      getProviderProfile(providerConfig.url),
+      modeConfig,
+      providerConfig,
+    );
 
     const imageUrlPolicy = modeConfig.imageUrlPolicy ?? "any";
     const safeImages =
       imageUrlPolicy === "data-only"
-        ? images.filter((part) => part.type === "image_url" && !!parseDataUrl(part.image_url.url))
+        ? images.filter(
+            (part) =>
+              part.type === "image_url" && !!parseDataUrl(part.image_url.url),
+          )
         : images;
 
-    const authConfig = applyAuthConfig(authMode, providerConfig, url, { "Content-Type": "application/json" });
+    const authConfig = applyAuthConfig(authMode, providerConfig, url, {
+      "Content-Type": "application/json",
+    });
 
     const sys = (systemPrompt || "").trim();
 
@@ -2015,7 +2478,8 @@ class AIService implements ConfigChangeListener {
     if (sys) messages.push({ role: "system", content: sys });
 
     let userContent: any = [];
-    if (question.trim()) userContent.push({ type: "text", text: question.trim() });
+    if (question.trim())
+      userContent.push({ type: "text", text: question.trim() });
 
     for (const img of safeImages) {
       if (img.type === "image_url") {
@@ -2024,7 +2488,8 @@ class AIService implements ConfigChangeListener {
     }
 
     if (userContent.length === 0) userContent = question;
-    else if (userContent.length === 1 && userContent[0].type === "text") userContent = userContent[0].text;
+    else if (userContent.length === 1 && userContent[0].type === "text")
+      userContent = userContent[0].text;
 
     messages.push({
       role: "user",
@@ -2034,7 +2499,7 @@ class AIService implements ConfigChangeListener {
     const data: any = {
       model,
       messages,
-      stream: false,
+      stream: providerConfig.stream,
     };
 
     if (isSearch) {
@@ -2042,9 +2507,9 @@ class AIService implements ConfigChangeListener {
         {
           type: "web_search",
           web_search: {
-            searchContextSize: "high"
-          }
-        }
+            searchContextSize: "high",
+          },
+        },
       ];
       data.web_search_options = { search_context_size: "high" };
     }
@@ -2055,31 +2520,17 @@ class AIService implements ConfigChangeListener {
         method: "POST",
         headers: authConfig.headers,
         data,
+        ...(providerConfig.stream ? { responseType: "stream" } : {}),
       },
-      token
+      token,
     );
 
-    const parsed = parseOpenAIChatResponse(response.data);
-
-    let sources: Array<{ url: string; title?: string }> = [];
-    if (isSearch) {
-      const msg = response.data?.choices?.[0]?.message;
-      if (msg?.annotations) {
-        sources = msg.annotations
-          .filter((a: any) => a.type === "url_citation" || a.url_citation)
-          .map((a: any) => ({
-            url: a.url_citation?.url || a.url,
-            title: a.url_citation?.title || a.title
-          }))
-          .filter((a: any) => !!a.url);
-      } else if (msg?.citations) {
-        sources = msg.citations.map((c: any) => ({ url: c.url, title: c.title })).filter((c: any) => !!c.url);
-      } else if (response.data?.citations) {
-        sources = response.data.citations.map((c: any) => ({ url: c.url, title: c.title })).filter((c: any) => !!c.url);
-      }
-    }
-
-    return { text: parsed.text, images: parsed.images, sources };
+    const parsed = await parseOpenAIResponseData(response.data);
+    return {
+      text: parsed.text,
+      images: parsed.images,
+      sources: isSearch ? parsed.sources : [],
+    };
   }
 
   private async callGeminiChatOrSearch(
@@ -2090,25 +2541,42 @@ class AIService implements ConfigChangeListener {
     modeConfig: ProviderModeConfig,
     systemPrompt: string,
     token?: AbortToken,
-    isSearch = false
-  ): Promise<{ text: string; sources: Array<{ url: string; title?: string }>; images: AIImage[] }> {
+    isSearch = false,
+  ): Promise<{
+    text: string;
+    sources: Array<{ url: string; title?: string }>;
+    images: AIImage[];
+  }> {
     const baseUrl = resolveBaseUrl(providerConfig, modeConfig);
-    const endpoint = (modeConfig.endpoint || "models/{model}:generateContent").replace("{model}", model);
+    const endpoint = (
+      modeConfig.endpoint || "models/{model}:generateContent"
+    ).replace("{model}", model);
     const url = resolveEndpointUrl(baseUrl, endpoint);
 
-    const authMode = resolveAuthMode(getProviderProfile(providerConfig.url), modeConfig, providerConfig);
-    const authConfig = applyAuthConfig(authMode, providerConfig, url, { "Content-Type": "application/json" });
+    const authMode = resolveAuthMode(
+      getProviderProfile(providerConfig.url),
+      modeConfig,
+      providerConfig,
+    );
+    const authConfig = applyAuthConfig(authMode, providerConfig, url, {
+      "Content-Type": "application/json",
+    });
 
-    const parts = await buildGeminiParts(question, images, this.httpClient, token);
+    const parts = await buildGeminiParts(
+      question,
+      images,
+      this.httpClient,
+      token,
+    );
 
     const data: any = {
-      contents: [{ role: "user", parts }]
+      contents: [{ role: "user", parts }],
     };
 
     if (systemPrompt?.trim()) {
       data.systemInstruction = {
         role: "system",
-        parts: [{ text: systemPrompt.trim() }]
+        parts: [{ text: systemPrompt.trim() }],
       };
     }
 
@@ -2123,10 +2591,11 @@ class AIService implements ConfigChangeListener {
         headers: authConfig.headers,
         data,
       },
-      token
+      token,
     );
 
-    const root = response.data?.response ?? response.data?.data ?? response.data;
+    const root =
+      response.data?.response ?? response.data?.data ?? response.data;
     const candidate = root?.candidates?.[0];
     const cparts = candidate?.content?.parts ?? [];
 
@@ -2146,8 +2615,12 @@ class AIService implements ConfigChangeListener {
 
     let sources: Array<{ url: string; title?: string }> = [];
     if (isSearch) {
-      const groundingMetadata = candidate?.groundingMetadata || candidate?.grounding_metadata;
-      const groundingChunks = groundingMetadata?.groundingChunks || groundingMetadata?.grounding_chunks || [];
+      const groundingMetadata =
+        candidate?.groundingMetadata || candidate?.grounding_metadata;
+      const groundingChunks =
+        groundingMetadata?.groundingChunks ||
+        groundingMetadata?.grounding_chunks ||
+        [];
       for (const chunk of groundingChunks) {
         const web = chunk.web || chunk.web_chunk;
         if (web?.uri) {
@@ -2156,7 +2629,11 @@ class AIService implements ConfigChangeListener {
       }
     }
 
-    return { text: text.trim() || "AI回复为空", images: extractedImages, sources };
+    return {
+      text: text.trim() || "AI 回复为空",
+      images: extractedImages,
+      sources,
+    };
   }
 
   private async generateImageWithDoubao(
@@ -2165,7 +2642,7 @@ class AIService implements ConfigChangeListener {
     prompt: string,
     image: AIImage | undefined,
     modeConfig: ProviderModeConfig,
-    token?: AbortToken
+    token?: AbortToken,
   ): Promise<AIImage[]> {
     const baseUrl = resolveBaseUrl(providerConfig, modeConfig);
 
@@ -2177,15 +2654,27 @@ class AIService implements ConfigChangeListener {
       if (!image.data) throw new Error("无法解析图片数据");
       data.image = `data:${image.mimeType};base64,${image.data.toString("base64")}`;
     }
-    if (modeConfig.imageDefaults?.size) data.size = modeConfig.imageDefaults.size;
-    if (modeConfig.imageDefaults?.responseFormat) data.response_format = modeConfig.imageDefaults.responseFormat;
-    if (modeConfig.imageDefaults?.extraParams) Object.assign(data, modeConfig.imageDefaults.extraParams);
+    if (modeConfig.imageDefaults?.size)
+      data.size = modeConfig.imageDefaults.size;
+    if (modeConfig.imageDefaults?.responseFormat)
+      data.response_format = modeConfig.imageDefaults.responseFormat;
+    if (modeConfig.imageDefaults?.extraParams)
+      Object.assign(data, modeConfig.imageDefaults.extraParams);
 
     const endpoint = modeConfig.endpoint || "api/v3/images/generations";
-    const authMode = resolveAuthMode(getProviderProfile(providerConfig.url), modeConfig, providerConfig);
-    const authConfig = applyAuthConfig(authMode, providerConfig, resolveEndpointUrl(baseUrl, endpoint), {
-      "Content-Type": "application/json",
-    });
+    const authMode = resolveAuthMode(
+      getProviderProfile(providerConfig.url),
+      modeConfig,
+      providerConfig,
+    );
+    const authConfig = applyAuthConfig(
+      authMode,
+      providerConfig,
+      resolveEndpointUrl(baseUrl, endpoint),
+      {
+        "Content-Type": "application/json",
+      },
+    );
     const response = await this.httpClient.request(
       {
         url: authConfig.url,
@@ -2193,7 +2682,7 @@ class AIService implements ConfigChangeListener {
         headers: authConfig.headers,
         data,
       },
-      token
+      token,
     );
 
     return parseOpenAIStyleImageResponse(response.data);
@@ -2205,11 +2694,15 @@ class AIService implements ConfigChangeListener {
     prompt: string,
     image: AIImage | undefined,
     modeConfig: ProviderModeConfig,
-    token?: AbortToken
+    token?: AbortToken,
   ): Promise<AIImage[]> {
     const baseUrl = resolveBaseUrl(providerConfig, modeConfig);
     let endpoint = modeConfig.endpoint || "images/generations";
-    const authMode = resolveAuthMode(getProviderProfile(providerConfig.url), modeConfig, providerConfig);
+    const authMode = resolveAuthMode(
+      getProviderProfile(providerConfig.url),
+      modeConfig,
+      providerConfig,
+    );
 
     const requestModel = model;
 
@@ -2218,8 +2711,12 @@ class AIService implements ConfigChangeListener {
 
     if (image && image.data) {
       const dataUri = `data:${image.mimeType};base64,${image.data.toString("base64")}`;
-      
-      if (model.includes("gpt-image") || model.includes("chatgpt-image") || model.includes("dall-e")) {
+
+      if (
+        model.includes("gpt-image") ||
+        model.includes("chatgpt-image") ||
+        model.includes("dall-e")
+      ) {
         endpoint = modeConfig.endpoint || "images/edits";
         data = {
           model: requestModel,
@@ -2238,22 +2735,38 @@ class AIService implements ConfigChangeListener {
           model: requestModel,
           prompt,
         };
-        this.applyImageDefaults(fields, providerConfig, requestModel, modeConfig);
+        this.applyImageDefaults(
+          fields,
+          providerConfig,
+          requestModel,
+          modeConfig,
+        );
 
-        const boundary = "----WebKitFormBoundary" + Math.random().toString(36).substring(2);
+        const boundary =
+          "----WebKitFormBoundary" + Math.random().toString(36).substring(2);
         const chunks: Buffer[] = [];
 
         for (const [key, value] of Object.entries(fields)) {
           if (value !== undefined && value !== null) {
             chunks.push(Buffer.from(`--${boundary}\r\n`));
-            chunks.push(Buffer.from(`Content-Disposition: form-data; name="${key}"\r\n\r\n`));
+            chunks.push(
+              Buffer.from(
+                `Content-Disposition: form-data; name="${key}"\r\n\r\n`,
+              ),
+            );
             chunks.push(Buffer.from(`${value}\r\n`));
           }
         }
 
         chunks.push(Buffer.from(`--${boundary}\r\n`));
-        chunks.push(Buffer.from(`Content-Disposition: form-data; name="image"; filename="image.png"\r\n`));
-        chunks.push(Buffer.from(`Content-Type: ${image.mimeType || "image/png"}\r\n\r\n`));
+        chunks.push(
+          Buffer.from(
+            `Content-Disposition: form-data; name="image"; filename="image.png"\r\n`,
+          ),
+        );
+        chunks.push(
+          Buffer.from(`Content-Type: ${image.mimeType || "image/png"}\r\n\r\n`),
+        );
         chunks.push(image.data);
         chunks.push(Buffer.from(`\r\n--${boundary}--\r\n`));
 
@@ -2270,7 +2783,12 @@ class AIService implements ConfigChangeListener {
       headers["Content-Type"] = "application/json";
     }
 
-    const authConfig = applyAuthConfig(authMode, providerConfig, resolveEndpointUrl(baseUrl, endpoint), headers);
+    const authConfig = applyAuthConfig(
+      authMode,
+      providerConfig,
+      resolveEndpointUrl(baseUrl, endpoint),
+      headers,
+    );
 
     const response = await this.httpClient.request(
       {
@@ -2279,7 +2797,7 @@ class AIService implements ConfigChangeListener {
         headers: authConfig.headers,
         data,
       },
-      token
+      token,
     );
 
     return parseOpenAIStyleImageResponse(response.data);
@@ -2292,20 +2810,31 @@ class AIService implements ConfigChangeListener {
     images: AIContentPart[],
     imageMode: VideoImageMode,
     modeConfig: ProviderModeConfig,
-    token?: AbortToken
+    token?: AbortToken,
   ): Promise<AIVideo[]> {
     const baseUrl = resolveBaseUrl(providerConfig, modeConfig);
-    const url = resolveEndpointUrl(baseUrl, modeConfig.endpoint || "chat/completions");
-    const authMode = resolveAuthMode(getProviderProfile(providerConfig.url), modeConfig, providerConfig);
+    const url = resolveEndpointUrl(
+      baseUrl,
+      modeConfig.endpoint || "chat/completions",
+    );
+    const authMode = resolveAuthMode(
+      getProviderProfile(providerConfig.url),
+      modeConfig,
+      providerConfig,
+    );
 
-    const authConfig = applyAuthConfig(authMode, providerConfig, url, { "Content-Type": "application/json" });
+    const authConfig = applyAuthConfig(authMode, providerConfig, url, {
+      "Content-Type": "application/json",
+    });
 
     const content: any[] = [];
     if (prompt.trim()) {
       content.push({ type: "text", text: prompt.trim() });
     }
 
-    const safeImages = images.filter((part) => part.type === "image_url" && !!parseDataUrl(part.image_url.url));
+    const safeImages = images.filter(
+      (part) => part.type === "image_url" && !!parseDataUrl(part.image_url.url),
+    );
     for (const img of safeImages) {
       content.push(img);
     }
@@ -2320,7 +2849,7 @@ class AIService implements ConfigChangeListener {
     const data: any = {
       model,
       messages: [{ role: "user", content: userContent }],
-      stream: false,
+      stream: providerConfig.stream,
     };
 
     const response = await this.httpClient.request(
@@ -2329,44 +2858,31 @@ class AIService implements ConfigChangeListener {
         method: "POST",
         headers: authConfig.headers,
         data,
+        ...(providerConfig.stream ? { responseType: "stream" } : {}),
       },
-      token
+      token,
     );
 
-    let replyText = "";
-    if (typeof response.data === "string") {
-      const lines = response.data.split('\n');
-      for (const line of lines) {
-        const trimmed = line.trim();
-        if (trimmed.startsWith("data: ") && trimmed !== "data: [DONE]") {
-          try {
-            const parsed = JSON.parse(trimmed.slice(6));
-            replyText += parsed.choices?.[0]?.delta?.content || parsed.choices?.[0]?.message?.content || "";
-          } catch (e) {}
-        }
-      }
-      if (!replyText) replyText = response.data;
-    } else {
-      replyText = response.data?.choices?.[0]?.message?.content || "";
-    }
+    const parsed = await parseOpenAIResponseData(response.data);
+    const replyText = parsed.text;
 
     if (!replyText) {
-      throw new Error("视频生成失败，AI返回为空");
+      throw new Error("视频生成失败，AI 返回为空");
     }
 
     const match = replyText.match(/(https?:\/\/[^\s"'>]+\.(?:mp4|webm))/i);
     if (match && match[1]) {
-      const isWebm = match[1].toLowerCase().endsWith('.webm');
+      const isWebm = match[1].toLowerCase().endsWith(".webm");
       return [{ url: match[1], mimeType: isWebm ? "video/webm" : "video/mp4" }];
     }
 
-    throw new Error(`未能从返回结果中提取到视频链接。\nAI返回: ${replyText}`);
+    throw new Error(`未能从返回结果中提取到视频链接。\nAI 返回: ${replyText}`);
   }
 
   private buildDoubaoVideoContent(
     prompt: string,
     images: AIContentPart[],
-    imageMode: VideoImageMode
+    imageMode: VideoImageMode,
   ): Array<Record<string, any>> {
     const content: Array<Record<string, any>> = [];
     const trimmedPrompt = prompt.trim();
@@ -2374,7 +2890,9 @@ class AIService implements ConfigChangeListener {
       content.push({ type: "text", text: trimmedPrompt });
     }
 
-    const imageParts = images.filter((part) => part.type === "image_url" && !!parseDataUrl(part.image_url.url));
+    const imageParts = images.filter(
+      (part) => part.type === "image_url" && !!parseDataUrl(part.image_url.url),
+    );
     const imageCount = imageParts.length;
 
     for (const [index, part] of imageParts.entries()) {
@@ -2406,47 +2924,67 @@ class AIService implements ConfigChangeListener {
     prompt: string,
     modeConfig: ProviderModeConfig,
     image?: AIImage,
-    token?: AbortToken
+    token?: AbortToken,
   ): Promise<AIImage[]> {
     const baseUrl = resolveBaseUrl(providerConfig, modeConfig);
 
     if (model.includes("imagen")) {
       const endpoint = `v1beta/models/${model}:predict`;
       const url = resolveEndpointUrl(baseUrl, endpoint);
-      const authMode = resolveAuthMode(getProviderProfile(providerConfig.url), modeConfig, providerConfig);
-      const authConfig = applyAuthConfig(authMode, providerConfig, url, { "Content-Type": "application/json" });
+      const authMode = resolveAuthMode(
+        getProviderProfile(providerConfig.url),
+        modeConfig,
+        providerConfig,
+      );
+      const authConfig = applyAuthConfig(authMode, providerConfig, url, {
+        "Content-Type": "application/json",
+      });
 
       const data: any = {
         instances: [{ prompt: prompt || "" }],
         parameters: {
           sampleCount: 1,
-          outputOptions: { mimeType: "image/png" }
-        }
+          outputOptions: { mimeType: "image/png" },
+        },
       };
 
-      const response = await this.httpClient.request({
-        url: authConfig.url,
-        method: "POST",
-        headers: authConfig.headers,
-        data,
-      }, token);
+      const response = await this.httpClient.request(
+        {
+          url: authConfig.url,
+          method: "POST",
+          headers: authConfig.headers,
+          data,
+        },
+        token,
+      );
 
       const predictions = response.data?.predictions || [];
       const images: AIImage[] = [];
       for (const p of predictions) {
         if (p.bytesBase64Encoded) {
-          images.push({ data: Buffer.from(p.bytesBase64Encoded, "base64"), mimeType: p.mimeType || "image/png" });
+          images.push({
+            data: Buffer.from(p.bytesBase64Encoded, "base64"),
+            mimeType: p.mimeType || "image/png",
+          });
         }
       }
       if (images.length === 0) throw new Error("图片生成失败");
       return images;
     }
 
-    const endpoint = (modeConfig.endpoint || "models/{model}:generateContent").replace("{model}", model);
+    const endpoint = (
+      modeConfig.endpoint || "models/{model}:generateContent"
+    ).replace("{model}", model);
     const url = resolveEndpointUrl(baseUrl, endpoint);
 
-    const authMode = resolveAuthMode(getProviderProfile(providerConfig.url), modeConfig, providerConfig);
-    const authConfig = applyAuthConfig(authMode, providerConfig, url, { "Content-Type": "application/json" });
+    const authMode = resolveAuthMode(
+      getProviderProfile(providerConfig.url),
+      modeConfig,
+      providerConfig,
+    );
+    const authConfig = applyAuthConfig(authMode, providerConfig, url, {
+      "Content-Type": "application/json",
+    });
 
     const parts: any[] = [];
     if (prompt?.trim()) parts.push({ text: prompt.trim() });
@@ -2469,10 +3007,11 @@ class AIService implements ConfigChangeListener {
           contents: [{ parts }],
         },
       },
-      token
+      token,
     );
 
-    const root = response.data?.response ?? response.data?.data ?? response.data;
+    const root =
+      response.data?.response ?? response.data?.data ?? response.data;
     const candidates = root?.candidates ?? [];
     const images: AIImage[] = [];
 
@@ -2490,7 +3029,9 @@ class AIService implements ConfigChangeListener {
     }
 
     if (images.length === 0) {
-      throw new Error("未在 candidates[].content.parts[].inlineData 中找到图片数据");
+      throw new Error(
+        "未在 candidates[].content.parts[].inlineData 中找到图片数据",
+      );
     }
 
     return images;
@@ -2504,11 +3045,21 @@ class AIService implements ConfigChangeListener {
     videoAudio: boolean,
     videoDuration: number,
     modeConfig: ProviderModeConfig,
-    token?: AbortToken
+    token?: AbortToken,
   ): Promise<AIVideo[]> {
     const baseUrl = resolveBaseUrl(providerConfig, modeConfig);
-    const apiUrl = buildGeminiVideoApiUrl(baseUrl, model, providerConfig.key, modeConfig.endpoint);
-    const parts = await buildGeminiParts(prompt, images, this.httpClient, token);
+    const apiUrl = buildGeminiVideoApiUrl(
+      baseUrl,
+      model,
+      providerConfig.key,
+      modeConfig.endpoint,
+    );
+    const parts = await buildGeminiParts(
+      prompt,
+      images,
+      this.httpClient,
+      token,
+    );
 
     const response = await this.httpClient.request(
       {
@@ -2528,12 +3079,17 @@ class AIService implements ConfigChangeListener {
           },
         },
       },
-      token
+      token,
     );
 
     const directResult = extractGeminiVideoResult(response.data);
     if (directResult?.bytes) {
-      return [{ data: Buffer.from(directResult.bytes, "base64"), mimeType: "video/mp4" }];
+      return [
+        {
+          data: Buffer.from(directResult.bytes, "base64"),
+          mimeType: "video/mp4",
+        },
+      ];
     }
 
     if (directResult?.uri) {
@@ -2543,9 +3099,10 @@ class AIService implements ConfigChangeListener {
           method: "GET",
           responseType: "arraybuffer",
         },
-        token
+        token,
       );
-      const contentType = download.headers?.["content-type"]?.split(";")[0] || "video/mp4";
+      const contentType =
+        download.headers?.["content-type"]?.split(";")[0] || "video/mp4";
       return [{ data: Buffer.from(download.data), mimeType: contentType }];
     }
 
@@ -2557,14 +3114,18 @@ class AIService implements ConfigChangeListener {
     const baseOrigin = normalizeGeminiBaseUrl(providerConfig.url);
     const operation = await pollTask<any>(
       async (abortToken) => {
-        const url = buildGeminiOperationUrl(baseOrigin, operationName, providerConfig.key);
+        const url = buildGeminiOperationUrl(
+          baseOrigin,
+          operationName,
+          providerConfig.key,
+        );
         const opResponse = await this.httpClient.request(
           {
             url,
             method: "GET",
             headers: { "Content-Type": "application/json" },
           },
-          abortToken
+          abortToken,
         );
         return opResponse.data;
       },
@@ -2573,7 +3134,10 @@ class AIService implements ConfigChangeListener {
           return { status: "pending" };
         }
         if (data.error) {
-          return { status: "failed", errorMessage: extractGeminiOperationError(data) };
+          return {
+            status: "failed",
+            errorMessage: extractGeminiOperationError(data),
+          };
         }
         return { status: "succeeded", result: data };
       },
@@ -2581,12 +3145,17 @@ class AIService implements ConfigChangeListener {
         maxAttempts: 303,
         intervalMs: 2000,
       },
-      token
+      token,
     );
 
     const finalResult = extractGeminiVideoResult(operation);
     if (finalResult?.bytes) {
-      return [{ data: Buffer.from(finalResult.bytes, "base64"), mimeType: "video/mp4" }];
+      return [
+        {
+          data: Buffer.from(finalResult.bytes, "base64"),
+          mimeType: "video/mp4",
+        },
+      ];
     }
     if (finalResult?.uri) {
       const download = await this.httpClient.request(
@@ -2595,9 +3164,10 @@ class AIService implements ConfigChangeListener {
           method: "GET",
           responseType: "arraybuffer",
         },
-        token
+        token,
       );
-      const contentType = download.headers?.["content-type"]?.split(";")[0] || "video/mp4";
+      const contentType =
+        download.headers?.["content-type"]?.split(";")[0] || "video/mp4";
       return [{ data: Buffer.from(download.data), mimeType: contentType }];
     }
 
@@ -2613,7 +3183,7 @@ class AIService implements ConfigChangeListener {
     videoAudio: boolean,
     videoDuration: number,
     modeConfig: ProviderModeConfig,
-    token?: AbortToken
+    token?: AbortToken,
   ): Promise<AIVideo[]> {
     const baseUrl = resolveBaseUrl(providerConfig, modeConfig);
 
@@ -2627,10 +3197,19 @@ class AIService implements ConfigChangeListener {
     this.applyVideoDefaults(data, modeConfig);
 
     const endpoint = modeConfig.endpoint || "api/v3/contents/generations/tasks";
-    const authMode = resolveAuthMode(getProviderProfile(providerConfig.url), modeConfig, providerConfig);
-    const authConfig = applyAuthConfig(authMode, providerConfig, resolveEndpointUrl(baseUrl, endpoint), {
-      "Content-Type": "application/json",
-    });
+    const authMode = resolveAuthMode(
+      getProviderProfile(providerConfig.url),
+      modeConfig,
+      providerConfig,
+    );
+    const authConfig = applyAuthConfig(
+      authMode,
+      providerConfig,
+      resolveEndpointUrl(baseUrl, endpoint),
+      {
+        "Content-Type": "application/json",
+      },
+    );
     const response = await this.httpClient.request(
       {
         url: authConfig.url,
@@ -2638,7 +3217,7 @@ class AIService implements ConfigChangeListener {
         headers: authConfig.headers,
         data,
       },
-      token
+      token,
     );
 
     const taskId =
@@ -2651,14 +3230,19 @@ class AIService implements ConfigChangeListener {
     const videoUrl = await pollTask<string>(
       async (abortToken) => {
         const pollUrl = resolveEndpointUrl(baseUrl, `${endpoint}/${taskId}`);
-        const authConfig = applyAuthConfig(authMode, providerConfig, pollUrl, {});
+        const authConfig = applyAuthConfig(
+          authMode,
+          providerConfig,
+          pollUrl,
+          {},
+        );
         const pollResponse = await this.httpClient.request(
           {
             url: authConfig.url,
             method: "GET",
             headers: authConfig.headers,
           },
-          abortToken
+          abortToken,
         );
         return pollResponse.data;
       },
@@ -2679,7 +3263,7 @@ class AIService implements ConfigChangeListener {
         maxAttempts: 303,
         intervalMs: 2000,
       },
-      token
+      token,
     );
 
     return [{ url: videoUrl, mimeType: "video/mp4" }];
@@ -2688,7 +3272,11 @@ class AIService implements ConfigChangeListener {
   createAbortToken(): AbortToken {
     const token = createAbortToken();
     this.activeTokens.add(token);
-    token.signal.addEventListener("abort", () => this.activeTokens.delete(token), { once: true });
+    token.signal.addEventListener(
+      "abort",
+      () => this.activeTokens.delete(token),
+      { once: true },
+    );
     return token;
   }
 
@@ -2712,37 +3300,71 @@ class AIService implements ConfigChangeListener {
   async callAI(
     question: string,
     images: AIContentPart[] = [],
-    token?: AbortToken
+    token?: AbortToken,
   ): Promise<{ text: string; images: AIImage[] }> {
-    const { providerConfig, model, config } = await this.getCurrentProviderConfig("chat");
+    const { providerConfig, model, config } =
+      await this.getCurrentProviderConfig("chat");
     const { modeConfig } = this.resolveMode(providerConfig, "chat", model);
     const handler = this.strategyHandlers[modeConfig.strategy]?.chat;
     if (!handler) throw new UserError("当前提供商不支持聊天");
-    return await handler({ providerConfig, model, config, modeConfig, question, images, token });
+    return await handler({
+      providerConfig,
+      model,
+      config,
+      modeConfig,
+      question,
+      images,
+      token,
+    });
   }
 
   async callSearch(
     question: string,
     images: AIContentPart[] = [],
-    token?: AbortToken
-  ): Promise<{ text: string; sources: Array<{ url: string; title?: string }> }> {
-    const { providerConfig, model, config } = await this.getCurrentProviderConfig("search");
+    token?: AbortToken,
+  ): Promise<{
+    text: string;
+    sources: Array<{ url: string; title?: string }>;
+  }> {
+    const { providerConfig, model, config } =
+      await this.getCurrentProviderConfig("search");
     const { modeConfig } = this.resolveMode(providerConfig, "search", model);
     const handler = this.strategyHandlers[modeConfig.strategy]?.search;
     if (!handler) throw new UserError("当前提供商不支持搜索模式");
-    return await handler({ providerConfig, model, config, modeConfig, question, images, token });
+    return await handler({
+      providerConfig,
+      model,
+      config,
+      modeConfig,
+      question,
+      images,
+      token,
+    });
   }
 
   async generateImage(prompt: string, token?: AbortToken): Promise<AIImage[]> {
-    const { providerConfig, model, config } = await this.getCurrentProviderConfig("image");
+    const { providerConfig, model, config } =
+      await this.getCurrentProviderConfig("image");
     const { modeConfig } = this.resolveMode(providerConfig, "image", model);
     const handler = this.strategyHandlers[modeConfig.strategy]?.image;
     if (!handler) throw new UserError("当前提供商不支持图片生成");
-    return await handler({ providerConfig, model, config, modeConfig, prompt, token });
+    return await handler({
+      providerConfig,
+      model,
+      config,
+      modeConfig,
+      prompt,
+      token,
+    });
   }
 
-  async editImage(prompt: string, image: AIImage, token?: AbortToken): Promise<AIImage[]> {
-    const { providerConfig, model, config } = await this.getCurrentProviderConfig("image");
+  async editImage(
+    prompt: string,
+    image: AIImage,
+    token?: AbortToken,
+  ): Promise<AIImage[]> {
+    const { providerConfig, model, config } =
+      await this.getCurrentProviderConfig("image");
     const { modeConfig } = this.resolveMode(providerConfig, "image", model);
 
     if (!modeConfig.supportsEdit) {
@@ -2755,20 +3377,38 @@ class AIService implements ConfigChangeListener {
 
     const handler = this.strategyHandlers[modeConfig.strategy]?.image;
     if (!handler) throw new UserError("当前提供商不支持图片编辑");
-    return await handler({ providerConfig, model, config, modeConfig, prompt, image, token });
+    return await handler({
+      providerConfig,
+      model,
+      config,
+      modeConfig,
+      prompt,
+      image,
+      token,
+    });
   }
 
   async generateVideo(
     prompt: string,
     images: AIContentPart[],
     imageMode: VideoImageMode = "auto",
-    token?: AbortToken
+    token?: AbortToken,
   ): Promise<AIVideo[]> {
-    const { providerConfig, model, config } = await this.getCurrentProviderConfig("video");
+    const { providerConfig, model, config } =
+      await this.getCurrentProviderConfig("video");
     const { modeConfig } = this.resolveMode(providerConfig, "video", model);
     const handler = this.strategyHandlers[modeConfig.strategy]?.video;
     if (!handler) throw new UserError("当前提供商不支持视频生成");
-    return await handler({ providerConfig, model, config, modeConfig, prompt, images, imageMode, token });
+    return await handler({
+      providerConfig,
+      model,
+      config,
+      modeConfig,
+      prompt,
+      images,
+      imageMode,
+      token,
+    });
   }
 }
 
@@ -2776,7 +3416,11 @@ abstract class BaseFeatureHandler implements FeatureHandler {
   abstract readonly name: string;
   abstract readonly command: string;
   abstract readonly description: string;
-  abstract execute(msg: Api.Message, args: string[], prefixes: string[]): Promise<void>;
+  abstract execute(
+    msg: Api.Message,
+    args: string[],
+    prefixes: string[],
+  ): Promise<void>;
 
   protected configManagerPromise: Promise<ConfigManager>;
 
@@ -2793,7 +3437,11 @@ abstract class BaseFeatureHandler implements FeatureHandler {
     return configManager.getConfig();
   }
 
-  protected async editMessage(msg: Api.Message, text: string, parseMode: string = "html"): Promise<void> {
+  protected async editMessage(
+    msg: Api.Message,
+    text: string,
+    parseMode: string = "html",
+  ): Promise<void> {
     await MessageSender.sendOrEdit(msg, text, { parseMode });
   }
 }
@@ -2801,22 +3449,32 @@ abstract class BaseFeatureHandler implements FeatureHandler {
 class ConfigFeature extends BaseFeatureHandler {
   readonly name = "配置管理";
   readonly command = "config";
-  readonly description = "管理API配置";
+  readonly description = "管理 API 配置";
 
   constructor(configManagerPromise: Promise<ConfigManager>) {
     super(configManagerPromise);
   }
 
-  async execute(msg: Api.Message, args: string[], _prefixes: string[]): Promise<void> {
+  async execute(
+    msg: Api.Message,
+    args: string[],
+    _prefixes: string[],
+  ): Promise<void> {
     const configManager = await this.getConfigManager();
     const config = configManager.getConfig();
 
     if (args.length < 2) {
       const list =
         Object.values(config.configs)
-          .map((c) => `🏷️ <code>${c.tag}</code> - ${c.url}`)
+          .map(
+            (c) =>
+              `🏷️ <code>${c.tag}</code> - ${c.url}\n🌊 Stream: <code>${c.stream ? "on" : "off"}</code>`,
+          )
           .join("\n") || "暂无配置";
-      await this.editMessage(msg, `📋 <b>API配置列表:</b>\n\n⚙️ 配置:\n${list}`);
+      await this.editMessage(
+        msg,
+        `📋 <b>API 配置列表:</b>\n\n⚙️ 配置:\n${list}`,
+      );
       return;
     }
 
@@ -2831,11 +3489,23 @@ class ConfigFeature extends BaseFeatureHandler {
       await this.deleteConfig(msg, args, configManager);
       return;
     }
+    if (action === "stream") {
+      requireUser(args.length >= 4, "参数不足");
+      await this.setStream(msg, args, configManager);
+      return;
+    }
     throw new UserError("参数格式错误");
   }
 
-  private async addConfig(msg: Api.Message, args: string[], configManager: ConfigManager): Promise<void> {
-    requireUser(!!(msg as any).savedPeerId, "出于安全考虑，禁止在公开场景添加/修改API密钥");
+  private async addConfig(
+    msg: Api.Message,
+    args: string[],
+    configManager: ConfigManager,
+  ): Promise<void> {
+    requireUser(
+      !!(msg as any).savedPeerId,
+      "出于安全考虑，禁止在公开场景添加/修改 API 密钥",
+    );
     const key = args[args.length - 1];
     const url = args[args.length - 2];
     const tag = args.slice(2, -2).join(" ").trim();
@@ -2843,28 +3513,58 @@ class ConfigFeature extends BaseFeatureHandler {
 
     try {
       const u = new URL(url);
-      if (!["http:", "https:"].includes(u.protocol)) throw new Error("bad protocol");
+      if (!["http:", "https:"].includes(u.protocol))
+        throw new Error("bad protocol");
     } catch {
-      throw new UserError("无效的URL格式");
+      throw new UserError("无效的 URL 格式");
     }
 
-    requireUser(!!key.trim(), "API密钥不能为空");
-    requireUser(key.length >= 10, "API密钥长度过短");
+    requireUser(!!key.trim(), "API 密钥不能为空");
+    requireUser(key.length >= 10, "API 密钥长度过短");
 
     await configManager.updateConfig((cfg) => {
-      cfg.configs[tag] = { tag, url, key };
+      cfg.configs[tag] = { tag, url, key, stream: false };
     });
 
     await this.editMessage(
       msg,
-      "✅ API配置已添加:\n\n" +
-      `🏷️ 标签: <code>${tag}</code>\n` +
-      `🔗 地址: <code>${url}</code>\n` +
-      `🔑 密钥: <code>${key}</code>`
+      "✅ API 配置已添加:\n\n" +
+        `🏷️ 标签: <code>${tag}</code>\n` +
+        `🔗 地址: <code>${url}</code>\n` +
+        `🔑 密钥: <code>${key}</code>\n` +
+        `🌊 Stream: <code>off</code>`,
     );
   }
 
-  private async deleteConfig(msg: Api.Message, args: string[], configManager: ConfigManager): Promise<void> {
+  private async setStream(
+    msg: Api.Message,
+    args: string[],
+    configManager: ConfigManager,
+  ): Promise<void> {
+    const state = args[args.length - 1]?.toLowerCase();
+    const tag = args.slice(2, -1).join(" ").trim();
+    const config = configManager.getConfig();
+
+    requireUser(!!tag, "参数格式错误");
+    requireUser(state === "on" || state === "off", "参数必须是 on 或 off");
+    requireUser(!!config.configs[tag], "配置不存在");
+
+    const enabled = state === "on";
+    await configManager.updateConfig((cfg) => {
+      cfg.configs[tag].stream = enabled;
+    });
+
+    await this.editMessage(
+      msg,
+      `✅ 已将配置 <code>${tag}</code> 的 Stream 设置为 <code>${enabled ? "on" : "off"}</code>`,
+    );
+  }
+
+  private async deleteConfig(
+    msg: Api.Message,
+    args: string[],
+    configManager: ConfigManager,
+  ): Promise<void> {
     const delTag = args[2];
     const config = configManager.getConfig();
 
@@ -2893,34 +3593,44 @@ class ConfigFeature extends BaseFeatureHandler {
 class ModelFeature extends BaseFeatureHandler {
   readonly name = "模型管理";
   readonly command = "model";
-  readonly description = "设置AI模型";
+  readonly description = "设置 AI 模型";
 
   constructor(configManagerPromise: Promise<ConfigManager>) {
     super(configManagerPromise);
   }
 
-  async execute(msg: Api.Message, args: string[], _prefixes: string[]): Promise<void> {
+  async execute(
+    msg: Api.Message,
+    args: string[],
+    _prefixes: string[],
+  ): Promise<void> {
     const configManager = await this.getConfigManager();
     const config = configManager.getConfig();
 
     if (args.length < 2) {
       await this.editMessage(
         msg,
-        `🤖 <b>当前AI配置:</b>\n\n` +
-        `💬 chat配置: <code>${config.currentChatTag || "未设置"}</code>\n` +
-        `🧠 chat模型: <code>${config.currentChatModel || "未设置"}</code>\n` +
-        `🔎 search配置: <code>${config.currentSearchTag || "未设置"}</code>\n` +
-        `📚 search模型: <code>${config.currentSearchModel || "未设置"}</code>\n` +
-        `🖼️ image配置: <code>${config.currentImageTag || "未设置"}</code>\n` +
-        `🎨 image模型: <code>${config.currentImageModel || "未设置"}</code>\n` +
-        `🎬 video配置: <code>${config.currentVideoTag || "未设置"}</code>\n` +
-        `📹 video模型: <code>${config.currentVideoModel || "未设置"}</code>`
+        `🤖 <b>当前 AI 配置:</b>\n\n` +
+          `💬 chat 配置: <code>${config.currentChatTag || "未设置"}</code>\n` +
+          `🧠 chat 模型: <code>${config.currentChatModel || "未设置"}</code>\n` +
+          `🔎 search 配置: <code>${config.currentSearchTag || "未设置"}</code>\n` +
+          `📚 search 模型: <code>${config.currentSearchModel || "未设置"}</code>\n` +
+          `🖼️ image 配置: <code>${config.currentImageTag || "未设置"}</code>\n` +
+          `🎨 image 模型: <code>${config.currentImageModel || "未设置"}</code>\n` +
+          `🎬 video 配置: <code>${config.currentVideoTag || "未设置"}</code>\n` +
+          `📹 video 模型: <code>${config.currentVideoModel || "未设置"}</code>`,
       );
       return;
     }
 
     const mode = args[1]?.toLowerCase();
-    requireUser(mode === "chat" || mode === "search" || mode === "image" || mode === "video", "参数格式错误");
+    requireUser(
+      mode === "chat" ||
+        mode === "search" ||
+        mode === "image" ||
+        mode === "video",
+      "参数格式错误",
+    );
     requireUser(args.length >= 4, "参数不足");
 
     const model = args[args.length - 1];
@@ -2944,10 +3654,16 @@ class ModelFeature extends BaseFeatureHandler {
     });
 
     const modeLabel =
-      mode === "chat" ? "chat模型" : mode === "search" ? "search模型" : mode === "image" ? "image模型" : "video模型";
+      mode === "chat"
+        ? "chat 模型"
+        : mode === "search"
+          ? "search 模型"
+          : mode === "image"
+            ? "image 模型"
+            : "video 模型";
     await this.editMessage(
       msg,
-      `✅ ${modeLabel}已切换到:\n\n🏷️ 配置: <code>${tag}</code>\n🧠 模型: <code>${model}</code>`
+      `✅ ${modeLabel} 已切换到:\n\n🏷️ 配置: <code>${tag}</code>\n🧠 模型: <code>${model}</code>`,
     );
   }
 }
@@ -2961,12 +3677,19 @@ class PromptFeature extends BaseFeatureHandler {
     super(configManagerPromise);
   }
 
-  async execute(msg: Api.Message, args: string[], _prefixes: string[]): Promise<void> {
+  async execute(
+    msg: Api.Message,
+    args: string[],
+    _prefixes: string[],
+  ): Promise<void> {
     const configManager = await this.getConfigManager();
     const config = configManager.getConfig();
 
     if (args.length < 2) {
-      await this.editMessage(msg, `💭 <b>当前提示词:</b>\n\n📝 内容: <code>${config.prompt || "未设置"}</code>`);
+      await this.editMessage(
+        msg,
+        `💭 <b>当前提示词:</b>\n\n📝 内容: <code>${config.prompt || "未设置"}</code>`,
+      );
       return;
     }
 
@@ -2976,7 +3699,10 @@ class PromptFeature extends BaseFeatureHandler {
       await configManager.updateConfig((cfg) => {
         cfg.prompt = args.slice(2).join(" ");
       });
-      await this.editMessage(msg, `✅ 提示词已设置:\n\n<code>${args.slice(2).join(" ")}</code>`);
+      await this.editMessage(
+        msg,
+        `✅ 提示词已设置:\n\n<code>${args.slice(2).join(" ")}</code>`,
+      );
       return;
     }
 
@@ -3001,14 +3727,18 @@ class CollapseFeature extends BaseFeatureHandler {
     super(configManagerPromise);
   }
 
-  async execute(msg: Api.Message, args: string[], _prefixes: string[]): Promise<void> {
+  async execute(
+    msg: Api.Message,
+    args: string[],
+    _prefixes: string[],
+  ): Promise<void> {
     const configManager = await this.getConfigManager();
     const config = configManager.getConfig();
 
     if (args.length < 2) {
       await this.editMessage(
         msg,
-        `📖 <b>消息折叠状态:</b>\n\n📄 当前状态: ${config.collapse ? "开启" : "关闭"}`
+        `📖 <b>消息折叠状态:</b>\n\n📄 当前状态: ${config.collapse ? "开启" : "关闭"}`,
       );
       return;
     }
@@ -3020,20 +3750,27 @@ class CollapseFeature extends BaseFeatureHandler {
       cfg.collapse = state === "on";
     });
 
-    await this.editMessage(msg, `✅ 引用折叠已${state === "on" ? "开启" : "关闭"}`);
+    await this.editMessage(
+      msg,
+      `✅ 引用折叠已${state === "on" ? "开启" : "关闭"}`,
+    );
   }
 }
 
 class TelegraphFeature extends BaseFeatureHandler {
-  readonly name = "Telegraph管理";
+  readonly name = "Telegraph 管理";
   readonly command = "telegraph";
-  readonly description = "管理Telegraph";
+  readonly description = "管理 Telegraph";
 
   constructor(configManagerPromise: Promise<ConfigManager>) {
     super(configManagerPromise);
   }
 
-  async execute(msg: Api.Message, args: string[], _prefixes: string[]): Promise<void> {
+  async execute(
+    msg: Api.Message,
+    args: string[],
+    _prefixes: string[],
+  ): Promise<void> {
     const configManager = await this.getConfigManager();
     const config = configManager.getConfig();
 
@@ -3064,9 +3801,12 @@ class TelegraphFeature extends BaseFeatureHandler {
     await this.showTelegraphStatus(msg, config);
   }
 
-  private async showTelegraphStatus(msg: Api.Message, config: DB): Promise<void> {
+  private async showTelegraphStatus(
+    msg: Api.Message,
+    config: DB,
+  ): Promise<void> {
     let status =
-      `📰 <b>Telegraph状态:</b>\n\n` +
+      `📰 <b>Telegraph 状态:</b>\n\n` +
       `🌐 当前状态: ${config.telegraph.enabled ? "开启" : "关闭"}\n` +
       `📊 限制数量: <code>${config.telegraph.limit}</code>\n` +
       `📈 记录数量: <code>${config.telegraph.list.length}/${config.telegraph.limit}</code>`;
@@ -3081,32 +3821,46 @@ class TelegraphFeature extends BaseFeatureHandler {
     await this.editMessage(msg, status);
   }
 
-  private async enableTelegraph(msg: Api.Message, configManager: ConfigManager): Promise<void> {
+  private async enableTelegraph(
+    msg: Api.Message,
+    configManager: ConfigManager,
+  ): Promise<void> {
     await configManager.updateConfig((cfg) => {
       cfg.telegraph.enabled = true;
     });
-    await this.editMessage(msg, "✅ Telegraph已开启");
+    await this.editMessage(msg, "✅ Telegraph 已开启");
   }
 
-  private async disableTelegraph(msg: Api.Message, configManager: ConfigManager): Promise<void> {
+  private async disableTelegraph(
+    msg: Api.Message,
+    configManager: ConfigManager,
+  ): Promise<void> {
     await configManager.updateConfig((cfg) => {
       cfg.telegraph.enabled = false;
     });
-    await this.editMessage(msg, "✅ Telegraph已关闭");
+    await this.editMessage(msg, "✅ Telegraph 已关闭");
   }
 
-  private async setTelegraphLimit(msg: Api.Message, args: string[], configManager: ConfigManager): Promise<void> {
+  private async setTelegraphLimit(
+    msg: Api.Message,
+    args: string[],
+    configManager: ConfigManager,
+  ): Promise<void> {
     const limit = parseInt(args[2]);
-    requireUser(!isNaN(limit) && limit > 0, "限制数量必须大于0");
+    requireUser(!isNaN(limit) && limit > 0, "限制数量必须大于 0");
 
     await configManager.updateConfig((cfg) => {
       cfg.telegraph.limit = limit;
     });
 
-    await this.editMessage(msg, `✅ Telegraph限制已设置为 ${limit}`);
+    await this.editMessage(msg, `✅ Telegraph 限制已设置为 ${limit}`);
   }
 
-  private async deleteTelegraphItem(msg: Api.Message, args: string[], configManager: ConfigManager): Promise<void> {
+  private async deleteTelegraphItem(
+    msg: Api.Message,
+    args: string[],
+    configManager: ConfigManager,
+  ): Promise<void> {
     const del = args[2];
     const config = configManager.getConfig();
 
@@ -3121,7 +3875,7 @@ class TelegraphFeature extends BaseFeatureHandler {
     const idx = parseInt(del) - 1;
     requireUser(
       !isNaN(idx) && idx >= 0 && idx < config.telegraph.list.length,
-      `序号超出范围 (1-${config.telegraph.list.length})`
+      `序号超出范围 (1-${config.telegraph.list.length})`,
     );
 
     await configManager.updateConfig((cfg) => {
@@ -3141,20 +3895,27 @@ class TimeoutFeature extends BaseFeatureHandler {
     super(configManagerPromise);
   }
 
-  async execute(msg: Api.Message, args: string[], _prefixes: string[]): Promise<void> {
+  async execute(
+    msg: Api.Message,
+    args: string[],
+    _prefixes: string[],
+  ): Promise<void> {
     const configManager = await this.getConfigManager();
     const config = configManager.getConfig();
 
     if (args.length < 2) {
       await this.editMessage(
         msg,
-        `⏱️ <b>当前超时设置:</b>\n\n⏰ 超时时间: <code>${config.timeout} 秒</code>`
+        `⏱️ <b>当前超时设置:</b>\n\n⏰ 超时时间: <code>${config.timeout} 秒</code>`,
       );
       return;
     }
 
     const timeout = parseInt(args[1]);
-    requireUser(!isNaN(timeout) && timeout >= 1 && timeout <= 600, "超时时间必须在1-600秒之间");
+    requireUser(
+      !isNaN(timeout) && timeout >= 1 && timeout <= 600,
+      "超时时间必须在 1 到 600 秒之间",
+    );
 
     await configManager.updateConfig((cfg) => {
       cfg.timeout = timeout;
@@ -3165,26 +3926,35 @@ class TimeoutFeature extends BaseFeatureHandler {
 }
 
 class QuestionFeature extends BaseFeatureHandler {
-  readonly name = "AI提问";
+  readonly name = "AI 提问";
   readonly command = "";
-  readonly description = "向AI提问";
+  readonly description = "向 AI 提问";
 
   private aiService: AIService;
   private messageUtils: MessageUtils;
   private activeToken?: AbortToken;
 
-  constructor(aiService: AIService, configManagerPromise: Promise<ConfigManager>, httpClient: HttpClient) {
+  constructor(
+    aiService: AIService,
+    configManagerPromise: Promise<ConfigManager>,
+    httpClient: HttpClient,
+  ) {
     super(configManagerPromise);
     this.aiService = aiService;
     this.messageUtils = new MessageUtils(configManagerPromise, httpClient);
   }
 
   cancelCurrentOperation(): void {
-    if (this.activeToken && !this.activeToken.aborted) this.activeToken.abort("操作被取消");
+    if (this.activeToken && !this.activeToken.aborted)
+      this.activeToken.abort("操作被取消");
     this.activeToken = undefined;
   }
 
-  private async runQuestion(msg: Api.Message, question: string, trigger?: Api.Message): Promise<void> {
+  private async runQuestion(
+    msg: Api.Message,
+    question: string,
+    trigger?: Api.Message,
+  ): Promise<void> {
     this.cancelCurrentOperation();
 
     const token = this.aiService.createAbortToken();
@@ -3198,7 +3968,11 @@ class QuestionFeature extends BaseFeatureHandler {
     }
   }
 
-  async execute(msg: Api.Message, args: string[], _prefixes: string[]): Promise<void> {
+  async execute(
+    msg: Api.Message,
+    args: string[],
+    _prefixes: string[],
+  ): Promise<void> {
     const question = args.join(" ").trim();
     await this.runQuestion(msg, question);
   }
@@ -3210,13 +3984,22 @@ class QuestionFeature extends BaseFeatureHandler {
     await this.runQuestion(msg, question, trigger);
   }
 
-  async handleQuestion(msg: Api.Message, question: string, trigger?: Api.Message, token?: AbortToken): Promise<void> {
+  async handleQuestion(
+    msg: Api.Message,
+    question: string,
+    trigger?: Api.Message,
+    token?: AbortToken,
+  ): Promise<void> {
     const config = await this.getConfig();
 
-    if (!config.currentChatTag || !config.currentChatModel || !config.configs[config.currentChatTag]) {
+    if (
+      !config.currentChatTag ||
+      !config.currentChatModel ||
+      !config.configs[config.currentChatTag]
+    ) {
       const prefixes = getPrefixes();
       throw new UserError(
-        `请先配置API并设置模型\n使用 ${prefixes[0]}ai config add <tag> <url> <key> 和 ${prefixes[0]}ai model chat <tag> <model-path>`
+        `请先配置 API 并设置模型\n使用 ${prefixes[0]}ai config add <tag> <url> <key> 和 ${prefixes[0]}ai model chat <tag> <model-path>`,
       );
     }
 
@@ -3227,32 +4010,55 @@ class QuestionFeature extends BaseFeatureHandler {
     const replyMsg = await msg.getReplyMessage();
     let context = getMessageText(replyMsg);
     const replyToId = replyMsg?.id;
-    const imageParts = [...(await getMessageImageParts(replyMsg)), ...(await getMessageImageParts(msg))];
+    const imageParts = [
+      ...(await getMessageImageParts(replyMsg)),
+      ...(await getMessageImageParts(msg)),
+    ];
 
     const normalizedQuestion = question.trim();
     const normalizedContext = context.trim();
-    if (normalizedQuestion && normalizedContext && normalizedQuestion === normalizedContext) {
+    if (
+      normalizedQuestion &&
+      normalizedContext &&
+      normalizedQuestion === normalizedContext
+    ) {
       context = "";
     }
 
-    const userText = context ? `上下文:\n${context}\n\n问题:\n${question}` : question;
+    const userText = context
+      ? `上下文:\n${context}\n\n问题:\n${question}`
+      : question;
 
     const response = await this.aiService.callAI(userText, imageParts, token);
-    const answer = response.text || "AI回复为空";
+    const answer = response.text || "AI 回复为空";
 
     const collapseSafe = config.collapse;
-    const htmlAnswer = TelegramFormatter.markdownToHtml(answer, { collapseSafe });
+    const htmlAnswer = TelegramFormatter.markdownToHtml(answer, {
+      collapseSafe,
+    });
     const safeQuestion = htmlEscape(question);
     const formattedAnswer = `Q:\n${safeQuestion}\n\nA:\n${htmlAnswer}`;
 
     token?.throwIfAborted();
 
     if (config.telegraph.enabled && formattedAnswer.length > 4050) {
-      await this.handleLongContentWithTelegraph(msg, question, answer, replyToId, token);
+      await this.handleLongContentWithTelegraph(
+        msg,
+        question,
+        answer,
+        replyToId,
+        token,
+      );
     } else {
-      await this.messageUtils.sendLongMessage(msg, formattedAnswer, replyToId, token, {
-        poweredByTag: config.currentChatTag,
-      });
+      await this.messageUtils.sendLongMessage(
+        msg,
+        formattedAnswer,
+        replyToId,
+        token,
+        {
+          poweredByTag: config.currentChatTag,
+        },
+      );
     }
     await deleteMessageOrGroup(msg);
   }
@@ -3262,13 +4068,17 @@ class QuestionFeature extends BaseFeatureHandler {
     question: string,
     rawAnswer: string,
     replyToId?: number,
-    token?: AbortToken
+    token?: AbortToken,
   ): Promise<void> {
     const configManager = await this.getConfigManager();
     const config = configManager.getConfig();
 
     const telegraphMarkdown = `**Q:**\n${question}\n\n**A:**\n${rawAnswer}\n`;
-    const telegraphResult = await this.messageUtils.createTelegraphPage(telegraphMarkdown, question, token);
+    const telegraphResult = await this.messageUtils.createTelegraphPage(
+      telegraphMarkdown,
+      question,
+      token,
+    );
 
     const poweredByText = `\n<i>🍀Powered by ${config.currentChatTag}</i>`;
     const safeQuestion = htmlEscape(question);
@@ -3276,14 +4086,20 @@ class QuestionFeature extends BaseFeatureHandler {
       ? `Q:\n<blockquote expandable>${safeQuestion}</blockquote>\n`
       : `Q:\n${safeQuestion}\n`;
     const answerBlock = config.collapse
-      ? `A:\n<blockquote expandable>📰内容比较长，Telegraph观感更好喔:\n🔗 <a href="${telegraphResult.url}">点我阅读内容</a></blockquote>${poweredByText}`
-      : `A:\n📰内容比较长，Telegraph观感更好喔:\n🔗 <a href="${telegraphResult.url}">点我阅读内容</a>${poweredByText}`;
+      ? `A:\n<blockquote expandable>📰内容比较长，Telegraph 观感更好喔:\n🔗 <a href="${telegraphResult.url}">点我阅读内容</a></blockquote>${poweredByText}`
+      : `A:\n📰内容比较长，Telegraph 观感更好喔:\n🔗 <a href="${telegraphResult.url}">点我阅读内容</a>${poweredByText}`;
 
-    await MessageSender.sendNew(msg, questionBlock + answerBlock, { parseMode: "html", linkPreview: false }, replyToId);
+    await MessageSender.sendNew(
+      msg,
+      questionBlock + answerBlock,
+      { parseMode: "html", linkPreview: false },
+      replyToId,
+    );
 
     await configManager.updateConfig((cfg) => {
       cfg.telegraph.list.push(telegraphResult);
-      if (cfg.telegraph.list.length > cfg.telegraph.limit) cfg.telegraph.list.shift();
+      if (cfg.telegraph.list.length > cfg.telegraph.limit)
+        cfg.telegraph.list.shift();
     });
   }
 }
@@ -3296,13 +4112,21 @@ class SearchFeature extends BaseFeatureHandler {
   private aiService: AIService;
   private messageUtils: MessageUtils;
 
-  constructor(aiService: AIService, configManagerPromise: Promise<ConfigManager>, httpClient: HttpClient) {
+  constructor(
+    aiService: AIService,
+    configManagerPromise: Promise<ConfigManager>,
+    httpClient: HttpClient,
+  ) {
     super(configManagerPromise);
     this.aiService = aiService;
     this.messageUtils = new MessageUtils(configManagerPromise, httpClient);
   }
 
-  async execute(msg: Api.Message, args: string[], _prefixes: string[]): Promise<void> {
+  async execute(
+    msg: Api.Message,
+    args: string[],
+    _prefixes: string[],
+  ): Promise<void> {
     const prefixes = getPrefixes();
     const config = await this.getConfig();
 
@@ -3311,9 +4135,13 @@ class SearchFeature extends BaseFeatureHandler {
     const replyMsg = await msg.getReplyMessage();
     requireUser(!!promptInput || !!replyMsg, "至少需要一条提示");
 
-    if (!config.currentSearchTag || !config.currentSearchModel || !config.configs[config.currentSearchTag]) {
+    if (
+      !config.currentSearchTag ||
+      !config.currentSearchModel ||
+      !config.configs[config.currentSearchTag]
+    ) {
       throw new UserError(
-        `请先配置API并设置模型\n使用 ${prefixes[0]}ai config add <tag> <url> <key> 和 ${prefixes[0]}ai model search <tag> <model-path>`
+        `请先配置 API 并设置模型\n使用 ${prefixes[0]}ai config add <tag> <url> <key> 和 ${prefixes[0]}ai model search <tag> <model-path>`,
       );
     }
 
@@ -3322,48 +4150,72 @@ class SearchFeature extends BaseFeatureHandler {
     const replyToId = replyMsg?.id;
 
     let context = getMessageText(replyMsg);
-    const imageParts = [...(await getMessageImageParts(replyMsg)), ...(await getMessageImageParts(msg))];
+    const imageParts = [
+      ...(await getMessageImageParts(replyMsg)),
+      ...(await getMessageImageParts(msg)),
+    ];
 
     const normalizedPrompt = promptInput.trim();
     const normalizedContext = (context || "").trim();
 
-    if (normalizedPrompt && normalizedContext && normalizedPrompt === normalizedContext) {
+    if (
+      normalizedPrompt &&
+      normalizedContext &&
+      normalizedPrompt === normalizedContext
+    ) {
       context = "";
     }
 
-    const userText = context ? `上下文:\n${context}\n\n问题:\n${promptInput}` : promptInput;
+    const userText = context
+      ? `上下文:\n${context}\n\n问题:\n${promptInput}`
+      : promptInput;
 
     const token = this.aiService.createAbortToken();
     try {
-      const { text, sources } = await this.aiService.callSearch(userText, imageParts, token);
+      const { text, sources } = await this.aiService.callSearch(
+        userText,
+        imageParts,
+        token,
+      );
 
       const sourcesText =
         sources && sources.length > 0
           ? "\n\n<b>🔗 Sources</b>\n" +
-          sources
-            .slice(0, 8)
-            .map((s, i) => {
-              const safeUrl = htmlEscape(s.url);
-              const safeTitle = htmlEscape(s.title || s.url);
-              return `${i + 1}. <a href="${safeUrl}">${safeTitle}</a>`;
-            })
-            .join("\n")
+            sources
+              .slice(0, 8)
+              .map((s, i) => {
+                const safeUrl = htmlEscape(s.url);
+                const safeTitle = htmlEscape(s.title || s.url);
+                return `${i + 1}. <a href="${safeUrl}">${safeTitle}</a>`;
+              })
+              .join("\n")
           : "";
 
       const collapseSafe = config.collapse;
-      const htmlAnswer = TelegramFormatter.markdownToHtml(text || "AI回复为空", { collapseSafe });
+      const htmlAnswer = TelegramFormatter.markdownToHtml(
+        text || "AI 回复为空",
+        { collapseSafe },
+      );
 
       const safeQuestion = htmlEscape(promptInput);
       const formatted = `Q:\n${safeQuestion}\n\nA:\n${htmlAnswer}${sourcesText}`;
 
       if (config.telegraph.enabled && formatted.length > 4050) {
         const telegraphMarkdown =
-          `**Q:**\n${promptInput}\n\n**A:**\n${text || "AI回复为空"}\n\n` +
+          `**Q:**\n${promptInput}\n\n**A:**\n${text || "AI 回复为空"}\n\n` +
           (sources && sources.length
-            ? `**Sources:**\n` + sources.slice(0, 20).map((s, i) => `${i + 1}. ${s.title || s.url}\n${s.url}`).join("\n")
+            ? `**Sources:**\n` +
+              sources
+                .slice(0, 20)
+                .map((s, i) => `${i + 1}. ${s.title || s.url}\n${s.url}`)
+                .join("\n")
             : "");
 
-        const telegraphResult = await this.messageUtils.createTelegraphPage(telegraphMarkdown, promptInput, token);
+        const telegraphResult = await this.messageUtils.createTelegraphPage(
+          telegraphMarkdown,
+          promptInput,
+          token,
+        );
 
         const poweredByText = `\n<i>🍀Powered by ${config.currentSearchTag}</i>`;
         const qBlock = config.collapse
@@ -3373,17 +4225,29 @@ class SearchFeature extends BaseFeatureHandler {
           ? `A:\n<blockquote expandable>📰内容较长，Telegraph 观感更好：\n🔗 <a href="${telegraphResult.url}">点我阅读内容</a></blockquote>${poweredByText}`
           : `A:\n📰内容较长，Telegraph 观感更好：\n🔗 <a href="${telegraphResult.url}">点我阅读内容</a>${poweredByText}`;
 
-        await MessageSender.sendNew(msg, qBlock + aBlock, { parseMode: "html", linkPreview: false }, replyToId);
+        await MessageSender.sendNew(
+          msg,
+          qBlock + aBlock,
+          { parseMode: "html", linkPreview: false },
+          replyToId,
+        );
 
         const configManager = await this.getConfigManager();
         await configManager.updateConfig((cfg) => {
           cfg.telegraph.list.push(telegraphResult);
-          if (cfg.telegraph.list.length > cfg.telegraph.limit) cfg.telegraph.list.shift();
+          if (cfg.telegraph.list.length > cfg.telegraph.limit)
+            cfg.telegraph.list.shift();
         });
       } else {
-        await this.messageUtils.sendLongMessage(msg, formatted, replyToId, token, {
-          poweredByTag: config.currentSearchTag,
-        });
+        await this.messageUtils.sendLongMessage(
+          msg,
+          formatted,
+          replyToId,
+          token,
+          {
+            poweredByTag: config.currentSearchTag,
+          },
+        );
       }
 
       await deleteMessageOrGroup(msg);
@@ -3402,14 +4266,22 @@ class ImageFeature extends BaseFeatureHandler {
   private messageUtils: MessageUtils;
   private httpClient: HttpClient;
 
-  constructor(aiService: AIService, configManagerPromise: Promise<ConfigManager>, httpClient: HttpClient) {
+  constructor(
+    aiService: AIService,
+    configManagerPromise: Promise<ConfigManager>,
+    httpClient: HttpClient,
+  ) {
     super(configManagerPromise);
     this.aiService = aiService;
     this.messageUtils = new MessageUtils(configManagerPromise, httpClient);
     this.httpClient = httpClient;
   }
 
-  async execute(msg: Api.Message, args: string[], _prefixes: string[]): Promise<void> {
+  async execute(
+    msg: Api.Message,
+    args: string[],
+    _prefixes: string[],
+  ): Promise<void> {
     const prefixes = getPrefixes();
     const configManager = await this.getConfigManager();
     const config = configManager.getConfig();
@@ -3422,7 +4294,7 @@ class ImageFeature extends BaseFeatureHandler {
       if (!state) {
         await this.editMessage(
           msg,
-          `🖼️ <b>图片预览状态:</b>\n\n📄 当前状态: ${config.imagePreview ? "开启" : "关闭"}`
+          `🖼️ <b>图片预览状态:</b>\n\n📄 当前状态: ${config.imagePreview ? "开启" : "关闭"}`,
         );
         return;
       }
@@ -3430,7 +4302,10 @@ class ImageFeature extends BaseFeatureHandler {
       await configManager.updateConfig((cfg) => {
         cfg.imagePreview = state === "on";
       });
-      await this.editMessage(msg, `✅ 图片预览已${state === "on" ? "开启" : "关闭"}`);
+      await this.editMessage(
+        msg,
+        `✅ 图片预览已${state === "on" ? "开启" : "关闭"}`,
+      );
       return;
     }
 
@@ -3443,9 +4318,13 @@ class ImageFeature extends BaseFeatureHandler {
     const hasPrompt = !!promptInput || !!replyText;
     requireUser(hasPrompt, "至少需要一条文字提示");
 
-    if (!config.currentImageTag || !config.currentImageModel || !config.configs[config.currentImageTag]) {
+    if (
+      !config.currentImageTag ||
+      !config.currentImageModel ||
+      !config.configs[config.currentImageTag]
+    ) {
       throw new UserError(
-        `请先配置API并设置模型\n使用 ${prefixes[0]}ai config add <tag> <url> <key> 和 ${prefixes[0]}ai model image <tag> <model-path>`
+        `请先配置 API 并设置模型\n使用 ${prefixes[0]}ai config add <tag> <url> <key> 和 ${prefixes[0]}ai model image <tag> <model-path>`,
       );
     }
 
@@ -3466,19 +4345,23 @@ class ImageFeature extends BaseFeatureHandler {
 
       let images: AIImage[] = [];
       if (imageParts.length > 0) {
-        let inputImage = await resolveImagePart(imageParts, this.httpClient, token);
+        let inputImage = await resolveImagePart(
+          imageParts,
+          this.httpClient,
+          token,
+        );
         if (!inputImage?.data) throw new Error("无法解析图片数据");
         if (inputImage.data && inputImage.mimeType !== "image/png") {
           try {
             const pngBuffer = await sharp(inputImage.data).png().toBuffer();
             inputImage = { data: pngBuffer, mimeType: "image/png" };
-          } catch { }
+          } catch {}
         }
         images = await this.aiService.editImage(prompt, inputImage, token);
       } else {
         images = await this.aiService.generateImage(prompt, token);
       }
-      if (images.length === 0) throw new Error("AI回复为空");
+      if (images.length === 0) throw new Error("AI 回复为空");
       await this.messageUtils.sendImages(msg, images, prompt, replyToId, token);
       await deleteMessageOrGroup(msg);
     } finally {
@@ -3495,13 +4378,21 @@ class VideoFeature extends BaseFeatureHandler {
   private aiService: AIService;
   private messageUtils: MessageUtils;
 
-  constructor(aiService: AIService, configManagerPromise: Promise<ConfigManager>, httpClient: HttpClient) {
+  constructor(
+    aiService: AIService,
+    configManagerPromise: Promise<ConfigManager>,
+    httpClient: HttpClient,
+  ) {
     super(configManagerPromise);
     this.aiService = aiService;
     this.messageUtils = new MessageUtils(configManagerPromise, httpClient);
   }
 
-  async execute(msg: Api.Message, args: string[], _prefixes: string[]): Promise<void> {
+  async execute(
+    msg: Api.Message,
+    args: string[],
+    _prefixes: string[],
+  ): Promise<void> {
     const prefixes = getPrefixes();
     const configManager = await this.getConfigManager();
     const config = configManager.getConfig();
@@ -3516,7 +4407,7 @@ class VideoFeature extends BaseFeatureHandler {
       if (!state) {
         await this.editMessage(
           msg,
-          `🎬 <b>视频预览状态:</b>\n\n📄 当前状态: ${config.videoPreview ? "开启" : "关闭"}`
+          `🎬 <b>视频预览状态:</b>\n\n📄 当前状态: ${config.videoPreview ? "开启" : "关闭"}`,
         );
         return;
       }
@@ -3524,7 +4415,10 @@ class VideoFeature extends BaseFeatureHandler {
       await configManager.updateConfig((cfg) => {
         cfg.videoPreview = state === "on";
       });
-      await this.editMessage(msg, `✅ 视频预览已${state === "on" ? "开启" : "关闭"}`);
+      await this.editMessage(
+        msg,
+        `✅ 视频预览已${state === "on" ? "开启" : "关闭"}`,
+      );
       return;
     }
     if (subCommand === "audio") {
@@ -3532,7 +4426,7 @@ class VideoFeature extends BaseFeatureHandler {
       if (!state) {
         await this.editMessage(
           msg,
-          `🔊 <b>视频音频状态:</b>\n\n📄 当前状态: ${config.videoAudio ? "开启" : "关闭"}`
+          `🔊 <b>视频音频状态:</b>\n\n📄 当前状态: ${config.videoAudio ? "开启" : "关闭"}`,
         );
         return;
       }
@@ -3540,7 +4434,10 @@ class VideoFeature extends BaseFeatureHandler {
       await configManager.updateConfig((cfg) => {
         cfg.videoAudio = state === "on";
       });
-      await this.editMessage(msg, `✅ 视频音频已${state === "on" ? "开启" : "关闭"}`);
+      await this.editMessage(
+        msg,
+        `✅ 视频音频已${state === "on" ? "开启" : "关闭"}`,
+      );
       return;
     }
     if (subCommand === "duration") {
@@ -3548,11 +4445,14 @@ class VideoFeature extends BaseFeatureHandler {
       if (!args[2]) {
         await this.editMessage(
           msg,
-          `⏱️ <b>视频时长:</b>\n\n⏰ 当前时长: <code>${config.videoDuration} 秒</code>`
+          `⏱️ <b>视频时长:</b>\n\n⏰ 当前时长: <code>${config.videoDuration} 秒</code>`,
         );
         return;
       }
-      requireUser(!isNaN(duration) && duration >= 5 && duration <= 20, "时长必须是 5-20 的整数");
+      requireUser(
+        !isNaN(duration) && duration >= 5 && duration <= 20,
+        "时长必须是 5-20 的整数",
+      );
       await configManager.updateConfig((cfg) => {
         cfg.videoDuration = duration;
       });
@@ -3589,9 +4489,13 @@ class VideoFeature extends BaseFeatureHandler {
 
     requireUser(hasPrompt || allImageParts.length > 0, "至少需要一条提示");
 
-    if (!config.currentVideoTag || !config.currentVideoModel || !config.configs[config.currentVideoTag]) {
+    if (
+      !config.currentVideoTag ||
+      !config.currentVideoModel ||
+      !config.configs[config.currentVideoTag]
+    ) {
       throw new UserError(
-        `请先配置API并设置模型\n使用 ${prefixes[0]}ai config add <tag> <url> <key> 和 ${prefixes[0]}ai model video <tag> <model-path>`
+        `请先配置 API 并设置模型\n使用 ${prefixes[0]}ai config add <tag> <url> <key> 和 ${prefixes[0]}ai model video <tag> <model-path>`,
       );
     }
 
@@ -3625,9 +4529,20 @@ class VideoFeature extends BaseFeatureHandler {
         imageParts = allImageParts.slice(0, 4);
       }
 
-      const videos = await this.aiService.generateVideo(finalPrompt, imageParts, imageMode, token);
-      if (videos.length === 0) throw new Error("AI回复为空");
-      await this.messageUtils.sendVideos(msg, videos, finalPrompt, replyToId, token);
+      const videos = await this.aiService.generateVideo(
+        finalPrompt,
+        imageParts,
+        imageMode,
+        token,
+      );
+      if (videos.length === 0) throw new Error("AI 回复为空");
+      await this.messageUtils.sendVideos(
+        msg,
+        videos,
+        finalPrompt,
+        replyToId,
+        token,
+      );
       await deleteMessageOrGroup(msg);
     } finally {
       this.aiService.releaseToken(token);
@@ -3652,7 +4567,11 @@ class AIPlugin extends Plugin {
     this.httpClient = new HttpClient(this.configManagerPromise);
     this.aiService = new AIService(this.configManagerPromise, this.httpClient);
     this.featureRegistry = new FeatureRegistry();
-    this.questionFeature = new QuestionFeature(this.aiService, this.configManagerPromise, this.httpClient);
+    this.questionFeature = new QuestionFeature(
+      this.aiService,
+      this.configManagerPromise,
+      this.httpClient,
+    );
     this.registerFeatures();
   }
 
@@ -3665,40 +4584,65 @@ class AIPlugin extends Plugin {
     this.featureRegistry.register(new ConfigFeature(this.configManagerPromise));
     this.featureRegistry.register(new ModelFeature(this.configManagerPromise));
     this.featureRegistry.register(new PromptFeature(this.configManagerPromise));
-    this.featureRegistry.register(new CollapseFeature(this.configManagerPromise));
-    this.featureRegistry.register(new TelegraphFeature(this.configManagerPromise));
-    this.featureRegistry.register(new TimeoutFeature(this.configManagerPromise));
-    this.featureRegistry.register(new SearchFeature(this.aiService, this.configManagerPromise, this.httpClient));
-    this.featureRegistry.register(new ImageFeature(this.aiService, this.configManagerPromise, this.httpClient));
-    this.featureRegistry.register(new VideoFeature(this.aiService, this.configManagerPromise, this.httpClient));
+    this.featureRegistry.register(
+      new CollapseFeature(this.configManagerPromise),
+    );
+    this.featureRegistry.register(
+      new TelegraphFeature(this.configManagerPromise),
+    );
+    this.featureRegistry.register(
+      new TimeoutFeature(this.configManagerPromise),
+    );
+    this.featureRegistry.register(
+      new SearchFeature(
+        this.aiService,
+        this.configManagerPromise,
+        this.httpClient,
+      ),
+    );
+    this.featureRegistry.register(
+      new ImageFeature(
+        this.aiService,
+        this.configManagerPromise,
+        this.httpClient,
+      ),
+    );
+    this.featureRegistry.register(
+      new VideoFeature(
+        this.aiService,
+        this.configManagerPromise,
+        this.httpClient,
+      ),
+    );
   }
 
   description = async (): Promise<string> => {
     const mainPrefix = this.getMainPrefix();
     const config = (await this.configManagerPromise).getConfig();
 
-    const baseDescription = `<b>🤖 智能AI助手</b>
+    const baseDescription = `<b>🤖 智能 AI 助手</b>
 
-<b>⚙️ API配置:</b>
-• <code>${mainPrefix}ai config add &lt;tag&gt; &lt;url&gt; &lt;key&gt;</code> - 添加API配置
-• <code>${mainPrefix}ai config del &lt;tag&gt;</code> - 删除API配置
+<b>⚙️ API 配置:</b>
+• <code>${mainPrefix}ai config add tag&gt; url key</code> - 添加 API 配置
+• <code>${mainPrefix}ai config del tag</code> - 删除 API 配置
+• <code>${mainPrefix}ai config stream tag on|off</code> - 设置 API 流式传输
 
 <b>🧠 模型设置:</b>
-• <code>${mainPrefix}ai model chat &lt;tag&gt; &lt;model-path&gt;</code> - 设置聊天模型
-• <code>${mainPrefix}ai model search &lt;tag&gt; &lt;model-path&gt;</code> - 设置搜索模型
-• <code>${mainPrefix}ai model image &lt;tag&gt; &lt;model-path&gt;</code> - 设置图片模型
-• <code>${mainPrefix}ai model video &lt;tag&gt; &lt;model-path&gt;</code> - 设置视频模型
+• <code>${mainPrefix}ai model chat tag model-path</code> - 设置聊天模型
+• <code>${mainPrefix}ai model search tag model-path</code> - 设置搜索模型
+• <code>${mainPrefix}ai model image tag model-path</code> - 设置图片模型
+• <code>${mainPrefix}ai model video tag model-path</code> - 设置视频模型
 
 <b>💬 提问:</b>
-• <code>${mainPrefix}ai &lt;input&gt;</code> - 向AI发起提问
-• <code>${mainPrefix}ai search &lt;input&gt;</code> - 联网搜索并回答
-• <code>${mainPrefix}ai image &lt;prompt&gt;</code> - 文生/编辑图片
-• <code>${mainPrefix}ai video &lt;prompt&gt;</code> - 文生/参考图生成视频
-• <code>${mainPrefix}ai video first &lt;prompt&gt;</code> - 首帧生成视频
-• <code>${mainPrefix}ai video firstlast &lt;prompt&gt;</code> - 首尾帧生成视频
+• <code>${mainPrefix}ai input</code> - 向 AI 发起提问
+• <code>${mainPrefix}ai search input</code> - 联网搜索并回答
+• <code>${mainPrefix}ai image prompt</code> - 文生/编辑图片
+• <code>${mainPrefix}ai video prompt</code> - 文生/参考图生成视频
+• <code>${mainPrefix}ai video first prompt</code> - 首帧生成视频
+• <code>${mainPrefix}ai video firstlast prompt</code> - 首尾帧生成视频
 
 <b>✍️ 提示词:</b>
-• <code>${mainPrefix}ai prompt set &lt;input&gt;</code> - 设置提示词
+• <code>${mainPrefix}ai prompt set input</code> - 设置提示词
 • <code>${mainPrefix}ai prompt del</code> - 删除提示词
 
 <b>🧩 消息设置:</b>
@@ -3706,14 +4650,14 @@ class AIPlugin extends Plugin {
 • <code>${mainPrefix}ai video preview on|off</code> - 开/关视频预览
 • <code>${mainPrefix}ai video audio on|off</code> - 开/关视频音频
 • <code>${mainPrefix}ai collapse on|off</code> - 开/关消息折叠
-• <code>${mainPrefix}ai video duration &lt;sec&gt;</code> - 视频输出时长
-• <code>${mainPrefix}ai timeout &lt;sec&gt;</code> - 设置超时时间
+• <code>${mainPrefix}ai video duration sec</code> - 视频输出时长
+• <code>${mainPrefix}ai timeout sec</code> - 设置超时时间
 
 <b>📰 Telegraph:</b>
-• <code>${mainPrefix}ai telegraph on</code> - 开启Telegraph
-• <code>${mainPrefix}ai telegraph off</code> - 关闭Telegraph
-• <code>${mainPrefix}ai telegraph limit &lt;integer&gt;</code> - 设置容量
-• <code>${mainPrefix}ai telegraph del &lt;number/all&gt;</code> - 删除记录
+• <code>${mainPrefix}ai telegraph on</code> - 开启 Telegraph
+• <code>${mainPrefix}ai telegraph off</code> - 关闭 Telegraph
+• <code>${mainPrefix}ai telegraph limit integer</code> - 设置容量
+• <code>${mainPrefix}ai telegraph del number/all</code> - 删除记录
 
 <b>📌 使用说明:</b>
 • 不携带参数可进行查询
@@ -3723,7 +4667,10 @@ class AIPlugin extends Plugin {
     return `<blockquote expandable>${baseDescription}</blockquote>`;
   };
 
-  cmdHandlers: Record<string, (msg: Api.Message, trigger?: Api.Message) => Promise<void>> = {
+  cmdHandlers: Record<
+    string,
+    (msg: Api.Message, trigger?: Api.Message) => Promise<void>
+  > = {
     ai: async (msg: Api.Message, trigger?: Api.Message) => {
       try {
         const prefixes = getPrefixes();
@@ -3737,7 +4684,9 @@ class AIPlugin extends Plugin {
         const sub = args[0].toLowerCase();
         if (sub === "help" || sub === "?") {
           const description = await this.description();
-          await MessageSender.sendOrEdit(trigger || msg, description, { parseMode: "html" });
+          await MessageSender.sendOrEdit(trigger || msg, description, {
+            parseMode: "html",
+          });
           return;
         }
         const handler = this.featureRegistry.getHandler(sub);
