@@ -59,6 +59,10 @@
     "url": "https://github.com/TiaraBasori/TeleBox_Plugins/blob/main/bgp/bgp.ts?raw=true",
     "desc": "BGP路由图查询工具"
   },
+  "biko": {
+    "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/biko/biko.ts?raw=true",
+    "desc": "批量获取整理发送指定对话中指定用户的消息"
+  },
   "bin": {
     "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/bin/bin.ts?raw=true",
     "desc": "卡头检测"
