@@ -24,6 +24,7 @@ tpm i <插件名>
 - `autorepeat` - 智能自动复读机  
 - `banana` - Nano-Banana 图像编辑  
 - `bgp` - BGP路由图查询工具  
+- `biko` - 批量获取整理发送指定对话中指定用户的消息  
 - `bin` - 卡头检测  
 - `bizhi` - 发送一张壁纸  
 - `botmzt` - 随机获取写真图片  
