@@ -7,6 +7,10 @@
     "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/acron/acron.ts?raw=true",
     "desc": "定时发送/转发/复制/置顶/取消置顶/删除消息/执行命令"
   },
+  "admin_board": {
+    "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/admin_board/admin_board.ts?raw=true",
+    "desc": "管理员排行榜 末位淘汰"
+  },
   "aff": {
     "url": "https://github.com/TeleBoxOrg/TeleBox_Plugins/blob/main/aff/aff.ts?raw=true",
     "desc": "机场Aff信息管理"
