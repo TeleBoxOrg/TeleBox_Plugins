@@ -89,10 +89,10 @@ const helpText = `👮 <b>管理员席位管理</b>
 • <code>${htmlEscape(commandName)} rm 3 对话id/@username</code>
 
 <b>席位锁定</b>
-• <code>${htmlEscape(commandName)} lock @用户名/用户id</code> - 锁定当前对话席位
-• <code>${htmlEscape(commandName)} lock @u1,@u2 对话id/@username</code>
-• <code>${htmlEscape(commandName)} unlock @用户名/用户id</code> - 取消锁定当前对话席位
-• <code>${htmlEscape(commandName)} unlock @u1，@u2 对话id/@username</code>
+• <code>${htmlEscape(commandName)} lock @用户名/用户id [对话id/@username]</code> - 不传默认当前对话
+• <code>${htmlEscape(commandName)} lock @u1,@u2 [对话id/@username]</code>
+• <code>${htmlEscape(commandName)} unlock @用户名/用户id [对话id/@username]</code> - 不传默认当前对话
+• <code>${htmlEscape(commandName)} unlock @u1，@u2 [对话id/@username]</code>
 
 <b>缓存</b>
 • <code>${htmlEscape(commandName)} clear</code> - 清当前对话的周日均/用户信息缓存
@@ -1110,29 +1110,25 @@ function parseSeatActionArgs(remainder: string): {
   targetArg?: string;
 } {
   const tokens = remainder.trim().split(/\s+/).filter(Boolean);
-  let bestMatch:
-    | {
-        identifiers: string[];
-        splitIndex: number;
-      }
-    | undefined;
+  const identifiers = parseUserIdentifiers(remainder);
+  if (identifiers) {
+    return { identifiers };
+  }
 
-  for (let index = 1; index <= tokens.length; index++) {
-    const parsed = parseUserIdentifiers(tokens.slice(0, index).join(" "));
-    if (parsed) {
-      bestMatch = { identifiers: parsed, splitIndex: index };
+  if (tokens.length > 1) {
+    const targetArg = tokens[tokens.length - 1];
+    const targetlessIdentifiers = parseUserIdentifiers(
+      tokens.slice(0, -1).join(" "),
+    );
+    if (targetlessIdentifiers) {
+      return {
+        identifiers: targetlessIdentifiers,
+        targetArg,
+      };
     }
   }
 
-  if (!bestMatch) {
-    return { identifiers: [] };
-  }
-
-  const targetArg = tokens.slice(bestMatch.splitIndex).join(" ").trim();
-  return {
-    identifiers: bestMatch.identifiers,
-    targetArg: targetArg || undefined,
-  };
+  return { identifiers: [] };
 }
 
 async function findUserInChatParticipants(
