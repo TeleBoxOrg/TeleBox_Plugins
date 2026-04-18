@@ -1270,7 +1270,7 @@ Asia/Tokyo
 Europe/London
 America/New_York
 
-使用 <code>${mainPrefix}acn tz &lt;时区&gt;</code> 设置`, parseMode: "html" });
+使用 <code>${mainPrefix}acn tz ＜时区＞</code> 设置`, parseMode: "html" });
     if (sub === "on" || sub === "off") {
       const settings = await requireSettings(userId, msg);
       if (!settings) return;
