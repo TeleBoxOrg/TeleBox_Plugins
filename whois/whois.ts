@@ -36,9 +36,9 @@ const help_text = `🔍 <b>WHOIS 域名查询</b>
 • 域名到期提醒
 
 <b>🔧 使用：</b>
-• <code>${mainPrefix}whois &lt;域名&gt;</code> - 查询指定域名
+• <code>${mainPrefix}whois ＜域名＞</code> - 查询指定域名
 • <code>${mainPrefix}whois</code> - 回复包含域名的消息
-• <code>${mainPrefix}whois batch &lt;域名1&gt; &lt;域名2&gt;...</code> - 批量查询
+• <code>${mainPrefix}whois batch ＜域名1＞ ＜域名2＞...</code> - 批量查询
 • <code>${mainPrefix}whois history</code> - 查看查询历史
 • <code>${mainPrefix}whois clear</code> - 清除历史记录
 
@@ -532,7 +532,7 @@ class WhoisPlugin extends Plugin {
     const history = this.db.data.history;
     if (history.length === 0) {
       await msg.edit({
-        text: `📭 <b>暂无查询历史</b>\n\n💡 使用 <code>${mainPrefix}whois &lt;域名&gt;</code> 开始查询`,
+        text: `📭 <b>暂无查询历史</b>\n\n💡 使用 <code>${mainPrefix}whois ＜域名＞</code> 开始查询`,
         parseMode: "html"
       });
       return;
