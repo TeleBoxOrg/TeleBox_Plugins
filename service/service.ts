@@ -1,22 +1,9 @@
 import { Plugin } from "@utils/pluginBase";
-import { Api, TelegramClient } from "teleproto";
+import { Api } from "teleproto";
 import { exec } from "child_process";
 import { promisify } from "util";
-import * as os from "os";
 
 const execAsync = promisify(exec);
-
-// 配置存储键名
-const CONFIG_KEYS = {
-  SERVICE_DEFAULT: "service_default",
-  SERVICE_AUTO_DETECT: "service_auto_detect",
-};
-
-// 默认配置
-const DEFAULT_CONFIG = {
-  [CONFIG_KEYS.SERVICE_DEFAULT]: "pagermaid",
-  [CONFIG_KEYS.SERVICE_AUTO_DETECT]: "true",
-};
 
 // 状态翻译映射
 const STATUS_TRANSLATIONS: Record<string, string> = {
@@ -173,7 +160,7 @@ function translateToChinese(text: string): string {
       // 提取时间部分并格式化
       const timeMatch = line.match(/(启动时间:|Started:)\s*(.+)/);
       if (timeMatch) {
-        const [, label, timePart] = timeMatch;
+          const [, , timePart] = timeMatch;
         const formattedTime = formatChineseTime(timePart);
         translatedLine = `启动时间: ${formattedTime}`;
       }
@@ -317,7 +304,7 @@ class ServicePlugin extends Plugin {
 
 使用方法：
 • \`service\` - 自动检测并显示当前服务状态
-• \`service <服务名>\` - 显示指定服务的状态
+• \`service ＜服务名＞\` - 显示指定服务的状态
 
 功能特点：
 • 自动检测当前进程对应的systemd服务

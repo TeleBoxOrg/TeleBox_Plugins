@@ -186,7 +186,7 @@ class EatGifPlugin extends Plugin {
     const items = keys.map(
       (k) => `• <code>${htmlEscape(k)}</code> - ${htmlEscape(config[k].desc)}`
     );
-    const header = `🧩 <b>可用表情列表</b>\n使用：<code>${commandName} &lt;名称&gt;</code>（需回复Ta）\n\n`;
+    const header = `🧩 <b>可用表情列表</b>\n使用：<code>${commandName} ＜名称＞</code>（需回复Ta）\n\n`;
     return header + items.join("\n");
   }
 
@@ -194,12 +194,6 @@ class EatGifPlugin extends Plugin {
     fs.rmSync(ASSET_PATH, { recursive: true, force: true });
     await loadGifListConfig(baseConfigURL);
     await msg.edit({ text: "🧹 已清理缓存并刷新配置", parseMode: "html" });
-  }
-
-  private getRandomEatGif(): string {
-    let keys = Object.keys(config);
-    const randomIndex = Math.floor(Math.random() * keys.length);
-    return keys[randomIndex];
   }
 
   private async generateGif(
@@ -410,12 +404,6 @@ class EatGifPlugin extends Plugin {
     return youAvatarBuffer as Buffer | undefined;
   }
 
-  private async getMediaAvatarBuffer(
-    msg: Api.Message,
-    trigger?: Api.Message
-  ): Promise<Buffer | undefined> {
-    return;
-  }
 }
 
 export default new EatGifPlugin();

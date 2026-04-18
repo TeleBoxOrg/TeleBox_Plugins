@@ -192,7 +192,7 @@ class QRPlugin extends Plugin {
 使用前请先安装依赖。
 
 ━━━ 核心功能 ━━━
-• <code>qr &lt;文本&gt;</code> - 直接生成二维码
+• <code>qr ＜文本＞</code> - 直接生成二维码
 • 回复文本消息使用 <code>qr</code> - 将消息内容转为二维码
 • 回复图片使用 <code>qr</code> - 解码图中的二维码内容
 
@@ -321,7 +321,7 @@ class QRPlugin extends Plugin {
         // 4. 如果没有任何有效输入，显示帮助信息
         await msg.edit({
           text: 'ℹ️ <b>QR 工具使用方法:</b>\n\n' +
-            '• <code>qr &lt;文本&gt;</code>\n  (将文本转为二维码)\n\n' +
+            '• <code>qr ＜文本＞</code>\n  (将文本转为二维码)\n\n' +
             '• 回复文本消息使用 <code>qr</code>\n  (将消息内容转为二维码)\n\n' +
             '• 回复图片/贴纸使用 <code>qr</code>\n  (解码图中的二维码)',
           parseMode: 'html'

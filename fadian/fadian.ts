@@ -219,7 +219,7 @@ class FadianPlugin extends Plugin {
 
             if (!targetName) {
               await msg.edit({
-                text: `❌ <b>参数不足</b>\n\n💡 使用方法：\n1. <code>${mainPrefix}fadian fd &lt;名字&gt;</code>\n2. 回复某人消息后使用 <code>${mainPrefix}fadian fd</code>\n\n示例：<code>${mainPrefix}fadian fd 张三</code>`,
+                text: `❌ <b>参数不足</b>\n\n💡 使用方法：\n1. <code>${mainPrefix}fadian fd ＜名字＞</code>\n2. 回复某人消息后使用 <code>${mainPrefix}fadian fd</code>\n\n示例：<code>${mainPrefix}fadian fd 张三</code>`,
                 parseMode: "html",
               });
               return;

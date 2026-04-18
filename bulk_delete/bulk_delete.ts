@@ -248,7 +248,7 @@ class BulkDeletePlugin extends Plugin {
     // 当前插件不持有需要在 reload 时额外释放的长期资源。
   }
 
-  description: string = `回复消息并使用 ${mainPrefix}bd, 删除从被回复的消息到当前指令之间的所有消息。或使用 ${mainPrefix}bd <数字> 删除您最近的消息。使用 ${mainPrefix}bd on/off 切换删除他人消息的权限。`;
+  description: string = `回复消息并使用 ${mainPrefix}bd, 删除从被回复的消息到当前指令之间的所有消息。或使用 ${mainPrefix}bd ＜数字＞ 删除您最近的消息。使用 ${mainPrefix}bd on/off 切换删除他人消息的权限。`;
   cmdHandlers: Record<string, (msg: Api.Message) => Promise<void>> = {
     bd,
   };
