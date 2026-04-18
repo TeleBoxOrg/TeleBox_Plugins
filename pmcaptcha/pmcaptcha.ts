@@ -141,7 +141,26 @@ const prefixes   = getPrefixes();
 const mainPrefix = prefixes[0] || ".";
 const pmcDir     = createDirectoryInAssets("pmcaptcha");
 
-const dataDir = path.join(process.cwd(), "pmcaptcha_userdata");
+const legacyDataDir = path.join(process.cwd(), "pmcaptcha_userdata");
+const newDataDir   = createDirectoryInAssets("pmcaptcha");
+
+if (fs.existsSync(legacyDataDir)) {
+  const legacyConfig = path.join(legacyDataDir, "pmcaptcha_config.json");
+  const legacyData = path.join(legacyDataDir, "pmcaptcha_data.json");
+  const newConfig  = path.join(newDataDir, "pmcaptcha_config.json");
+  const newData    = path.join(newDataDir, "pmcaptcha_data.json");
+
+  if (fs.existsSync(legacyConfig) && !fs.existsSync(newConfig)) {
+    fs.copyFileSync(legacyConfig, newConfig);
+    log(LogLevel.INFO, `Migrated config: ${legacyConfig} → ${newConfig}`);
+  }
+  if (fs.existsSync(legacyData) && !fs.existsSync(newData)) {
+    fs.copyFileSync(legacyData, newData);
+    log(LogLevel.INFO, `Migrated data: ${legacyData} → ${newData}`);
+  }
+}
+
+const dataDir = newDataDir;
 if (!fs.existsSync(dataDir)) fs.mkdirSync(dataDir, { recursive: true });
 
 let configDb: JsonDb | null = null;
