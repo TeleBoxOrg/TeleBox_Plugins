@@ -54,7 +54,7 @@ const help_text = `🤖 <b>自动昵称更新插件 v3</b>
   常用时区：Asia/Shanghai（北京）、America/New_York（纽约）、Europe/London（伦敦）等
 • <code>${mainPrefix}acn tz list</code>
   查看常用时区列表，方便复制使用
-• <code>${mainPrefix}acn tz show on</code> / <code>off</code>
+• <code>${mainPrefix}acn tz on</code> / <code>off</code>
   控制昵称中是否显示时区信息（如 GMT+8）
   开启后昵称示例：张三 09:30 GMT+8
 • <code>${mainPrefix}acn tz format GMT</code>
@@ -65,11 +65,7 @@ const help_text = `🤖 <b>自动昵称更新插件 v3</b>
   • <code>offset</code> - 显示纯偏移量，如 +8:00
   • <code>custom:文字</code> - 自定义显示文字，如 custom:北京时间
 • <code>${mainPrefix}acn timezone</code>
-  等同于 <code>${mainPrefix}acn tz</code>（旧命令）
-• <code>${mainPrefix}acn showtz on/off</code>
-  等同于 <code>${mainPrefix}acn tz show on/off</code>（旧命令）
-• <code>${mainPrefix}acn tzformat GMT</code>
-  等同于 <code>${mainPrefix}acn tz format GMT</code>（旧命令）</blockquote>
+  等同于 <code>${mainPrefix}acn tz</code>（别名）</blockquote>
 <b>🎨 外观设置：</b>
 <blockquote expandable>• <code>${mainPrefix}acn emoji on</code> / <code>off</code>
   开启或关闭时钟 emoji（🕐🕑🕒...）
@@ -185,7 +181,7 @@ interface ConfigData {
 
 // === 数据管理层 ===
 class DataManager {
-  private static db: any = null;
+  private static db: Awaited<ReturnType<typeof JSONFilePreset<ConfigData>>> | null = null;
   private static initPromise: Promise<void> | null = null;
 
   private static async init(): Promise<void> {
@@ -204,42 +200,42 @@ class DataManager {
   static async getUserSettings(userId: number): Promise<UserSettings | null> {
     if (!userId || isNaN(userId)) return null;
     await this.init();
-    return this.db?.data.users[userId.toString()] || null;
+    return this.db?.data?.users?.[userId.toString()] ?? null;
   }
 
   static async saveUserSettings(settings: UserSettings): Promise<boolean> {
     if (!settings?.user_id) return false;
     await this.init();
     try {
-      this.db.data.users[settings.user_id.toString()] = { ...settings };
-      await this.db.write();
+      this.db!.data.users[settings.user_id.toString()] = { ...settings };
+      await this.db!.write();
       return true;
     } catch { return false; }
   }
 
   static async getRandomTexts(): Promise<string[]> {
     await this.init();
-    return this.db?.data.random_texts || [];
+    return this.db?.data?.random_texts ?? [];
   }
 
   static async saveRandomTexts(texts: string[]): Promise<boolean> {
     await this.init();
     try {
-      this.db.data.random_texts = texts.slice(0, 100)
-        .filter(t => t && typeof t === 'string')
+      this.db!.data.random_texts = texts.slice(0, 100)
+        .filter((t): t is string => Boolean(t) && typeof t === 'string')
         .map(t => t.trim())
         .filter(t => t.length > 0 && t.length <= 50);
-      await this.db.write();
+      await this.db!.write();
       return true;
     } catch { return false; }
   }
 
   static async getAllEnabledUsers(): Promise<number[]> {
     await this.init();
-    const users = this.db?.data.users || {};
-    return Object.keys(users)
-      .filter(key => users[key].is_enabled)
-      .map(key => parseInt(key));
+    const users = this.db?.data?.users ?? {};
+    return Object.entries(users)
+      .filter(([_, v]) => v.is_enabled)
+      .map(([k]) => parseInt(k, 10));
   }
 }
 
@@ -534,9 +530,13 @@ class NameManager {
 
   formatTime(timezone: string): string {
     try {
-      return new Date().toLocaleTimeString("zh-CN", {
+      const timeStr = new Date().toLocaleTimeString("zh-CN", {
         timeZone: timezone, hour12: false, hour: "2-digit", minute: "2-digit"
       });
+      if (timeStr.startsWith("24:")) {
+        return "00:" + timeStr.slice(3);
+      }
+      return timeStr;
     } catch {
       const now = new Date();
       return `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
@@ -1029,13 +1029,11 @@ class AutoChangeNamePlugin extends Plugin {
           case "update": case "now": await this.handleUpdate(msg, userId); break;
           case "reset": await this.handleReset(msg, userId); break;
           case "emoji": await this.handleEmojiToggle(msg, userId, args.slice(1)); break;
-          case "showtz": await this.handleTimezoneToggle(msg, userId, args.slice(1)); break;
           case "order": await this.handleDisplayOrder(msg, userId, args.slice(1)); break;
           case "config": await this.handleShowConfig(msg, userId); break;
           case "weather": await this.handleWeather(msg, userId, args.slice(1)); break;
           case "style": await this.handleTextStyle(msg, userId, args.slice(1)); break;
           case "time": await this.handleTimeToggle(msg, userId, args.slice(1)); break;
-          case "tzformat": await this.handleTimezoneFormat(msg, userId, args.slice(1)); break;
           default:
             await msg.edit({
               text: `❌ <b>未知命令</b>\n\n未知的子命令: <code>${htmlEscape(sub)}</code>\n\n输入 <code>${mainPrefix}acn</code> 查看帮助。`,
@@ -1159,7 +1157,7 @@ class AutoChangeNamePlugin extends Plugin {
     const toggleableComponents = ["time", "text", "weather"] as const;
     if (!toggleableComponents.includes(action as any)) {
       await msg.edit({
-        text: `❌ <b>acn show 仅支持管理 time/text/weather</b>\n\nemoji 和 timezone 请使用：\n• <code>${mainPrefix}acn emoji on/off</code>\n• <code>${mainPrefix}acn showtz on/off</code>`,
+        text: `❌ <b>acn show 仅支持管理 time/text/weather</b>\n\nemoji 请使用：\n• <code>${mainPrefix}acn emoji on/off</code>`,
         parseMode: "html"
       });
       return;
@@ -1210,8 +1208,8 @@ class AutoChangeNamePlugin extends Plugin {
     const texts = await DataManager.getRandomTexts();
 
     if (action === "add") {
-      const cmdPrefix = (msg.message || "").split(' ').slice(0, 3).join(' ');
-      const inputText = (msg.message || "").substring(cmdPrefix.length).trim();
+      // Extract text after "acn text add" - join remaining args
+      const inputText = args.slice(1).join(" ").trim();
       
       if (!inputText) return void await msg.edit({ text: "❌ 请提供要添加的文本内容", parseMode: "html" });
       
@@ -1256,11 +1254,35 @@ class AutoChangeNamePlugin extends Plugin {
 
   private async handleTimezone(msg: Api.Message, userId: number, args: string[]): Promise<void> {
     if (args.length === 0) {
-      await msg.edit({ text: `🌍 <b>时区管理</b>\n\n• <code>${mainPrefix}acn tz Asia/Shanghai</code> - 设置时区\n• <code>${mainPrefix}acn tz list</code> - 时区列表\n• <code>${mainPrefix}acn tz show on/off</code> - 显示控制\n• <code>${mainPrefix}acn tz format GMT</code> - 格式设置`, parseMode: "html" });
+      await msg.edit({ text: `🌍 <b>时区管理</b>
+
+• <code>${mainPrefix}acn tz Asia/Shanghai</code> - 设置时区
+• <code>${mainPrefix}acn tz list</code> - 时区列表
+• <code>${mainPrefix}acn tz on/off</code> - 显示控制
+• <code>${mainPrefix}acn tz format GMT</code> - 格式设置`, parseMode: "html" });
       return;
     }
     const sub = (args[0] || "").toLowerCase();
-    if (sub === "list") return void await msg.edit({ text: `🌍 <b>常用时区列表</b>\n\nAsia/Shanghai\nAsia/Tokyo\nEurope/London\nAmerica/New_York\n\n使用 <code>${mainPrefix}acn tz &lt;时区&gt;</code> 设置`, parseMode: "html" });
+    if (sub === "list") return void await msg.edit({ text: `🌍 <b>常用时区列表</b>
+
+Asia/Shanghai
+Asia/Tokyo
+Europe/London
+America/New_York
+
+使用 <code>${mainPrefix}acn tz &lt;时区&gt;</code> 设置`, parseMode: "html" });
+    if (sub === "on" || sub === "off") {
+      const settings = await requireSettings(userId, msg);
+      if (!settings) return;
+      settings.show_timezone = (sub === "on");
+      if (await DataManager.saveUserSettings(settings)) {
+        if (settings.is_enabled) await nameManager.updateUserProfile(userId, true);
+        await msg.edit({ text: `✅ <b>时区显示已${sub === "on" ? "开启" : "关闭"}</b>`, parseMode: "html" });
+      } else {
+        await msg.edit({ text: "❌ 设置保存失败", parseMode: "html" });
+      }
+      return;
+    }
     if (sub === "format") return this.handleTimezoneFormat(msg, userId, args.slice(1));
 
     const newTimezone = (sub === "set" ? args.slice(1) : args).join(" ").trim();
@@ -1274,6 +1296,8 @@ class AutoChangeNamePlugin extends Plugin {
     if (await DataManager.saveUserSettings(settings)) {
       if (settings.is_enabled) await nameManager.updateUserProfile(userId, true);
       await msg.edit({ text: `✅ <b>时区已更新为:</b> <code>${newTimezone}</code>`, parseMode: "html" });
+    } else {
+      await msg.edit({ text: "❌ 设置保存失败", parseMode: "html" });
     }
   }
 
@@ -1289,51 +1313,20 @@ class AutoChangeNamePlugin extends Plugin {
   }
 
   private async handleEmojiToggle(msg: Api.Message, userId: number, args: string[]): Promise<void> {
-    const settings = await requireSettings(userId, msg);
-    if (!settings) return;
-
-    const action = args[0]?.toLowerCase();
-    if (action === "on" || action === "off") {
-      settings.show_clock_emoji = (action === "on");
-      if (await DataManager.saveUserSettings(settings)) {
-        if (settings.is_enabled) await nameManager.updateUserProfile(userId, true);
-        await msg.edit({ text: `✅ <b>时钟Emoji已${action === "on" ? "开启" : "关闭"}</b>`, parseMode: "html" });
-      }
-    } else {
-      await msg.edit({ text: `🕐 <b>时钟Emoji</b>\n当前: <code>${settings.show_clock_emoji ? "开启" : "关闭"}</code>\n使用 <code>${mainPrefix}acn emoji on/off</code> 切换`, parseMode: "html" });
-    }
+    await this.handleToggleSetting(msg, userId, args, {
+      key: "show_clock_emoji",
+      settingName: "时钟Emoji",
+      command: "emoji"
+    });
   }
 
   private async handleTimeToggle(msg: Api.Message, userId: number, args: string[]): Promise<void> {
-    const settings = await requireSettings(userId, msg);
-    if (!settings) return;
-
-    const action = args[0]?.toLowerCase();
-    if (action === "on" || action === "off") {
-      settings.show_time = (action === "on");
-      if (await DataManager.saveUserSettings(settings)) {
-        if (settings.is_enabled) await nameManager.updateUserProfile(userId, true);
-        await msg.edit({ text: `✅ <b>时间显示已${action === "on" ? "开启" : "关闭"}</b>`, parseMode: "html" });
-      }
-    } else {
-      await msg.edit({ text: `⏰ <b>时间显示</b>\n当前: <code>${settings.show_time !== false ? "开启" : "关闭"}</code>\n使用 <code>${mainPrefix}acn time on/off</code> 切换`, parseMode: "html" });
-    }
-  }
-
-  private async handleTimezoneToggle(msg: Api.Message, userId: number, args: string[]): Promise<void> {
-    const settings = await requireSettings(userId, msg);
-    if (!settings) return;
-
-    const action = args[0]?.toLowerCase();
-    if (action === "on" || action === "off") {
-      settings.show_timezone = (action === "on");
-      if (await DataManager.saveUserSettings(settings)) {
-        if (settings.is_enabled) await nameManager.updateUserProfile(userId, true);
-        await msg.edit({ text: `✅ <b>时区显示已${action === "on" ? "开启" : "关闭"}</b>`, parseMode: "html" });
-      }
-    } else {
-      await msg.edit({ text: `🌍 <b>时区显示</b>\n当前: <code>${settings.show_timezone ? "开启" : "关闭"}</code>\n使用 <code>${mainPrefix}acn showtz on/off</code> 切换`, parseMode: "html" });
-    }
+    await this.handleToggleSetting(msg, userId, args, {
+      key: "show_time",
+      settingName: "时间显示",
+      command: "time",
+      defaultOn: true
+    });
   }
 
   private async handleTimezoneFormat(msg: Api.Message, userId: number, args: string[]): Promise<void> {
@@ -1349,6 +1342,39 @@ class AutoChangeNamePlugin extends Plugin {
     if (await DataManager.saveUserSettings(settings)) {
       if (settings.is_enabled) await nameManager.updateUserProfile(userId, true);
       await msg.edit({ text: `✅ <b>时区格式已更新为:</b> <code>${htmlEscape(settings.timezone_format)}</code>`, parseMode: "html" });
+    } else {
+      await msg.edit({ text: "❌ 设置保存失败", parseMode: "html" });
+    }
+  }
+
+  private async handleToggleSetting(
+    msg: Api.Message, 
+    userId: number, 
+    args: string[], 
+    options: {
+      key: keyof UserSettings;
+      settingName: string;
+      command: string;
+      defaultOn?: boolean;
+    }
+  ): Promise<void> {
+    const settings = await requireSettings(userId, msg);
+    if (!settings) return;
+
+    const action = args[0]?.toLowerCase();
+    if (action === "on" || action === "off") {
+      (settings as any)[options.key] = action === "on";
+      if (await DataManager.saveUserSettings(settings)) {
+        if (settings.is_enabled) await nameManager.updateUserProfile(userId, true);
+        await msg.edit({ text: `<b>${options.settingName}已${action === "on" ? "开启" : "关闭"}</b>`, parseMode: "html" });
+      } else {
+        await msg.edit({ text: "❌ 设置保存失败", parseMode: "html" });
+      }
+    } else {
+      const isOn = options.defaultOn 
+        ? (settings as any)[options.key] !== false 
+        : (settings as any)[options.key] === true;
+      await msg.edit({ text: `<b>${options.settingName}</b>\n当前: <code>${isOn ? "开启" : "关闭"}</code>\n使用 <code>${mainPrefix}acn ${options.command} on/off</code> 切换`, parseMode: "html" });
     }
   }
 
@@ -1370,6 +1396,8 @@ class AutoChangeNamePlugin extends Plugin {
     if (await DataManager.saveUserSettings(settings)) {
       if (settings.is_enabled) await nameManager.updateUserProfile(userId, true);
       await msg.edit({ text: `✅ <b>文字样式已更新为:</b> <code>${settings.text_style}</code>`, parseMode: "html" });
+    } else {
+      await msg.edit({ text: "❌ 设置保存失败", parseMode: "html" });
     }
   }
 
@@ -1396,6 +1424,8 @@ class AutoChangeNamePlugin extends Plugin {
     if (await DataManager.saveUserSettings(settings)) {
       if (settings.is_enabled) await nameManager.updateUserProfile(userId, true);
       await msg.edit({ text: `✅ <b>天气配置已更新</b>`, parseMode: "html" });
+    } else {
+      await msg.edit({ text: "❌ 设置保存失败", parseMode: "html" });
     }
   }
 
@@ -1417,6 +1447,8 @@ class AutoChangeNamePlugin extends Plugin {
     if (await DataManager.saveUserSettings(settings)) {
       if (settings.is_enabled) await nameManager.updateUserProfile(userId, true);
       await msg.edit({ text: `✅ <b>显示顺序已更新为:</b>\n<code>${newOrder}</code>`, parseMode: "html" });
+    } else {
+      await msg.edit({ text: "❌ 设置保存失败", parseMode: "html" });
     }
   }
 
