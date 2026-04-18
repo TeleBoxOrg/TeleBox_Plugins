@@ -1119,12 +1119,12 @@ function helpText(section?: string): string {
     set: `🔒 <b>参数设置</b>
 
 <b>超时 / 次数</b>
-  <code>${p}pmc set time &lt;秒&gt;</code>    — 验证超时（0 = 不限时，默认 30）
-  <code>${p}pmc set tries &lt;次&gt;</code>   — 最大尝试次数（0 = 不限，默认 3）
+  <code>${p}pmc set time <秒></code>    — 验证超时（0 = 不限时，默认 30）
+  <code>${p}pmc set tries <次></code>   — 最大尝试次数（0 = 不限，默认 3）
 
 <b>文字模式</b>
-  <code>${p}pmc set keyword &lt;关键词&gt;</code>  — 设置文字模式回复关键词（默认"我同意"）
-  <code>${p}pmc set prompt &lt;文本&gt;</code>     — 自定义验证提示语（留空 = 恢复默认）
+  <code>${p}pmc set keyword <关键词></code>  — 设置文字模式回复关键词（默认"我同意"）
+  <code>${p}pmc set prompt <文本></code>     — 自定义验证提示语（留空 = 恢复默认）
     └ math 模式占位符：<code>{question}</code>
     └ text 模式占位符：<code>{keyword}</code>
 
@@ -1147,23 +1147,23 @@ function helpText(section?: string): string {
     wl: `🔒 <b>白名单管理</b>
 
 <b>快捷命令</b>
-  <code>${p}pmc add &lt;ID/@user&gt;</code>   — 将用户加入白名单（支持回复消息）
-  <code>${p}pmc del &lt;ID/@user&gt;</code>   — 将用户从白名单移除
+  <code>${p}pmc add <ID/@user></code>   — 将用户加入白名单（支持回复消息）
+  <code>${p}pmc del <ID/@user></code>   — 将用户从白名单移除
 
 <b>wl 子命令</b>
   <code>${p}pmc wl</code>                   — 查看白名单列表
-  <code>${p}pmc wl add &lt;ID/@user&gt;</code> — 同 add（支持回复消息）
-  <code>${p}pmc wl del &lt;ID/@user&gt;</code> — 同 del
+  <code>${p}pmc wl add <ID/@user></code> — 同 add（支持回复消息）
+  <code>${p}pmc wl del <ID/@user></code> — 同 del
   <code>${p}pmc wl del all</code>           — 清空白名单
-  <code>${p}pmc wl pass &lt;ID/@user&gt;</code> — 手动标记为验证通过并加入白名单`,
+  <code>${p}pmc wl pass <ID/@user></code> — 手动标记为验证通过并加入白名单`,
 
     record: `🔒 <b>验证记录</b>
 
   <code>${p}pmc record</code>                               — 通过 / 失败人数摘要
   <code>${p}pmc record verified</code>                     — 查看验证通过记录
   <code>${p}pmc record failed</code>                       — 查看验证失败记录
-  <code>${p}pmc record del verified &lt;ID&gt;/all</code>   — 删除通过记录（支持 all）
-  <code>${p}pmc record del failed &lt;ID&gt;/all</code>     — 删除失败记录（支持 all）`,
+  <code>${p}pmc record del verified <ID>/all</code>   — 删除通过记录（支持 all）
+  <code>${p}pmc record del failed <ID>/all</code>     — 删除失败记录（支持 all）`,
   };
 
   if (section && sections[section]) return sections[section];
@@ -1289,7 +1289,7 @@ const pmcaptcha = async (message: Api.Message) => {
               `<code>text</code>      — 关键词验证\n` +
               `<code>img_digit</code> — 图片验证（纯数字）\n` +
               `<code>img_mixed</code> — 图片验证（字母+数字）\n\n` +
-              `用法：<code>${mainPrefix}pmc captcha &lt;模式&gt;</code>`
+              `用法：<code>${mainPrefix}pmc captcha <模式></code>`
             );
             break;
           }
@@ -1322,7 +1322,7 @@ const pmcaptcha = async (message: Api.Message) => {
 
         if (!param) {
           await edit(
-            `❌ 用法：<code>${mainPrefix}pmc set &lt;三级命令&gt; &lt;值&gt;</code>\n\n` +
+            `❌ 用法：<code>${mainPrefix}pmc set <三级命令> <值></code>\n\n` +
             `三级命令：\n` +
             `<code>time</code>     — 验证超时秒数（0=不限，默认 30）\n` +
             `<code>tries</code>    — 最大尝试次数（0=不限，默认 3）\n` +
@@ -1342,7 +1342,7 @@ const pmcaptcha = async (message: Api.Message) => {
           case "timeout": {
             const n = parseInt(val);
             if (isNaN(n) || n < 0) {
-              await edit(`❌ 用法：<code>${mainPrefix}pmc set time &lt;秒&gt;</code>（0 = 不限时）`);
+              await edit(`❌ 用法：<code>${mainPrefix}pmc set time <秒></code>（0 = 不限时）`);
               break;
             }
             set(K.CAP_TIMEOUT, n);
@@ -1356,7 +1356,7 @@ const pmcaptcha = async (message: Api.Message) => {
           case "tries": {
             const n = parseInt(val);
             if (isNaN(n) || n < 0) {
-              await edit(`❌ 用法：<code>${mainPrefix}pmc set tries &lt;次&gt;</code>（0 = 不限次数）`);
+              await edit(`❌ 用法：<code>${mainPrefix}pmc set tries <次></code>（0 = 不限次数）`);
               break;
             }
             set(K.CAP_TRIES, n);
@@ -1368,7 +1368,7 @@ const pmcaptcha = async (message: Api.Message) => {
           // ── keyword ────────────────────────────────────────────────────────
           case "keyword": {
             if (!val) {
-              await edit(`❌ 用法：<code>${mainPrefix}pmc set keyword &lt;关键词&gt;</code>`);
+              await edit(`❌ 用法：<code>${mainPrefix}pmc set keyword <关键词></code>`);
               break;
             }
             set(K.CAP_KEYWORD, val);
@@ -1390,7 +1390,7 @@ const pmcaptcha = async (message: Api.Message) => {
             const subs = args.slice(2).filter(Boolean);
             if (!subs.length) {
               await edit(
-                `❌ 用法：<code>${mainPrefix}pmc set fail &lt;操作…&gt;</code>（空格分隔，可复选）\n\n` +
+                `❌ 用法：<code>${mainPrefix}pmc set fail <操作…></code>（空格分隔，可复选）\n\n` +
                 `英文 / 中文 均可：\n` +
                 `<code>block</code>   / <code>屏蔽</code>   — 屏蔽用户\n` +
                 `<code>delete</code>  / <code>删除</code>   — 双方撤回全部对话\n` +
@@ -1434,7 +1434,7 @@ const pmcaptcha = async (message: Api.Message) => {
             const subs = args.slice(2).filter(Boolean);
             if (!subs.length) {
               await edit(
-                `❌ 用法：<code>${mainPrefix}pmc set pass &lt;操作…&gt;</code>（可复选）\n\n` +
+                `❌ 用法：<code>${mainPrefix}pmc set pass <操作…></code>（可复选）\n\n` +
                 `英文 / 中文 均可：\n` +
                 `<code>unmute</code>    / <code>取消静音</code>   — 验证通过后取消静音\n` +
                 `<code>unarchive</code> / <code>取消归档</code>   — 验证通过后取消归档\n` +
@@ -1509,7 +1509,7 @@ const pmcaptcha = async (message: Api.Message) => {
         if (!tid && args[1]) tid = await resolveUser(client, args[1]);
         if (!tid || tid <= 0) {
           await edit(
-            `❌ 用法：<code>${mainPrefix}pmc add &lt;ID/@user&gt;</code> 或回复对方消息\n\n` +
+            `❌ 用法：<code>${mainPrefix}pmc add <ID/@user></code> 或回复对方消息\n\n` +
             `请提供有效的用户 ID 或用户名。`
           );
           break;
@@ -1524,7 +1524,7 @@ const pmcaptcha = async (message: Api.Message) => {
       case "del": {
         // 二级命令 del：快捷白名单移除（等同 .pmc wl del）
         if (!args[1]) {
-          await edit(`❌ 用法：<code>${mainPrefix}pmc del &lt;ID/@user&gt;</code>`);
+          await edit(`❌ 用法：<code>${mainPrefix}pmc del <ID/@user></code>`);
           break;
         }
         const tid = await resolveUser(client, args[1]);
@@ -1583,7 +1583,7 @@ const pmcaptcha = async (message: Api.Message) => {
             await edit("✅ 白名单已清空");
             break;
           }
-          if (!args[2]) { await edit(`❌ 用法：<code>${mainPrefix}pmc wl del &lt;ID/@user&gt;</code> 或 <code>del all</code>`); break; }
+          if (!args[2]) { await edit(`❌ 用法：<code>${mainPrefix}pmc wl del <ID/@user></code> 或 <code>del all</code>`); break; }
           const tid = await resolveUser(client, args[2]);
           if (!tid || tid <= 0) { await edit("❌ 无法解析目标用户"); break; }
           wl.del(tid);
@@ -1594,7 +1594,7 @@ const pmcaptcha = async (message: Api.Message) => {
 
         // wl pass
         if (sub === "pass") {
-          if (!args[2]) { await edit(`❌ 用法：<code>${mainPrefix}pmc wl pass &lt;ID/@user&gt;</code>`); break; }
+          if (!args[2]) { await edit(`❌ 用法：<code>${mainPrefix}pmc wl pass <ID/@user></code>`); break; }
           const tid = await resolveUser(client, args[2]);
           if (!tid || tid <= 0) { await edit("❌ 无法解析目标用户"); break; }
           const st = states.get(tid);
@@ -1612,13 +1612,13 @@ const pmcaptcha = async (message: Api.Message) => {
         await edit(
           `❌ 未知子命令：<code>${sub}</code>\n\n` +
           `可用：\n` +
-          `<code>${mainPrefix}pmc add &lt;ID/@user&gt;</code>    — 快捷加入白名单\n` +
-          `<code>${mainPrefix}pmc del &lt;ID/@user&gt;</code>    — 快捷移除白名单\n` +
+          `<code>${mainPrefix}pmc add <ID/@user></code>    — 快捷加入白名单\n` +
+          `<code>${mainPrefix}pmc del <ID/@user></code>    — 快捷移除白名单\n` +
           `<code>${mainPrefix}pmc wl</code>                  — 查看白名单\n` +
-          `<code>${mainPrefix}pmc wl add &lt;ID/@user&gt;</code> — 加入白名单\n` +
-          `<code>${mainPrefix}pmc wl del &lt;ID/@user&gt;</code> — 移除用户\n` +
+          `<code>${mainPrefix}pmc wl add <ID/@user></code> — 加入白名单\n` +
+          `<code>${mainPrefix}pmc wl del <ID/@user></code> — 移除用户\n` +
           `<code>${mainPrefix}pmc wl del all</code>          — 清空白名单\n` +
-          `<code>${mainPrefix}pmc wl pass &lt;ID/@user&gt;</code>— 手动标记通过\n\n` +
+          `<code>${mainPrefix}pmc wl pass <ID/@user></code>— 手动标记通过\n\n` +
           ``
         );
         break;
@@ -1656,7 +1656,7 @@ const pmcaptcha = async (message: Api.Message) => {
         if (sub === "del") {
           const target = sub2;
           if (target !== "verified" && target !== "failed") {
-            await edit(`❌ 用法：<code>${mainPrefix}pmc record del verified/failed [&lt;ID&gt;/all]</code>`);
+            await edit(`❌ 用法：<code>${mainPrefix}pmc record del verified/failed [<ID>/all]</code>`);
             break;
           }
           const isV = target === "verified";
@@ -1665,7 +1665,7 @@ const pmcaptcha = async (message: Api.Message) => {
               isV ? rec.clearVerified() : rec.clearFailed();
               await edit(`✅ 所有${isV ? "通过" : "失败"}记录已清空`);
             } else {
-              await edit(`❌ 用法：<code>${mainPrefix}pmc record del ${target} &lt;ID&gt;/all</code>`);
+              await edit(`❌ 用法：<code>${mainPrefix}pmc record del ${target} <ID>/all</code>`);
             }
             break;
           }
@@ -1723,8 +1723,8 @@ const pmcaptcha = async (message: Api.Message) => {
           `<code>${mainPrefix}pmc record</code>                            — 摘要\n` +
           `<code>${mainPrefix}pmc record verified</code>                  — 通过列表\n` +
           `<code>${mainPrefix}pmc record failed</code>                    — 失败列表\n` +
-          `<code>${mainPrefix}pmc record del verified &lt;ID&gt;/all</code> — 删除通过记录\n` +
-          `<code>${mainPrefix}pmc record del failed &lt;ID&gt;/all</code>   — 删除失败记录\n\n` +
+          `<code>${mainPrefix}pmc record del verified <ID>/all</code> — 删除通过记录\n` +
+          `<code>${mainPrefix}pmc record del failed <ID>/all</code>   — 删除失败记录\n\n` +
           ``
         );
         break;
