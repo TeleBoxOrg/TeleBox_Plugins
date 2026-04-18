@@ -280,9 +280,9 @@ class BGPPlugin extends Plugin {
 
     description =
         "\n🌐 BGP路由图查询工具\n" +
-        "\n• <code>.bgp &lt;IP&gt;</code> - 查询指定IP的BGP路由图\n" +
+        "\n• <code>.bgp ＜IP＞</code> - 查询指定IP的BGP路由图\n" +
         "• <code>.bgp</code> - 回复包含IP的消息自动查询BGP路由图\n" +
-        "• <code>.bgp dns &lt;IP&gt;</code> - 查询指定IP的DNS解析记录\n" +
+        "• <code>.bgp dns ＜IP＞</code> - 查询指定IP的DNS解析记录\n" +
         "• <code>.bgp dns</code> - 回复包含IP的消息查询DNS解析记录";
 
     cmdHandlers: Record<string, (msg: Api.Message, trigger?: Api.Message) => Promise<void>> = {
