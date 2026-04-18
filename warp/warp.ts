@@ -483,7 +483,7 @@ const helpText = `⚡ <b>WARP 管理面板</b>
 <code>${mainPrefix}warp status</code> - 查看 WARP 综合状态
 <code>${mainPrefix}warp y</code> - 切换 WireProxy 开/关
 <code>${mainPrefix}warp ip</code> - 重启 WireProxy (更换 WARP IP)
-<code>${mainPrefix}warp port &lt;端口&gt;</code> - 修改 WireProxy 监听端口
+<code>${mainPrefix}warp port ＜端口＞</code> - 修改 WireProxy 监听端口
 <code>${mainPrefix}warp proxy</code> - 配置 Telegram 代理设置 (需要 WireProxy 运行)
 <code>${mainPrefix}warp unproxy</code> - 关闭 Telegram 代理设置
 <code>${mainPrefix}warp music</code> - 配置 Music 插件代理设置
@@ -525,7 +525,7 @@ class WarpPlugin extends Plugin {
         text = `📖 <b>重启/换IP</b>\n\n<code>${cmd} ip</code> - 重启 wireproxy 以更换 IP`;
         break;
       case "port":
-        text = `📖 <b>端口</b>\n\n<code>${cmd} port &lt;端口&gt;</code> - 修改监听端口并重启`;
+        text = `📖 <b>端口</b>\n\n<code>${cmd} port ＜端口＞</code> - 修改监听端口并重启`;
         break;
       case "uninstall":
       case "uninstall_all":
