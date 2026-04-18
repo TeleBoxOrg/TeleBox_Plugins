@@ -1081,89 +1081,184 @@ function helpText(section?: string): string {
 
   const sections: Record<string, string> = {
 
-    overview: `🔒 <b>PMCaptcha v${PLUGIN_VERSION} 帮助</b>
+    overview: `<b>🔒 PMCaptcha v${PLUGIN_VERSION} 帮助</b>
 
-<b>快速入门</b>
-  1. <code>${p}pmc on/off</code>          — 启用或禁用插件
-  2. <code>${p}pmc captcha on/off</code>  — 开启或关闭验证功能
-  3. <code>${p}pmc captcha math</code>    — 选择验证模式
-  4. <code>${p}pmc set fail 屏蔽</code>   — 设置失败后动作
-  5. <code>${p}pmc status</code>          — 查看当前配置
+自动拦截陌生人私聊，发送验证题，通过后放行，失败后执行屏蔽/举报等操作 ⛑️
 
-<b>分类帮助</b>
-  
-  
-  
-  
-  `,
+<b>📌 快速开始（按顺序执行）：</b>
+1️⃣ <code>${p}pmc on</code> - 启用插件
+2️⃣ <code>${p}pmc captcha on</code> - 开启验证功能
+3️⃣ <code>${p}pmc captcha math</code> - 选择验证模式
+4️⃣ <code>${p}pmc set fail 屏蔽</code> - 设置失败后动作
 
-    basic: `🔒 <b>基础命令</b>
+<b>🔧 基础操作：</b>
+<blockquote expandable>• <code>${p}pmc on</code> / <code>off</code>
+  启用或禁用插件（关闭时验证设置保留不变）
+• <code>${p}pmc status</code>
+  查看完整配置与运行状态
+• <code>${p}pmc h basic</code> / <code>captcha</code> / <code>set</code> / <code>wl</code> / <code>record</code>
+  查看分类帮助（见下方）</blockquote>
 
-  <code>${p}pmc on/off</code>    — 启用或禁用插件（关闭时验证设置保留不变）
-  <code>${p}pmc status</code>   — 查看完整配置与运行状态
+<b>🔐 验证设置：</b>
+<blockquote expandable>• <code>${p}pmc captcha on</code> / <code>off</code>
+  开启或关闭验证功能
+• <code>${p}pmc captcha math</code>
+  算术验证（默认，随机四则运算/幂运算，无需额外依赖）
+• <code>${p}pmc captcha text</code>
+  关键词验证（需回复指定词，或内置随机问答）
+• <code>${p}pmc captcha img_digit</code>
+  图片验证码（5位纯数字，自动安装 canvas）
+• <code>${p}pmc captcha img_mixed</code>
+  图片验证码（5位字母+数字，自动安装 canvas）</blockquote>
 
-  ℹ️ <code>off</code> 只停用插件本身，不会重置验证（captcha）的开关状态，
-     下次 <code>on</code> 后验证功能恢复到关闭前的状态。`,
+<b>⚙️ 参数设置：</b>
+<blockquote expandable>• <code>${p}pmc set time <秒></code>
+  验证超时（0 = 不限时，默认 30）
+• <code>${p}pmc set tries <次></code>
+  最大尝试次数（0 = 不限，默认 3）
+• <code>${p}pmc set keyword <关键词></code>
+  文字模式关键词（默认"我同意"）
+• <code>${p}pmc set prompt <文本></code>
+  自定义验证提示（留空恢复默认）
+  └ math 模式：{question} → 题目占位符
+  └ text 模式：{keyword} → 关键词占位符
+• <code>${p}pmc set fail 屏蔽/删除/举报/静音/归档/无</code>
+  失败后动作（可多选，空格分隔）
+  示例：<code>${p}pmc set fail 屏蔽 举报</code>
+• <code>${p}pmc set pass 取消静音/取消归档/白名单/无</code>
+  通过后动作（可多选）
+  ⚠️ 修改后正在进行中的验证消息实时更新</blockquote>
 
-    captcha: `🔒 <b>验证设置</b>
+<b>👥 白名单管理：</b>
+<blockquote expandable>• <code>${p}pmc add <ID/@user></code>
+  添加白名单（支持回复消息）
+• <code>${p}pmc del <ID/@user></code>
+  移除白名单
+• <code>${p}pmc wl</code>
+  查看白名单列表
+• <code>${p}pmc wl add <ID/@user></code>
+  同 add（支持回复消息）
+• <code>${p}pmc wl del <ID/@user></code>
+  同 del
+• <code>${p}pmc wl del all</code>
+  清空白名单
+• <code>${p}pmc wl pass <ID/@user></code>
+  手动标记通过并加入白名单</blockquote>
 
-<b>开关</b>
-  <code>${p}pmc captcha on/off</code>     — 开启或关闭验证功能
+<b>📋 验证记录：</b>
+<blockquote expandable>• <code>${p}pmc record</code>
+  通过/失败人数摘要
+• <code>${p}pmc record verified</code>
+  查看验证通过记录
+• <code>${p}pmc record failed</code>
+  查看验证失败记录
+• <code>${p}pmc record del verified <ID/all></code>
+  删除通过记录
+• <code>${p}pmc record del failed <ID/all></code>
+  删除失败记录</blockquote>
+
+<b>ℹ️ 使用说明：</b>
+• 验证失败默认执行静音+归档
+• 我方主动发起对话时对方自动通过验证
+• 支持中/英文设置（如：屏蔽/block）`,
+
+    basic: `<b>🔒 基础命令</b>
+
+<blockquote expandable>• <code>${p}pmc on</code> / <code>off</code>
+  启用或禁用插件（关闭时验证设置保留不变）
+• <code>${p}pmc status</code>
+  查看完整配置与运行状态
+
+ℹ️ <code>off</code> 只停用插件本身，不会重置验证（captcha）的开关状态，
+   下次 <code>on</code> 后验证功能恢复到关闭前的状态。</blockquote>`,
+
+    captcha: `<b>🔐 验证设置</b>
+
+<blockquote expandable><b>开关</b>
+• <code>${p}pmc captcha on</code> / <code>off</code>
+  开启或关闭验证功能
 
 <b>模式</b>
-  <code>${p}pmc captcha math</code>      — 算术验证（默认，随机四则运算/幂运算，无需额外依赖）
-  <code>${p}pmc captcha text</code>      — 关键词验证（需回复指定词，或内置随机问答）
-  <code>${p}pmc captcha img_digit</code> — 图片验证·纯数字（自动安装 canvas 模块）
-  <code>${p}pmc captcha img_mixed</code> — 图片验证·字母+数字（自动安装 canvas 模块）`,
+• <code>${p}pmc captcha math</code>
+  算术验证（默认，随机四则运算/幂运算，无需额外依赖）
+• <code>${p}pmc captcha text</code>
+  关键词验证（需回复指定词，或内置随机问答）
+• <code>${p}pmc captcha img_digit</code>
+  图片验证码（5位纯数字，自动安装 canvas）
+• <code>${p}pmc captcha img_mixed</code>
+  图片验证码（5位字母+数字，自动安装 canvas）</blockquote>`,
 
-    set: `🔒 <b>参数设置</b>
+    set: `<b>⚙️ 参数设置</b>
 
-<b>超时 / 次数</b>
-  <code>${p}pmc set time &lt;秒&gt;</code>    — 验证超时（0 = 不限时，默认 30）
-  <code>${p}pmc set tries &lt;次&gt;</code>   — 最大尝试次数（0 = 不限，默认 3）
+<blockquote expandable><b>超时 / 次数</b>
+• <code>${p}pmc set time <秒></code>
+  验证超时（0 = 不限时，默认 30）
+• <code>${p}pmc set tries <次></code>
+  最大尝试次数（0 = 不限，默认 3）
 
 <b>文字模式</b>
-  <code>${p}pmc set keyword &lt;关键词&gt;</code>  — 设置文字模式回复关键词（默认"我同意"）
-  <code>${p}pmc set prompt &lt;文本&gt;</code>     — 自定义验证提示语（留空 = 恢复默认）
-    └ math 模式占位符：<code>{question}</code>
-    └ text 模式占位符：<code>{keyword}</code>
+• <code>${p}pmc set keyword <关键词></code>
+  文字模式关键词（默认"我同意"）
+• <code>${p}pmc set prompt <文本></code>
+  自定义验证提示（留空恢复默认）
+  └ math 模式：<code>{question}</code> → 题目占位符
+  └ text 模式：<code>{keyword}</code> → 关键词占位符
 
 <b>失败操作</b>（可复选，空格分隔）
-  <code>${p}pmc set fail block</code>   / <code>屏蔽</code>         — 屏蔽用户
-  <code>${p}pmc set fail delete</code>  / <code>删除</code>         — 双方撤回全部对话
-  <code>${p}pmc set fail report</code>  / <code>举报</code>         — 举报为垃圾信息
-  <code>${p}pmc set fail mute</code>    / <code>静音</code>         — 永久静音（失败时已默认执行）
-  <code>${p}pmc set fail archive</code> / <code>归档</code>         — 归档（失败时已默认执行）
-  <code>${p}pmc set fail none</code>    / <code>无</code>           — 清除所有额外操作
+• <code>${p}pmc set fail block</code> / <code>屏蔽</code>
+  屏蔽用户
+• <code>${p}pmc set fail delete</code> / <code>删除</code>
+  双方撤回全部对话
+• <code>${p}pmc set fail report</code> / <code>举报</code>
+  举报为垃圾信息
+• <code>${p}pmc set fail mute</code> / <code>静音</code>
+  永久静音（失败时已默认执行）
+• <code>${p}pmc set fail archive</code> / <code>归档</code>
+  归档（失败时已默认执行）
+• <code>${p}pmc set fail none</code> / <code>无</code>
+  清除所有额外操作
   ✏️ 示例：<code>${p}pmc set fail 屏蔽 举报</code>
-  ℹ️ 修改后正在进行中的验证消息会实时更新。
+  ℹ️ 修改后正在进行中的验证消息实时更新
 
 <b>通过操作</b>（可复选）
-  <code>${p}pmc set pass unmute</code>    / <code>取消静音</code>   — 通过后取消静音
-  <code>${p}pmc set pass unarchive</code> / <code>取消归档</code>   — 通过后取消归档
-  <code>${p}pmc set pass wl</code>        / <code>白名单</code>     — 通过后加入白名单
-  <code>${p}pmc set pass none</code>      / <code>无</code>         — 清除所有通过操作`,
+• <code>${p}pmc set pass unmute</code> / <code>取消静音</code>
+  通过后取消静音
+• <code>${p}pmc set pass unarchive</code> / <code>取消归档</code>
+  通过后取消归档
+• <code>${p}pmc set pass wl</code> / <code>白名单</code>
+  通过后加入白名单
+• <code>${p}pmc set pass none</code> / <code>无</code>
+  清除所有通过操作</blockquote>`,
 
-    wl: `🔒 <b>白名单管理</b>
+    wl: `<b>👥 白名单管理</b>
 
-<b>快捷命令</b>
-  <code>${p}pmc add &lt;ID/@user&gt;</code>   — 将用户加入白名单（支持回复消息）
-  <code>${p}pmc del &lt;ID/@user&gt;</code>   — 将用户从白名单移除
+<blockquote expandable>• <code>${p}pmc add <ID/@user></code>
+  添加白名单（支持回复消息）
+• <code>${p}pmc del <ID/@user></code>
+  移除白名单
+• <code>${p}pmc wl</code>
+  查看白名单列表
+• <code>${p}pmc wl add <ID/@user></code>
+  同 add（支持回复消息）
+• <code>${p}pmc wl del <ID/@user></code>
+  同 del
+• <code>${p}pmc wl del all</code>
+  清空白名单
+• <code>${p}pmc wl pass <ID/@user></code>
+  手动标记为验证通过并加入白名单</blockquote>`,
 
-<b>wl 子命令</b>
-  <code>${p}pmc wl</code>                   — 查看白名单列表
-  <code>${p}pmc wl add &lt;ID/@user&gt;</code> — 同 add（支持回复消息）
-  <code>${p}pmc wl del &lt;ID/@user&gt;</code> — 同 del
-  <code>${p}pmc wl del all</code>           — 清空白名单
-  <code>${p}pmc wl pass &lt;ID/@user&gt;</code> — 手动标记为验证通过并加入白名单`,
+    record: `<b>📋 验证记录</b>
 
-    record: `🔒 <b>验证记录</b>
-
-  <code>${p}pmc record</code>                               — 通过 / 失败人数摘要
-  <code>${p}pmc record verified</code>                     — 查看验证通过记录
-  <code>${p}pmc record failed</code>                       — 查看验证失败记录
-  <code>${p}pmc record del verified &lt;ID&gt;/all</code>   — 删除通过记录（支持 all）
-  <code>${p}pmc record del failed &lt;ID&gt;/all</code>     — 删除失败记录（支持 all）`,
+<blockquote expandable>• <code>${p}pmc record</code>
+  通过/失败人数摘要
+• <code>${p}pmc record verified</code>
+  查看验证通过记录
+• <code>${p}pmc record failed</code>
+  查看验证失败记录
+• <code>${p}pmc record del verified <ID/all></code>
+  删除通过记录（支持 all）
+• <code>${p}pmc record del failed <ID/all></code>
+  删除失败记录（支持 all）</blockquote>`,
   };
 
   if (section && sections[section]) return sections[section];
@@ -1289,7 +1384,7 @@ const pmcaptcha = async (message: Api.Message) => {
               `<code>text</code>      — 关键词验证\n` +
               `<code>img_digit</code> — 图片验证（纯数字）\n` +
               `<code>img_mixed</code> — 图片验证（字母+数字）\n\n` +
-              `用法：<code>${mainPrefix}pmc captcha &lt;模式&gt;</code>`
+              `用法：<code>${mainPrefix}pmc captcha <模式></code>`
             );
             break;
           }
@@ -1322,7 +1417,7 @@ const pmcaptcha = async (message: Api.Message) => {
 
         if (!param) {
           await edit(
-            `❌ 用法：<code>${mainPrefix}pmc set &lt;三级命令&gt; &lt;值&gt;</code>\n\n` +
+            `❌ 用法：<code>${mainPrefix}pmc set <三级命令> <值></code>\n\n` +
             `三级命令：\n` +
             `<code>time</code>     — 验证超时秒数（0=不限，默认 30）\n` +
             `<code>tries</code>    — 最大尝试次数（0=不限，默认 3）\n` +
@@ -1342,7 +1437,7 @@ const pmcaptcha = async (message: Api.Message) => {
           case "timeout": {
             const n = parseInt(val);
             if (isNaN(n) || n < 0) {
-              await edit(`❌ 用法：<code>${mainPrefix}pmc set time &lt;秒&gt;</code>（0 = 不限时）`);
+              await edit(`❌ 用法：<code>${mainPrefix}pmc set time <秒></code>（0 = 不限时）`);
               break;
             }
             set(K.CAP_TIMEOUT, n);
@@ -1356,7 +1451,7 @@ const pmcaptcha = async (message: Api.Message) => {
           case "tries": {
             const n = parseInt(val);
             if (isNaN(n) || n < 0) {
-              await edit(`❌ 用法：<code>${mainPrefix}pmc set tries &lt;次&gt;</code>（0 = 不限次数）`);
+              await edit(`❌ 用法：<code>${mainPrefix}pmc set tries <次></code>（0 = 不限次数）`);
               break;
             }
             set(K.CAP_TRIES, n);
@@ -1368,7 +1463,7 @@ const pmcaptcha = async (message: Api.Message) => {
           // ── keyword ────────────────────────────────────────────────────────
           case "keyword": {
             if (!val) {
-              await edit(`❌ 用法：<code>${mainPrefix}pmc set keyword &lt;关键词&gt;</code>`);
+              await edit(`❌ 用法：<code>${mainPrefix}pmc set keyword <关键词></code>`);
               break;
             }
             set(K.CAP_KEYWORD, val);
@@ -1390,7 +1485,7 @@ const pmcaptcha = async (message: Api.Message) => {
             const subs = args.slice(2).filter(Boolean);
             if (!subs.length) {
               await edit(
-                `❌ 用法：<code>${mainPrefix}pmc set fail &lt;操作…&gt;</code>（空格分隔，可复选）\n\n` +
+                `❌ 用法：<code>${mainPrefix}pmc set fail <操作…></code>（空格分隔，可复选）\n\n` +
                 `英文 / 中文 均可：\n` +
                 `<code>block</code>   / <code>屏蔽</code>   — 屏蔽用户\n` +
                 `<code>delete</code>  / <code>删除</code>   — 双方撤回全部对话\n` +
@@ -1434,7 +1529,7 @@ const pmcaptcha = async (message: Api.Message) => {
             const subs = args.slice(2).filter(Boolean);
             if (!subs.length) {
               await edit(
-                `❌ 用法：<code>${mainPrefix}pmc set pass &lt;操作…&gt;</code>（可复选）\n\n` +
+                `❌ 用法：<code>${mainPrefix}pmc set pass <操作…></code>（可复选）\n\n` +
                 `英文 / 中文 均可：\n` +
                 `<code>unmute</code>    / <code>取消静音</code>   — 验证通过后取消静音\n` +
                 `<code>unarchive</code> / <code>取消归档</code>   — 验证通过后取消归档\n` +
@@ -1509,7 +1604,7 @@ const pmcaptcha = async (message: Api.Message) => {
         if (!tid && args[1]) tid = await resolveUser(client, args[1]);
         if (!tid || tid <= 0) {
           await edit(
-            `❌ 用法：<code>${mainPrefix}pmc add &lt;ID/@user&gt;</code> 或回复对方消息\n\n` +
+            `❌ 用法：<code>${mainPrefix}pmc add <ID/@user></code> 或回复对方消息\n\n` +
             `请提供有效的用户 ID 或用户名。`
           );
           break;
@@ -1524,7 +1619,7 @@ const pmcaptcha = async (message: Api.Message) => {
       case "del": {
         // 二级命令 del：快捷白名单移除（等同 .pmc wl del）
         if (!args[1]) {
-          await edit(`❌ 用法：<code>${mainPrefix}pmc del &lt;ID/@user&gt;</code>`);
+          await edit(`❌ 用法：<code>${mainPrefix}pmc del <ID/@user></code>`);
           break;
         }
         const tid = await resolveUser(client, args[1]);
@@ -1583,7 +1678,7 @@ const pmcaptcha = async (message: Api.Message) => {
             await edit("✅ 白名单已清空");
             break;
           }
-          if (!args[2]) { await edit(`❌ 用法：<code>${mainPrefix}pmc wl del &lt;ID/@user&gt;</code> 或 <code>del all</code>`); break; }
+          if (!args[2]) { await edit(`❌ 用法：<code>${mainPrefix}pmc wl del <ID/@user></code> 或 <code>del all</code>`); break; }
           const tid = await resolveUser(client, args[2]);
           if (!tid || tid <= 0) { await edit("❌ 无法解析目标用户"); break; }
           wl.del(tid);
@@ -1594,7 +1689,7 @@ const pmcaptcha = async (message: Api.Message) => {
 
         // wl pass
         if (sub === "pass") {
-          if (!args[2]) { await edit(`❌ 用法：<code>${mainPrefix}pmc wl pass &lt;ID/@user&gt;</code>`); break; }
+          if (!args[2]) { await edit(`❌ 用法：<code>${mainPrefix}pmc wl pass <ID/@user></code>`); break; }
           const tid = await resolveUser(client, args[2]);
           if (!tid || tid <= 0) { await edit("❌ 无法解析目标用户"); break; }
           const st = states.get(tid);
@@ -1612,13 +1707,13 @@ const pmcaptcha = async (message: Api.Message) => {
         await edit(
           `❌ 未知子命令：<code>${sub}</code>\n\n` +
           `可用：\n` +
-          `<code>${mainPrefix}pmc add &lt;ID/@user&gt;</code>    — 快捷加入白名单\n` +
-          `<code>${mainPrefix}pmc del &lt;ID/@user&gt;</code>    — 快捷移除白名单\n` +
+          `<code>${mainPrefix}pmc add <ID/@user></code>    — 快捷加入白名单\n` +
+          `<code>${mainPrefix}pmc del <ID/@user></code>    — 快捷移除白名单\n` +
           `<code>${mainPrefix}pmc wl</code>                  — 查看白名单\n` +
-          `<code>${mainPrefix}pmc wl add &lt;ID/@user&gt;</code> — 加入白名单\n` +
-          `<code>${mainPrefix}pmc wl del &lt;ID/@user&gt;</code> — 移除用户\n` +
+          `<code>${mainPrefix}pmc wl add <ID/@user></code> — 加入白名单\n` +
+          `<code>${mainPrefix}pmc wl del <ID/@user></code> — 移除用户\n` +
           `<code>${mainPrefix}pmc wl del all</code>          — 清空白名单\n` +
-          `<code>${mainPrefix}pmc wl pass &lt;ID/@user&gt;</code>— 手动标记通过\n\n` +
+          `<code>${mainPrefix}pmc wl pass <ID/@user></code>— 手动标记通过\n\n` +
           ``
         );
         break;
@@ -1656,7 +1751,7 @@ const pmcaptcha = async (message: Api.Message) => {
         if (sub === "del") {
           const target = sub2;
           if (target !== "verified" && target !== "failed") {
-            await edit(`❌ 用法：<code>${mainPrefix}pmc record del verified/failed [&lt;ID&gt;/all]</code>`);
+            await edit(`❌ 用法：<code>${mainPrefix}pmc record del verified/failed [<ID>/all]</code>`);
             break;
           }
           const isV = target === "verified";
@@ -1665,7 +1760,7 @@ const pmcaptcha = async (message: Api.Message) => {
               isV ? rec.clearVerified() : rec.clearFailed();
               await edit(`✅ 所有${isV ? "通过" : "失败"}记录已清空`);
             } else {
-              await edit(`❌ 用法：<code>${mainPrefix}pmc record del ${target} &lt;ID&gt;/all</code>`);
+              await edit(`❌ 用法：<code>${mainPrefix}pmc record del ${target} <ID>/all</code>`);
             }
             break;
           }
@@ -1723,8 +1818,8 @@ const pmcaptcha = async (message: Api.Message) => {
           `<code>${mainPrefix}pmc record</code>                            — 摘要\n` +
           `<code>${mainPrefix}pmc record verified</code>                  — 通过列表\n` +
           `<code>${mainPrefix}pmc record failed</code>                    — 失败列表\n` +
-          `<code>${mainPrefix}pmc record del verified &lt;ID&gt;/all</code> — 删除通过记录\n` +
-          `<code>${mainPrefix}pmc record del failed &lt;ID&gt;/all</code>   — 删除失败记录\n\n` +
+          `<code>${mainPrefix}pmc record del verified <ID>/all</code> — 删除通过记录\n` +
+          `<code>${mainPrefix}pmc record del failed <ID>/all</code>   — 删除失败记录\n\n` +
           ``
         );
         break;
@@ -1759,31 +1854,48 @@ class PMCaptchaPlugin extends Plugin {
   }
 
   name        = "pmcaptcha";
-  description = [
-    `🔒 PMCaptcha v${PLUGIN_VERSION} — 陌生人私聊人机验证`,
-    ``,
-    `自动拦截陌生人私聊，发送验证题，通过后放行，失败后执行屏蔽/举报等操作。`,
-    ``,
-    `【验证模式】`,
-    `  math      — 算术验证（随机四则运算/幂运算）`,
-    `  text      — 关键词验证（回复指定词/内置随机问答）`,
-    `  img_digit — 图片验证（5位纯数字，自动安装 canvas）`,
-    `  img_mixed — 图片验证（5位字母+数字，自动安装 canvas）`,
-    ``,
-    `【失败操作】可复选，支持中/英文设置`,
-    `  屏蔽 / 删除对话 / 举报 / 静音 / 归档`,
-    ``,
-    `【通过操作】可复选，支持中/英文设置`,
-    `  取消静音 / 取消归档 / 加入白名单`,
-    ``,
-    `【其他功能】`,
-    `  • 白名单：手动添加信任用户永久免验证`,
-    `  • 验证记录：查看通过/失败历史及原因`,
-    `  • 实时刷新：修改参数后进行中的验证消息即时更新`,
-    `  • 我方主动发起对话时对方自动标记为已验证`,
-    ``,
-    ``,
-  ].join("\n");
+  description = (): string => {
+    const p = mainPrefix;
+    return [
+      `<b>🔒 PMCaptcha v${PLUGIN_VERSION}</b> — 陌生人私聊人机验证`,
+      ``,
+      `<b>⚙️ 基础设置:</b>`,
+      `• <code>${p}pmc on/off</code> - 启用/禁用插件`,
+      `• <code>${p}pmc status</code> - 查看当前配置`,
+      ``,
+      `<b>🔐 验证设置:</b>`,
+      `• <code>${p}pmc captcha on/off</code> - 开启/关闭验证`,
+      `• <code>${p}pmc captcha math</code> - 算术验证`,
+      `• <code>${p}pmc captcha text</code> - 关键词验证`,
+      `• <code>${p}pmc captcha img_digit</code> - 图片验证码（纯数字）`,
+      `• <code>${p}pmc captcha img_mixed</code> - 图片验证码（字母+数字）`,
+      ``,
+      `<b>⚙️ 参数设置:</b>`,
+      `• <code>${p}pmc set time <秒></code> - 验证超时（默认30秒）`,
+      `• <code>${p}pmc set tries <次></code> - 最大尝试次数（默认3次）`,
+      `• <code>${p}pmc set keyword <关键词></code> - 文字模式关键词`,
+      `• <code>${p}pmc set prompt <文本></code> - 自定义验证提示`,
+      `• <code>${p}pmc set fail 屏蔽/删除/举报/静音/归档</code> - 失败后动作`,
+      `• <code>${p}pmc set pass 取消静音/取消归档/白名单</code> - 通过后动作`,
+      ``,
+      `<b>👥 白名单:</b>`,
+      `• <code>${p}pmc add <ID/@user></code> - 添加白名单`,
+      `• <code>${p}pmc del <ID/@user></code> - 移除白名单`,
+      `• <code>${p}pmc wl</code> - 查看白名单`,
+      `• <code>${p}pmc wl pass <ID></code> - 手动标记通过`,
+      ``,
+      `<b>📋 验证记录:</b>`,
+      `• <code>${p}pmc record</code> - 查看统计`,
+      `• <code>${p}pmc record verified</code> - 查看通过记录`,
+      `• <code>${p}pmc record failed</code> - 查看失败记录`,
+      `• <code>${p}pmc record del verified/failed <ID/all></code> - 删除记录`,
+      ``,
+      `<b>ℹ️ 使用说明:</b>`,
+      `• 验证失败默认执行静音+归档`,
+      `• 修改参数后进行中的验证消息实时更新`,
+      `• 我方主动发起对话时对方自动通过`,
+    ].join("\n");
+  };
   cmdHandlers = { pmc, pmcaptcha };
   listenMessageHandler = messageListener;
 }
