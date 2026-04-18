@@ -286,10 +286,6 @@ async function formatEntity(target: any) {
   };
 }
 
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
 // AI 调用函数
 async function callOpenAI(
   apiKey: string,
@@ -853,7 +849,7 @@ const help_text = `▎群消息总结
 <code>${mainPrefix}sum 200 --provider gemini</code> - 指定数量和AI配置
 
 <b>📋 定时总结：</b>
-<code>${mainPrefix}sum add &lt;群组标识&gt; &lt;间隔&gt; [消息数] [选项]</code>
+<code>${mainPrefix}sum add ＜群组标识＞ ＜间隔＞ [消息数] [选项]</code>
 群组标识支持:
   • 数字ID: -1001234567890
   • 公开链接: t.me/groupname 或 https://t.me/groupname
@@ -864,8 +860,8 @@ const help_text = `▎群消息总结
   • Cron表达式(6字段): 0 0 9,15,21 * * * (每天9:00,15:00,21:00)
   • Cron表达式(5字段): 30 */2 * * * (自动补秒字段)
 选项:
-  --time &lt;小时&gt; - 按时间范围总结（如 --time 2 表示过去2小时）
-  --provider &lt;名称&gt; - 指定AI配置
+  --time ＜小时＞ - 按时间范围总结（如 --time 2 表示过去2小时）
+  --provider ＜名称＞ - 指定AI配置
   --spoiler - 启用折叠显示
   --no-spoiler - 禁用折叠显示（覆盖全局设置）
 示例:
@@ -875,35 +871,35 @@ const help_text = `▎群消息总结
 
 <b>🔧 管理命令：</b>
 • <code>${mainPrefix}sum list</code> - 列出所有任务（按ID排序）
-• <code>${mainPrefix}sum del &lt;任务ID&gt;</code> - 删除任务
-• <code>${mainPrefix}sum run &lt;任务ID&gt;</code> - 立即运行任务
-• <code>${mainPrefix}sum edit &lt;任务ID&gt; &lt;属性&gt; &lt;值&gt;</code> - 修改任务属性
+• <code>${mainPrefix}sum del ＜任务ID＞</code> - 删除任务
+• <code>${mainPrefix}sum run ＜任务ID＞</code> - 立即运行任务
+• <code>${mainPrefix}sum edit ＜任务ID＞ ＜属性＞ ＜值＞</code> - 修改任务属性
   属性: spoiler (on/off) | provider (配置名) | prompt (提示词)
   留空值则使用全局配置
-• <code>${mainPrefix}sum disable/enable &lt;任务ID&gt;</code> - 禁用/启用任务
+• <code>${mainPrefix}sum disable/enable ＜任务ID＞</code> - 禁用/启用任务
 • <code>${mainPrefix}sum reorder</code> - 从1开始重新编号所有任务
 
 <b>🤖 AI 配置管理：</b>
 • <code>${mainPrefix}sum config list</code> - 列出所有配置
-• <code>${mainPrefix}sum config add &lt;官方名称&gt; &lt;API_KEY&gt;</code> - 快速添加官方 (openai/gemini)
+• <code>${mainPrefix}sum config add ＜官方名称＞ ＜API_KEY＞</code> - 快速添加官方 (openai/gemini)
   示例: <code>${mainPrefix}sum config add openai sk-xxx</code>
-• <code>${mainPrefix}sum config add &lt;名称&gt; &lt;类型&gt; &lt;BaseURL&gt; &lt;Model&gt;</code> - 自定义服务商
+• <code>${mainPrefix}sum config add ＜名称＞ ＜类型＞ ＜BaseURL＞ ＜Model＞</code> - 自定义服务商
   类型: openai 或 gemini
   示例: <code>${mainPrefix}sum config add deepseek openai https://api.deepseek.com deepseek-chat</code>
-• <code>${mainPrefix}sum config set &lt;名称&gt; key &lt;API_KEY&gt;</code> - 设置API Key
-• <code>${mainPrefix}sum config set &lt;名称&gt; model &lt;模型&gt;</code> - 修改模型
-• <code>${mainPrefix}sum config set &lt;名称&gt; url &lt;URL&gt;</code> - 修改Base URL
-• <code>${mainPrefix}sum config del &lt;名称&gt;</code> - 删除配置
+• <code>${mainPrefix}sum config set ＜名称＞ key ＜API_KEY＞</code> - 设置API Key
+• <code>${mainPrefix}sum config set ＜名称＞ model ＜模型＞</code> - 修改模型
+• <code>${mainPrefix}sum config set ＜名称＞ url ＜URL＞</code> - 修改Base URL
+• <code>${mainPrefix}sum config del ＜名称＞</code> - 删除配置
 
 <b>⚙️ 全局设置：</b>
-• <code>${mainPrefix}sum config set push &lt;目标&gt;</code> - 设置默认推送目标
-• <code>${mainPrefix}sum config set default &lt;名称&gt;</code> - 设置默认配置
-• <code>${mainPrefix}sum config set prompt &lt;提示词&gt;</code> - 设置总结提示词
+• <code>${mainPrefix}sum config set push ＜目标＞</code> - 设置默认推送目标
+• <code>${mainPrefix}sum config set default ＜名称＞</code> - 设置默认配置
+• <code>${mainPrefix}sum config set prompt ＜提示词＞</code> - 设置总结提示词
 • <code>${mainPrefix}sum config set prompt reset</code> - 重置提示词为默认值
 • <code>${mainPrefix}sum config set spoiler on/off</code> - 全局折叠开关
-• <code>${mainPrefix}sum config set timeout &lt;秒数&gt;</code> - 设置AI超时时间（默认60秒）
+• <code>${mainPrefix}sum config set timeout ＜秒数＞</code> - 设置AI超时时间（默认60秒）
 • <code>${mainPrefix}sum config set reply on/off</code> - 回复模式（发送新消息，防止被顶走，默认开启）
-• <code>${mainPrefix}sum config set maxoutput &lt;字符数&gt;</code> - 最大输出长度（0不限制，默认不限制）
+• <code>${mainPrefix}sum config set maxoutput ＜字符数＞</code> - 最大输出长度（0不限制，默认不限制）
 • <code>${mainPrefix}sum prompts</code> - 查看推荐提示词
 `;
 
@@ -1173,7 +1169,7 @@ class SummaryPlugin extends Plugin {
 
           if (!chatIdInput || !intervalInput) {
             await msg.edit({
-              text: `❌ 格式错误\n\n用法: <code>${mainPrefix}sum add &lt;群组标识&gt; &lt;间隔&gt; [消息数] [选项]</code>\n\n群组标识支持:\n• 数字ID: -1001234567890\n• 链接: t.me/groupname\n• 用户名: @groupname\n\n示例: <code>${mainPrefix}sum add -1001234567890 2h</code>`,
+              text: `❌ 格式错误\n\n用法: <code>${mainPrefix}sum add ＜群组标识＞ ＜间隔＞ [消息数] [选项]</code>\n\n群组标识支持:\n• 数字ID: -1001234567890\n• 链接: t.me/groupname\n• 用户名: @groupname\n\n示例: <code>${mainPrefix}sum add -1001234567890 2h</code>`,
               parseMode: "html"
             });
             return;
@@ -1394,7 +1390,7 @@ class SummaryPlugin extends Plugin {
 
           if (!id || !prop) {
             await msg.edit({
-              text: `❌ 格式错误\n\n用法: <code>${mainPrefix}sum edit &lt;任务ID&gt; &lt;属性&gt; &lt;值&gt;</code>\n\n支持的属性:\n• spoiler - 折叠显示 (on/off)\n• provider - AI配置名称\n• prompt - AI提示词 (留空使用全局配置)`,
+              text: `❌ 格式错误\n\n用法: <code>${mainPrefix}sum edit ＜任务ID＞ ＜属性＞ ＜值＞</code>\n\n支持的属性:\n• spoiler - 折叠显示 (on/off)\n• provider - AI配置名称\n• prompt - AI提示词 (留空使用全局配置)`,
               parseMode: "html"
             });
             return;
@@ -1611,7 +1607,7 @@ class SummaryPlugin extends Plugin {
 
             if (!type || !baseUrl || !model) {
               await msg.edit({
-                text: `❌ 格式错误\n\n自定义用法: <code>${mainPrefix}sum config add &lt;名称&gt; &lt;类型&gt; &lt;BaseURL&gt; &lt;Model&gt;</code>\n示例: <code>${mainPrefix}sum config add deepseek openai https://api.deepseek.com deepseek-chat</code>`,
+                text: `❌ 格式错误\n\n自定义用法: <code>${mainPrefix}sum config add ＜名称＞ ＜类型＞ ＜BaseURL＞ ＜Model＞</code>\n示例: <code>${mainPrefix}sum config add deepseek openai https://api.deepseek.com deepseek-chat</code>`,
                 parseMode: "html"
               });
               return;
@@ -1851,4 +1847,3 @@ class SummaryPlugin extends Plugin {
 }
 
 export default new SummaryPlugin();
-
