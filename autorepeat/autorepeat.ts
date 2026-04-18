@@ -105,14 +105,14 @@ class CacheManager {
 // ==================== 消息管理器 ====================
 class MessageManager {
   static async smartEdit(
-    message: Api.Message,
+    message: Api.Message | undefined,
     text: string,
     deleteAfter: number = CONFIG.MESSAGE_AUTO_DELETE,
     parseMode: "html" | "md" = "html"
-  ): Promise<Api.Message> {
+  ): Promise<Api.Message | undefined> {
     try {
       const client = await getGlobalClient();
-      if (!client) return message;
+      if (!client || !message) return message;
 
       await client.editMessage(message.peerId, {
         message: message.id,
@@ -203,7 +203,10 @@ class AutoRepeatManager {
       }
       if (data.daily_history) {
         for (const [gidStr, hashes] of Object.entries(data.daily_history)) {
-          this.dailyHistory.set(Number(gidStr), new Set(hashes));
+          const gid = Number(gidStr);
+          if (!Number.isNaN(gid)) {
+            this.dailyHistory.set(gid, new Set(hashes));
+          }
         }
       }
       if (data.trigger_config) {
@@ -622,7 +625,7 @@ class CommandHandlers {
         const result = await this.parseGroupIdentifier(client, message, identifier);
         
         if (!result.success) {
-          await MessageManager.smartEdit(message, result.error!);
+          await MessageManager.smartEdit(message, result.error || "操作失败");
           return;
         }
 
@@ -637,7 +640,7 @@ class CommandHandlers {
         const result = await this.parseGroupIdentifier(client, message, identifier);
         
         if (!result.success) {
-          await MessageManager.smartEdit(message, result.error!);
+          await MessageManager.smartEdit(message, result.error || "操作失败");
           return;
         }
 
@@ -689,6 +692,8 @@ class AutoRepeatPlugin extends Plugin {
   };
 
   listenMessageHandler = async (msg: Api.Message) => {
+    if (!msg || msg.date === undefined) return;
+
     // 忽略之前的旧消息（只处理实时消息）
     if (Date.now() / 1000 - msg.date > 60) return;
 
@@ -696,8 +701,8 @@ class AutoRepeatPlugin extends Plugin {
     if (msg.out) return;
 
     // 忽略其他机器人发送的消息
-    // 注意: GramJS 的 msg.sender 可能是 User 或 Chat，需要检查
     const sender = await msg.getSender();
+    if (!sender) return;
     if (sender instanceof Api.User && sender.bot) {
       return;
     }
