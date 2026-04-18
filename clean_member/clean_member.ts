@@ -516,13 +516,13 @@ function getHelpText(): string {
   return `<b>🧹 群成员清理工具 Pro</b>
 
 <b>🔧 使用格式:</b>
-<code>${mainPrefix}clean_member &lt;模式&gt; &lt;参数&gt; [chat:-100xxx] [limit:数量] [search]</code>
+<code>${mainPrefix}clean_member ＜模式＞ ＜参数＞ [chat:-100xxx] [limit:数量] [search]</code>
 
 <b>📋 清理模式:</b>
 ┌─────────────────────────
-│ <b>1</b> &lt;天数&gt; → 未上线超过N天
-│ <b>2</b> &lt;天数&gt; → 未发言超过N天  
-│ <b>3</b> &lt;数量&gt; → 发言少于N条
+│ <b>1</b> ＜天数＞ → 未上线超过N天
+│ <b>2</b> ＜天数＞ → 未发言超过N天  
+│ <b>3</b> ＜数量＞ → 发言少于N条
 │ <b>4</b> → 已注销账户
 │ <b>5</b> → 所有普通成员 ⚠️
 └─────────────────────────
