@@ -111,6 +111,10 @@
     "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/copy_sticker_set/copy_sticker_set.ts?raw=true",
     "desc": "复制贴纸包"
   },
+  "codex_image": {
+    "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/codex_image/codex_image.ts?raw=true",
+    "desc": "通过codex调用gpt-image-2"
+  },
   "cosplay": {
     "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/cosplay/cosplay.ts?raw=true",
     "desc": "获取随机cos写真"
