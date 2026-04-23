@@ -35,6 +35,7 @@ tpm i <插件名>
 - `clean` - 账号清理工具 Pro  
 - `clean_member` - 群组成员清理  
 - `clear_sticker` - 批量删除群组内贴纸  
+- `codex_image` - 通过codex调用gpt-image-2  
 - `convert` - 视频转音频  
 - `copy_sticker_set` - 复制贴纸包  
 - `cosplay` - 获取随机cos写真  
