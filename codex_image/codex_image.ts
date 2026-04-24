@@ -12,6 +12,7 @@ const prefixes = getPrefixes();
 const mainPrefix = prefixes[0];
 const CODEX_URL = "https://chatgpt.com/backend-api/codex/responses";
 const CODEX_MODEL = "gpt-5.4";
+const CODEX_MAX_WAIT_MS = 10 * 60 * 1000;
 const pluginName = "codex_image";
 const dataDir = createDirectoryInAssets(pluginName);
 const configPath = path.join(dataDir, "config.json");
@@ -137,6 +138,7 @@ async function callCodexImage(
   prompt: string,
   referenceImage?: { buffer: Buffer; mimeType: string },
   updateStatus?: StatusUpdater,
+  deadlineAt: number = Date.now() + CODEX_MAX_WAIT_MS,
 ): Promise<CodexResponseResult> {
   const token = await getBearerToken();
   if (!token) {
@@ -182,7 +184,7 @@ async function callCodexImage(
   const readStreamResult = async (): Promise<CodexResponseResult> => {
     const response = await axios.post(CODEX_URL, payload, {
       responseType: "stream",
-      timeout: 600000,
+      timeout: Math.max(1000, deadlineAt - Date.now()),
       headers,
     });
 
@@ -244,7 +246,7 @@ async function callCodexImage(
   ): Promise<CodexResponseResult | null> => {
     try {
       const response = await axios.get(`${CODEX_URL}/${responseId}`, {
-        timeout: 60000,
+        timeout: Math.min(60000, Math.max(1000, deadlineAt - Date.now())),
         headers,
       });
       const data = response.data?.response || response.data;
@@ -298,7 +300,13 @@ async function callCodexImage(
   let attempt = 0;
   while (true) {
     attempt += 1;
-    await sleep(20000);
+    if (Date.now() >= deadlineAt) {
+      throw new Error("生成超时，已强制停止（超过10分钟）");
+    }
+    await sleep(Math.min(20000, Math.max(1000, deadlineAt - Date.now())));
+    if (Date.now() >= deadlineAt) {
+      throw new Error("生成超时，已强制停止（超过10分钟）");
+    }
     if (updateStatus) {
       await updateStatus(
         `⏳ 正在等待 Codex 返回结果...（第 ${attempt} 次检查）`,
@@ -368,6 +376,7 @@ async function handleCximg(msg: Api.Message): Promise<void> {
   });
 
   const startedAt = Date.now();
+  const deadlineAt = startedAt + CODEX_MAX_WAIT_MS;
   let lastStatusUpdateAt = 0;
   let currentPhaseText = initialStatus;
   let heartbeatStopped = false;
@@ -398,6 +407,7 @@ async function handleCximg(msg: Api.Message): Promise<void> {
       prompt,
       referenceImage || undefined,
       updateProgressStatus,
+      deadlineAt,
     );
   } catch (error: any) {
     heartbeatStopped = true;
