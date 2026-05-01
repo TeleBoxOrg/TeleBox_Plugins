@@ -1112,7 +1112,7 @@ const speedtest = async (msg: Api.Message) => {
       const defaultServer = getDefaultServer() || "Auto";
       const typePref = getPreferredType() || "默认(photo→sticker→file→txt)";
       await msg.edit({
-        text: `<blockquote><b>⚡️SPEEDTEST by OOKLA</b></blockquote>\n<code>默认服务器: ${defaultServer}</code>\n<code>优先类型: ${typePref}</code>\n<code>Speedtest® CLI: ${SPEEDTEST_VERSION}</code>`,
+        text: `<blockquote><b>⚡️SPEEDTEST by OOKLA</b></blockquote>\n<code>默认服务器: ${htmlEscape(String(defaultServer))}</code>\n<code>优先类型: ${htmlEscape(typePref)}</code>\n<code>Speedtest® CLI: ${SPEEDTEST_VERSION}</code>`,
         parseMode: "html",
       });
     } else if (command === "type") {
@@ -1144,7 +1144,7 @@ const speedtest = async (msg: Api.Message) => {
         const statusIcon = networkStatus.connected ? "✅" : "❌";
 
         await msg.edit({
-          text: `<blockquote><b>⚡️SPEEDTEST by OOKLA</b></blockquote>\n${statusIcon} <b>网络状态:</b> <code>${networkStatus.message}</code>\n\n<b>建议:</b>\n• 如果连接异常，请检查网络设置\n• 尝试更换网络环境或DNS服务器\n• 确认防火墙允许网络测试`,
+          text: `<blockquote><b>⚡️SPEEDTEST by OOKLA</b></blockquote>\n${statusIcon} <b>网络状态:</b> <code>${htmlEscape(networkStatus.message)}</code>\n\n<b>建议:</b>\n• 如果连接异常，请检查网络设置\n• 尝试更换网络环境或DNS服务器\n• 确认防火墙允许网络测试`,
           parseMode: "html",
         });
       } catch (error) {
@@ -1173,10 +1173,10 @@ const speedtest = async (msg: Api.Message) => {
         const statusIcon = result.available ? "✅" : "❌";
         const statusText = result.available ? "可用" : "不可用";
         const pingText = result.ping ? ` (延迟: ${result.ping}ms)` : "";
-        const errorText = result.error ? `\n<b>错误:</b> <code>${result.error}</code>` : "";
+        const errorText = result.error ? `\n<b>错误:</b> <code>${htmlEscape(result.error)}</code>` : "";
 
         await msg.edit({
-          text: `<blockquote><b>⚡️SPEEDTEST by OOKLA</b></blockquote>\n${statusIcon} <b>服务器 ${serverId}:</b> <code>${statusText}</code>${pingText}${errorText}`,
+          text: `<blockquote><b>⚡️SPEEDTEST by OOKLA</b></blockquote>\n${statusIcon} <b>服务器 ${htmlEscape(String(serverId))}:</b> <code>${htmlEscape(statusText)}</code>${pingText}${errorText}`,
           parseMode: "html",
         });
       } catch (error) {
@@ -1228,7 +1228,7 @@ const speedtest = async (msg: Api.Message) => {
         const diagnosis = await diagnoseSpeedtestExecutable();
         const statusIcon = diagnosis.canRun ? "✅" : "❌";
         const statusText = diagnosis.canRun ? "正常" : "异常";
-        const errorText = diagnosis.error ? `\n<b>问题:</b> <code>${diagnosis.error}</code>` : "";
+        const errorText = diagnosis.error ? `\n<b>问题:</b> <code>${htmlEscape(diagnosis.error)}</code>` : "";
         const fixText = diagnosis.needsReinstall ? `\n\n💡 <b>建议:</b> 使用 <code>${commandName} fix</code> 自动修复` : "";
 
         await msg.edit({
@@ -1355,37 +1355,36 @@ const speedtest = async (msg: Api.Message) => {
           : await unitConvert(result.upload.bytes, true);
 
         const description = [
-          `<blockquote><b>⚡️SPEEDTEST by OOKLA @${ccCode}${ccFlag}</b></blockquote>`,
-          `<code>Name</code>  <code>${htmlEscape(result.isp)}</code> ${asInfo}`,
+          `<blockquote><b>⚡️SPEEDTEST by OOKLA @${htmlEscape(ccCode)}${htmlEscape(ccFlag)}</b></blockquote>`,
+          `<code>Name</code>  <code>${htmlEscape(result.isp)}</code> ${htmlEscape(asInfo)}`,
           `<code>Node</code>  <code>${result.server.id
           }</code> - <code>${htmlEscape(
             result.server.name
           )}</code> - <code>${htmlEscape(result.server.location)}</code>`,
           `<code>Conn</code>  <code>${result.interface.externalIp.includes(":") ? "IPv6" : "IPv4"
-          }</code> - <code>${htmlEscape(
-            result.interface.name
+          }</code> - <code>${htmlEscape(result.interface.name
           )}</code> - <code>MTU</code> <code>${mtu}</code>`,
-          `<code>Ping</code>  <code>⇔${result.ping.latency}ms</code> <code>±${result.ping.jitter}ms</code>`,
-          `<code>Rate</code>  <code>↓${await unitConvert(
+          `<code>Ping</code>  <code>⇔${htmlEscape(String(result.ping.latency))}ms</code> <code>±${htmlEscape(String(result.ping.jitter))}ms</code>`,
+          `<code>Rate</code>  <code>↓${htmlEscape(await unitConvert(
             result.download.bandwidth
-          )}</code> <code>↑${uploadRate}</code>`,
-          `<code>Data</code>  <code>↓${await unitConvert(
+          ))}</code> <code>↑${htmlEscape(uploadRate)}</code>`,
+          `<code>Data</code>  <code>↓${htmlEscape(await unitConvert(
             result.download.bytes,
             true
-          )}</code> <code>↑${uploadData}</code>`,
-          `<code>Stat</code>  <code>RX ${await unitConvert(
+          ))}</code> <code>↑${htmlEscape(uploadData)}</code>`,
+          `<code>Stat</code>  <code>RX ${htmlEscape(await unitConvert(
             rxBytes,
             true
-          )}</code> <code>TX ${await unitConvert(txBytes, true)}</code>`,
-          `<code>Time</code>  <code>${result.timestamp
+          ))}</code> <code>TX ${htmlEscape(await unitConvert(txBytes, true))}</code>`,
+          `<code>Time</code>  <code>${htmlEscape(result.timestamp
             .replace("T", " ")
             .split(".")[0]
-            .replace("Z", "")}</code>`,
+            .replace("Z", ""))}</code>`,
         ];
 
         // 如果上传失败，添加说明
         if ((result as any).uploadFailed) {
-          description.push(`<code>Note</code>  <code>上传测试失败，可能是网络环境限制</code>`);
+          description.push(`<code>Note</code>  <code>${htmlEscape("上传测试失败，可能是网络环境限制")}</code>`);
         }
 
         const finalDescription = description.join("\n");
