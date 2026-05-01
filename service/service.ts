@@ -304,7 +304,7 @@ class ServicePlugin extends Plugin {
 
 使用方法：
 • \`service\` - 自动检测并显示当前服务状态
-• \`service ＜服务名＞\` - 显示指定服务的状态
+• \`service &lt;服务名&gt;\` - 显示指定服务的状态
 
 功能特点：
 • 自动检测当前进程对应的systemd服务
