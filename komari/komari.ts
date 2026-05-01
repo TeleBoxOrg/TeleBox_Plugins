@@ -602,7 +602,7 @@ async function handleKomariRequest(msg: Api.Message): Promise<void> {
     const baseUrl = ConfigManager.get(CONFIG_KEYS.KOMARI_URL);
     if (!baseUrl) {
       await msg.edit({
-        text: "❌ 请先设置 Komari URL\n使用命令: `komari _set_url <URL>`",
+        text: "❌ 请先设置 Komari URL\n使用命令: `komari _set_url &lt;URL&gt;`",
         parseMode: "markdown",
       });
       return;
@@ -636,10 +636,10 @@ async function handleKomariRequest(msg: Api.Message): Promise<void> {
         text: `❌ 未知命令。支持的命令：
 • <code>komari status</code> - 获取服务器基本信息
 • <code>komari total</code> - 获取节点总览
-• <code>komari show ＜节点名＞</code> - 查看指定节点详情
+• <code>komari show &lt;节点名&gt;</code> - 查看指定节点详情
 
 配置命令：
-• <code>komari _set_url ＜URL＞</code> - 设置 Komari 服务器 URL`,
+• <code>komari _set_url &lt;URL&gt;</code> - 设置 Komari 服务器 URL`,
         parseMode: "html",
       });
     }
@@ -667,10 +667,10 @@ Komari 服务器监控插件：
 命令：
 • <code>komari status</code> - 获取服务器基本信息
 • <code>komari total</code> - 获取所有节点总览
-• <code>komari show ＜节点名＞</code> - 查看指定节点详细状态
+• <code>komari show &lt;节点名&gt;</code> - 查看指定节点详细状态
 
 配置命令：
-• <code>komari _set_url ＜URL＞</code> - 设置 Komari 服务器地址
+• <code>komari _set_url &lt;URL&gt;</code> - 设置 Komari 服务器地址
   `;
   cmdHandlers: Record<string, (msg: Api.Message) => Promise<void>> = {
     komari: handleKomariRequest,
