@@ -141,7 +141,7 @@ class Ox0Plugin extends Plugin {
         let debugInfo = `<b>调试信息</b>\n`;
         debugInfo += `filename: <code>${htmlEscape(filename)}</code>\n`;
         debugInfo += `buffer.length: <code>${buffer.length}</code>\n`;
-        debugInfo += `buffer[0:32]: <code>${buffer.slice(0,32).toString('hex')}</code>\n`;
+        debugInfo += `buffer[0:32]: <code>${htmlEscape(buffer.slice(0,32).toString('hex'))}</code>\n`;
         debugInfo += `expires: <code>${htmlEscape(expires || "")}</code> secret: <code>${secret ? "1" : "0"}</code>\n`;
 
         // 使用 Node.js 原生 FormData（无需 form-data 依赖）
@@ -150,7 +150,7 @@ class Ox0Plugin extends Plugin {
         if (expires) form.append("expires", expires);
         if (secret) form.append("secret", "1");
   const headers = { 'User-Agent': 'curl/8.0.1' };
-  debugInfo += `headers: <code>${JSON.stringify(headers)}</code>\n`;
+  debugInfo += `headers: <code>${htmlEscape(JSON.stringify(headers))}</code>\n`;
 
         try {
           const response = await axios.post("https://0x0.st", form, {
