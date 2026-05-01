@@ -322,15 +322,15 @@ const getHelpText = () => `⚙️ <b>UAI - 用户消息AI分析</b>
 • <code>${mainPrefix}uai collapse on/off</code> - 开启或关闭 AI 回答折叠
 
 <b>🔌 供应商配置:</b>
-• <code>${mainPrefix}uai add &lt;名称&gt; &lt;url&gt; &lt;key&gt; &lt;type&gt;</code> - 添加供应商
-• <code>${mainPrefix}uai set &lt;名称&gt;</code> - 设置默认供应商
-• <code>${mainPrefix}uai del &lt;名称&gt;</code> - 删除供应商
+• <code>${mainPrefix}uai add ＜名称＞ ＜url＞ ＜key＞ ＜type＞</code> - 添加供应商
+• <code>${mainPrefix}uai set ＜名称＞</code> - 设置默认供应商
+• <code>${mainPrefix}uai del ＜名称＞</code> - 删除供应商
 • <code>${mainPrefix}uai list</code> - 列出所有供应商
-• <code>${mainPrefix}uai model &lt;名称&gt; &lt;模型&gt;</code> - 修改模型
+• <code>${mainPrefix}uai model ＜名称＞ ＜模型＞</code> - 修改模型
 
 <b>📝 提示词配置:</b>
-• <code>${mainPrefix}uai prompt add &lt;名称&gt; &lt;内容&gt;</code> - 添加自定义提示词
-• <code>${mainPrefix}uai prompt del &lt;名称&gt;</code> - 删除自定义提示词
+• <code>${mainPrefix}uai prompt add ＜名称＞ ＜内容＞</code> - 添加自定义提示词
+• <code>${mainPrefix}uai prompt del ＜名称＞</code> - 删除自定义提示词
 • <code>${mainPrefix}uai prompt list</code> - 列出所有提示词
 
 <b>💡 内置提示词:</b>

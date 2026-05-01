@@ -30,8 +30,8 @@ const CONFIG_DEFAULTS: BananaConfig = {
 const help_text =
   "🎯 <b>Nano-Banana 图像编辑插件</b>\n" +
   "• 回复图片并附带 <code>${mainPrefix}banana 提示词</code> 调用 Gemini Nano-Banana 修改图像\n" +
-  "• <code>${mainPrefix}banana key &lt;密钥&gt;</code> 配置 Gemini API Key\n" +
-  "• <code>${mainPrefix}banana limit &lt;数值/MB&gt;</code> 调整图片大小上限（默认 10MB，可用 default 重置）\n" +
+  "• <code>${mainPrefix}banana key ＜密钥＞</code> 配置 Gemini API Key\n" +
+  "• <code>${mainPrefix}banana limit ＜数值/MB＞</code> 调整图片大小上限（默认 10MB，可用 default 重置）\n" +
   "• 使用 ";
 
 const dataDir = createDirectoryInAssets("banana");

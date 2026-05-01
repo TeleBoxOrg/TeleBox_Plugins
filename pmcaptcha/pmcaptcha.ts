@@ -1258,7 +1258,7 @@ function helpText(section?: string): string {
 • <code>${p}pmc record del verified <ID>/all</code>
   删除通过记录（支持 all）
 • <code>${p}pmc record del failed <ID>/all</code>
-  删除失败记录（支持 all）</blockquote>`,
+  删除失败记录（支持 all）</blockquote>`
   };
 
   if (section && sections[section]) return sections[section];

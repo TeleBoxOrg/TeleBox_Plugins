@@ -228,13 +228,13 @@ async function handleAitcCommand(msg: Api.Message): Promise<void> {
   if (!trimmed) {
     await replyWith(
       "ℹ️ <b>aitc 插件</b>\n\n" +
-        "• <code>aitc key &lt;API Key&gt;</code> - 设置API Key\n" +
-        "• <code>aitc url &lt;地址&gt;</code> - 自定义API地址\n" +
-        "• <code>aitc model &lt;模型名&gt;</code> - 指定模型\n" +
-        `• <code>aitc temp &lt;${TEMPERATURE_RANGE_LABEL}&gt;</code> - 调整温度\n` +
-        "• <code>aitc prompt &lt;系统Prompt&gt;</code> - 定义默认Prompt\n" +
-        "• <code>aitc spn &lt;简称&gt; &lt;Prompt文本&gt;</code> - 保存或更新Prompt预设 (set prompt name)\n" +
-        "• <code>aitc &lt;简称&gt; [文本]</code> - 使用预设Prompt处理文本\n" +
+        "• <code>aitc key ＜API Key＞</code> - 设置API Key\n" +
+        "• <code>aitc url ＜地址＞</code> - 自定义API地址\n" +
+        "• <code>aitc model ＜模型名＞</code> - 指定模型\n" +
+        `• <code>aitc temp ＜${TEMPERATURE_RANGE_LABEL}＞</code> - 调整温度\n` +
+        "• <code>aitc prompt ＜系统Prompt＞</code> - 定义默认Prompt\n" +
+        "• <code>aitc spn ＜简称＞ ＜Prompt文本＞</code> - 保存或更新Prompt预设 (set prompt name)\n" +
+        "• <code>aitc ＜简称＞ [文本]</code> - 使用预设Prompt处理文本\n" +
         "• <code>aitc [文本]</code> - 使用默认Prompt处理文本\n" +
         "• <code>aitc info</code> - 查看当前配置",
     );
@@ -322,7 +322,7 @@ async function handleAitcCommand(msg: Api.Message): Promise<void> {
       if (!aliasToken) {
         await replyWith(
           "❌ <b>请提供Prompt简称与内容</b>\n" +
-            "用法：<code>aitc spn &lt;简称&gt; &lt;Prompt文本&gt;</code>",
+            "用法：<code>aitc spn ＜简称＞ ＜Prompt文本＞</code>",
         );
         return;
       }
@@ -342,7 +342,7 @@ async function handleAitcCommand(msg: Api.Message): Promise<void> {
       if (!promptContent) {
         await replyWith(
           "❌ <b>请提供Prompt内容</b>\n" +
-            "用法：<code>aitc spn &lt;简称&gt; &lt;Prompt文本&gt;</code>",
+            "用法：<code>aitc spn ＜简称＞ ＜Prompt文本＞</code>",
         );
         return;
       }
@@ -425,7 +425,7 @@ async function handleAitcCommand(msg: Api.Message): Promise<void> {
   const apiKey = ConfigManager.get(CONFIG_KEYS.API_KEY, "");
   if (!apiKey) {
     await replyWith(
-      "❌ <b>未配置API Key</b>\n请使用 <code>aitc _set_key &lt;OpenAI Key&gt;</code> 设置后再试",
+      "❌ <b>未配置API Key</b>\n请使用 <code>aitc _set_key ＜OpenAI Key＞</code> 设置后再试",
     );
     return;
   }
@@ -498,13 +498,13 @@ class AitcPlugin extends Plugin {
 
   description: string = `
 自定义 Prompt 的 AI 转写插件：
-- aitc url &lt;地址&gt; - 自定义API地址（兼容OpenAI SDK，默认OpenAI）
-- aitc key &lt;API Key&gt; - 设置API Key
-- aitc model &lt;模型名&gt; - 指定模型（默认gpt-4o-mini）
-- aitc temp &lt;${TEMPERATURE_RANGE_LABEL}&gt; - 调整模型温度（默认0.2）
-- aitc prompt &lt;默认Prompt&gt; - 设置默认Prompt（默认转写为英文）
-- aitc spn &lt;Prompt简称&gt; &lt;Prompt内容&gt; - 保存或更新Prompt预设
-- aitc &lt;Prompt简称&gt; [文本] - 使用预设Prompt处理文本
+- aitc url ＜地址＞ - 自定义API地址（兼容OpenAI SDK，默认OpenAI）
+- aitc key ＜API Key＞ - 设置API Key
+- aitc model ＜模型名＞ - 指定模型（默认gpt-4o-mini）
+- aitc temp ＜${TEMPERATURE_RANGE_LABEL}＞ - 调整模型温度（默认0.2）
+- aitc prompt ＜默认Prompt＞ - 设置默认Prompt（默认转写为英文）
+- aitc spn ＜Prompt简称＞ ＜Prompt内容＞ - 保存或更新Prompt预设
+- aitc ＜Prompt简称＞ [文本] - 使用预设Prompt处理文本
 - aitc [文本] - 使用默认Prompt处理文本
 - aitc info - 查看当前配置
   `;
