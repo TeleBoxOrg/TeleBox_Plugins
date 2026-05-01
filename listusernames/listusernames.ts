@@ -13,6 +13,8 @@ const htmlEscape = (text: string): string =>
     '"': '&quot;', "'": '&#x27;' 
   }[m] || m));
 
+const codeTag = (text: string | number): string => `<code>${htmlEscape(String(text))}</code>`;
+
 const help_text = `📋 <b>listusernames - 列出公开群组/频道</b>
 
 <b>命令格式：</b>
@@ -70,9 +72,9 @@ class ListUsernamesPlugin extends Plugin {
           const chatType = chat.broadcast ? "📢 频道" : "👥 群组";
           const chatId = chat.id ? chat.id.toString() : "未知ID";
           
-          output += `<b>${index + 1}.</b> ${title} (${chatType})\n`;
-          output += `   👤 用户名: <code>${username}</code>\n`;
-          output += `   🆔 ID: <code>${chatId}</code>\n\n`;
+          output += `<b>${index + 1}.</b> ${title} (${htmlEscape(chatType)})\n`;
+          output += `   👤 用户名: ${codeTag(username)}\n`;
+          output += `   🆔 ID: ${codeTag(chatId)}\n\n`;
         });
 
         // 添加统计信息
