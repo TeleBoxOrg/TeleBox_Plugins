@@ -191,10 +191,18 @@ const sendProgressToSaved = async (
       statusText = "⏸️ 已暂停";
     }
 
-    const message = `📊 <b>删除任务${status}</b>
+    const safeStatus = htmlEscape(status);
+    const safeChatName = htmlEscape(task.chatName);
+    const safeStatusText = htmlEscape(statusText);
+    const recentErrors = task.errors
+      .slice(-3)
+      .map((error) => htmlEscape(error))
+      .join("\n");
 
-<b>群聊:</b> ${task.chatName}
-<b>状态:</b> ${statusText}
+    const message = `📊 <b>删除任务${safeStatus}</b>
+
+<b>群聊:</b> ${safeChatName}
+<b>状态:</b> ${safeStatusText}
 
 <b>📈 统计信息:</b>
 • 已删除: <code>${task.deletedMessages.toLocaleString()}</code> 条
@@ -203,7 +211,7 @@ const sendProgressToSaved = async (
 
 <b>最后更新:</b> ${new Date(task.lastUpdate).toLocaleString("zh-CN")}
 
-${task.errors.length > 0 ? `<b>⚠️ 最近错误:</b>\n${task.errors.slice(-3).join("\n")}` : ""}`;
+${recentErrors ? `<b>⚠️ 最近错误:</b>\n${recentErrors}` : ""}`;
 
     // 如果已有收藏夹消息，则编辑；否则创建新消息
     if (task.savedMessageId) {

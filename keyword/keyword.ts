@@ -84,12 +84,12 @@ class KeywordTask {
   }
 
   exportStr(showAll: boolean = false): string {
-    let text = `<code>${this.task_id}</code> - `;
-    text += `<code>${this.key}</code> - `;
+    let text = `${codeTag(this.task_id ?? "")}`;
+    text += ` - ${codeTag(this.key)} - `;
     if (showAll) {
-      text += `<code>${this.cid}</code> - `;
+      text += `${codeTag(this.cid)} - `;
     }
-    text += `${this.msg}`;
+    text += `${htmlEscape(this.msg)}`;
     return text;
   }
 
@@ -134,13 +134,14 @@ class KeywordTask {
 
     if (message.fromId && "userId" in message.fromId) {
       const userId = Number(message.fromId.userId);
-      const firstName = "User";
+      const sender = message.sender as any;
+      const firstName = sender?.firstName || sender?.first_name || "User";
       text = text.replace(
         "$mention",
-        `<a href="tg://user?id=${userId}">${firstName}</a>`
+        `<a href="tg://user?id=${userId}">${htmlEscape(firstName)}</a>`
       );
       text = text.replace("$code_id", String(userId));
-      text = text.replace("$code_name", firstName);
+      text = text.replace("$code_name", htmlEscape(firstName));
     } else {
       text = text.replace("$mention", "");
       text = text.replace("$code_id", "");
@@ -334,6 +335,10 @@ function htmlEscape(text: string): string {
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;")
     .replace(/'/g, "&#x27;");
+}
+
+function codeTag(text: string | number): string {
+  return `<code>${htmlEscape(String(text))}</code>`;
 }
 
 class KeywordAlias {

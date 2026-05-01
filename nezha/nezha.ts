@@ -432,7 +432,7 @@ function formatServerInfo(
   const online = isServerOnline(server);
   const state = server.state;
   const host = server.host;
-  const flag = getCountryFlag(server.geoip?.country_code);
+  const flag = htmlEscape(getCountryFlag(server.geoip?.country_code));
 
   let title = `${getStatusEmoji(online)} ${flag} <b>${htmlEscape(server.name)}</b> <code>#${server.id}</code>`;
 
@@ -440,7 +440,7 @@ function formatServerInfo(
     const monitors: string[] = [];
     serviceData.forEach((delay, name) => {
       const delayMs = delay.toFixed(1);
-      monitors.push(`${name}:${delayMs}ms`);
+      monitors.push(`${htmlEscape(name)}:${delayMs}ms`);
     });
     title += `\n📶 ${monitors.join(" | ")}`;
   }
@@ -573,7 +573,7 @@ const nezha = async (msg: Api.Message) => {
 
       try {
         const client = await getGlobalClient();
-        const caption = `📊 <b>${htmlEscape(targetServer.name)}</b> 服务监控\n\n监控项: ${monitorData.map((m) => m.monitor_name).join(", ")}`;
+        const caption = `📊 <b>${htmlEscape(targetServer.name)}</b> 服务监控\n\n监控项: ${monitorData.map((m) => htmlEscape(m.monitor_name)).join(", ")}`;
 
         await client.sendFile(msg.chatId!, {
           file: tempFile,

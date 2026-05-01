@@ -375,29 +375,29 @@ sudo yum install speedtest</code></pre>
 <b>服务器管理指令:</b>
 
 - <b>添加服务器 (密码认证):</b>
-  <code>sl add ＜别名＞ ＜user@host:port＞ password ＜密码＞</code>
+  <code>sl add &lt;别名&gt; &lt;user@host:port&gt; password &lt;密码&gt;</code>
   <i>示例:</i> <code>sl add 东京-甲骨文 root@1.2.3.4:22 password MyPassword123</code>
 
 - <b>添加服务器 (密钥认证):</b>
-  <code>sl add ＜别名＞ ＜user@host:port＞ key ＜私钥路径＞</code>
+  <code>sl add &lt;别名&gt; &lt;user@host:port&gt; key &lt;私钥路径&gt;</code>
   <i>注意: 私钥路径是指在<b>运行TeleBox的服务器上</b>的绝对路径。</i>
   <i>示例:</i> <code>sl add 法兰克福-谷歌 ubuntu@5.6.7.8:22 key /root/.ssh/id_rsa</code>
 
 - <b>查看服务器列表:</b> <code>sl list</code>
-- <b>删除服务器:</b> <code>sl del ＜显示序号＞</code>
-- <b>🆕 修改别名:</b> <code>sl rename ＜显示序号＞ ＜新别名＞</code>
+- <b>删除服务器:</b> <code>sl del &lt;显示序号&gt;</code>
+- <b>🆕 修改别名:</b> <code>sl rename &lt;显示序号&gt; &lt;新别名&gt;</code>
 ---
 <b>执行测速指令:</b>
 
-- <b>远程测速:</b> <code>sl ＜显示序号＞</code>
+- <b>远程测速:</b> <code>sl &lt;显示序号&gt;</code>
 - <b>本机测速:</b> <code>sl</code>
 - <b>多服务器测速:</b> <code>sl 1 3 5</code>
 - <b>全部测速:</b> <code>sl all</code>
-- <b>🆕 排除测速:</b> <code>sl all no ＜序号1＞ ＜序号2＞</code>
+- <b>🆕 排除测速:</b> <code>sl all no &lt;序号1&gt; &lt;序号2&gt;</code>
 ---
 <b>配置指令:</b>
 
-- <b>设置超时时间:</b> <code>sl timeout ＜秒数＞</code>
+- <b>设置超时时间:</b> <code>sl timeout &lt;秒数&gt;</code>
   <i>示例:</i> <code>sl timeout 60</code> (设置60秒超时)
   <i>默认值: 300秒 (5分钟)</i>
 - <b>查看当前超时:</b> <code>sl timeout</code>
@@ -456,7 +456,7 @@ const speedtest = async (msg: Api.Message): Promise<void> => {
       } else {
         const currentTimeout = DEFAULT_TIMEOUT / 1000;
         await msg.edit({
-            text: `ℹ️ <b>当前超时设置</b>\n\n超时时间: <code>${currentTimeout}</code> 秒\n\n使用 <code>sl timeout ＜秒数＞</code> 来修改`,
+            text: `ℹ️ <b>当前超时设置</b>\n\n超时时间: <code>${currentTimeout}</code> 秒\n\n使用 <code>sl timeout &lt;秒数&gt;</code> 来修改`,
           parseMode: "html",
         });
       }
@@ -563,7 +563,7 @@ const speedtest = async (msg: Api.Message): Promise<void> => {
         const newName = args.slice(2).join(" ");
         if (isNaN(displayId) || displayId < 1 || !newName) {
           await msg.edit({
-            text: "❌ <b>参数错误</b>\n\n请使用: <code>sl rename ＜显示序号＞ ＜新别名＞</code>",
+            text: "❌ <b>参数错误</b>\n\n请使用: <code>sl rename &lt;显示序号&gt; &lt;新别名&gt;</code>",
             parseMode: "html",
           });
           return;

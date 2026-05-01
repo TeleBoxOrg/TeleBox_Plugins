@@ -29,6 +29,22 @@ const filePath = path.join(
   `${pluginName}_config.json`
 );
 
+function htmlEscape(value: any): string {
+  return String(value ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
+function codeTag(value: any): string {
+  return `<code>${htmlEscape(value)}</code>`;
+}
+
+function attrEscape(value: any): string {
+  return htmlEscape(value).replace(/'/g, "&#39;");
+}
+
 function getRemarkFromMsg(msg: Api.Message | string, n: number): string {
   return (typeof msg === "string" ? msg : msg?.message || "")
     .replace(new RegExp(`^\\S+${Array(n).fill("\\s+\\S+").join("")}`), "")
@@ -92,22 +108,22 @@ async function formatEntity(
   }
   const displayParts: string[] = [];
 
-  if (entity?.title) displayParts.push(entity.title);
-  if (entity?.firstName) displayParts.push(entity.firstName);
-  if (entity?.lastName) displayParts.push(entity.lastName);
+  if (entity?.title) displayParts.push(htmlEscape(entity.title));
+  if (entity?.firstName) displayParts.push(htmlEscape(entity.firstName));
+  if (entity?.lastName) displayParts.push(htmlEscape(entity.lastName));
   if (entity?.username)
     displayParts.push(
-      mention ? `@${entity.username}` : `<code>@${entity.username}</code>`
+      mention ? htmlEscape(`@${entity.username}`) : codeTag(`@${entity.username}`)
     );
 
   if (id) {
     displayParts.push(
       entity instanceof Api.User
-        ? `<a href="tg://user?id=${id}">${id}</a>`
-        : `<a href="https://t.me/c/${id}">${id}</a>`
+        ? `<a href="tg://user?id=${attrEscape(id)}">${htmlEscape(id)}</a>`
+        : `<a href="https://t.me/c/${attrEscape(id)}">${htmlEscape(id)}</a>`
     );
   } else if (!target?.className) {
-    displayParts.push(`<code>${target}</code>`);
+    displayParts.push(codeTag(target));
   }
 
   return {
@@ -135,7 +151,7 @@ ${task.action}`;
 }
 function buildCopyCommand(task: any): string {
   const cmd = buildCopy(task);
-  return cmd?.includes("\n") ? `<pre>${cmd}</pre>` : `<code>${cmd}</code>`;
+  return cmd?.includes("\n") ? `<pre>${htmlEscape(cmd)}</pre>` : codeTag(cmd);
 }
 async function run(text: string, msg: Api.Message, trigger?: Api.Message) {
   const cmd = await getCommandFromMessage(text);
@@ -275,7 +291,7 @@ class KittPlugin extends Plugin {
         });
         await db.write();
         await msg.edit({
-          text: `任务 <code>${id}</code> 已添加`,
+          text: `任务 ${codeTag(id)} 已添加`,
           parseMode: "html",
         });
       } else if (["ls", "list", "lv"].includes(command)) {
@@ -299,7 +315,7 @@ class KittPlugin extends Plugin {
           text += `🔛 已启用的任务：\n\n${enabledTasks
             .map(
               (t) =>
-                `- [<code>${t.id}</code>] ${t.remark}${
+                `- [${codeTag(t.id)}] ${htmlEscape(t.remark)}${
                   verbose ? `\n${buildCopyCommand(t)}` : ""
                 }`
             )
@@ -310,7 +326,7 @@ class KittPlugin extends Plugin {
           text += `⏹ 已禁用的任务：\n\n${disabledTasks
             .map(
               (t) =>
-                `- [<code>${t.id}</code>] ${t.remark}${
+                `- [${codeTag(t.id)}] ${htmlEscape(t.remark)}${
                   verbose ? `\n${buildCopyCommand(t)}` : ""
                 }`
             )
@@ -333,7 +349,7 @@ class KittPlugin extends Plugin {
         const taskIndex = tasks.findIndex((t) => t.id === taskId);
         if (taskIndex === -1) {
           await msg.edit({
-            text: `任务 <code>${taskId}</code> 不存在`,
+            text: `任务 ${codeTag(taskId)} 不存在`,
             parseMode: "html",
           });
           return;
@@ -341,7 +357,7 @@ class KittPlugin extends Plugin {
         tasks.splice(taskIndex, 1);
         await db.write();
         await msg.edit({
-          text: `任务 <code>${taskId}</code> 已删除`,
+          text: `任务 ${codeTag(taskId)} 已删除`,
           parseMode: "html",
         });
       } else if (["disable", "off"].includes(command)) {
@@ -351,7 +367,7 @@ class KittPlugin extends Plugin {
         const task = tasks.find((t) => t.id === taskId);
         if (!task) {
           await msg.edit({
-            text: `任务 <code>${taskId}</code> 不存在`,
+            text: `任务 ${codeTag(taskId)} 不存在`,
             parseMode: "html",
           });
           return;
@@ -359,7 +375,7 @@ class KittPlugin extends Plugin {
         task.status = "0";
         await db.write();
         await msg.edit({
-          text: `任务 <code>${taskId}</code> 已禁用`,
+          text: `任务 ${codeTag(taskId)} 已禁用`,
           parseMode: "html",
         });
       } else if (["enable", "on"].includes(command)) {
@@ -369,7 +385,7 @@ class KittPlugin extends Plugin {
         const task = tasks.find((t) => t.id === taskId);
         if (!task) {
           await msg.edit({
-            text: `任务 <code>${taskId}</code> 不存在`,
+            text: `任务 ${codeTag(taskId)} 不存在`,
             parseMode: "html",
           });
           return;
@@ -377,7 +393,7 @@ class KittPlugin extends Plugin {
         delete task.status;
         await db.write();
         await msg.edit({
-          text: `任务 <code>${taskId}</code> 已启用`,
+          text: `任务 ${codeTag(taskId)} 已启用`,
           parseMode: "html",
         });
       }

@@ -186,7 +186,7 @@ class EatGifPlugin extends Plugin {
     const items = keys.map(
       (k) => `• <code>${htmlEscape(k)}</code> - ${htmlEscape(config[k].desc)}`
     );
-    const header = `🧩 <b>可用表情列表</b>\n使用：<code>${commandName} ＜名称＞</code>（需回复Ta）\n\n`;
+    const header = `🧩 <b>可用表情列表</b>\n使用：<code>${commandName} &lt;名称&gt;</code>（需回复Ta）\n\n`;
     return header + items.join("\n");
   }
 

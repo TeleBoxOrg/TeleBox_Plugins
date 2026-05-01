@@ -5,7 +5,17 @@ import { sleep } from "teleproto/Helpers";
 
 // 参考 plugins/music_bot.ts 的结构与实现方式
 
+const htmlEscape = (text: string): string =>
+  text.replace(/[&<>"']/g, (m) => ({
+    "&": "&amp;",
+    "<": "&lt;",
+    ">": "&gt;",
+    '"': "&quot;",
+    "'": "&#x27;",
+  }[m] || m));
+
 const prefixes = getPrefixes();
+
 const mainPrefix = prefixes[0];
 
 const bot = "Music163bot"; // 与原实现保持一致（可用 @ 或不带 @）
@@ -110,7 +120,8 @@ async function fetchAndSendAudio(
     try {
       await replyWithButtons.click({});
     } catch (e) {
-      await msg.edit({ text: `❌ 点击按钮失败：${(e as any)?.message || e}` });
+        await msg.edit({ text: `❌ 点击按钮失败：${htmlEscape((e as any)?.message || String(e))}`, parseMode: "html" });
+
       return;
     }
 
@@ -165,7 +176,7 @@ class NeteasePlugin extends Plugin {
 
       try {
         await msg.edit({
-          text: `🔎 处理中：<code>${keyword}</code>`,
+          text: `🔎 处理中：<code>${htmlEscape(keyword)}</code>`,
           parseMode: "html",
         });
       } catch {}
@@ -181,7 +192,7 @@ class NeteasePlugin extends Plugin {
         if (id) commandToBot = `/music ${id}`;
       }
 
-      const caption = `🎵 ${keyword}`;
+      const caption = `🎵 ${htmlEscape(keyword)}`;
       await fetchAndSendAudio(msg, commandToBot, caption);
 
       try {

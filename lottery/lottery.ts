@@ -23,6 +23,10 @@ function htmlEscape(text: string): string {
     .replace(/'/g, "&#x27;");
 }
 
+function codeTag(text: string | number): string {
+  return `<code>${htmlEscape(String(text))}</code>`;
+}
+
 // Initialize database
 let db = new Database(
   path.join(createDirectoryInAssets("lottery"), "lottery.db")
@@ -764,7 +768,7 @@ async function performLotteryDraw(client: TelegramClient, lottery: any): Promise
       
       let statusText = "";
       if (winner.status === PrizeStatus.PENDING && lottery.distribution_mode === DistributionMode.CLAIM) {
-        statusText = ` - 请私聊 @${lottery.creator_id} 领取奖品`;
+        statusText = ` - 请私聊 @${htmlEscape(lottery.creator_id)} 领取奖品`;
       }
       
       winnerLines.push(`${statusIcon} ${formattedName}${statusText}`);
@@ -1198,7 +1202,7 @@ const lottery = async (msg: Api.Message) => {
       
       if (!selectedWarehouse) {
         const warehouseList = availableWarehouses.map((w, index) => 
-          `${index + 1}. ${w}`
+          `${index + 1}. ${htmlEscape(w)}`
         ).join("\n");
         
         await msg.edit({
@@ -1212,7 +1216,7 @@ const lottery = async (msg: Api.Message) => {
       const warehousePrizes = getWarehousePrizes(selectedWarehouse);
       if (warehousePrizes.length === 0) {
         await msg.edit({
-          text: `❌ <b>错误:</b> 仓库 <code>${htmlEscape(selectedWarehouse)}</code> 中没有可用的奖品\n\n💡 请先添加奖品或选择其他仓库`,
+          text: `❌ <b>错误:</b> 仓库 ${codeTag(selectedWarehouse)} 中没有可用的奖品\n\n💡 请先添加奖品或选择其他仓库`,
           parseMode: "html"
         });
         return;
@@ -1258,10 +1262,10 @@ const lottery = async (msg: Api.Message) => {
         `🏆 <b>活动名称:</b> ${htmlEscape(title)}\n` +
         `🎁 <b>中奖名额:</b> <b>${winnerCount}</b> 个\n` +
         `👥 <b>参与上限:</b> <b>${maxParticipants}</b> 人\n` +
-        `🔑 <b>参与关键词:</b> <code>${htmlEscape(keyword)}</code>\n` +
+        `🔑 <b>参与关键词:</b> ${codeTag(keyword)}\n` +
         `📦 <b>奖品仓库:</b> ${htmlEscape(selectedWarehouse)}\n` +
         `🎁 <b>可用奖品:</b> ${warehousePrizes.length} 种\n` +
-        `🆔 <b>抽奖ID:</b> <code>${uniqueId}</code>\n\n` +
+        `🆔 <b>抽奖ID:</b> ${codeTag(uniqueId)}\n\n` +
         `💡 <b>提示:</b> 发送关键词即可参与抽奖`;
 
       const sentMsg = await msg.client?.sendMessage(chatId, {
@@ -1382,11 +1386,11 @@ const lottery = async (msg: Api.Message) => {
       const statusText =
         `📋 <b>抽奖状态</b>\n\n` +
         `🏆 <b>活动:</b> ${htmlEscape(activeLottery.title)}\n` +
-        `🔑 <b>关键词:</b> <code>${htmlEscape(activeLottery.keyword)}</code>\n` +
+        `🔑 <b>关键词:</b> ${codeTag(activeLottery.keyword)}\n` +
         `👥 <b>参与情况:</b> ${participants.length}/${activeLottery.max_participants}\n` +
         `🎁 <b>中奖名额:</b> ${activeLottery.winner_count}\n` +
-        `⏰ <b>创建时间:</b> ${new Date(activeLottery.created_at).toLocaleString("zh-CN")}\n` +
-        `🆔 <b>抽奖ID:</b> <code>${activeLottery.unique_id}</code>`;
+        `⏰ <b>创建时间:</b> ${htmlEscape(new Date(activeLottery.created_at).toLocaleString("zh-CN"))}\n` +
+        `🆔 <b>抽奖ID:</b> ${codeTag(activeLottery.unique_id)}`;
 
       await msg.edit({
         text: statusText,
@@ -1421,12 +1425,12 @@ const lottery = async (msg: Api.Message) => {
         
         if (isCreated) {
           await msg.edit({
-            text: `✅ <b>奖品仓库已创建</b>\n\n仓库名称: <code>${htmlEscape(warehouseName)}</code>`,
+            text: `✅ <b>奖品仓库已创建</b>\n\n仓库名称: ${codeTag(warehouseName)}`,
             parseMode: "html"
           });
         } else {
           await msg.edit({
-            text: `⚠️ <b>仓库已存在</b>\n\n仓库 <code>${htmlEscape(warehouseName)}</code> 已经存在，无需重复创建\n\n💡 可以使用 <code>${mainPrefix}lottery prize add ${warehouseName} [奖品内容] [数量]</code> 添加奖品`,
+            text: `⚠️ <b>仓库已存在</b>\n\n仓库 ${codeTag(warehouseName)} 已经存在，无需重复创建\n\n💡 可以使用 <code>${mainPrefix}lottery prize add ${warehouseName} [奖品内容] [数量]</code> 添加奖品`,
             parseMode: "html"
           });
         }
@@ -1455,7 +1459,7 @@ const lottery = async (msg: Api.Message) => {
         
         addPrizeToWarehouse(warehouseName, prizeText, stock);
         await msg.edit({
-          text: `✅ <b>奖品已添加</b>\n\n仓库: <code>${htmlEscape(warehouseName)}</code>\n奖品: ${htmlEscape(prizeText)}\n数量: ${stock}`,
+          text: `✅ <b>奖品已添加</b>\n\n仓库: ${codeTag(warehouseName)}\n奖品: ${htmlEscape(prizeText)}\n数量: ${stock}`,
           parseMode: "html"
         });
         return;
@@ -1470,7 +1474,7 @@ const lottery = async (msg: Api.Message) => {
         
         if (prizes.length === 0) {
           await msg.edit({
-            text: `📦 <b>奖品仓库</b>\n\n仓库 <code>${htmlEscape(warehouseName)}</code> 暂无奖品`,
+            text: `📦 <b>奖品仓库</b>\n\n仓库 ${codeTag(warehouseName)} 暂无奖品`,
             parseMode: "html"
           });
           return;
@@ -1510,12 +1514,12 @@ const lottery = async (msg: Api.Message) => {
           const deletedCount = clearWarehouse(target);
           if (deletedCount > 0) {
             await msg.edit({
-              text: `✅ <b>清空完成</b>\n\n仓库 <code>${htmlEscape(target)}</code> 已清空\n删除了 ${deletedCount} 个奖品`,
+              text: `✅ <b>清空完成</b>\n\n仓库 ${codeTag(target)} 已清空\n删除了 ${deletedCount} 个奖品`,
               parseMode: "html"
             });
           } else {
             await msg.edit({
-              text: `❌ <b>错误:</b> 仓库 <code>${htmlEscape(target)}</code> 不存在或已为空`,
+              text: `❌ <b>错误:</b> 仓库 ${codeTag(target)} 不存在或已为空`,
               parseMode: "html"
             });
           }
@@ -1667,7 +1671,7 @@ const lottery = async (msg: Api.Message) => {
         const winner = winners.find(w => w.username === targetUserId);
         if (!winner) {
           await msg.edit({
-            text: `❌ <b>错误:</b> 未找到用户名为 @${htmlEscape(targetUserId)} 的中奖用户`,
+            text: `❌ <b>错误:</b> 未找到用户名为 ${htmlEscape(`@${targetUserId}`)} 的中奖用户`,
             parseMode: "html"
           });
           return;

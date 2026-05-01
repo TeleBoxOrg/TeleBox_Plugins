@@ -11,6 +11,7 @@ import { JSONFilePreset } from "lowdb/node";
 import * as path from "path";
 import { createDirectoryInAssets } from "@utils/pathHelpers";
 import { getGlobalClient } from "@utils/globalClient";
+import { TelegramFormatter } from "@utils/telegramFormatter";
 
 const prefixes = getPrefixes();
 const mainPrefix = prefixes[0];
@@ -64,13 +65,6 @@ function htmlEscape(t: string): string {
         .replace(/'/g, "&#39;");
 }
 
-// HTML转义函数（确保用户输入安全）
-const escapeHtml = (text: string): string => 
-    text.replace(/[&<>"']/g, m => ({ 
-        '&': '&amp;', '<': '&lt;', '>': '&gt;', 
-        '"': '&quot;', "'": '&#x27;' 
-    }[m] || m));
-
 // 应用折叠功能
 const applyWrap = (s: string, collapse?: boolean): string => {
     if (!collapse) return s;
@@ -78,25 +72,6 @@ const applyWrap = (s: string, collapse?: boolean): string => {
     if (/<blockquote(?:\s|>|\/)\/?>/i.test(s)) return s;
     return `<blockquote expandable>${s}</blockquote>`;
 };
-
-// Markdown 转 Telegram HTML，保留特殊格式
-function markdownToHtml(text: string): string {
-    return text
-        // 粗体 **text** 或 __text__
-        .replace(/\*\*(.+?)\*\*/g, "<b>$1</b>")
-        .replace(/__(.+?)__/g, "<b>$1</b>")
-        // 斜体 *text* 或 _text_
-        .replace(/(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*)/g, "<i>$1</i>")
-        .replace(/(?<!_)_(?!_)(.+?)(?<!_)_(?!_)/g, "<i>$1</i>")
-        // 代码 `code`
-        .replace(/`([^`]+)`/g, "<code>$1</code>")
-        // 删除线 ~~text~~
-        .replace(/~~(.+?)~~/g, "<s>$1</s>")
-        // 保留已有的HTML标签
-        .replace(/&lt;(.+?)&gt;/g, "<$1>")
-        // 处理块引用 > text
-        .replace(/^&gt;\s?(.+)$/gm, "<blockquote>$1</blockquote>");
-}
 
 function trimBase(url: string): string {
     return url.replace(/\/$/, "");
@@ -322,15 +297,15 @@ const getHelpText = () => `⚙️ <b>UAI - 用户消息AI分析</b>
 • <code>${mainPrefix}uai collapse on/off</code> - 开启或关闭 AI 回答折叠
 
 <b>🔌 供应商配置:</b>
-• <code>${mainPrefix}uai add ＜名称＞ ＜url＞ ＜key＞ ＜type＞</code> - 添加供应商
-• <code>${mainPrefix}uai set ＜名称＞</code> - 设置默认供应商
-• <code>${mainPrefix}uai del ＜名称＞</code> - 删除供应商
+• <code>${mainPrefix}uai add &lt;名称&gt; &lt;url&gt; &lt;key&gt; &lt;type&gt;</code> - 添加供应商
+• <code>${mainPrefix}uai set &lt;名称&gt;</code> - 设置默认供应商
+• <code>${mainPrefix}uai del &lt;名称&gt;</code> - 删除供应商
 • <code>${mainPrefix}uai list</code> - 列出所有供应商
-• <code>${mainPrefix}uai model ＜名称＞ ＜模型＞</code> - 修改模型
+• <code>${mainPrefix}uai model &lt;名称&gt; &lt;模型&gt;</code> - 修改模型
 
 <b>📝 提示词配置:</b>
-• <code>${mainPrefix}uai prompt add ＜名称＞ ＜内容＞</code> - 添加自定义提示词
-• <code>${mainPrefix}uai prompt del ＜名称＞</code> - 删除自定义提示词
+• <code>${mainPrefix}uai prompt add &lt;名称&gt; &lt;内容&gt;</code> - 添加自定义提示词
+• <code>${mainPrefix}uai prompt del &lt;名称&gt;</code> - 删除自定义提示词
 • <code>${mainPrefix}uai prompt list</code> - 列出所有提示词
 
 <b>💡 内置提示词:</b>
@@ -603,7 +578,7 @@ class UAIPlugin extends Plugin {
                         const result = await callAI(provider, prompt, `${userInfo}\n\n${content}`, db.data.timeout);
                         
                         // 处理AI回答，保留格式并应用折叠
-                        const aiContent = markdownToHtml(result);
+                        const aiContent = TelegramFormatter.markdownToHtml(result, { collapseSafe: db.data.collapse });
                         const foldedContent = applyWrap(aiContent, db.data.collapse);
                         
                         const resultText = `📊 <b>${promptKey === "zj" ? "总结" : "分析"}结果</b>（${displayName}，${messages.length} 条）\n\n${foldedContent}`;
@@ -654,7 +629,7 @@ class UAIPlugin extends Plugin {
                 const result = await callAI(provider, prompt, `${userInfo}\n\n${content}`, db.data.timeout);
                 
                 // 处理AI回答，保留格式并应用折叠
-                const aiContent = markdownToHtml(result);
+                const aiContent = TelegramFormatter.markdownToHtml(result, { collapseSafe: db.data.collapse });
                 const foldedContent = applyWrap(aiContent, db.data.collapse);
                 
                 const resultText = `📊 <b>${promptKey === "zj" ? "总结" : "分析"}结果</b>（${displayName}，${messages.length} 条）\n\n${foldedContent}`;

@@ -571,19 +571,19 @@ class DeepWikiPlugin extends Plugin {
       `<b>📚 DeepWiki 插件</b>\n\n` +
       `DeepWiki通过与Github上的项目建立索引可以解决目前普遍的Ai信息滞后问题来精准回答您的提问\n\n` +
       `<b>🗂️ 项目管理</b>\n` +
-      `• <code>${p}deepwiki add ＜tag＞ ＜url＞</code>（添加新的项目）\n` +
+      `• <code>${p}deepwiki add &lt;tag&gt; &lt;url&gt;</code>（添加新的项目）\n` +
       `• <code>${p}deepwiki lst</code>（已添加的项目）\n` +
-      `• <code>${p}deepwiki use ＜tag＞</code>（切换默认项目）\n` +
-      `• <code>${p}deepwiki del ＜tag＞</code>（删除指定项目）\n\n` +
+      `• <code>${p}deepwiki use &lt;tag&gt;</code>（切换默认项目）\n` +
+      `• <code>${p}deepwiki del &lt;tag&gt;</code>（删除指定项目）\n\n` +
       `<b>📜 上下文管理</b>\n` +
       `• <code>${p}deepwiki ctx</code>（上下文状态）\n` +
       `• <code>${p}deepwiki ctx on/off</code>（开启或关闭上下文）\n` +
       `• <code>${p}deepwiki ctx del</code>（清空当前项目上下文）\n` +
-      `• <code>${p}deepwiki ctx del ＜tag＞</code>（清空指定项目上下文）\n` +
+      `• <code>${p}deepwiki ctx del &lt;tag&gt;</code>（清空指定项目上下文）\n` +
       `• <code>${p}deepwiki ctx del all</code>（清空全部项目上下文）\n\n` +
       `<b>📌 使用说明</b>\n` +
       `• <code>${p}deepwiki 你的问题</code>（发起默认项目提问）\n` +
-      `• <code>${p}deepwiki ＜tag＞ 你的问题</code>（发起指定项目提问）\n\n` +
+      `• <code>${p}deepwiki &lt;tag&gt; 你的问题</code>（发起指定项目提问）\n\n` +
       `说明：项目需要能在 deepwiki.com 上正常访问（已索引）。`
     );
   }
@@ -698,7 +698,7 @@ class DeepWikiPlugin extends Plugin {
           if (entries.length === 0) {
             await MessageSender.sendOrEdit(
               original,
-              `暂无项目。\n用 <code>${this.getMainPrefix()}deepwiki add ＜tag＞ ＜url＞</code> 添加。`,
+              `暂无项目。\n用 <code>${this.getMainPrefix()}deepwiki add &lt;tag&gt; &lt;url&gt;</code> 添加。`,
               "html"
             );
             return;
@@ -715,7 +715,7 @@ class DeepWikiPlugin extends Plugin {
           return;
         }
         if (sub === "use") {
-          requireUser(args.length >= 2, `用法：<code>${this.getMainPrefix()}deepwiki use ＜tag＞</code>`);
+          requireUser(args.length >= 2, `用法：<code>${this.getMainPrefix()}deepwiki use &lt;tag&gt;</code>`);
           const tag = normalizeTag(args[1]);
           requireUser(!!state.repos?.[tag], `项目不存在：<code>${escapeHtml(tag)}</code>`);
           await this.store.setCurrent(chatKey, tag);
@@ -728,7 +728,7 @@ class DeepWikiPlugin extends Plugin {
           return;
         }
         if (sub === "del") {
-          requireUser(args.length >= 2, `用法：<code>${this.getMainPrefix()}deepwiki del ＜tag＞</code>`);
+          requireUser(args.length >= 2, `用法：<code>${this.getMainPrefix()}deepwiki del &lt;tag&gt;</code>`);
           const tag = normalizeTag(args[1]);
           const ok = await this.store.deleteRepo(chatKey, tag);
           requireUser(ok, `项目不存在：<code>${escapeHtml(tag)}</code>`);
@@ -736,9 +736,9 @@ class DeepWikiPlugin extends Plugin {
           return;
         }
         if (sub === "add") {
-          requireUser(args.length >= 3, `用法：<code>${this.getMainPrefix()}deepwiki add ＜tag＞ ＜url＞</code>`);
+          requireUser(args.length >= 3, `用法：<code>${this.getMainPrefix()}deepwiki add &lt;tag&gt; &lt;url&gt;</code>`);
           const tagArg = normalizeTag(args[1]);
-          requireUser(/^[A-Za-z0-9_.-]+$/.test(tagArg), "＜tag＞ 只能包含字母/数字/下划线/点/短横线");
+          requireUser(/^[A-Za-z0-9_.-]+$/.test(tagArg), "&lt;tag&gt; 只能包含字母/数字/下划线/点/短横线");
           const parsed = parseRepoFromUrl(args[2]);
           requireUser(!!parsed, "链接格式不正确，仅支持 deepwiki.com 或 github.com");
           const entry: RepoEntry = {
@@ -780,7 +780,7 @@ class DeepWikiPlugin extends Plugin {
 
             const tagArg = args[2] ? normalizeTag(args[2]) : "";
             const tagToClear = tagArg || state.currentTag;
-            requireUser(!!tagToClear, "未指定 ＜tag＞，且当前也没有默认项目。用法：<code>deepwiki ctx del ＜tag＞</code>");
+            requireUser(!!tagToClear, "未指定 &lt;tag&gt;，且当前也没有默认项目。用法：<code>deepwiki ctx del &lt;tag&gt;</code>");
             if (tagArg) {
               requireUser(!!state.repos?.[tagArg], `项目不存在：<code>${escapeHtml(tagArg)}</code>`);
             }
@@ -827,7 +827,7 @@ class DeepWikiPlugin extends Plugin {
         requireUser(!!combinedQuestion, "请输入问题内容");
         requireUser(!!tagToUse, "尚未设置默认项目，请先添加项目");
         const entry = state.repos?.[tagToUse];
-        requireUser(!!entry, "项目不存在，请检查 <tag>");
+        requireUser(!!entry, "项目不存在，请检查 &lt;tag&gt;");
 
         await MessageSender.sendOrEdit(original, "💬 <b>DeepWiki 正在处理</b>", "html");
 

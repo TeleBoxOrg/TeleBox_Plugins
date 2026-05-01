@@ -10,6 +10,15 @@ import path from "path";
 const prefixes = getPrefixes();
 const mainPrefix = prefixes[0];
 
+function htmlEscape(text: string): string {
+  return String(text)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#x27;");
+}
+
 // ==================== 配置常量 ====================
 const CONFIG = {
   CACHE_DB_NAME: "autorepeat.json",  // 修改为 autorepeat.json
@@ -478,10 +487,12 @@ class CommandHandlers {
               title: entity.title || `群组 ${chatId}`
             };
           } catch (e) {
-            return {
-              success: false,
-              error: `❌ 无法访问群组 ${identifier}\n请确保:\n1. 群组ID正确\n2. 你在该群组中\n3. 已经在该群组中发送过消息`
-            };
+              const safeIdentifier = htmlEscape(identifier);
+              return {
+                success: false,
+                error: `❌ 无法访问群组 ${safeIdentifier}\n请确保:\n1. 群组ID正确\n2. 你在该群组中\n3. 已经在该群组中发送过消息`
+              };
+
           }
         }
       }
@@ -508,10 +519,12 @@ class CommandHandlers {
             };
           }
         } catch (e: any) {
-          return {
-            success: false,
-            error: `❌ 无法找到群组 ${identifier}\n可能原因:\n1. 群组不是公开群组\n2. 用户名或链接错误\n3. 你不在该群组中\n\n建议使用群组ID或在群组中直接使用命令`
-          };
+            const safeIdentifier = htmlEscape(identifier);
+            return {
+              success: false,
+              error: `❌ 无法找到群组 ${safeIdentifier}\n可能原因:\n1. 群组不是公开群组\n2. 用户名或链接错误\n3. 你不在该群组中\n\n建议使用群组ID或在群组中直接使用命令`
+            };
+
         }
       }
 
@@ -521,9 +534,10 @@ class CommandHandlers {
       };
 
     } catch (e: any) {
+      const errorMessage = htmlEscape(e.message || '未知错误');
       return {
         success: false,
-        error: `❌ 解析失败: ${e.message || '未知错误'}`
+        error: `❌ 解析失败: ${errorMessage}`
       };
     }
   }
@@ -581,8 +595,9 @@ class CommandHandlers {
         for (const gid of pageGroups) {
           try {
             const entity: any = await client.getEntity(gid);
-            const title = entity.title || "Unknown Group";
-            lines.push(`• <b>${title}</b> (<code>${gid}</code>)`);
+                const title = htmlEscape(entity.title || "Unknown Group");
+                lines.push(`• <b>${title}</b> (<code>${gid}</code>)`);
+
           } catch (e) {
             lines.push(`• <code>${gid}</code> (无法获取信息)`);
           }
@@ -630,7 +645,8 @@ class CommandHandlers {
         }
 
         await AutoRepeatManager.toggleGroup(result.chatId!, true);
-        await MessageManager.smartEdit(message, `✅ 已开启 <b>${result.title}</b> 的自动复读`, 3);
+          await MessageManager.smartEdit(message, `✅ 已开启 <b>${htmlEscape(result.title || "")}</b> 的自动复读`, 3);
+
         return;
       }
 
@@ -645,7 +661,8 @@ class CommandHandlers {
         }
 
         await AutoRepeatManager.toggleGroup(result.chatId!, false);
-        await MessageManager.smartEdit(message, `❌ 已关闭 <b>${result.title}</b> 的自动复读`, 3);
+          await MessageManager.smartEdit(message, `❌ 已关闭 <b>${htmlEscape(result.title || "")}</b> 的自动复读`, 3);
+
         return;
       }
 
@@ -654,20 +671,23 @@ class CommandHandlers {
       if (result.success) {
         const status = AutoRepeatManager.isEnabled(result.chatId!) ? "✅ 已开启" : "❌ 已关闭";
         const config = AutoRepeatManager.getTriggerConfig();
-        await MessageManager.smartEdit(
-          message,
-          `🤖 <b>${result.title}</b>\n` +
-          `群组ID: <code>${result.chatId}</code>\n` +
-          `状态: ${status}\n` +
-          `触发条件: ${config.timeWindow}秒内${config.minUsers}人`
-        );
+          const safeTitle = htmlEscape(result.title || "");
+          await MessageManager.smartEdit(
+            message,
+            `🤖 <b>${safeTitle}</b>\n` +
+            `群组ID: <code>${result.chatId}</code>\n` +
+            `状态: ${status}\n` +
+            `触发条件: ${config.timeWindow}秒内${config.minUsers}人`
+          );
+
       } else {
         // 默认显示帮助
         await MessageManager.smartEdit(message, HELP_TEXT);
       }
 
     } catch (e: any) {
-      await MessageManager.smartEdit(message, `❌ 操作失败: ${e.message}`);
+      const errorMessage = htmlEscape(e.message || "未知错误");
+      await MessageManager.smartEdit(message, `❌ 操作失败: ${errorMessage}`);
     }
   }
 }

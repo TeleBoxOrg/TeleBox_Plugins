@@ -265,7 +265,7 @@ class SearchService {
   }
 
   private async handleDelete(msg: Api.Message, args: string) {
-    if (!args) throw new Error("用法: ${mainPrefix}so del <频道链接|序号> [...] 或 ${mainPrefix}so del all。");
+    if (!args) throw new Error("用法: ${mainPrefix}so del &lt;频道链接|序号&gt; [...] 或 ${mainPrefix}so del all。");
     if (args.toLowerCase().trim() === "all") {
         const count = this.config.channelList.length;
         this.config.channelList = [];
@@ -320,7 +320,7 @@ class SearchService {
   }
 
   private async handleDefault(msg: Api.Message, args: string) {
-    if (!args) throw new Error("用法: ${mainPrefix}so default <频道链接> 或 ${mainPrefix}so default d。");
+    if (!args) throw new Error("用法: ${mainPrefix}so default &lt;频道链接&gt; 或 ${mainPrefix}so default d。");
     if (args === "d") {
         this.config.defaultChannel = null;
         await this.saveConfig();
@@ -405,7 +405,7 @@ class SearchService {
         }
         break;
       default:
-        throw new Error("用法: ${mainPrefix}so ad <add|del|list> [关键词]");
+        throw new Error(`用法: ${mainPrefix}so ad &lt;add|del|list&gt; [关键词]`);
     }
   }
 
@@ -698,7 +698,7 @@ class ChannelSearchPlugin extends Plugin {
   description: string = `强大的多频道资源搜索插件，具备高级功能：
 
 搜索功能:
-- 关键词搜索: ${mainPrefix}so <关键词> （不限制大小和时长）
+- 关键词搜索: ${mainPrefix}so &lt;关键词&gt; （不限制大小和时长）
 - 随机速览: ${mainPrefix}so kkp （随机选择20秒-3分钟的视频）
 
 选项:
@@ -706,16 +706,16 @@ class ChannelSearchPlugin extends Plugin {
 - 随机模式: -r (从匹配结果中随机选择)
 
 频道管理:
-- 添加频道: .so add <频道链接> (使用 \\ 分隔)
-- 删除频道: ${mainPrefix}so del <频道链接|序号> [...] 或 ${mainPrefix}so del all (删除所有)
-- 设置默认: ${mainPrefix}so default <频道链接> 或 ${mainPrefix}so default d (移除默认)
+- 添加频道: .so add &lt;频道链接&gt; (使用 \\ 分隔)
+- 删除频道: ${mainPrefix}so del &lt;频道链接|序号&gt; [...] 或 ${mainPrefix}so del all (删除所有)
+- 设置默认: ${mainPrefix}so default &lt;频道链接&gt; 或 ${mainPrefix}so default d (移除默认)
 - 列出频道: ${mainPrefix}so list
 - 导出配置: ${mainPrefix}so export
 - 导入配置: ${mainPrefix}so import (回复备份文件)
 
 广告过滤:
-- 添加关键词: ${mainPrefix}so ad add <关键词1> <关键词2> ...
-- 删除关键词: ${mainPrefix}so ad del <关键词1> <关键词2> ...
+- 添加关键词: ${mainPrefix}so ad add &lt;关键词1&gt; &lt;关键词2&gt; ...
+- 删除关键词: ${mainPrefix}so ad del &lt;关键词1&gt; &lt;关键词2&gt; ...
 - 查看关键词: ${mainPrefix}so ad list`;
   
   cmdHandlers: Record<string, (msg: Api.Message) => Promise<void>> = {

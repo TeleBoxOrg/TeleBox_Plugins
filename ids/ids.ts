@@ -10,6 +10,8 @@ const htmlEscape = (text: string): string =>
     '"': '&quot;', "'": '&#x27;' 
   }[m] || m));
 
+const codeTag = (text: string | number): string => `<code>${htmlEscape(String(text))}</code>`;
+
 // 获取命令前缀
 const prefixes = getPrefixes();
 const mainPrefix = prefixes[0];
@@ -181,19 +183,19 @@ class IdsPlugin extends Plugin {
 
     let result = `👤 <b>${htmlEscape(displayName)}</b>\n\n`;
     result += `<b>基本信息：</b>\n`;
-    result += `• 用户名：<code>${htmlEscape(usernameInfo)}</code>\n`;
-    result += `• 用户ID：<code>${userId}</code>\n`;
-    result += `• 注册时间：<code>${info.regDate} (±2月)</code>\n`;
-    if (info.joinedDate) result += `• 入群时间：<code>${info.joinedDate}</code>\n`;
-    result += `• DC：<code>${info.dc}</code>\n`;
-    result += `• 共同群：<code>${info.commonChats}</code> 个\n`;
+    result += `• 用户名：${codeTag(usernameInfo)}\n`;
+    result += `• 用户ID：${codeTag(userId)}\n`;
+    result += `• 注册时间：${codeTag(`${info.regDate} (±2月)`)}\n`;
+    if (info.joinedDate) result += `• 入群时间：${codeTag(info.joinedDate)}\n`;
+    result += `• DC：${codeTag(info.dc)}\n`;
+    result += `• 共同群：${codeTag(info.commonChats)} 个\n`;
     if (statusTags.length > 0) result += `• 状态：${statusTags.join(" ")}\n`;
     
-    result += `\n<b>简介：</b>\n<code>${htmlEscape(bioText)}</code>\n`;
+    result += `\n<b>简介：</b>\n${codeTag(bioText)}\n`;
     result += `\n<b>跳转链接：</b>\n`;
-    result += `• <a href="${link1}">用户资料</a>\n• <a href="${link2}">聊天链接</a>\n• <a href="${link3}">打开消息</a>\n`;
+    result += `• <a href="${htmlEscape(link1)}">用户资料</a>\n• <a href="${htmlEscape(link2)}">聊天链接</a>\n• <a href="${htmlEscape(link3)}">打开消息</a>\n`;
     result += `\n<b>链接文本：</b>\n`;
-    result += `• <code>${link1}</code>\n• <code>${link2}</code>\n• <code>${link3}</code>`;
+    result += `• ${codeTag(link1)}\n• ${codeTag(link2)}\n• ${codeTag(link3)}`;
 
     return result;
   }

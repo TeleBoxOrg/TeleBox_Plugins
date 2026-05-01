@@ -457,10 +457,10 @@ class ParseHubPlugin extends Plugin {
         baselineId = outcome.lastId;
 
         if (!outcome.forwarded) {
-          const reasonText = describeReason(outcome.reason);
+          const reasonText = htmlEscape(describeReason(outcome.reason));
           const detail =
             outcome.error && outcome.error !== "undefined"
-              ? `\n\n错误信息：${outcome.error}`
+              ? `\n\n错误信息：${htmlEscape(outcome.error)}`
               : "";
           await client.sendMessage(msg.peerId, {
             message: `⚠️ 未能获取 <b>${htmlEscape(link)}</b> 的最终结果（${reasonText}）。请稍后重试或直接私聊 @${BOT_USERNAME}。${detail}`,

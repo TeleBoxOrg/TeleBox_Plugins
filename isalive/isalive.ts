@@ -30,6 +30,10 @@ function htmlEscape(text: string): string {
     .replace(/"/g, "&quot;")
     .replace(/'/g, "&#x27;");
 }
+
+function codeTag(text: string | number): string {
+  return `<code>${htmlEscape(String(text))}</code>`;
+}
 async function formatEntity(
   target: any,
   mention?: boolean,
@@ -425,14 +429,14 @@ class IsAlivePlugin extends Plugin {
           `${statusIcon} ${entityInfo.display}`,
         ];
         if (entityInfo.username) {
-          lines.push(`├ 用户名: <code>@${entityInfo.username}</code>`);
+          lines.push(`├ 用户名: ${codeTag(`@${entityInfo.username}`)}`);
         }
         lines.push(`└ 用户ID: <a href="tg://user?id=${user.id}">${user.id}</a>`);
         lines.push(`<b>📡 在线状态</b>`);
-        lines.push(`├ 状态: <code>${lastOnlineDateTime ?? "未知"}</code>`);
-        lines.push(`└ 天数: <code>${lastOnlineDays === null ? "未知" : lastOnlineDays + " 天"}</code>`);
+        lines.push(`├ 状态: ${codeTag(lastOnlineDateTime ?? "未知")}`);
+        lines.push(`└ 天数: ${codeTag(lastOnlineDays === null ? "未知" : lastOnlineDays + " 天")}`);
         lines.push(`<b>💬 发言记录</b>`);
-        lines.push(`└ 本群最后发言: <code>${lastMessageTime ?? "无记录"}</code>`);
+        lines.push(`└ 本群最后发言: ${codeTag(lastMessageTime ?? "无记录")}`);
         lines.push(`<b>🏷️ 账号属性</b>`);
 
         // 账号属性

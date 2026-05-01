@@ -552,7 +552,7 @@ class ZprPlugin extends Plugin {
 
 <b>可用地址:</b>
 ${Object.entries(PROXY_HOSTS).map(([key, value]) => 
-`• <code>${value}</code> - ${key}`).join('\n')}
+`• <code>${htmlEscape(value)}</code> - ${htmlEscape(key)}`).join('\n')}
 
 <b>使用方法:</b>
 <code>${mainPrefix}zpr proxy [地址]</code> - 设置反代地址`);
@@ -655,7 +655,7 @@ ${Object.entries(PROXY_HOSTS).map(([key, value]) =>
                         } catch (error: any) {
                             const errorMsg = error.message?.includes("CHAT_SEND_MEDIA_FORBIDDEN")
                                 ? "此群组不允许发送媒体。"
-                                : `发送失败: ${htmlEscape(error.message || "未知错误")}`;
+                                : htmlEscape(`发送失败: ${error.message || "未知错误"}`);
                             
                             await editHtmlMessage(msg, `❌ <b>发送失败:</b> ${errorMsg}`);
                             throw error; // 继续抛出错误以中断循环

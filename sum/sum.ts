@@ -17,14 +17,29 @@ const filePath = path.join(
   "summary_config.json"
 );
 
+function htmlEscape(value: any): string {
+  return String(value ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
+function codeTag(value: any): string {
+  return `<code>${htmlEscape(value)}</code>`;
+}
+
+function attrEscape(value: any): string {
+  return htmlEscape(value).replace(/'/g, "&#39;");
+}
+
 function formatDate(date: Date): string {
   const year = date.getFullYear();
   const month = String(date.getMonth() + 1).padStart(2, '0');
   const day = String(date.getDate()).padStart(2, '0');
   const hours = String(date.getHours()).padStart(2, '0');
   const minutes = String(date.getMinutes()).padStart(2, '0');
-  const seconds = String(date.getSeconds()).padStart(2, '0');
-  return `${year}/${month}/${day} ${hours}:${minutes}:${seconds}`;
+  return `${year}-${month}-${day} ${hours}:${minutes}`;
 }
 
 type CustomProvider = {
@@ -275,9 +290,9 @@ async function formatEntity(target: any) {
   }
 
   const displayParts: string[] = [];
-  if (entity?.title) displayParts.push(entity.title);
-  if (entity?.username) displayParts.push(`@${entity.username}`);
-  if (id) displayParts.push(`<code>${id}</code>`);
+  if (entity?.title) displayParts.push(htmlEscape(entity.title));
+  if (entity?.username) displayParts.push(htmlEscape(`@${entity.username}`));
+  if (id) displayParts.push(codeTag(id));
 
   return {
     id,
@@ -750,7 +765,7 @@ async function executeSummary(task: SummaryTask): Promise<{ success: boolean; me
       summaryContent = summaryContent.substring(0, maxOutputLength) + "\n\n⚠️ 内容已截断（超过最大长度限制）";
     }
 
-    const header = `📊 群组总结\n来源: ${task.chatDisplay || task.chatId}\n时间: ${formatDate(new Date())}\n\n`;
+    const header = `📊 群组总结\n来源: ${htmlEscape(task.chatDisplay || task.chatId)}\n时间: ${formatDate(new Date())}\n\n`;
 
     // 应用折叠标签（如果启用）
     const wrappedContent = wrapWithSpoiler(summaryContent, task.useSpoiler || false);
@@ -849,7 +864,7 @@ const help_text = `▎群消息总结
 <code>${mainPrefix}sum 200 --provider gemini</code> - 指定数量和AI配置
 
 <b>📋 定时总结：</b>
-<code>${mainPrefix}sum add ＜群组标识＞ ＜间隔＞ [消息数] [选项]</code>
+<code>${mainPrefix}sum add &lt;群组标识&gt; &lt;间隔&gt; [消息数] [选项]</code>
 群组标识支持:
   • 数字ID: -1001234567890
   • 公开链接: t.me/groupname 或 https://t.me/groupname
@@ -860,8 +875,8 @@ const help_text = `▎群消息总结
   • Cron表达式(6字段): 0 0 9,15,21 * * * (每天9:00,15:00,21:00)
   • Cron表达式(5字段): 30 */2 * * * (自动补秒字段)
 选项:
-  --time ＜小时＞ - 按时间范围总结（如 --time 2 表示过去2小时）
-  --provider ＜名称＞ - 指定AI配置
+  --time &lt;小时&gt; - 按时间范围总结（如 --time 2 表示过去2小时）
+  --provider &lt;名称&gt; - 指定AI配置
   --spoiler - 启用折叠显示
   --no-spoiler - 禁用折叠显示（覆盖全局设置）
 示例:
@@ -871,35 +886,35 @@ const help_text = `▎群消息总结
 
 <b>🔧 管理命令：</b>
 • <code>${mainPrefix}sum list</code> - 列出所有任务（按ID排序）
-• <code>${mainPrefix}sum del ＜任务ID＞</code> - 删除任务
-• <code>${mainPrefix}sum run ＜任务ID＞</code> - 立即运行任务
-• <code>${mainPrefix}sum edit ＜任务ID＞ ＜属性＞ ＜值＞</code> - 修改任务属性
+• <code>${mainPrefix}sum del &lt;任务ID&gt;</code> - 删除任务
+• <code>${mainPrefix}sum run &lt;任务ID&gt;</code> - 立即运行任务
+• <code>${mainPrefix}sum edit &lt;任务ID&gt; &lt;属性&gt; &lt;值&gt;</code> - 修改任务属性
   属性: spoiler (on/off) | provider (配置名) | prompt (提示词)
   留空值则使用全局配置
-• <code>${mainPrefix}sum disable/enable ＜任务ID＞</code> - 禁用/启用任务
+• <code>${mainPrefix}sum disable/enable &lt;任务ID&gt;</code> - 禁用/启用任务
 • <code>${mainPrefix}sum reorder</code> - 从1开始重新编号所有任务
 
 <b>🤖 AI 配置管理：</b>
 • <code>${mainPrefix}sum config list</code> - 列出所有配置
-• <code>${mainPrefix}sum config add ＜官方名称＞ ＜API_KEY＞</code> - 快速添加官方 (openai/gemini)
+• <code>${mainPrefix}sum config add &lt;官方名称&gt; &lt;API_KEY&gt;</code> - 快速添加官方 (openai/gemini)
   示例: <code>${mainPrefix}sum config add openai sk-xxx</code>
-• <code>${mainPrefix}sum config add ＜名称＞ ＜类型＞ ＜BaseURL＞ ＜Model＞</code> - 自定义服务商
+• <code>${mainPrefix}sum config add &lt;名称&gt; &lt;类型&gt; &lt;BaseURL&gt; &lt;Model&gt;</code> - 自定义服务商
   类型: openai 或 gemini
   示例: <code>${mainPrefix}sum config add deepseek openai https://api.deepseek.com deepseek-chat</code>
-• <code>${mainPrefix}sum config set ＜名称＞ key ＜API_KEY＞</code> - 设置API Key
-• <code>${mainPrefix}sum config set ＜名称＞ model ＜模型＞</code> - 修改模型
-• <code>${mainPrefix}sum config set ＜名称＞ url ＜URL＞</code> - 修改Base URL
-• <code>${mainPrefix}sum config del ＜名称＞</code> - 删除配置
+• <code>${mainPrefix}sum config set &lt;名称&gt; key &lt;API_KEY&gt;</code> - 设置API Key
+• <code>${mainPrefix}sum config set &lt;名称&gt; model &lt;模型&gt;</code> - 修改模型
+• <code>${mainPrefix}sum config set &lt;名称&gt; url &lt;URL&gt;</code> - 修改Base URL
+• <code>${mainPrefix}sum config del &lt;名称&gt;</code> - 删除配置
 
 <b>⚙️ 全局设置：</b>
-• <code>${mainPrefix}sum config set push ＜目标＞</code> - 设置默认推送目标
-• <code>${mainPrefix}sum config set default ＜名称＞</code> - 设置默认配置
-• <code>${mainPrefix}sum config set prompt ＜提示词＞</code> - 设置总结提示词
+• <code>${mainPrefix}sum config set push &lt;目标&gt;</code> - 设置默认推送目标
+• <code>${mainPrefix}sum config set default &lt;名称&gt;</code> - 设置默认配置
+• <code>${mainPrefix}sum config set prompt &lt;提示词&gt;</code> - 设置总结提示词
 • <code>${mainPrefix}sum config set prompt reset</code> - 重置提示词为默认值
 • <code>${mainPrefix}sum config set spoiler on/off</code> - 全局折叠开关
-• <code>${mainPrefix}sum config set timeout ＜秒数＞</code> - 设置AI超时时间（默认60秒）
+• <code>${mainPrefix}sum config set timeout &lt;秒数&gt;</code> - 设置AI超时时间（默认60秒）
 • <code>${mainPrefix}sum config set reply on/off</code> - 回复模式（发送新消息，防止被顶走，默认开启）
-• <code>${mainPrefix}sum config set maxoutput ＜字符数＞</code> - 最大输出长度（0不限制，默认不限制）
+• <code>${mainPrefix}sum config set maxoutput &lt;字符数&gt;</code> - 最大输出长度（0不限制，默认不限制）
 • <code>${mainPrefix}sum prompts</code> - 查看推荐提示词
 `;
 
@@ -938,17 +953,17 @@ class SummaryPlugin extends Plugin {
 • 话题2</blockquote>
 
 <b>技术讨论：</b>
-<blockquote expandable>• 技术点1 <a href="来源链接">来源</a>
+<blockquote expandable>• 技术点1 <a href="https://example.com/source">来源</a>
 • 技术点2</blockquote>
 
 <b>资源分享：</b>
 <blockquote expandable>* 外部链接：
-• 资源说明 <a href="资源URL">链接</a> - <a href="Telegram链接">查看原消息</a>
+• 资源说明 <a href="https://example.com/resource">链接</a> - <a href="https://t.me/c/123456789/123">查看原消息</a>
 * 文件分享：
-• 文件名 - <a href="Telegram链接">查看原消息</a></blockquote>
+• 文件名 - <a href="https://t.me/c/123456789/123">查看原消息</a></blockquote>
 
 <b>重要互动：</b>
-<blockquote expandable>• 人物 + 问题/结论 <a href="来源链接">来源</a></blockquote>
+<blockquote expandable>• 人物 + 问题/结论 <a href="https://example.com/source">来源</a></blockquote>
 
 <b>零散信息：</b>
 <blockquote expandable>• 备注信息</blockquote>
@@ -994,8 +1009,8 @@ class SummaryPlugin extends Plugin {
           const lines = ["📝 推荐提示词", ""];
 
           for (const p of prompts) {
-            lines.push(`<b>${p.name}</b>`);
-            lines.push(`<code>${p.prompt}</code>`);
+            lines.push(`<b>${htmlEscape(p.name)}</b>`);
+            lines.push(codeTag(p.prompt));
             lines.push("");
           }
 
@@ -1027,7 +1042,7 @@ class SummaryPlugin extends Plugin {
             : formattedText;
 
           await msg.edit({
-            text: `📋 发送给 AI 的文本预览（最后2000字符）：\n\n<code>${preview.replace(/</g, '&lt;').replace(/>/g, '&gt;')}</code>`,
+            text: `📋 发送给 AI 的文本预览（最后2000字符）：\n\n${codeTag(preview)}`,
             parseMode: "html"
           });
           return;
@@ -1074,9 +1089,9 @@ class SummaryPlugin extends Plugin {
             try {
               const chat = await client.getEntity(chatId);
               const displayParts: string[] = [];
-              if ((chat as any).title) displayParts.push((chat as any).title);
-              if ((chat as any).username) displayParts.push(`@${(chat as any).username}`);
-              displayParts.push(`<code>${chatId}</code>`);
+              if ((chat as any).title) displayParts.push(htmlEscape((chat as any).title));
+              if ((chat as any).username) displayParts.push(htmlEscape(`@${(chat as any).username}`));
+              displayParts.push(codeTag(chatId));
               chatDisplay = displayParts.join(" ");
             } catch (e) {
               console.error("获取群组信息失败:", e);
@@ -1097,7 +1112,7 @@ class SummaryPlugin extends Plugin {
 
           const summaryResult = await summarizeMessages(task, messageData);
           if (!summaryResult.success) {
-            await msg.edit({ text: `❌ ${summaryResult.error}` });
+            await msg.edit({ text: `❌ ${htmlEscape(summaryResult.error)}`, parseMode: "html" });
             return;
           }
 
@@ -1113,7 +1128,7 @@ class SummaryPlugin extends Plugin {
             summaryContent = summaryContent.substring(0, maxOutputLength) + "\n\n⚠️ 内容已截断（超过最大长度限制）";
           }
 
-          const header = `📊 群组总结\n来源: ${chatDisplay}\n时间: ${formatDate(new Date())}\n\n`;
+          const header = `📊 群组总结\n来源: ${htmlEscape(chatDisplay)}\n时间: ${formatDate(new Date())}\n\n`;
 
           // 应用折叠标签（如果启用）
           const wrappedContent = wrapWithSpoiler(summaryContent, db.data.aiConfig.default_spoiler || false);
@@ -1169,7 +1184,7 @@ class SummaryPlugin extends Plugin {
 
           if (!chatIdInput || !intervalInput) {
             await msg.edit({
-              text: `❌ 格式错误\n\n用法: <code>${mainPrefix}sum add ＜群组标识＞ ＜间隔＞ [消息数] [选项]</code>\n\n群组标识支持:\n• 数字ID: -1001234567890\n• 链接: t.me/groupname\n• 用户名: @groupname\n\n示例: <code>${mainPrefix}sum add -1001234567890 2h</code>`,
+              text: `❌ 格式错误\n\n用法: <code>${mainPrefix}sum add &lt;群组标识&gt; &lt;间隔&gt; [消息数] [选项]</code>\n\n群组标识支持:\n• 数字ID: -1001234567890\n• 链接: t.me/groupname\n• 用户名: @groupname\n\n示例: <code>${mainPrefix}sum add -1001234567890 2h</code>`,
               parseMode: "html"
             });
             return;
@@ -1250,14 +1265,14 @@ class SummaryPlugin extends Plugin {
 
           const tip = [
             "✅ 已添加总结任务",
-            `ID: <code>${id}</code>`,
-            `群组: ${entity?.display || chatId}`,
-            `间隔: ${intervalInput}`,
+            `ID: ${codeTag(id)}`,
+            `群组: ${entity?.display ? htmlEscape(entity.display) : codeTag(chatId)}`,
+            `间隔: ${codeTag(intervalInput)}`,
             timeRange ? `时间范围: 过去${timeRange}小时` : `消息数: ${messageCount}`,
-            aiProvider ? `AI配置: ${aiProvider}` : null,
+            aiProvider ? `AI配置: ${codeTag(aiProvider)}` : null,
             useSpoiler ? `折叠: 是` : null,
-            `推送: ${task.pushTarget || "me"}`,
-            remark ? `备注: ${remark}` : null,
+            `推送: ${codeTag(task.pushTarget || "me")}`,
+            remark ? `备注: ${htmlEscape(remark)}` : null,
             `下次执行: ${formatDate(nextDate)}`,
           ].filter(Boolean).join("\n");
 
@@ -1285,37 +1300,37 @@ class SummaryPlugin extends Plugin {
             const nextDt = cron.sendAt(t.cron);
             const nextDate = (nextDt as any).toJSDate ? (nextDt as any).toJSDate() : nextDt;
 
-            lines.push(`<code>${t.id}</code> • ${t.remark || t.chatDisplay || t.chatId}`);
-            lines.push(`群组: ${t.chatDisplay || t.chatId}`);
-            lines.push(`间隔: ${t.interval}`);
+            lines.push(`${codeTag(t.id)} • ${htmlEscape(t.remark || t.chatDisplay || t.chatId)}`);
+            lines.push(`群组: ${htmlEscape(t.chatDisplay || t.chatId)}`);
+            lines.push(`间隔: ${codeTag(t.interval)}`);
             if (t.timeRange) {
               lines.push(`时间范围: 过去${t.timeRange}小时`);
             } else {
               lines.push(`消息数: ${t.messageCount}`);
             }
             if (t.aiProvider) {
-              lines.push(`AI配置: ${t.aiProvider}`);
+              lines.push(`AI配置: ${codeTag(t.aiProvider)}`);
             } else {
-              lines.push(`AI配置: 默认 (${db.data.aiConfig.default_provider || "openai"})`);
+              lines.push(`AI配置: 默认 (${htmlEscape(db.data.aiConfig.default_provider || "openai")})`);
             }
             if (t.aiPrompt) {
               const shortPrompt = t.aiPrompt.length > 30
                 ? t.aiPrompt.substring(0, 30) + "..."
                 : t.aiPrompt;
-              lines.push(`提示词: ${shortPrompt}`);
+              lines.push(`提示词: ${htmlEscape(shortPrompt)}`);
             } else {
               lines.push(`提示词: 默认`);
             }
             if (t.useSpoiler) lines.push(`折叠: 是`);
-            lines.push(`推送: ${t.pushTarget || "me"}`);
+            lines.push(`推送: ${codeTag(t.pushTarget || "me")}`);
             if (t.disabled) {
               lines.push(`状态: ⏹ 已禁用`);
             } else {
               lines.push(`下次: ${formatDate(nextDate)}`);
             }
             if (t.lastRunAt) lines.push(`上次: ${formatDate(new Date(Number(t.lastRunAt)))}`);
-            if (t.lastResult) lines.push(`结果: ${t.lastResult}`);
-            if (t.lastError) lines.push(`错误: ${t.lastError}`);
+            if (t.lastResult) lines.push(`结果: ${htmlEscape(t.lastResult)}`);
+            if (t.lastError) lines.push(`错误: ${htmlEscape(t.lastError)}`);
             lines.push("");
           }
 
@@ -1333,7 +1348,7 @@ class SummaryPlugin extends Plugin {
           const db = await getDB();
           const idx = db.data.tasks.findIndex((t: SummaryTask) => t.id === id);
           if (idx < 0) {
-            await msg.edit({ text: `未找到任务: <code>${id}</code>`, parseMode: "html" });
+            await msg.edit({ text: `未找到任务: ${codeTag(id)}`, parseMode: "html" });
             return;
           }
 
@@ -1341,7 +1356,7 @@ class SummaryPlugin extends Plugin {
           db.data.tasks.splice(idx, 1);
           await db.write();
 
-          await msg.edit({ text: `✅ 已删除任务 <code>${id}</code>`, parseMode: "html" });
+          await msg.edit({ text: `✅ 已删除任务 ${codeTag(id)}`, parseMode: "html" });
           return;
         }
 
@@ -1355,7 +1370,7 @@ class SummaryPlugin extends Plugin {
           const db = await getDB();
           const task = db.data.tasks.find((t: SummaryTask) => t.id === id);
           if (!task) {
-            await msg.edit({ text: `未找到任务: <code>${id}</code>`, parseMode: "html" });
+            await msg.edit({ text: `未找到任务: ${codeTag(id)}`, parseMode: "html" });
             return;
           }
 
@@ -1371,14 +1386,14 @@ class SummaryPlugin extends Plugin {
           } catch { /* 忽略 */ }
 
           const chatDisplay = task.chatDisplay || task.chatId;
-          const linkText = chatLink ? ` <a href="${chatLink}">${chatDisplay}</a>` : ` ${chatDisplay}`;
+          const linkText = chatLink ? ` <a href="${attrEscape(chatLink)}">${htmlEscape(chatDisplay)}</a>` : ` ${htmlEscape(chatDisplay)}`;
           await msg.edit({ text: `⏳ 正在执行总结...${linkText}`, parseMode: "html" });
 
           const result = await executeSummary(task);
           if (result.success) {
-            await msg.edit({ text: `✅ ${result.message}`, parseMode: "html" });
+            await msg.edit({ text: `✅ ${htmlEscape(result.message)}`, parseMode: "html" });
           } else {
-            await msg.edit({ text: `❌ ${result.message}`, parseMode: "html" });
+            await msg.edit({ text: `❌ ${htmlEscape(result.message)}`, parseMode: "html" });
           }
           return;
         }
@@ -1390,7 +1405,7 @@ class SummaryPlugin extends Plugin {
 
           if (!id || !prop) {
             await msg.edit({
-              text: `❌ 格式错误\n\n用法: <code>${mainPrefix}sum edit ＜任务ID＞ ＜属性＞ ＜值＞</code>\n\n支持的属性:\n• spoiler - 折叠显示 (on/off)\n• provider - AI配置名称\n• prompt - AI提示词 (留空使用全局配置)`,
+              text: `❌ 格式错误\n\n用法: <code>${mainPrefix}sum edit &lt;任务ID&gt; &lt;属性&gt; &lt;值&gt;</code>\n\n支持的属性:\n• spoiler - 折叠显示 (on/off)\n• provider - AI配置名称\n• prompt - AI提示词 (留空使用全局配置)`,
               parseMode: "html"
             });
             return;
@@ -1399,7 +1414,7 @@ class SummaryPlugin extends Plugin {
           const db = await getDB();
           const idx = db.data.tasks.findIndex((t: SummaryTask) => t.id === id);
           if (idx < 0) {
-            await msg.edit({ text: `未找到任务: <code>${id}</code>`, parseMode: "html" });
+            await msg.edit({ text: `未找到任务: ${codeTag(id)}`, parseMode: "html" });
             return;
           }
 
@@ -1413,11 +1428,11 @@ class SummaryPlugin extends Plugin {
             if (value === "on" || value === "true" || value === "1") {
               task.useSpoiler = true;
               await db.write();
-              await msg.edit({ text: `✅ 已启用任务 <code>${id}</code> 的折叠显示`, parseMode: "html" });
+              await msg.edit({ text: `✅ 已启用任务 ${codeTag(id)} 的折叠显示`, parseMode: "html" });
             } else if (value === "off" || value === "false" || value === "0") {
               task.useSpoiler = false;
               await db.write();
-              await msg.edit({ text: `✅ 已禁用任务 <code>${id}</code> 的折叠显示`, parseMode: "html" });
+              await msg.edit({ text: `✅ 已禁用任务 ${codeTag(id)} 的折叠显示`, parseMode: "html" });
             } else {
               await msg.edit({ text: "❌ 无效的值，请使用 on 或 off", parseMode: "html" });
             }
@@ -1426,30 +1441,30 @@ class SummaryPlugin extends Plugin {
               // 清空 provider，使用全局默认
               task.aiProvider = undefined;
               await db.write();
-              await msg.edit({ text: `✅ 已清空任务 <code>${id}</code> 的 AI 配置，将使用全局默认配置`, parseMode: "html" });
+              await msg.edit({ text: `✅ 已清空任务 ${codeTag(id)} 的 AI 配置，将使用全局默认配置`, parseMode: "html" });
             } else {
               // 检查 provider 是否存在
               if (!db.data.aiConfig.providers[value]) {
-                await msg.edit({ text: `❌ 未找到 AI 配置: ${value}`, parseMode: "html" });
+                await msg.edit({ text: `❌ 未找到 AI 配置: ${codeTag(value)}`, parseMode: "html" });
                 return;
               }
               task.aiProvider = value;
               await db.write();
-              await msg.edit({ text: `✅ 已设置任务 <code>${id}</code> 的 AI 配置为: ${value}`, parseMode: "html" });
+              await msg.edit({ text: `✅ 已设置任务 ${codeTag(id)} 的 AI 配置为: ${codeTag(value)}`, parseMode: "html" });
             }
           } else if (prop === "prompt") {
             if (!value) {
               // 清空 prompt，使用全局默认
               task.aiPrompt = undefined;
               await db.write();
-              await msg.edit({ text: `✅ 已清空任务 <code>${id}</code> 的提示词，将使用全局默认提示词`, parseMode: "html" });
+              await msg.edit({ text: `✅ 已清空任务 ${codeTag(id)} 的提示词，将使用全局默认提示词`, parseMode: "html" });
             } else {
               task.aiPrompt = value;
               await db.write();
-              await msg.edit({ text: `✅ 已设置任务 <code>${id}</code> 的提示词`, parseMode: "html" });
+              await msg.edit({ text: `✅ 已设置任务 ${codeTag(id)} 的提示词`, parseMode: "html" });
             }
           } else {
-            await msg.edit({ text: `❌ 未知属性: ${prop}\n支持: spoiler/provider/prompt`, parseMode: "html" });
+              await msg.edit({ text: `❌ 未知属性: ${codeTag(prop)}\n支持: spoiler/provider/prompt`, parseMode: "html" });
           }
           return;
         }
@@ -1464,7 +1479,7 @@ class SummaryPlugin extends Plugin {
           const db = await getDB();
           const idx = db.data.tasks.findIndex((t: SummaryTask) => t.id === id);
           if (idx < 0) {
-            await msg.edit({ text: `未找到任务: <code>${id}</code>`, parseMode: "html" });
+            await msg.edit({ text: `未找到任务: ${codeTag(id)}`, parseMode: "html" });
             return;
           }
 
@@ -1473,12 +1488,12 @@ class SummaryPlugin extends Plugin {
             cronManager.del(makeCronKey(id));
             t.disabled = true;
             await db.write();
-            await msg.edit({ text: `⏸️ 已禁用任务 <code>${id}</code>`, parseMode: "html" });
+            await msg.edit({ text: `⏸️ 已禁用任务 ${codeTag(id)}`, parseMode: "html" });
           } else {
             t.disabled = false;
             await db.write();
             await scheduleTask(t);
-            await msg.edit({ text: `▶️ 已启用任务 <code>${id}</code>`, parseMode: "html" });
+            await msg.edit({ text: `▶️ 已启用任务 ${codeTag(id)}`, parseMode: "html" });
           }
           return;
         }
@@ -1512,7 +1527,7 @@ class SummaryPlugin extends Plugin {
 
           await db.write();
 
-          const mapping = oldIds.map((old, i) => `${old} → ${i + 1}`).join(", ");
+          const mapping = oldIds.map((old, i) => `${htmlEscape(old)} → ${i + 1}`).join(", ");
           await msg.edit({
             text: `✅ 已重新排序 ${db.data.tasks.length} 个任务\n\n${mapping}`,
             parseMode: "html"
@@ -1539,19 +1554,19 @@ class SummaryPlugin extends Plugin {
 
             for (const [key, p] of Object.entries(providers)) {
               const provider = p as CustomProvider;
-              lines.push(`<b>${provider.name}</b> (<code>${key}</code>)`);
-              lines.push(`类型: ${provider.type}`);
-              lines.push(`Base URL: ${provider.base_url}`);
-              lines.push(`Model: ${provider.model}`);
+            lines.push(`<b>${htmlEscape(provider.name)}</b> (${codeTag(key)})`);
+            lines.push(`类型: ${codeTag(provider.type)}`);
+            lines.push(`Base URL: ${codeTag(provider.base_url)}`);
+            lines.push(`Model: ${codeTag(provider.model)}`);
               lines.push(`API Key: ${provider.api_key ? "已设置" : "未设置"}`);
               lines.push("");
             }
 
             lines.push("⚙️ 全局设置");
             lines.push("");
-            lines.push(`默认配置: ${cfg.default_provider || "未设置"}`);
-            lines.push(`默认推送: ${db.data.defaultPushTarget || "me"}`);
-            lines.push(`提示词: ${cfg.default_prompt || "默认"}`);
+            lines.push(`默认配置: ${codeTag(cfg.default_provider || "未设置")}`);
+            lines.push(`默认推送: ${codeTag(db.data.defaultPushTarget || "me")}`);
+            lines.push(`提示词: ${htmlEscape(cfg.default_prompt || "默认")}`);
             lines.push(`折叠显示: ${cfg.default_spoiler ? "开启" : "关闭"}`);
             lines.push(`超时时间: ${cfg.default_timeout ? `${cfg.default_timeout / 1000}秒` : "60秒（默认）"}`);
             lines.push(`回复模式: ${cfg.reply_mode !== false ? "开启" : "关闭"}`);
@@ -1581,7 +1596,7 @@ class SummaryPlugin extends Plugin {
 
               if (!apiKey) {
                 await msg.edit({
-                  text: `❌ 请提供 API Key\n用法: <code>${mainPrefix}sum config add ${key} YOUR_API_KEY</code>`,
+                  text: `❌ 请提供 API Key\n用法: <code>${mainPrefix}sum config add ${htmlEscape(key)} YOUR_API_KEY</code>`,
                   parseMode: "html"
                 });
                 return;
@@ -1595,7 +1610,7 @@ class SummaryPlugin extends Plugin {
               await db.write();
 
               await msg.edit({
-                text: `✅ 已配置官方 <b>${officialPreset.name}</b>\n默认模型: <code>${officialPreset.model}</code>\n可用命令: <code>${mainPrefix}sum config set ${key} model ...</code> / <code>url ...</code>`,
+                text: `✅ 已配置官方 <b>${htmlEscape(officialPreset.name)}</b>\n默认模型: ${codeTag(officialPreset.model)}\n可用命令: <code>${mainPrefix}sum config set ${htmlEscape(key)} model ...</code> / <code>url ...</code>`,
                 parseMode: "html"
               });
               return;
@@ -1607,7 +1622,7 @@ class SummaryPlugin extends Plugin {
 
             if (!type || !baseUrl || !model) {
               await msg.edit({
-                text: `❌ 格式错误\n\n自定义用法: <code>${mainPrefix}sum config add ＜名称＞ ＜类型＞ ＜BaseURL＞ ＜Model＞</code>\n示例: <code>${mainPrefix}sum config add deepseek openai https://api.deepseek.com deepseek-chat</code>`,
+                text: `❌ 格式错误\n\n自定义用法: <code>${mainPrefix}sum config add &lt;名称&gt; &lt;类型&gt; &lt;BaseURL&gt; &lt;Model&gt;</code>\n示例: <code>${mainPrefix}sum config add deepseek openai https://api.deepseek.com deepseek-chat</code>`,
                 parseMode: "html"
               });
               return;
@@ -1629,7 +1644,7 @@ class SummaryPlugin extends Plugin {
             await db.write();
 
             await msg.edit({
-              text: `✅ 已添加配置 <code>${key}</code>\n\n请使用以下命令设置 API Key:\n<code>${mainPrefix}sum config set ${key} key YOUR_API_KEY</code>`,
+              text: `✅ 已添加配置 ${codeTag(key)}\n\n请使用以下命令设置 API Key:\n<code>${mainPrefix}sum config set ${htmlEscape(key)} key YOUR_API_KEY</code>`,
               parseMode: "html"
             });
             return;
@@ -1641,7 +1656,7 @@ class SummaryPlugin extends Plugin {
             const value = args.slice(3).join(" ");
 
             if (!name || !prop) {
-              await msg.edit({ text: "用法: sum config set <名称/选项> <属性> <值>\n属性: key/model/url\n选项: push/default/prompt" });
+              await msg.edit({ text: "用法: sum config set &lt;名称/选项&gt; &lt;属性&gt; &lt;值&gt;\n属性: key/model/url\n选项: push/default/prompt" });
               return;
             }
 
@@ -1655,7 +1670,7 @@ class SummaryPlugin extends Plugin {
               }
               db.data.defaultPushTarget = prop;
               await db.write();
-              await msg.edit({ text: `✅ 已设置默认推送目标: ${prop}` });
+              await msg.edit({ text: `✅ 已设置默认推送目标: ${codeTag(prop)}`, parseMode: "html" });
               return;
             }
 
@@ -1665,12 +1680,12 @@ class SummaryPlugin extends Plugin {
                 return;
               }
               if (!db.data.aiConfig.providers[prop]) {
-                await msg.edit({ text: `❌ 未找到配置: ${prop}` });
+                await msg.edit({ text: `❌ 未找到配置: ${htmlEscape(prop)}` });
                 return;
               }
               db.data.aiConfig.default_provider = prop;
               await db.write();
-              await msg.edit({ text: `✅ 已设置默认配置: ${prop}` });
+              await msg.edit({ text: `✅ 已设置默认配置: ${codeTag(prop)}`, parseMode: "html" });
               return;
             }
 
@@ -1783,7 +1798,7 @@ class SummaryPlugin extends Plugin {
             const provider = db.data.aiConfig.providers[name];
 
             if (!provider) {
-              await msg.edit({ text: `❌ 未找到配置: ${name}` });
+              await msg.edit({ text: `❌ 未找到配置: ${htmlEscape(name)}` });
               return;
             }
 
@@ -1804,7 +1819,7 @@ class SummaryPlugin extends Plugin {
             }
 
             await db.write();
-            await msg.edit({ text: `✅ 已更新配置 ${name} 的 ${prop}` });
+            await msg.edit({ text: `✅ 已更新配置 ${codeTag(name)} 的 ${codeTag(prop)}`, parseMode: "html" });
             return;
           }
 
@@ -1819,7 +1834,7 @@ class SummaryPlugin extends Plugin {
             const db = await getDB();
 
             if (!db.data.aiConfig.providers[name]) {
-              await msg.edit({ text: `❌ 未找到配置: ${name}` });
+              await msg.edit({ text: `❌ 未找到配置: ${htmlEscape(name)}` });
               return;
             }
 
@@ -1830,7 +1845,7 @@ class SummaryPlugin extends Plugin {
             }
 
             await db.write();
-            await msg.edit({ text: `✅ 已删除配置 ${name}` });
+            await msg.edit({ text: `✅ 已删除配置 ${codeTag(name)}`, parseMode: "html" });
             return;
           }
 

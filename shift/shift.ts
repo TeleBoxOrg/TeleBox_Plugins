@@ -45,9 +45,9 @@ async function formatEntity(
   if (entity?.title) displayParts.push(entity.title);
   if (entity?.firstName) displayParts.push(entity.firstName);
   if (entity?.lastName) displayParts.push(entity.lastName);
-  if (entity?.username)
+  if (entity.username)
     displayParts.push(
-      mention ? `@${entity.username}` : `<code>@${entity.username}</code>`
+      mention ? `@${htmlEscape(entity.username)}` : `<code>@${htmlEscape(entity.username)}</code>`
     );
 
   if (id) {
@@ -434,7 +434,7 @@ function getAllShiftRules(): Array<{ sourceId: number; rule: ShiftRule }> {
 // Utility functions
 function getDisplayName(entity: any): string {
   if (!entity) return "未知实体";
-  if (entity.username) return `@${entity.username}`;
+  if (entity.username) return `@${htmlEscape(entity.username)}`;
   if (entity.firstName) return entity.firstName;
   if (entity.title) return entity.title;
   return `ID: ${entity.id}`;
@@ -1074,7 +1074,7 @@ class ShiftPlugin extends Plugin {
           const rulesJson = rules; // exportRules 已返回 JSON 字符串，避免二次 stringify
           const base64Data = Buffer.from(rulesJson, "utf-8").toString("base64");
           await msg.edit({
-            text: `📤 <b>导出的规则配置：</b>\n\n<code>${base64Data}</code>\n\n💡 复制上述 Base64 编码数据用于导入`,
+            text: `📤 <b>导出的规则配置：</b>\n\n<code>${htmlEscape(base64Data)}</code>\n\n💡 复制上述 Base64 编码数据用于导入`,
             parseMode: "html",
           });
           return;
@@ -1411,9 +1411,9 @@ class ShiftPlugin extends Plugin {
             }
           }
 
-          const action = pause ? "暂停" : "恢复";
+          const actionLabel = htmlEscape(sub);
           await msg.edit({
-            text: `✅ <b>成功${action} ${count} 条规则</b>`,
+            text: `✅ <b>成功${actionLabel} ${count} 条规则</b>`,
             parseMode: "html",
           });
           return;
