@@ -428,7 +428,7 @@ const help_text =
   `表情包插件，智能缓存机制，首次使用自动下载配置\n` +
   `• eat - 获取表情包列表（优先使用缓存）\n` +
   `• eat set [url] - 强制更新配置（覆盖缓存）\n` +
-  `• 回复消息 + eat <名称> - 发送指定表情包\n` +
+  `• 回复消息 + eat &lt;名称&gt; - 发送指定表情包\n` +
   `• 回复消息 + eat - 随机发送表情包\n\n` +
   `若想实现定时更新表情包配置, 可安装并使用 <code>${mainPrefix}tpm i acron</code>  
 每天2点自动更新 <code>eat</code> 的表情包配置(调用 <code>${mainPrefix}eat set</code> 命令)  
