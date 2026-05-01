@@ -31,9 +31,9 @@ const help_text = `🎯 <b>自动回应插件 (Trace)</b>
    └ 取消追踪该用户
 
 🔍 <b>关键字追踪</b>
-├ ➕ <code>${mainPrefix}trace kw add ＜词＞ 👍👎🥰</code>
+├ ➕ <code>${mainPrefix}trace kw add &lt;词&gt; 👍👎🥰</code>
 │  └ 添加关键字自动回应
-└ ➖ <code>${mainPrefix}trace kw del ＜词＞</code>
+└ ➖ <code>${mainPrefix}trace kw del &lt;词&gt;</code>
    └ 删除关键字追踪
 
 📊 <b>管理命令</b>
