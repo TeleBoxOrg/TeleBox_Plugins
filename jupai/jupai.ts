@@ -5,6 +5,15 @@ import { Api } from "teleproto";
 import { getGlobalClient } from "@utils/globalClient";
 import { CustomFile } from "teleproto/client/uploads.js";
 
+const htmlEscape = (text: string): string =>
+  text.replace(/[&<>"']/g, (m) => ({
+    "&": "&amp;",
+    "<": "&lt;",
+    ">": "&gt;",
+    '"': "&quot;",
+    "'": "&#x27;",
+  }[m] || m));
+
 const timeout = 60000;
 const prefixes = getPrefixes();
 const mainPrefix = prefixes[0];
@@ -89,12 +98,12 @@ class JuPaiPlugin extends Plugin {
           await msg.delete();
         } catch (error) {
           const errorMsg = error instanceof Error ? error.message : String(error);
-          await msg.edit({ text: `获取失败: ${errorMsg}` });
+          await msg.edit({ text: `获取失败: ${htmlEscape(errorMsg)}`, parseMode: "html" });
         }
       } catch (error) {
         console.error("JuPai Plugin Error:", error);
         const errorMsg = error instanceof Error ? error.message : String(error);
-        await msg.edit({ text: `插件执行失败: ${errorMsg}` });
+        await msg.edit({ text: `插件执行失败: ${htmlEscape(errorMsg)}`, parseMode: "html" });
       }
     },
   };
