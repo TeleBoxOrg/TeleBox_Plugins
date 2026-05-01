@@ -556,9 +556,12 @@ class AutoDeleteService {
         if (conflictingRule) {
           const conflictResponse = conflictingRule.deleteResponse ? " (含响应)" : "";
           const newResponse = rule.deleteResponse ? " (含响应)" : "";
+          const safeParam = htmlEscape(param);
+          const safeRuleCommand = htmlEscape(rule.command);
+          const safeConflictCommand = htmlEscape(conflictingRule.command);
           return {
             success: false,
-            error: `参数冲突: 参数 "${param}" 已存在于规则 "${rule.command} → ${conflictingRule.delay}秒删除${conflictResponse}" 中，与新规则 "${rule.command} → ${rule.delay}秒删除${newResponse}" 冲突\n
+            error: `参数冲突: 参数 "${safeParam}" 已存在于规则 "${safeConflictCommand} → ${conflictingRule.delay}秒删除${conflictResponse}" 中，与新规则 "${safeRuleCommand} → ${rule.delay}秒删除${newResponse}" 冲突\n
 💡 提示: 使用 "<code>${mainPrefix}autodelcmd del ${conflictingRule.id}</code>" 删除冲突规则后重试`
           };
         }
@@ -581,9 +584,11 @@ class AutoDeleteService {
         const newResponse = rule.deleteResponse ? " (含响应)" : "";
         const newExact = rule.exactMatch ? " (精确匹配)" : " (普通匹配)";
         
+        const safeRuleCommand = htmlEscape(rule.command);
+        const safeConflictCommand = htmlEscape(conflictingRule.command);
         return {
           success: false,
-          error: `规则冲突: 命令 "${rule.command}" 已存在规则 "→ ${conflictingRule.delay}秒删除${conflictResponse}${conflictExact}"，与新规则 "→ ${rule.delay}秒删除${newResponse}${newExact}" 冲突\n
+          error: `规则冲突: 命令 "${safeRuleCommand}" 已存在规则 "→ ${conflictingRule.delay}秒删除${conflictResponse}${conflictExact}"，与新规则 "${safeConflictCommand} → ${rule.delay}秒删除${newResponse}${newExact}" 冲突\n
 💡 提示: 使用 "<code>${mainPrefix}autodelcmd del ${conflictingRule.id}</code>" 删除冲突规则后重试`
         };
       }
@@ -820,11 +825,11 @@ class AutoDeletePlugin extends Plugin {
     
     text += "⚙️ <b>配置规则:</b>\n";
     allRules.forEach((rule, index) => {
-      const params = rule.parameters?.length ? ` [${rule.parameters.join(', ')}]` : '';
+      const params = rule.parameters?.length ? ` [${rule.parameters.map((value) => htmlEscape(value)).join(', ')}]` : '';
       const response = rule.deleteResponse ? ' 🔄' : '';
       const exact = rule.exactMatch ? ' 🎯' : '';
-      const ruleId = rule.id || 'unknown';
-      text += `${index + 1}. <code>${rule.command}${params}</code> → ${rule.delay}秒${response}${exact} <code>[ID: ${ruleId}]</code>\n`;
+      const ruleId = htmlEscape(rule.id || 'unknown');
+      text += `${index + 1}. <code>${htmlEscape(rule.command)}${params}</code> → ${rule.delay}秒${response}${exact} <code>[ID: ${ruleId}]</code>\n`;
     });
 
     // 添加图标说明
@@ -919,6 +924,9 @@ class AutoDeletePlugin extends Plugin {
     
     const responseText = deleteResponse ? " (含响应)" : "";
     const exactText = exactMatch ? " (精确匹配)" : "";
+    const safeCommand = htmlEscape(command);
+    const formatParams = (values: string[]) => values.map((value) => htmlEscape(value)).join(', ');
+    const formatCodeParams = (values: string[]) => values.map((value) => `<code>${htmlEscape(value)}</code>`).join(' 或 ');
     
     if (parameters.length > 0) {
       if (result.merged) {
@@ -929,19 +937,23 @@ class AutoDeletePlugin extends Plugin {
           !!r.deleteResponse === !!deleteResponse &&
           !!r.exactMatch === !!exactMatch
         );
-        const mergedParams = updatedRule?.parameters || parameters;
-        
-        await msg.edit({ 
-          text: `✅ 已合并自定义规则参数: <code>${command} [${mergedParams.join(', ')}]</code> → ${delay}秒删除${responseText}\n\n` +
-                `触发条件: ${command} 命令的第一个参数为 ${mergedParams.map(p => `<code>${p}</code>`).join(' 或 ')} 时` +
+          const mergedParams = updatedRule?.parameters || parameters;
+          const safeMergedParams = formatParams(mergedParams);
+          const safeMergedCodeParams = formatCodeParams(mergedParams);
+          
+          await msg.edit({ 
+            text: `✅ 已合并自定义规则参数: <code>${safeCommand} [${safeMergedParams}]</code> → ${delay}秒删除${responseText}\n\n` +
+                  `触发条件: ${safeCommand} 命令的第一个参数为 ${safeMergedCodeParams} 时` +
                 (deleteResponse ? "\n🔄 同时删除响应消息" : ""), 
           parseMode: "html" 
         });
       } else {
-        const params = `[${parameters.join(', ')}]`;
+        const safeParams = formatParams(parameters);
+        const safeCodeParams = formatCodeParams(parameters);
+        const params = `[${safeParams}]`;
         await msg.edit({ 
-          text: `✅ 已添加自定义规则: <code>${command} ${params}</code> → ${delay}秒删除${responseText}\n\n` +
-                `触发条件: ${command} 命令的第一个参数为 ${parameters.map(p => `<code>${p}</code>`).join(' 或 ')} 时` +
+          text: `✅ 已添加自定义规则: <code>${safeCommand} ${params}</code> → ${delay}秒删除${responseText}\n\n` +
+                `触发条件: ${safeCommand} 命令的第一个参数为 ${safeCodeParams} 时` +
                 (deleteResponse ? "\n🔄 同时删除响应消息" : ""), 
           parseMode: "html" 
         });
@@ -949,8 +961,8 @@ class AutoDeletePlugin extends Plugin {
     } else {
       const matchType = exactMatch ? "只有无参数的" : "任何";
       await msg.edit({ 
-        text: `✅ 已添加自定义规则: <code>${command}</code> → ${delay}秒删除${responseText}${exactText}\n\n` +
-              `触发条件: ${matchType} ${command} 命令` +
+        text: `✅ 已添加自定义规则: <code>${safeCommand}</code> → ${delay}秒删除${responseText}${exactText}\n\n` +
+              `触发条件: ${matchType} ${safeCommand} 命令` +
               (deleteResponse ? "\n🔄 同时删除响应消息" : "") +
               (exactMatch ? "\n🎯 精确匹配：不匹配带参数的调用" : ""), 
         parseMode: "html" 
@@ -981,12 +993,12 @@ class AutoDeletePlugin extends Plugin {
     
     if (result.success && result.removedRule) {
       const rule = result.removedRule;
-      const params = rule.parameters?.length ? ` [${rule.parameters.join(', ')}]` : '';
+      const params = rule.parameters?.length ? ` [${rule.parameters.map((value) => htmlEscape(value)).join(', ')}]` : '';
       const exact = rule.exactMatch ? ' 🎯' : '';
       const response = rule.deleteResponse ? ' 🔄' : '';
       
       await msg.edit({ 
-        text: `✅ 已删除自定义规则:\n<code>${rule.command}${params}</code> → ${rule.delay}秒${response}${exact}\n\n<code>[ID: ${rule.id}]</code>`, 
+        text: `✅ 已删除自定义规则:\n<code>${htmlEscape(rule.command)}${params}</code> → ${rule.delay}秒${response}${exact}\n\n<code>[ID: ${htmlEscape(rule.id || "")}]</code>`, 
         parseMode: "html" 
       });
       return;
@@ -997,20 +1009,21 @@ class AutoDeletePlugin extends Plugin {
     
     if (matchingRules.length === 0) {
       await msg.edit({ 
-        text: `❌ 未找到匹配的规则\n\n• 规则ID "${input}" 不存在\n• 命令 "${input}" 没有自定义规则\n\n使用 <code>${mainPrefix}autodelcmd list</code> 查看所有规则`, 
+        text: `❌ 未找到匹配的规则\n\n• 规则ID "${htmlEscape(input)}" 不存在\n• 命令 "${htmlEscape(input)}" 没有自定义规则\n\n使用 <code>${mainPrefix}autodelcmd list</code> 查看所有规则`, 
         parseMode: "html" 
       });
       return;
     }
     
     // 显示匹配的规则供用户选择
-    let text = `📋 <b>命令 "${input}" 的自定义规则:</b>\n\n`;
+    const safeInput = htmlEscape(input);
+    let text = `📋 <b>命令 "${safeInput}" 的自定义规则:</b>\n\n`;
     matchingRules.forEach((rule, index) => {
-      const params = rule.parameters?.length ? ` [${rule.parameters.join(', ')}]` : '';
+      const params = rule.parameters?.length ? ` [${rule.parameters.map((value) => htmlEscape(value)).join(', ')}]` : '';
       const exact = rule.exactMatch ? ' 🎯' : '';
       const response = rule.deleteResponse ? ' 🔄' : '';
-      const ruleId = rule.id || 'unknown';
-      text += `${index + 1}. <code>${rule.command}${params}</code> → ${rule.delay}秒${response}${exact}\n`;
+      const ruleId = htmlEscape(rule.id || 'unknown');
+      text += `${index + 1}. <code>${htmlEscape(rule.command)}${params}</code> → ${rule.delay}秒${response}${exact}\n`;
       text += `   <code>删除: ${mainPrefix}autodelcmd del ${ruleId}</code>\n\n`;
     });
     
