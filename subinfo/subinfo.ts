@@ -76,6 +76,9 @@ function htmlEscape(text: string): string {
   }[m] || m));
 }
 
+const isHttpUrl = (text: string): boolean => /^https?:\/\//i.test(text);
+const formatRawUrl = (url: string, isTxtOutput: boolean): string => isTxtOutput ? url : htmlEscape(url);
+
 // Markdown特殊字符转义 (用于TXT输出)
 function markdownEscape(text: string): string {
   return text.replace(/([*`>#+\-.!_[\](){}])/g, '\\$1');
@@ -517,13 +520,13 @@ class SubinfoPlugin extends Plugin {
 
       if (!result.success && result.errorMessage === "无流量统计信息") {
           let output = `订阅链接: ${codeTag(url)}\n机场名称: ${codeTag(result.configName)}\n**无流量统计信息**`;
-          if (result.websiteInfo.website) output += `\n🔗 官网链接: ${result.websiteInfo.website}`;
+          if (result.websiteInfo.website) output += `\n🔗 官网链接: ${formatRawUrl(result.websiteInfo.website, isTxtOutput)}`;
           reports.push(output); stats.失败++; continue;
       }
       
       if (!result.success) {
         let errorMsg = `${boldTag('查询失败:')} ${codeTag(result.errorMessage || '未知错误')}`;
-        if (result.websiteInfo.website) errorMsg += `\n🔗 官网链接: ${result.websiteInfo.website}`;
+        if (result.websiteInfo.website) errorMsg += `\n🔗 官网链接: ${formatRawUrl(result.websiteInfo.website, isTxtOutput)}`;
         let output = `订阅链接: ${codeTag(url)}\n${errorMsg}`;
         reports.push(output); stats.失败++; continue;
       }
@@ -544,7 +547,7 @@ class SubinfoPlugin extends Plugin {
       seg.push(`📄 ${boldTag('机场名称')}: ${codeTag(configName)}`);
       
       const finalProfileUrl = profileUrl || websiteInfo.website;
-      if (finalProfileUrl) seg.push(`🔗 ${boldTag('官网链接')}: ${finalProfileUrl}`);
+      if (finalProfileUrl && isHttpUrl(finalProfileUrl)) seg.push(`🔗 ${boldTag('官网链接')}: ${formatRawUrl(finalProfileUrl, isTxtOutput)}`);
       seg.push(`🏷️ ${boldTag('订阅链接')}: ${codeTag(url)}`);
       
       seg.push(`⏱️ ${boldTag('查询时间')}: ${codeTag(dayjs().format('YYYY-MM-DD HH:mm:ss'))}`);
@@ -625,7 +628,10 @@ class SubinfoPlugin extends Plugin {
             await client.sendFile(msg.chatId!, { file: fileBuffer, caption: `✅ 订阅查询报告 (共 ${urls.length} 个链接)\n${statsText.trim()}` });
             await msg.delete();
         } catch (e) {
-            await msg.edit({ text: `❌ 发送TXT文件失败，请检查权限。\n\n部分内容：\n${splitLongMessage(resultText, 1024)[0]}`, parseMode: 'html' });
+              const preview = isTxtOutput
+                ? splitLongMessage(resultText, 1024)[0]
+                : htmlEscape(splitLongMessage(resultText, 1024)[0]);
+              await msg.edit({ text: `❌ 发送TXT文件失败，请检查权限。\n\n部分内容：\n${preview}`, parseMode: 'html' });
         }
     } else {
         const messageParts = splitLongMessage(resultText, 4090);
@@ -696,10 +702,10 @@ class SubinfoPlugin extends Plugin {
             if (errorMsg === "无流量统计信息") {
                  outputText = `${boldTag('订阅链接')}：${codeTag(url)}\n` +
                               `${boldTag('机场名称')}：${codeTag(result.configName)}\n` +
-                              `**无流量信息**`;
+                              `${boldTag('无流量信息')}`;
             } else {
                  outputText = `${boldTag('订阅链接')}：${codeTag(url)}\n` +
-                              `**查询失败**: ${format(errorMsg)}`;
+                              `${boldTag('查询失败')}: ${format(errorMsg)}`;
             }
         } else {
             const { configName, profileUrl, used, upload, download, total, remain, expireTs } = result;
@@ -707,7 +713,7 @@ class SubinfoPlugin extends Plugin {
             outputText = `${boldTag('机场名称')}：${codeTag(configName)}\n`;
             
             const finalProfileUrl = profileUrl || result.websiteInfo.website;
-            if (finalProfileUrl) outputText += `${boldTag('官网链接')}：${finalProfileUrl}\n`;
+            if (finalProfileUrl && isHttpUrl(finalProfileUrl)) outputText += `${boldTag('官网链接')}：${formatRawUrl(finalProfileUrl, isTxtOutput)}\n`;
 
             outputText += `${boldTag('订阅链接')}：${codeTag(url)}\n` +
                           `\n` +
@@ -754,7 +760,10 @@ class SubinfoPlugin extends Plugin {
             await client.sendFile(msg.chatId!, { file: fileBuffer, caption: `✅ 简洁订阅查询报告 (共 ${urls.length} 个链接)` });
             await msg.delete(); 
         } catch (e) {
-            await msg.edit({ text: `❌ 发送TXT文件失败，请检查权限。\n\n部分内容：\n${splitLongMessage(finalOutput, 1024)[0]}`, parseMode: 'html' });
+              const preview = isTxtOutput
+                ? splitLongMessage(finalOutput, 1024)[0]
+                : htmlEscape(splitLongMessage(finalOutput, 1024)[0]);
+              await msg.edit({ text: `❌ 发送TXT文件失败，请检查权限。\n\n部分内容：\n${preview}`, parseMode: 'html' });
         }
     } else {
         const messageParts = splitLongMessage(finalOutput || "未获取到任何信息", 4090);
