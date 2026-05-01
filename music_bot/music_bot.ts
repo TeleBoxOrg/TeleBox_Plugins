@@ -7,7 +7,14 @@ import { sleep } from "teleproto/Helpers";
 
 const prefixes = getPrefixes();
 const mainPrefix = prefixes[0];
-const botReady = new Map<string, boolean>();
+const htmlEscape = (text: string): string =>
+  text.replace(/[&<>"']/g, (m) => ({
+    "&": "&amp;",
+    "<": "&lt;",
+    ">": "&gt;",
+    '"': "&quot;",
+    "'": "&#x27;",
+  }[m] || m));
 
 const bots = {
   default: "@music_v1bot",
@@ -18,6 +25,8 @@ const bots = {
 const pluginName = "music_bot";
 
 const commandName = `${mainPrefix}${pluginName}`;
+
+const botReady = new Map<string, boolean>();
 
 const help_text = `
 依赖 ${Object.values(bots).join(", ")}
@@ -61,7 +70,7 @@ async function searchAndSendMusic(
   // Give quick feedback
   try {
     await msg.edit({
-      text: `🔎 搜索中：<code>${displayKeyword ?? keyword}</code>`,
+      text: `🔎 搜索中：<code>${htmlEscape(displayKeyword ?? keyword)}</code>`,
       parseMode: "html",
     });
   } catch {}
@@ -133,7 +142,7 @@ async function searchAndSendMusic(
   }
 
   if (!replyWithButtons) {
-    await msg.edit({ text: `⚠️ 机器人未启用或未响应，请先打开 ${bot} 并点击 Start，然后重试。` });
+    await msg.edit({ text: `⚠️ 机器人未启用或未响应，请先打开 ${htmlEscape(bot)} 并点击 Start，然后重试。` });
     return;
   }
 
@@ -193,7 +202,7 @@ async function searchAndSendMusic(
   } else {
     await client.sendFile(msg.peerId, {
       file: mediaMsg.media,
-      caption: `🎵 ${displayKeyword ?? keyword}`,
+      caption: `🎵 ${htmlEscape(displayKeyword ?? keyword)}`,
       replyTo: msg.replyTo?.replyToTopId || msg.replyTo?.replyToMsgId,
     });
   }
