@@ -1152,9 +1152,9 @@ function helpText(section?: string): string {
   查看验证通过记录
 • <code>${p}pmc record failed</code>
   查看验证失败记录
-• <code>${p}pmc record del verified <ID/all></code>
+• <code>${p}pmc record del verified <ID>/all</code>
   删除通过记录
-• <code>${p}pmc record del failed <ID/all></code>
+• <code>${p}pmc record del failed <ID>/all</code>
   删除失败记录</blockquote>
 
 <b>ℹ️ 使用说明：</b>
@@ -1255,9 +1255,9 @@ function helpText(section?: string): string {
   查看验证通过记录
 • <code>${p}pmc record failed</code>
   查看验证失败记录
-• <code>${p}pmc record del verified <ID/all></code>
+• <code>${p}pmc record del verified <ID>/all</code>
   删除通过记录（支持 all）
-• <code>${p}pmc record del failed <ID/all></code>
+• <code>${p}pmc record del failed <ID>/all</code>
   删除失败记录（支持 all）</blockquote>`,
   };
 
@@ -1888,7 +1888,7 @@ class PMCaptchaPlugin extends Plugin {
       `• <code>${p}pmc record</code> - 查看统计`,
       `• <code>${p}pmc record verified</code> - 查看通过记录`,
       `• <code>${p}pmc record failed</code> - 查看失败记录`,
-      `• <code>${p}pmc record del verified/failed <ID/all></code> - 删除记录`,
+      `• <code>${p}pmc record del verified/failed <ID>/all</code> - 删除记录`,
       ``,
       `<b>ℹ️ 使用说明:</b>`,
       `• 验证失败默认执行静音+归档`,
