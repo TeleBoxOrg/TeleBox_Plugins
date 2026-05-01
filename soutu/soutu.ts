@@ -66,7 +66,7 @@ class SoutuPlugin extends Plugin {
 
       } catch (error: any) {
         console.error('[soutu] 插件执行失败:', error);
-        await msg.edit({ text: `❌ <b>操作失败:</b> ${htmlEscape(error.message)}`, parseMode: "html" });
+        await msg.edit({ text: `❌ <b>操作失败:</b> ${htmlEscape(error.message)} (${htmlEscape(pluginName)})`, parseMode: "html" });
       }
     },
   };
@@ -119,8 +119,8 @@ class SoutuPlugin extends Plugin {
       const responseText = `🖼️ <b>搜图结果:</b> (<a href="${htmlEscape(imageUrl)}">原图</a>)
 有效期限: 约30天
 
-• <a href="${googleUrl}">Google Lens</a>
-• <a href="${yandexUrl}">Yandex Images</a>`;
+• <a href="${htmlEscape(googleUrl)}">Google Lens</a>
+• <a href="${htmlEscape(yandexUrl)}">Yandex Images</a>`;
 
       await msg.edit({ text: responseText, parseMode: "html" });
 
