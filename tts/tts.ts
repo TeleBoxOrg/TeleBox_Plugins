@@ -71,6 +71,19 @@ function escapeSsmlText(text: string): string {
         .replace(/'/g, "&apos;");
 }
 
+function htmlEscape(text: unknown): string {
+    return String(text ?? "")
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&#x27;");
+}
+
+function codeTag(text: unknown): string {
+    return `<code>${htmlEscape(text)}</code>`;
+}
+
 // ========== 类型定义 ==========
 type TTSConfig = {
     key: string;
@@ -144,7 +157,7 @@ class TTSPlugin extends Plugin {
             // 配置
             if (subCmd === "config") {
                 if (parts.length < 3) {
-                    await msg.edit({ text: `❌ 用法: <code>${mainPrefix}tts config <key> <region></code>`, parseMode: "html" });
+                    await msg.edit({ text: `❌ 用法: <code>${mainPrefix}tts config &lt;key&gt; &lt;region&gt;</code>`, parseMode: "html" });
                     return;
                 }
                 const [, key, region] = parts;
@@ -154,20 +167,20 @@ class TTSPlugin extends Plugin {
 
                 // 遮挡 Key 显示
                 const maskedKey = key.length > 8 ? `${key.substring(0, 4)}...${key.substring(key.length - 4)}` : "***";
-                await msg.edit({ text: `✅ 配置已更新\nKey: ${maskedKey}\nRegion: ${region}`, parseMode: "html" });
+                await msg.edit({ text: `✅ 配置已更新\nKey: ${codeTag(maskedKey)}\nRegion: ${codeTag(region)}`, parseMode: "html" });
                 return;
             }
 
             // 设置语音
             if (subCmd === "voice") {
                 if (parts.length < 2) {
-                    await msg.edit({ text: `❌ 用法: <code>${mainPrefix}tts voice <VoiceName></code>`, parseMode: "html" });
+                    await msg.edit({ text: `❌ 用法: <code>${mainPrefix}tts voice &lt;VoiceName&gt;</code>`, parseMode: "html" });
                     return;
                 }
                 const voice = parts[1];
                 db.data.voice = voice;
                 await db.write();
-                await msg.edit({ text: `✅ 语音已设置为: <code>${voice}</code>`, parseMode: "html" });
+                await msg.edit({ text: `✅ 语音已设置为: ${codeTag(voice)}`, parseMode: "html" });
                 return;
             }
 
@@ -176,7 +189,7 @@ class TTSPlugin extends Plugin {
                 const { key, region, voice, style, rate } = db.data;
                 const maskedKey = key ? (key.length > 8 ? `${key.substring(0, 4)}...${key.substring(key.length - 4)}` : "***") : "未设置";
                 await msg.edit({
-                    text: `📋 <b>当前配置</b>\n\nKey: <code>${maskedKey}</code>\nRegion: <code>${region}</code>\nVoice: <code>${voice}</code>\nStyle: <code>${style || "默认"}</code>\nRate: <code>${rate || "1.0"}</code>`,
+                    text: `📋 <b>当前配置</b>\n\nKey: ${codeTag(maskedKey)}\nRegion: ${codeTag(region)}\nVoice: ${codeTag(voice)}\nStyle: ${codeTag(style || "默认")}\nRate: ${codeTag(rate || "1.0")}`,
                     parseMode: "html"
                 });
                 return;
@@ -186,12 +199,12 @@ class TTSPlugin extends Plugin {
             if (subCmd === "style") {
                 const style = parts[1];
                 if (!style) {
-                    await msg.edit({ text: `❌ 用法: <code>${mainPrefix}tts style <style></code> (使用 clear 清除)`, parseMode: "html" });
+                    await msg.edit({ text: `❌ 用法: <code>${mainPrefix}tts style &lt;style&gt;</code> (使用 clear 清除)`, parseMode: "html" });
                     return;
                 }
                 db.data.style = style === "clear" ? "" : style;
                 await db.write();
-                await msg.edit({ text: `✅ 风格已设置: <code>${db.data.style || "默认"}</code>`, parseMode: "html" });
+                await msg.edit({ text: `✅ 风格已设置: ${codeTag(db.data.style || "默认")}`, parseMode: "html" });
                 return;
             }
 
@@ -205,7 +218,7 @@ class TTSPlugin extends Plugin {
                 }
                 db.data.rate = rateStr;
                 await db.write();
-                await msg.edit({ text: `✅ 语速已设置: <code>${rateStr}</code>`, parseMode: "html" });
+                await msg.edit({ text: `✅ 语速已设置: ${codeTag(rateStr)}`, parseMode: "html" });
                 return;
             }
 
@@ -239,17 +252,17 @@ class TTSPlugin extends Plugin {
                     }
 
                     if (voices.length === 0) {
-                        await msg.edit({ text: `❌ 未找到匹配 "<code>${filter}</code>" 的音色`, parseMode: "html" });
+                        await msg.edit({ text: `❌ 未找到匹配 "${codeTag(filter)}" 的音色`, parseMode: "html" });
                         return;
                     }
 
                     // 格式化输出
                     const lines = voices.map((v: any) => {
                         const gender = v.Gender === "Female" ? "👩" : (v.Gender === "Male" ? "👨" : "👤");
-                        return `${gender} <code>${v.ShortName}</code> (${v.LocalName})`;
+                        return `${gender} ${codeTag(v.ShortName)} (${htmlEscape(v.LocalName)})`;
                     });
 
-                    const resultText = `📋 <b>可用音色列表</b> (${filter})\n\n${lines.join("\n")}\n\n使用 <code>${mainPrefix}tts voice <Name></code> 设置`;
+                    const resultText = `📋 <b>可用音色列表</b> (${htmlEscape(filter)})\n\n${lines.join("\n")}\n\n使用 <code>${mainPrefix}tts voice &lt;Name&gt;</code> 设置`;
 
                     // 如果太长，发送文件
                     if (resultText.length > 4000) {
@@ -262,7 +275,7 @@ class TTSPlugin extends Plugin {
                         await client.sendFile(msg.peerId, {
                             file: buffer,
                             attributes: [new Api.DocumentAttributeFilename({ fileName: `voices_${filter}.txt` })],
-                            caption: `📋 <b>可用音色列表</b> (${filter}) - 共 ${voices.length} 个`,
+                            caption: `📋 <b>可用音色列表</b> (${htmlEscape(filter)}) - 共 ${voices.length} 个`,
                             parseMode: "html"
                         });
                         await deleteCommandMessage(msg);
@@ -272,7 +285,7 @@ class TTSPlugin extends Plugin {
 
                 } catch (error: any) {
                     console.error("[TTS Plugin] Voices Error:", error);
-                    await msg.edit({ text: `❌ 获取列表失败: ${error.message}`, parseMode: "html" });
+                    await msg.edit({ text: `❌ 获取列表失败: ${htmlEscape(error.message)}`, parseMode: "html" });
                 }
                 return;
             }
@@ -305,7 +318,7 @@ class TTSPlugin extends Plugin {
             }
 
             if (!db.data.key || !db.data.region) {
-                await msg.edit({ text: `❌ 请先配置 Azure API Key 和 Region\n使用: <code>${mainPrefix}tts config <key> <region></code>`, parseMode: "html" });
+                await msg.edit({ text: `❌ 请先配置 Azure API Key 和 Region\n使用: <code>${mainPrefix}tts config &lt;key&gt; &lt;region&gt;</code>`, parseMode: "html" });
                 return;
             }
 
@@ -332,15 +345,15 @@ class TTSPlugin extends Plugin {
 
                 // 添加语速控制
                 if (rate && rate !== "1.0") {
-                    content = `<prosody rate="${rate}">${content}</prosody>`;
+                    content = `<prosody rate="${escapeSsmlText(rate)}">${content}</prosody>`;
                 }
 
                 // 添加风格控制 (仅当 style 存在时)
                 if (style) {
-                    content = `<mstts:express-as style="${style}">${content}</mstts:express-as>`;
+                    content = `<mstts:express-as style="${escapeSsmlText(style)}">${content}</mstts:express-as>`;
                 }
 
-                const ssml = `<speak version='1.0' xml:lang='en-US' xmlns:mstts='https://www.w3.org/2001/mstts'><voice xml:lang='en-US' name='${voice}'>${content}</voice></speak>`;
+                const ssml = `<speak version='1.0' xml:lang='en-US' xmlns:mstts='https://www.w3.org/2001/mstts'><voice xml:lang='en-US' name='${escapeSsmlText(voice)}'>${content}</voice></speak>`;
 
                 const url = `https://${region}.tts.speech.microsoft.com/cognitiveservices/v1`;
 
@@ -397,7 +410,7 @@ class TTSPlugin extends Plugin {
             } catch (error: any) {
                 console.error("[TTS Plugin] Error:", error);
                 const errMsg = error.response ? `API Error: ${error.response.status} ${error.response.statusText}` : (error.message || "Unknown error");
-                await msg.edit({ text: `❌ 合成失败: ${errMsg}`, parseMode: "html" });
+                await msg.edit({ text: `❌ 合成失败: ${htmlEscape(errMsg)}`, parseMode: "html" });
             }
         }
     };
