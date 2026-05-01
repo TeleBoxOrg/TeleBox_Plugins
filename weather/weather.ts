@@ -115,7 +115,7 @@ const help_text = `🌤️ <b>天气查询插件</b>
 • 🆓 <b>完全免费</b>：使用 Open-Meteo 免费API
 
 <b>🔧 使用方法:</b>
-• <code>${mainPrefix}weather ＜城市名＞</code> - 查询指定城市天气
+• <code>${mainPrefix}weather &lt;城市名&gt;</code> - 查询指定城市天气
 
 <b>💡 使用示例:</b>
 • <code>${mainPrefix}weather 北京</code> - 查询北京天气
