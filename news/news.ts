@@ -175,9 +175,9 @@ class NewsPlugin extends Plugin {
         messageParts.push("");
         data.newsList.forEach((item, index) => {
           const title = htmlEscape(item.title || "");
-          const url = item.url || ""; // URL不需要HTML转义
-          if (title && url) {
-            messageParts.push(`${index + 1}. <a href="${url}">${title}</a>`);
+          const url = item.url || "";
+          if (title && /^https?:\/\//i.test(url)) {
+            messageParts.push(`${index + 1}. <a href="${htmlEscape(url)}">${title}</a>`);
           }
         });
         messageParts.push("");
