@@ -260,7 +260,7 @@ function buildUserDisplay(user: Api.User): string {
 }
 
 function buildUserDisplayFromId(userId: string): string {
-  return `<a href="tg://user?id=${htmlEscape(userId)}">${htmlEscape(userId)}</a>`;
+  return `<a href="tg://user?id=${userId}">${htmlEscape(userId)}</a>`;
 }
 
 function buildUserDisplayFromCache(
@@ -282,7 +282,7 @@ function buildUserDisplayFromCache(
     parts.push(`<code>${htmlEscape(cachedUser.username)}</code>`);
   }
   parts.push(
-    `<a href="tg://user?id=${htmlEscape(userId)}">${htmlEscape(userId)}</a>`,
+    `<a href="tg://user?id=${userId}">${htmlEscape(userId)}</a>`,
   );
 
   return parts.join(" ");
