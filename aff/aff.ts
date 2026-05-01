@@ -306,7 +306,7 @@ class AffPlugin extends Plugin {
   private async handleError(msg: Api.Message, error: any): Promise<void> {
     console.error(`[${this.PLUGIN_NAME}] Error:`, error);
     
-    const errorMsg = this.htmlEscape(error.message || "未知错误");
+    const errorMsg = this.htmlEscape(error?.message || String(error) || "未知错误");
     
     await msg.edit({
       text: `❌ <b>操作失败：</b>${errorMsg}`,
