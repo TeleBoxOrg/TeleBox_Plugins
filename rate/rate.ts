@@ -227,6 +227,8 @@ const htmlEscape = (text: string): string =>
     '"': '&quot;', "'": '&#x27;' 
   }[m] || m));
 
+const codeTag = (text: string): string => `<code>${htmlEscape(text)}</code>`;
+
 const help_text = `🚀 <b>智能汇率查询助手</b>
 
 📊 <b>使用示例</b>
@@ -579,40 +581,40 @@ class RatePlugin extends Plugin {
 
   private buildFiatToFiatResponse(amount: number, convertedAmount: number, rate: number, sourceSymbol: string, targetSymbol: string): string {
     return `💱 <b>汇率</b>\n\n` +
-      `<code>${this.formatAmount(amount)} ${sourceSymbol} ≈</code>\n` +
-      `<code>${this.formatAmount(convertedAmount)} ${targetSymbol}</code>\n\n` +
-      `📊 <b>汇率:</b> <code>1 ${sourceSymbol} = ${this.formatAmount(rate)} ${targetSymbol}</code>\n` +
+      `${codeTag(`${this.formatAmount(amount)} ${sourceSymbol} ≈`)}\n` +
+      `${codeTag(`${this.formatAmount(convertedAmount)} ${targetSymbol}`)}\n\n` +
+      `📊 <b>汇率:</b> ${codeTag(`1 ${sourceSymbol} = ${this.formatAmount(rate)} ${targetSymbol}`)}\n` +
       `⏰ <b>更新时间:</b> ${new Date().toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' })}`;
   }
 
   private buildCryptoToCryptoResponse(amount: number, convertedAmount: number, conversionRate: number, price: number, targetPrice: number, sourceSymbol: string, targetSymbol: string, lastUpdated: Date): string {
     return `💱 <b>汇率</b>\n\n` +
-      `<code>${this.formatAmount(amount)} ${sourceSymbol} ≈</code>\n` +
-      `<code>${this.formatAmount(convertedAmount)} ${targetSymbol}</code>\n\n` +
-      `💎 <b>兑换比率:</b> <code>1 ${sourceSymbol} = ${this.formatAmount(conversionRate)} ${targetSymbol}</code>\n` +
-      `📊 <b>基准价格:</b> <code>${sourceSymbol} $${this.formatPrice(price)} • ${targetSymbol} $${this.formatPrice(targetPrice)}</code>\n` +
+      `${codeTag(`${this.formatAmount(amount)} ${sourceSymbol} ≈`)}\n` +
+      `${codeTag(`${this.formatAmount(convertedAmount)} ${targetSymbol}`)}\n\n` +
+      `💎 <b>兑换比率:</b> ${codeTag(`1 ${sourceSymbol} = ${this.formatAmount(conversionRate)} ${targetSymbol}`)}\n` +
+      `📊 <b>基准价格:</b> ${codeTag(`${sourceSymbol} $${this.formatPrice(price)} • ${targetSymbol} $${this.formatPrice(targetPrice)}`)}\n` +
       `⏰ <b>数据更新:</b> ${lastUpdated.toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' })}`;
   }
 
   private buildFiatToCryptoResponse(amount: number, cryptoAmount: number, price: number, cryptoSymbol: string, fiatSymbol: string, lastUpdated: Date): string {
     return `💱 <b>汇率</b>\n\n` +
-      `<code>${this.formatAmount(amount)} ${fiatSymbol} ≈</code>\n` +
-      `<code>${this.formatAmount(cryptoAmount)} ${cryptoSymbol}</code>\n\n` +
-      `💎 <b>当前汇率:</b> <code>1 ${cryptoSymbol} = ${this.formatPrice(price)} ${fiatSymbol}</code>\n` +
+      `${codeTag(`${this.formatAmount(amount)} ${fiatSymbol} ≈`)}\n` +
+      `${codeTag(`${this.formatAmount(cryptoAmount)} ${cryptoSymbol}`)}\n\n` +
+      `💎 <b>当前汇率:</b> ${codeTag(`1 ${cryptoSymbol} = ${this.formatPrice(price)} ${fiatSymbol}`)}\n` +
       `⏰ <b>数据更新:</b> ${lastUpdated.toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' })}`;
   }
 
   private buildCryptoToFiatResponse(amount: number, totalValue: number, price: number, cryptoSymbol: string, fiatSymbol: string, lastUpdated: Date): string {
     return `💱 <b>汇率</b>\n\n` +
-      `<code>${this.formatAmount(amount)} ${cryptoSymbol} ≈</code>\n` +
-      `<code>${this.formatAmount(totalValue)} ${fiatSymbol}</code>\n\n` +
-      `💎 <b>当前汇率:</b> <code>1 ${cryptoSymbol} = ${this.formatPrice(price)} ${fiatSymbol}</code>\n` +
+      `${codeTag(`${this.formatAmount(amount)} ${cryptoSymbol} ≈`)}\n` +
+      `${codeTag(`${this.formatAmount(totalValue)} ${fiatSymbol}`)}\n\n` +
+      `💎 <b>当前汇率:</b> ${codeTag(`1 ${cryptoSymbol} = ${this.formatPrice(price)} ${fiatSymbol}`)}\n` +
       `⏰ <b>数据更新:</b> ${lastUpdated.toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' })}`;
   }
 
   private buildPriceResponse(price: number, cryptoSymbol: string, fiatSymbol: string, lastUpdated: Date): string {
     return `💱 <b>汇率</b>\n\n` +
-      `<code>1 ${cryptoSymbol} = ${this.formatPrice(price)} ${fiatSymbol}</code>\n\n` +
+      `${codeTag(`1 ${cryptoSymbol} = ${this.formatPrice(price)} ${fiatSymbol}`)}\n\n` +
       `⏰ <b>数据更新:</b> ${lastUpdated.toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' })}`;
   }
 
@@ -711,7 +713,7 @@ class RatePlugin extends Plugin {
       } catch (error: any) {
         console.error(`[RatePlugin] 价格获取详细错误:`, error);
         await msg.edit({
-          text: `❌ <b>获取价格失败:</b> ${error.message}\n\n🔍 <b>调试信息:</b>\n• ${currency1.symbol} (${currency1.type})\n• ${currency2.symbol} (${currency2.type})`,
+          text: `❌ <b>获取价格失败:</b> ${htmlEscape(error.message)}\n\n🔍 <b>调试信息:</b>\n• ${htmlEscape(currency1.symbol)} (${htmlEscape(currency1.type)})\n• ${htmlEscape(currency2.symbol)} (${htmlEscape(currency2.type)})`,
           parseMode: "html"
         });
         return;
