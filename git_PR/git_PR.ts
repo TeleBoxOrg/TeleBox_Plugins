@@ -53,11 +53,11 @@ const pluginName = "git";
 const help_text = `⚙️ <b>Git PR 管理插件</b>
 
 <b>命令:</b>
-• <code>${mainPrefix}${pluginName} login ＜邮箱＞ ＜用户名＞ ＜Token＞</code> - 登录Git
+• <code>${mainPrefix}${pluginName} login &lt;邮箱&gt; &lt;用户名&gt; &lt;Token&gt;</code> - 登录Git
 • <code>${mainPrefix}${pluginName} repos</code> - 列出有编辑权限的仓库
-• <code>${mainPrefix}${pluginName} prs ＜仓库名＞</code> - 列出仓库的PR
-• <code>${mainPrefix}${pluginName} merge ＜仓库名＞ ＜PR编号＞</code> - 合并PR
-• <code>${mainPrefix}${pluginName} mergeall ＜仓库名＞</code> - 按序号合并所有可合并的PR
+• <code>${mainPrefix}${pluginName} prs &lt;仓库名&gt;</code> - 列出仓库的PR
+• <code>${mainPrefix}${pluginName} merge &lt;仓库名&gt; &lt;PR编号&gt;</code> - 合并PR
+• <code>${mainPrefix}${pluginName} mergeall &lt;仓库名&gt;</code> - 按序号合并所有可合并的PR
 • <code>${mainPrefix}${pluginName} help</code> - 显示此帮助消息`;
 
 // 配置键
@@ -194,7 +194,7 @@ class GitManagerPlugin extends Plugin {
 
   private async handleLogin(msg: Api.Message, args: string[]) {
     if (args.length < 3) {
-        await msg.edit({ text: `❌ <b>参数不足</b>\n\n<b>格式:</b> <code>${mainPrefix}${pluginName} login ＜邮箱＞ ＜用户名＞ ＜Token＞</code>`, parseMode: "html" });
+        await msg.edit({ text: `❌ <b>参数不足</b>\n\n<b>格式:</b> <code>${mainPrefix}${pluginName} login &lt;邮箱&gt; &lt;用户名&gt; &lt;Token&gt;</code>`, parseMode: "html" });
       return;
     }
 
