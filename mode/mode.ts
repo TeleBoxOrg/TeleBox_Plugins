@@ -23,6 +23,12 @@ const mainPrefix = prefixes[0];
 const pluginName = "mode";
 const commandName = `${mainPrefix}${pluginName}`;
 
+const htmlEscape = (text: string): string =>
+  String(text).replace(/[&<>"']/g, (m) => ({
+    "&": "&amp;", "<": "&lt;", ">": "&gt;",
+    '"': "&quot;", "'": "&#x27;",
+  }[m] || m));
+
 /* ===================== Help Menu ===================== */
 
 const help_text = `
@@ -239,7 +245,7 @@ class MessageModePlugin extends Plugin {
 
       case "list":
         await msg.edit({
-          text: `⚪ 白名单列表：\n<code>${list.join("\n") || "空"}</code>`,
+          text: `⚪ 白名单列表：\n<code>${htmlEscape(list.join("\n")) || "空"}</code>`,
           parseMode: "html",
         });
         return;
@@ -276,7 +282,7 @@ class MessageModePlugin extends Plugin {
 
       case "list":
         await msg.edit({
-          text: `⚫ 黑名单列表：\n<code>${list.join("\n") || "空"}</code>`,
+          text: `⚫ 黑名单列表：\n<code>${htmlEscape(list.join("\n")) || "空"}</code>`,
           parseMode: "html",
         });
         return;
