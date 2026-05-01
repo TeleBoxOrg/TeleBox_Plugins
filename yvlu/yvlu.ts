@@ -268,6 +268,17 @@ function getWebPDimensions(imageBuffer: any): {
   }
 }
 
+const htmlEscape = (text: string): string =>
+  text.replace(/[&<>"']/g, (m) => ({
+    "&": "&amp;",
+    "<": "&lt;",
+    ">": "&gt;",
+    '"': "&quot;",
+    "'": "&#x27;",
+  }[m] || m));
+
+const codeTag = (text: string): string => `<code>${htmlEscape(text)}</code>`;
+
 const getPeerNumericId = (peer?: Api.TypePeer): number | undefined => {
   if (!peer) return undefined;
   if (peer instanceof Api.PeerUser) return peer.userId;
@@ -1036,7 +1047,7 @@ class YvluPlugin extends Plugin {
             console.log("[yvlu] 文件发送成功");
           } catch (fileError) {
             console.error(`发送文件失败: ${fileError}`);
-            await msg.edit({ text: `发送文件失败: ${fileError}` });
+            await msg.edit({ text: `发送文件失败: ${htmlEscape(String(fileError))}`, parseMode: "html" });
             return;
           }
 
@@ -1046,7 +1057,7 @@ class YvluPlugin extends Plugin {
           console.log(`语录生成耗时: ${end - start}ms`);
         } catch (error) {
           console.error(`语录生成失败: ${error}`);
-          await msg.edit({ text: `语录生成失败: ${error}` });
+          await msg.edit({ text: `语录生成失败: ${htmlEscape(String(error))}`, parseMode: "html" });
         }
       } else {
         await msg.edit({
@@ -1067,17 +1078,16 @@ class YvluPlugin extends Plugin {
         const configInfo = `
 <b>📋 当前配置:</b>
 
-<b>贴纸包名称:</b> <code>${
-          this.config?.stickerSetShortName || "(未设置)"
-        }</code>
+        <b>贴纸包名称:</b> ${codeTag(this.config?.stickerSetShortName || "(未设置)")}
 ${
   this.config?.stickerSetShortName
-    ? `<b>贴纸包链接:</b> t.me/addstickers/${this.config.stickerSetShortName}`
+    ? `<b>贴纸包链接:</b> t.me/addstickers/${htmlEscape(this.config.stickerSetShortName)}`
     : ""
 }
 
 <b>配置文件路径:</b>
-<code>${this.configPath}</code>
+${codeTag(this.configPath)}
+
 
 <b>可用配置命令:</b>
 <code>${commandName} config sticker 贴纸包名称</code> - 设置贴纸包名称
@@ -1138,7 +1148,7 @@ ${
           await this.loadConfig();
 
           await msg.edit({
-            text: `✅ 贴纸包名称已设置为: <code>${newName}</code>\n贴纸包链接: t.me/addstickers/${newName}`,
+            text: `✅ 贴纸包名称已设置为: ${codeTag(newName)}\n贴纸包链接: t.me/addstickers/${htmlEscape(newName)}`,
             parseMode: "html",
           });
           break;
@@ -1146,14 +1156,15 @@ ${
 
         default:
           await msg.edit({
-            text: `❌ 未知的配置项: <code>${subCommand}</code>\n\n可用配置命令:\n<code>${commandName} config sticker 贴纸包名称</code> - 设置贴纸包名称`,
+            text: `❌ 未知的配置项: ${codeTag(subCommand)}\n\n可用配置命令:\n<code>${commandName} config sticker 贴纸包名称</code> - 设置贴纸包名称`,
             parseMode: "html",
           });
       }
     } catch (error: any) {
       console.error("处理配置命令失败:", error);
       await msg.edit({
-        text: `❌ 配置操作失败: ${error.message || error}`,
+        text: `❌ 配置操作失败: ${htmlEscape(error.message || String(error))}`,
+        parseMode: "html",
       });
     }
   }
@@ -1191,7 +1202,8 @@ ${
         this.config.stickerSetShortName.trim() === ""
       ) {
         await msg.edit({
-          text: `❌ 未配置贴纸包!\n请编辑配置文件: ${this.configPath}\n设置 stickerSetShortName`,
+          text: `❌ 未配置贴纸包!\n请编辑配置文件: ${htmlEscape(this.configPath)}\n设置 stickerSetShortName`,
+          parseMode: "html",
         });
         return;
       }
@@ -1282,12 +1294,14 @@ ${
           );
 
           await msg.edit({
-            text: `✅ 已成功添加到贴纸包!\n贴纸包: t.me/addstickers/${this.config.stickerSetShortName}`,
+            text: `✅ 已成功添加到贴纸包!\n贴纸包: t.me/addstickers/${htmlEscape(this.config.stickerSetShortName)}`,
+            parseMode: "html",
           });
         } catch (error: any) {
           console.error("添加贴纸失败:", error);
           await msg.edit({
-            text: `❌ 添加贴纸失败: ${error.message || error}`,
+            text: `❌ 添加贴纸失败: ${htmlEscape(error.message || String(error))}`,
+            parseMode: "html",
           });
         }
         return;
@@ -1333,12 +1347,14 @@ ${
           );
 
           await msg.edit({
-            text: `✅ 已成功添加到贴纸包!\n贴纸包: t.me/addstickers/${this.config.stickerSetShortName}`,
+            text: `✅ 已成功添加到贴纸包!\n贴纸包: t.me/addstickers/${htmlEscape(this.config.stickerSetShortName)}`,
+            parseMode: "html",
           });
         } catch (error: any) {
           console.error("处理图片失败:", error);
           await msg.edit({
-            text: `❌ 处理图片失败: ${error.message || error}`,
+            text: `❌ 处理图片失败: ${htmlEscape(error.message || String(error))}`,
+            parseMode: "html",
           });
         }
         return;
@@ -1346,7 +1362,8 @@ ${
     } catch (error: any) {
       console.error("保存贴纸到贴纸包失败:", error);
       await msg.edit({
-        text: `❌ 操作失败: ${error.message || error}`,
+        text: `❌ 操作失败: ${htmlEscape(error.message || String(error))}`,
+        parseMode: "html",
       });
     }
   }
@@ -1410,14 +1427,16 @@ ${
       );
 
       await msg.edit({
-        text: `✅ 已创建贴纸包并添加第一个贴纸!\n贴纸包: t.me/addstickers/${
+        text: `✅ 已创建贴纸包并添加第一个贴纸!\n贴纸包: t.me/addstickers/${htmlEscape(
           this.config!.stickerSetShortName
-        }`,
+        )}`,
+        parseMode: "html",
       });
     } catch (error: any) {
       console.error("创建贴纸包失败:", error);
       await msg.edit({
-        text: `❌ 创建贴纸包失败: ${error.message || error}`,
+        text: `❌ 创建贴纸包失败: ${htmlEscape(error.message || String(error))}`,
+        parseMode: "html",
       });
     }
   }
