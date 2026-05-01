@@ -788,8 +788,8 @@ class PrometheusPlugin extends Plugin {
     };
     
     if (caption && type !== 'voice' && type !== 'sticker') {
-      sendOptions.caption = caption;
-      sendOptions.parseMode = caption.includes('<') ? 'html' : undefined;
+      sendOptions.caption = htmlEscape(caption);
+      sendOptions.parseMode = 'html';
     }
     
     if (replyMsg) {
@@ -843,8 +843,8 @@ class PrometheusPlugin extends Plugin {
           if (text) {
             // 发送文本消息，获取发送的消息
             forwardedMessage = await client.sendMessage(targetPeer, {
-              message: text,
-              parseMode: sourceMsg.text?.includes('<') ? 'html' : undefined
+              message: htmlEscape(text),
+              parseMode: 'html'
             });
             
             await this.safeEditMessage(replyMsg, `${progress}✅ 文本内容已发送`, true);
@@ -1301,7 +1301,7 @@ class PrometheusPlugin extends Plugin {
               });
             }
           } else {
-            await this.safeEditMessage(msg, `❌ 无法获取消息: ${link}`, true);
+            await this.safeEditMessage(msg, `❌ 无法获取消息: <code>${htmlEscape(link)}</code>`, true);
             return;
           }
         }
