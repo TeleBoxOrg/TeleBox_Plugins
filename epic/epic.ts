@@ -111,7 +111,7 @@ function buildGameText(game: EpicGame, index: number): string {
   const desc = game.description.length > 100 ? htmlEscape(game.description.slice(0, 100)) + "..." : htmlEscape(game.description);
   const start = formatDate(game.startDate);
   const end = formatDate(game.endDate);
-  const link = game.url ? `<a href="${game.url}">🔗 领取</a>` : "";
+  const link = game.url ? `<a href="${htmlEscape(game.url)}">🔗 领取</a>` : "";
 
   return `<b>${index}. ${title}</b>
 💰 原价: <code>${htmlEscape(game.originalPrice)}</code> → <b>免费</b>
