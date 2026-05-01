@@ -18,6 +18,19 @@ const help_text = `
 使用 <code>${commandName} rm/remove</code> 回复一条消息, <code>${commandName} rm/remove 用户ID/用户名</code> 将用户移除管理员
 <code>${commandName} ls/list</code> 查看当前对话所有管理员
 `;
+
+function htmlEscape(text: string): string {
+  return text
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#x27;");
+}
+
+function codeTag(text: string | number): string {
+  return `<code>${htmlEscape(String(text))}</code>`;
+}
 async function formatEntity(
   target: any,
   mention?: boolean,
@@ -49,7 +62,7 @@ async function formatEntity(
   if (entity?.lastName) displayParts.push(entity.lastName);
   if (entity?.username)
     displayParts.push(
-      mention ? `@${entity.username}` : `<code>@${entity.username}</code>`
+      mention ? `@${htmlEscape(entity.username)}` : codeTag(`@${entity.username}`)
     );
 
   if (id) {
@@ -59,7 +72,7 @@ async function formatEntity(
         : `<a href="https://t.me/c/${id}">${id}</a>`
     );
   } else if (!target?.className) {
-    displayParts.push(`<code>${target}</code>`);
+    displayParts.push(codeTag(target));
   }
 
   return {
@@ -314,7 +327,7 @@ class ManageAdminPlugin extends Plugin {
               `已设置管理员: ${u.display}` +
               (rankToUse
                 ? rankOk
-                  ? `，头衔：<code>${rankToUse}</code>`
+                  ? `，头衔：${codeTag(rankToUse)}`
                   : `，但头衔未更新。` +
                     (selfIsCreator
                       ? `可能原因：非超级群或系统暂未同步。`
@@ -329,7 +342,7 @@ class ManageAdminPlugin extends Plugin {
               ? "\n可能原因：目标不是当前对话中的用户、匿名管理员、或仅提供了数字ID且无法解析。请改为回复该用户的消息或使用 @用户名。"
               : "";
           await msg.edit({
-            text: `设置管理员失败：<code>${e?.message || e}</code>${extra}`,
+            text: `设置管理员失败：${codeTag(e?.message || e)}${extra}`,
             parseMode: "html",
           });
         }
@@ -375,7 +388,7 @@ class ManageAdminPlugin extends Plugin {
               ? "\n可能原因：目标不是当前对话中的用户、匿名管理员、或仅提供了数字ID且无法解析。请改为回复该用户的消息或使用 @用户名。"
               : "";
           await msg.edit({
-            text: `移除管理员失败：<code>${e?.message || e}</code>${extra}`,
+            text: `移除管理员失败：${codeTag(e?.message || e)}${extra}`,
             parseMode: "html",
           });
         }
@@ -415,16 +428,16 @@ class ManageAdminPlugin extends Plugin {
             let display = "";
             if (user) {
               const parts: string[] = [];
-              if (user.firstName) parts.push(user.firstName);
-              if (user.lastName) parts.push(user.lastName);
-              if (user.username) parts.push(`<code>@${user.username}</code>`);
+              if (user.firstName) parts.push(htmlEscape(user.firstName));
+              if (user.lastName) parts.push(htmlEscape(user.lastName));
+              if (user.username) parts.push(codeTag(`@${user.username}`));
               parts.push(`<a href="tg://user?id=${uid}">${uid}</a>`);
               display = parts.join(" ");
             } else {
               display = `<a href=\"tg://user?id=${uid}\">${uid}</a>`;
             }
             lines.push(
-              `- ${display}${rank ? ` | 头衔: <code>${rank}</code>` : ""}`
+              `- ${display}${rank ? ` | 头衔: ${codeTag(rank)}` : ""}`
             );
           }
 
@@ -434,7 +447,7 @@ class ManageAdminPlugin extends Plugin {
           });
         } catch (e: any) {
           await msg.edit({
-            text: `获取管理员列表失败：<code>${e?.message || e}</code>`,
+            text: `获取管理员列表失败：${codeTag(e?.message || e)}`,
             parseMode: "html",
           });
         }
