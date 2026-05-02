@@ -379,10 +379,12 @@ class PrometheusPlugin extends Plugin {
         blocks.push(`⏹ <b>结尾消息</b>\n${this.formatSourceLine(endTitle, endSource.chatId, endSource.messageId)}`);
       }
 
+      const replyTo = forwardedMsg.replyTo?.replyToTopId || forwardedMsg.id;
+
       await client.sendMessage(targetPeer, {
         message: `🔗 <b>范围保存来源</b>\n\n${blocks.join('\n\n')}`,
         parseMode: 'html',
-        replyTo: forwardedMsg.id
+        replyTo,
       });
     } catch (error) {
       console.error(`发送范围来源消息失败:`, error);
