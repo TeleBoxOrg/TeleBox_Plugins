@@ -129,7 +129,7 @@ tpm i <插件名>
 - **开发语言**: TypeScript
 - **数据库**: Lowdb
 - **任务调度**: node-schedule
-- **Telegram API**: telegram (GramJS)
+- **Telegram API**: Teleproto
 - **图像处理**: Sharp
 - **其他依赖**: axios, lodash 等
   
