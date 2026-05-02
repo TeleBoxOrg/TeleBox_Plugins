@@ -240,22 +240,6 @@ ${recentErrors ? `<b>⚠️ 最近错误:</b>\n${recentErrors}` : ""}`;
   }
 };
 
-// 计算已用时间
-const calculateElapsedTime = (task: DeleteTask): string => {
-  const elapsed = Date.now() - task.startTime;
-  const hours = Math.floor(elapsed / 3600000);
-  const minutes = Math.floor((elapsed % 3600000) / 60000);
-  const seconds = Math.floor((elapsed % 60000) / 1000);
-  
-  if (hours > 0) {
-    return `${hours}小时 ${minutes}分钟 ${seconds}秒`;
-  } else if (minutes > 0) {
-    return `${minutes}分钟 ${seconds}秒`;
-  } else {
-    return `${seconds}秒`;
-  }
-};
-
 // 高速删除批处理（极简版）
 const fastDeleteBatch = async (
   client: TelegramClient,
@@ -480,8 +464,6 @@ const da = async (msg: Api.Message) => {
 
     // 批处理配置
     const BATCH_SIZE = 100;
-    let floodWaitTime = 0;
-    let consecutiveErrors = 0;
 
     if (isAdmin) {
       // 管理员模式：使用传统遍历删除所有消息
