@@ -37,12 +37,9 @@ class KeepOnlinePlugin extends Plugin {
       description: `${help_text}`,
       handler: async (client: Api.Client) => {
         try {
-          // const isConnected = client?.connected === true;
-          const dialogs = await client.getDialogs({});
-          if (dialogs) {
-            const timestamp = Date.now() / 1000;
-            fs.writeFileSync(file, `${timestamp.toFixed(0)}`, "utf-8");
-          }
+          await client.getMe();
+          const timestamp = Date.now() / 1000;
+          fs.writeFileSync(file, `${timestamp.toFixed(0)}`, "utf-8");
         } catch (e) {}
       },
     },
