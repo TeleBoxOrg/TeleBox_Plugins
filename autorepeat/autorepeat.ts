@@ -46,6 +46,24 @@ const HELP_TEXT = `<b>自动复读插件使用说明</b>
 • <b>忽略规则</b>：匿名消息、非文本消息、自己发送的消息、机器人消息会被忽略
 `;
 
+async function getAllManageableGroupIds(client: TelegramClient): Promise<number[]> {
+  const dialogsById = new Map<number, any>();
+
+  const collectDialogs = async (params: Record<string, any>) => {
+    const dialogs = await client.getDialogs(params);
+    for (const dialog of dialogs || []) {
+      if (dialog.isGroup || (dialog.isChannel && (dialog.entity as any)?.megagroup)) {
+        dialogsById.set(Number(dialog.id), dialog);
+      }
+    }
+  };
+
+  await collectDialogs({});
+  await collectDialogs({ folderId: 1 });
+
+  return Array.from(dialogsById.keys());
+}
+
 // ==================== 缓存管理器 ====================
 type CacheData = {
   cache: Record<string, any>;
@@ -555,14 +573,7 @@ class CommandHandlers {
       // .autorepeat allon - 开启全部群组
       if (action === "allon") {
         await MessageManager.smartEdit(message, "🔄 正在扫描所有群组...", 0);
-        const dialogs = await client.getDialogs();
-        const groupIds: number[] = [];
-
-        for (const dialog of dialogs) {
-          if (dialog.isGroup || (dialog.isChannel && (dialog.entity as any)?.megagroup)) {
-            groupIds.push(Number(dialog.id));
-          }
-        }
+        const groupIds = await getAllManageableGroupIds(client);
         await AutoRepeatManager.enableAll(groupIds);
         await MessageManager.smartEdit(message, `✅ 已开启 ${groupIds.length} 个群组的自动复读`);
         return;
