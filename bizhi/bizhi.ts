@@ -317,7 +317,7 @@ class BizhiPlugin extends Plugin {
           // 发送为文件
           await client.sendFile(msg.peerId, {
             file,
-            replyTo: msg.id,
+            replyTo: msg.replyTo?.replyToTopId || msg.id,
             caption: `📁 源文件: ${source}`,
             forceDocument: true // 强制作为文档发送
           });
@@ -325,7 +325,7 @@ class BizhiPlugin extends Plugin {
           // 发送为图片
           await client.sendFile(msg.peerId, {
             file,
-            replyTo: msg.id,
+            replyTo: msg.replyTo?.replyToTopId || msg.id,
             caption: `📸 来源: ${source}`
           });
         }
