@@ -91,17 +91,25 @@ const getRepliedMessageText = async (msg: Api.Message): Promise<string> => {
 
 const getRepliedMessageId = async (msg: Api.Message): Promise<number | undefined> => {
   try {
+    const typedMsg = msg as Api.Message & {
+      replyTo?: { replyToMsgId?: number; replyToTopId?: number; replyToMsg?: { id?: number } };
+      replyToMsgId?: number;
+    };
     const id =
-      (msg as any)?.replyTo?.replyToMsgId ??
-      (msg as any)?.replyToMsgId ??
-      (msg as any)?.replyTo?.replyToMsg?.id;
+      typedMsg.replyTo?.replyToTopId ??
+      typedMsg.replyTo?.replyToMsgId ??
+      typedMsg.replyToMsgId ??
+      typedMsg.replyTo?.replyToMsg?.id;
 
     if (typeof id === "number") return id;
 
     const getter = (msg as any).getReplyMessage;
     if (typeof getter === "function") {
       const replied = await getter.call(msg);
-      const rid = (replied as any)?.id;
+      const typedReply = replied as Api.Message & {
+        replyTo?: { replyToTopId?: number };
+      };
+      const rid = typedReply.replyTo?.replyToTopId ?? typedReply.id;
       if (typeof rid === "number") return rid;
     }
   } catch {}
@@ -136,23 +144,38 @@ class MessageSender {
     replyToId?: number,
     linkPreview: boolean = false
   ): Promise<Api.Message | undefined> {
+    const topicRootId = getTopicRootId(msg);
+    const replyTo =
+      replyToId && topicRootId && replyToId !== topicRootId
+        ? new Api.InputReplyToMessage({
+            replyToMsgId: replyToId,
+            topMsgId: topicRootId,
+          })
+        : replyToId ?? topicRootId;
+
     return await (msg.client as any).sendMessage(msg.chatId || msg.peerId, {
       message: text,
       parseMode,
-      ...(replyToId ? { replyTo: replyToId } : {}),
+      ...(replyTo ? { replyTo } : {}),
       linkPreview,
     });
   }
 }
 
+const getTopicRootId = (msg: Api.Message): number | undefined => {
+  const typedMsg = msg as Api.Message & {
+    replyTo?: { replyToTopId?: number; replyToMsgId?: number };
+    replyToMsgId?: number;
+  };
+  return typedMsg.replyTo?.replyToTopId ?? typedMsg.replyTo?.replyToMsgId ?? typedMsg.replyToMsgId;
+};
+
 class DeepWikiStore {
   private dbMain: any;
   private dbCtx: any;
 
-  private static readonly GLOBAL_CHAT_KEY = "__global__";
-
-  private gk(_: string): string {
-    return DeepWikiStore.GLOBAL_CHAT_KEY;
+  private gk(chatKey: string): string {
+    return chatKey || "unknown";
   }
 
   async init(): Promise<void> {
@@ -165,20 +188,12 @@ class DeepWikiStore {
     this.dbMain.data ||= { chats: {}, telegraphToken: "" };
     this.dbMain.data.chats ||= {};
     this.dbMain.data.telegraphToken ||= "";
-
-    if (!this.dbMain.data.chats[DeepWikiStore.GLOBAL_CHAT_KEY]) {
-      this.dbMain.data.chats[DeepWikiStore.GLOBAL_CHAT_KEY] = { currentTag: "", repos: {} };
-    }
     await this.dbMain.write();
 
     this.dbCtx = await JSONFilePreset<CtxDB>(ctxFile, { chats: {} });
     await this.dbCtx.read();
     this.dbCtx.data ||= { chats: {} };
     this.dbCtx.data.chats ||= {};
-
-    if (!this.dbCtx.data.chats[DeepWikiStore.GLOBAL_CHAT_KEY]) {
-      this.dbCtx.data.chats[DeepWikiStore.GLOBAL_CHAT_KEY] = { contextEnabled: false, contextTurns: {} };
-    }
     await this.dbCtx.write();
   }
 
@@ -387,28 +402,14 @@ class DeepWikiMcp {
   private async ensureConnected(): Promise<void> {
     if (this.client) return;
     if (this.connecting) return await this.connecting;
+
     this.connecting = (async () => {
       const transport = new StreamableHTTPClientTransport(new URL("https://mcp.deepwiki.com/mcp"));
-      const client = new Client({ name: "telebox-deepwiki", version: "0.5.1" }, { capabilities: {} });
-      await client.connect(transport);
+      const client = new Client({ name: "telebox-deepwiki", version: "1.0.0" });
+      await client.connect(transport as any);
       this.client = client;
-      const tools = await client.listTools();
-      const ask = tools?.tools?.find((t: any) => t?.name === "ask_question");
-      const props = ask?.inputSchema?.properties || {};
-      const keys = Object.keys(props);
-      this.repoKey =
-        keys.find((k) => /repo/i.test(k)) ||
-        keys.find((k) => /repository/i.test(k)) ||
-        keys.find((k) => /project/i.test(k)) ||
-        keys[0] ||
-        "repo";
-      this.questionKey =
-        keys.find((k) => /question/i.test(k)) ||
-        keys.find((k) => /query/i.test(k)) ||
-        keys.find((k) => /prompt/i.test(k)) ||
-        keys[1] ||
-        "question";
     })();
+
     try {
       await this.connecting;
     } finally {
@@ -417,90 +418,160 @@ class DeepWikiMcp {
   }
 
   async ask(repo: string, question: string): Promise<string> {
-    await this.ensureConnected();
-    if (!this.client) throw new Error("DeepWiki MCP client not ready");
-    const args: Record<string, any> = {
-      [this.repoKey || "repo"]: repo,
-      [this.questionKey || "question"]: question,
-    };
-    const res = await this.client.callTool({ name: "ask_question", arguments: args });
-    const text = this.extractText(res);
-    const cleaned = this.stripWikiExploreTail(text);
-    return cleaned || "DeepWiki 未返回可用文本结果（可能项目未被索引或暂时不可用）";
+    const repoKey = repo.trim();
+    const questionKey = question.trim();
+    if (!repoKey) throw new Error("缺少仓库信息");
+    if (!questionKey) throw new Error("问题不能为空");
+
+    if (!this.client || this.repoKey !== repoKey || this.questionKey !== questionKey) {
+      this.client = null;
+      this.repoKey = null;
+      this.questionKey = null;
+      await this.ensureConnected();
+      this.repoKey = repoKey;
+      this.questionKey = questionKey;
+    }
+
+    const result = await this.client.callTool({
+      name: "ask_question",
+      arguments: {
+        repoName: repoKey,
+        question: questionKey,
+      },
+    });
+
+    const text = this.stripWikiExploreTail(this.extractText(result));
+    if (!text) throw new Error("DeepWiki 返回为空");
+    return text;
   }
 
   async close(): Promise<void> {
-    try {
-      await this.client?.close();
-    } catch {}
-    this.client = null;
-    this.connecting = null;
+    if (this.client) {
+      await this.client.close();
+      this.client = null;
+      this.repoKey = null;
+      this.questionKey = null;
+    }
   }
 }
 
-const normalizeTag = (tag: string): string => tag.trim().replace(/^@/, "").replace(/\s+/g, "-");
+const isHttpUrl = (v: string): boolean => /^https?:\/\//i.test(v.trim());
 
-const parseRepoFromUrl = (url: string): { repo: string; canonicalUrl: string } | null => {
+const normalizeTag = (v: string): string => v.trim();
+
+const parseRepoFromUrl = (raw: string): { repo: string; canonicalUrl: string } | null => {
   try {
-    const u = new URL(url);
-    const host = u.hostname.toLowerCase();
-    if (host === "deepwiki.com") {
-      const parts = u.pathname.split("/").filter(Boolean);
+    const input = raw.trim();
+    if (!input) return null;
+    const url = new URL(input);
+
+    if (url.hostname === "github.com") {
+      const parts = url.pathname.split("/").filter(Boolean);
+      if (parts.length < 2) return null;
+      const owner = parts[0];
+      const repoName = parts[1].replace(/\.git$/i, "");
+      return {
+        repo: `${owner}/${repoName}`,
+        canonicalUrl: `https://github.com/${owner}/${repoName}`,
+      };
+    }
+
+    if (url.hostname === "deepwiki.com") {
+      const parts = url.pathname.split("/").filter(Boolean);
+      if (parts.length >= 3 && parts[0] === "browse" && parts[1] === "github.com") {
+        const owner = parts[2];
+        const repoName = parts[3]?.replace(/\.git$/i, "");
+        if (!owner || !repoName) return null;
+        return {
+          repo: `${owner}/${repoName}`,
+          canonicalUrl: `https://deepwiki.com/browse/github.com/${owner}/${repoName}`,
+        };
+      }
       if (parts.length >= 2) {
         const owner = parts[0];
-        const repo = parts[1];
-        const full = `${owner}/${repo}`;
-        return { repo: full, canonicalUrl: `https://deepwiki.com/${owner}/${repo}` };
+        const repoName = parts[1].replace(/\.git$/i, "");
+        return {
+          repo: `${owner}/${repoName}`,
+          canonicalUrl: `https://deepwiki.com/${owner}/${repoName}`,
+        };
       }
-      return null;
     }
-    if (host === "github.com") {
-      const parts = u.pathname.split("/").filter(Boolean);
-      if (parts.length >= 2) {
-        const owner = parts[0];
-        const repo = parts[1].replace(/\.git$/i, "");
-        const full = `${owner}/${repo}`;
-        return { repo: full, canonicalUrl: `https://deepwiki.com/${owner}/${repo}` };
-      }
-      return null;
-    }
-    return null;
   } catch {
     return null;
   }
+  return null;
 };
 
-const buildQuestionWithContext = (turns: ContextTurn[], question: string): { finalQuestion: string; dropped: number } => {
-  const header = "以下是我们的历史问答上下文，请在回答时参考；若上下文与仓库事实冲突，以仓库内容为准。\n\n";
-  const tail = `现在的问题：\nQ: ${question}\n`;
-  let safeTail = tail;
-  if (header.length + safeTail.length > MAX_DEEPWIKI_LEN) {
-    const keep = Math.max(0, MAX_DEEPWIKI_LEN - header.length);
-    safeTail = safeTail.slice(safeTail.length - keep);
+const splitMarkdownSections = (text: string): string[] => {
+  const sections = text.split(/\n(?=#+\s)/).map((s) => s.trim()).filter(Boolean);
+  return sections.length ? sections : [text.trim()];
+};
+
+const truncateBySections = (text: string, maxLen: number): { text: string; dropped: number } => {
+  if (text.length <= maxLen) return { text, dropped: 0 };
+  const sections = splitMarkdownSections(text);
+  if (sections.length === 1) {
+    const slice = text.slice(0, maxLen - 1).trimEnd() + "…";
+    return { text: slice, dropped: 0 };
   }
-  const renderTurns = (ts: ContextTurn[]) =>
-    ts
-      .map((t, idx) => {
-        const n = idx + 1;
-        return `[历史问答 ${n}]\nQ: ${t.q}\nA: ${t.a}\n`;
-      })
-      .join("\n");
-  let working = turns.slice();
+
+  const kept: string[] = [];
+  let total = 0;
   let dropped = 0;
-  const assemble = () => {
-    const ctx = working.length ? renderTurns(working) + "\n\n" : "";
-    return header + ctx + safeTail;
-  };
-  let finalText = assemble();
-  while (finalText.length > MAX_DEEPWIKI_LEN && working.length > 0) {
-    working.shift();
-    dropped++;
-    finalText = assemble();
+  for (const sec of sections) {
+    const cost = (kept.length ? 2 : 0) + sec.length;
+    if (total + cost > maxLen) {
+      dropped += 1;
+      continue;
+    }
+    kept.push(sec);
+    total += cost;
   }
-  if (finalText.length > MAX_DEEPWIKI_LEN) {
-    finalText = finalText.slice(finalText.length - MAX_DEEPWIKI_LEN);
+  const out = kept.join("\n\n").trim();
+  return { text: out || text.slice(0, maxLen - 1).trimEnd() + "…", dropped };
+};
+
+const buildQuestionWithContext = (turns: ContextTurn[], userQuestion: string): { finalQuestion: string; dropped: number } => {
+  if (!turns.length) return { finalQuestion: userQuestion, dropped: 0 };
+
+  let dropped = 0;
+  const lines: string[] = ["你正在延续一个多轮问答。以下是最近对话上下文，请只把它们当作参考："];
+
+  for (let i = 0; i < turns.length; i++) {
+    const t = turns[i];
+    const q = truncateBySections(t.q, 4000).text;
+    const a = truncateBySections(t.a, 12000).text;
+    lines.push(`Q${i + 1}:\n${q}`);
+    lines.push(`A${i + 1}:\n${a}`);
   }
-  return { finalQuestion: finalText, dropped };
+
+  lines.push(`当前问题:\n${userQuestion}`);
+  let finalQuestion = lines.join("\n\n");
+  if (finalQuestion.length <= MAX_DEEPWIKI_LEN) {
+    return { finalQuestion, dropped };
+  }
+
+  const copy = turns.slice();
+  while (copy.length > 0) {
+    copy.shift();
+    dropped += 1;
+    const trimmedLines: string[] = ["你正在延续一个多轮问答。以下是最近对话上下文，请只把它们当作参考："];
+    for (let i = 0; i < copy.length; i++) {
+      const t = copy[i];
+      const q = truncateBySections(t.q, 4000).text;
+      const a = truncateBySections(t.a, 12000).text;
+      trimmedLines.push(`Q${i + 1}:\n${q}`);
+      trimmedLines.push(`A${i + 1}:\n${a}`);
+    }
+    trimmedLines.push(`当前问题:\n${userQuestion}`);
+    finalQuestion = trimmedLines.join("\n\n");
+    if (finalQuestion.length <= MAX_DEEPWIKI_LEN) {
+      return { finalQuestion, dropped };
+    }
+  }
+
+  const truncatedQuestion = truncateBySections(userQuestion, MAX_DEEPWIKI_LEN - 20).text;
+  return { finalQuestion: `当前问题:\n${truncatedQuestion}`, dropped: turns.length };
 };
 
 const buildQAHtml = (headerLines: string[], question: string, answerMarkdown: string, collapseSafe: boolean): string => {
@@ -561,8 +632,9 @@ class DeepWikiPlugin extends Plugin {
   private getChatKey(msg: Api.Message): string {
     const chatId = (msg as any).chatId;
     const peerId = (msg as any).peerId;
-    const key = toIdString(chatId) || toIdString(peerId);
-    return key || "unknown";
+    const baseKey = toIdString(chatId) || toIdString(peerId) || "unknown";
+    const topicRootId = getTopicRootId(msg);
+    return topicRootId ? `${baseKey}:topic:${topicRootId}` : baseKey;
   }
 
   private helpText(): string {
