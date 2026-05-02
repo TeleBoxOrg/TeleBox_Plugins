@@ -14,6 +14,29 @@ const htmlEscape = (text: string): string =>
     '"': '&quot;', "'": '&#x27;' 
   }[m] || m));
 
+async function getAllDialogs(client: any): Promise<any[]> {
+  const dialogMap = new Map<string, any>();
+
+  const collectDialogs = async (params: Record<string, any>) => {
+    try {
+      const dialogs = await client.getDialogs(params);
+      for (const dialog of dialogs || []) {
+        const key = `${dialog.id}`;
+        if (!dialogMap.has(key)) {
+          dialogMap.set(key, dialog);
+        }
+      }
+    } catch (error) {
+      console.error("[AnnualReport] 获取对话列表失败:", error);
+    }
+  };
+
+  await collectDialogs({});
+  await collectDialogs({ folderId: 1 });
+
+  return Array.from(dialogMap.values());
+}
+
 class AnnualReportPlugin extends Plugin {
   cleanup(): void {
     // 引用重置：清空实例级 db / cache / manager 引用，便于 reload 后重新初始化。
@@ -47,7 +70,7 @@ class AnnualReportPlugin extends Plugin {
     let privateCount = 0, groupCount = 0, botsCount = 0, channelCount = 0;
     
     try {
-      const dialogs = await client.getDialogs({});
+      const dialogs = await getAllDialogs(client);
       
       for (const dialog of dialogs) {
         if (dialog.isUser) {
@@ -63,7 +86,7 @@ class AnnualReportPlugin extends Plugin {
         }
       }
     } catch (error) {
-      console.error("[AnnualReport] 获取对话列表失败:", error);
+      console.error("[AnnualReport] 获取对话统计失败:", error);
     }
     
     return { private: privateCount, group: groupCount, bots: botsCount, channel: channelCount };
