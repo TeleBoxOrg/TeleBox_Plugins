@@ -649,7 +649,7 @@ ${Object.entries(PROXY_HOSTS).map(([key, value]) =>
                                 }),
                                 caption: item.caption,
                                 parseMode: 'html',
-                                replyTo: msg.replyTo?.replyToMsgId
+                                replyTo: msg.replyTo?.replyToTopId || msg.replyTo?.replyToMsgId
                             });
 
                         } catch (error: any) {
