@@ -297,6 +297,24 @@ class PermissionManager {
 class GroupManager {
   private static cache = CacheManager.getInstance();
 
+  private static async getAllManageableDialogs(client: TelegramClient): Promise<any[]> {
+    const dialogMap = new Map<number, any>();
+
+    const collectDialogs = async (params: Record<string, any>) => {
+      const dialogs = await client.getDialogs(params);
+      for (const dialog of dialogs || []) {
+        if (dialog.isChannel || dialog.isGroup) {
+          dialogMap.set(Number(dialog.id), dialog);
+        }
+      }
+    };
+
+    await collectDialogs({});
+    await collectDialogs({ folderId: 1 });
+
+    return Array.from(dialogMap.values());
+  }
+
   static async getManagedGroups(
     client: TelegramClient
   ): Promise<Array<{ id: number; title: string }>> {
@@ -307,7 +325,7 @@ class GroupManager {
     const groups: Array<{ id: number; title: string }> = [];
     
     try {
-      const dialogs = await client.getDialogs({ limit: 500 });
+      const dialogs = await this.getAllManageableDialogs(client);
       
       // 并发检查权限
       const checkPromises = dialogs.map(async (dialog: any) => {
@@ -330,8 +348,11 @@ class GroupManager {
       const results = await Promise.all(checkPromises);
       groups.push(...results.filter((g: any): g is { id: number; title: string } => g !== null));
       
-      // 缓存结果
-      await this.cache.set("managed_groups", groups);
+      try {
+        await this.cache.set("managed_groups", groups);
+      } catch (cacheError) {
+        console.error(`[GroupManager] 缓存群组失败: ${cacheError}`);
+      }
     } catch (error) {
       console.error(`[GroupManager] 获取群组失败: ${error}`);
     }
