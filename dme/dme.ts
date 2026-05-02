@@ -55,6 +55,8 @@ const mainPrefix = prefixes[0];
 const sleep = (ms: number): Promise<void> =>
   new Promise((resolve) => setTimeout(resolve, ms));
 
+const TEXT_PLACEHOLDER = "占位符";
+
 /**
  * 获取防撤回图片，支持缓存
  */
@@ -187,6 +189,39 @@ async function editMediaMessageToAntiRecall(
   }
 }
 
+async function editTextMessageToPlaceholder(
+  client: TelegramClient,
+  message: Api.Message,
+  chatEntity: any
+): Promise<boolean> {
+  if (message.media) {
+    return false;
+  }
+
+  const nowSec = Math.floor(Date.now() / 1000);
+  if (typeof (message as any).date === "number" && nowSec - (message as any).date > 172800) {
+    return false;
+  }
+
+  const currentText = typeof message.message === "string" ? message.message : "";
+  if (currentText === TEXT_PLACEHOLDER) {
+    return true;
+  }
+
+  try {
+    await client.invoke(
+      new Api.messages.EditMessage({
+        peer: chatEntity,
+        id: message.id,
+        message: TEXT_PLACEHOLDER,
+      })
+    );
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function isSavedMessagesPeer(chatEntity: any, myId: bigint): boolean {
   return (
     (chatEntity?.className === "User" && chatEntity?.id?.toString?.() === myId.toString()) ||
@@ -304,31 +339,220 @@ function isMyMessageByIdentity(
   return false;
 }
 
-function getTopicRootIdFromReplyHeader(replyHeader: any): number | undefined {
-  const topId =
-    replyHeader?.replyToTopId ??
-    replyHeader?.topMsgId ??
-    replyHeader?.replyToMsgId ??
-    replyHeader?.replyToMsg?.id;
-  return typeof topId === "number" ? topId : undefined;
+/**
+ * 增强的消息搜索函数 - 带容错机制
+ */
+async function searchMyMessagesOptimized(
+  client: TelegramClient,
+  chatEntity: any,
+  myId: bigint,
+  userRequestedCount: number
+): Promise<Api.Message[]> {
+  // 使用多种策略搜索用户消息，提高成功率
+  let allMessages: Api.Message[] = [];
+  const maxSearchCount = Math.max(
+    userRequestedCount * CONFIG.MAX_SEARCH_MULTIPLIER,
+    CONFIG.MIN_MAX_SEARCH
+  );
+
+  try {
+    // 策略1: 使用Search API搜索用户消息
+    const searchResult = await client.invoke(
+      new Api.messages.Search({
+        peer: chatEntity,
+        q: "",
+        fromId: await client.getInputEntity(myId.toString()),
+        filter: new Api.InputMessagesFilterEmpty(),
+        minDate: 0,
+        maxDate: 0,
+        offsetId: 0,
+        addOffset: 0,
+        limit: maxSearchCount,
+        maxId: 0,
+        minId: 0,
+        hash: 0 as any
+      })
+    );
+    
+    if ((searchResult as any).messages) {
+      allMessages = (searchResult as any).messages.filter(
+        (m: any) => m.className === "Message" && m.senderId?.toString() === myId.toString()
+      );
+      console.log(`[DME] Search API找到 ${allMessages.length} 条消息`);
+    }
+  } catch (searchError) {
+    console.log(`[DME] Search API失败，尝试GetHistory:`, searchError);
+  }
+
+  // 如果Search API结果不足，尝试GetHistory API
+  if (allMessages.length < userRequestedCount) {
+    try {
+      const history = await client.invoke(
+        new Api.messages.GetHistory({
+          peer: chatEntity,
+          offsetId: 0,
+          offsetDate: 0,
+          addOffset: 0,
+          limit: Math.min(maxSearchCount, 1000), // 避免单次请求过大
+          maxId: 0,
+          minId: 0,
+          hash: 0 as any,
+        })
+      );
+      
+      const historyMessages = (history as any).messages || [];
+      const myMessages = historyMessages.filter(
+        (m: any) =>
+          m.className === "Message" &&
+          (m.senderId?.toString() === myId.toString() ||
+            m.out === true)
+      );
+      
+      // 合并去重
+      const existingIds = new Set(allMessages.map(m => m.id));
+      for (const msg of myMessages) {
+        if (!existingIds.has(msg.id)) {
+          allMessages.push(msg);
+        }
+      }
+      
+      console.log(`[DME] GetHistory补充后总计 ${allMessages.length} 条消息`);
+    } catch (historyError) {
+      console.log(`[DME] GetHistory也失败:`, historyError);
+    }
+  }
+
+  // 按消息ID降序排序（最新的在前）
+  allMessages.sort((a, b) => b.id - a.id);
+  
+  return allMessages.slice(0, userRequestedCount);
+}
+
+/**
+ * 带重试机制的实体获取函数
+ */
+async function getEntityWithRetry(
+  client: TelegramClient,
+  entityId: string,
+  retryCount: number = 0
+): Promise<any> {
+  try {
+    return await client.getEntity(entityId);
+  } catch (error: any) {
+    if (retryCount < 2) {
+      console.log(`[DME] 获取实体失败，第 ${retryCount + 1} 次重试:`, error.message);
+      await sleep(1000 * (retryCount + 1));
+      return getEntityWithRetry(client, entityId, retryCount + 1);
+    }
+    throw error;
+  }
+}
+
+/**
+ * 通用实体解析器 - 增强版本
+ */
+async function resolveChatEntity(client: TelegramClient, chatId: string): Promise<any> {
+  console.log(`[DME] 开始解析聊天实体: ${chatId}`);
+
+  // 策略1: 优先使用主仓库共享的 accessHash 感知解析器，覆盖折叠/归档等缓存未预热场景
+  try {
+    const entity = await getEntityWithHash(client, chatId);
+    console.log(`[DME] getEntityWithHash 解析成功:`, entity.className);
+    return entity;
+  } catch (hashError: any) {
+    console.log(`[DME] getEntityWithHash 解析失败，继续多策略回退:`, hashError?.message || hashError);
+  }
+
+  // 策略2: 直接使用原始chatId尝试
+  try {
+    const entity = await getEntityWithRetry(client, chatId);
+    console.log(`[DME] 直接解析成功:`, entity.className);
+    return entity;
+  } catch (directError: any) {
+    console.log(`[DME] 直接解析失败:`, directError.message);
+  }
+
+  // 策略2: 尝试标准化群组ID格式
+  const normalizedIds = [chatId];
+  
+  // 如果是负数ID，尝试不同格式
+  if (chatId.startsWith("-100")) {
+    normalizedIds.push(chatId.substring(4));
+    normalizedIds.push(chatId.substring(1));
+  } else if (chatId.startsWith("-")) {
+    normalizedIds.push(chatId.substring(1));
+    normalizedIds.push(`-100${chatId.substring(1)}`);
+  } else {
+    normalizedIds.push(`-100${chatId}`);
+    normalizedIds.push(`-${chatId}`);
+  }
+
+  // 尝试所有可能的ID格式
+  for (const normalizedId of normalizedIds) {
+    if (normalizedId === chatId) continue;
+    
+    try {
+      console.log(`[DME] 尝试标准化ID: ${normalizedId}`);
+      const entity = await getEntityWithRetry(client, normalizedId);
+      console.log(`[DME] 标准化ID解析成功:`, entity.className);
+      return entity;
+    } catch (normalizedError: any) {
+      console.log(`[DME] 标准化ID ${normalizedId} 解析失败:`, normalizedError.message);
+    }
+  }
+
+  // 策略3: 通过对话列表查找匹配的实体
+  try {
+    console.log(`[DME] 尝试通过对话列表查找实体`);
+    const [defaultDialogs, archivedDialogs] = await Promise.all([
+      client.getDialogs({}),
+      client.getDialogs({ folderId: 1 }).catch(() => [] as any[]),
+    ]);
+    const dialogs = [...defaultDialogs, ...archivedDialogs];
+    for (const dialog of dialogs) {
+      const dialogId = dialog.id?.toString() || "";
+      const dialogEntity = dialog.entity;
+      
+      if (dialogId === chatId || 
+          dialogId === chatId.replace("-100", "") ||
+          dialogId === chatId.replace("-", "")) {
+        console.log(`[DME] 通过对话列表找到实体:`, dialogEntity.className);
+        return dialogEntity;
+      }
+    }
+  } catch (dialogsError: any) {
+    console.log(`[DME] 对话列表查找失败:`, dialogsError.message);
+  }
+
+  throw new Error(`无法解析聊天实体: ${chatId}`);
+}
+
+/**
+ * 从回复头中提取 topic root id
+ */
+function getTopicRootIdFromReplyHeader(replyTo: any): number | undefined {
+  if (!replyTo) return undefined;
+  const candidates = [
+    replyTo.replyToTopId,
+    replyTo.topMsgId,
+    replyTo.replyToMsgId,
+    replyTo.replyToMsg?.id,
+  ];
+  for (const candidate of candidates) {
+    if (typeof candidate === "number" && Number.isFinite(candidate) && candidate > 0) {
+      return candidate;
+    }
+  }
+  return undefined;
 }
 
 function getTopicRootIdFromMessage(message: any): number | undefined {
-  return (
-    getTopicRootIdFromReplyHeader(message?.replyTo) ??
-    (typeof message?.replyToMsgId === "number" ? message.replyToMsgId : undefined)
-  );
+  return getTopicRootIdFromReplyHeader(message?.replyTo);
 }
 
 function isMessageInTopic(message: any, topicRootId?: number): boolean {
-  if (typeof topicRootId !== "number") {
-    return true;
-  }
-
-  return (
-    getTopicRootIdFromMessage(message) === topicRootId ||
-    message?.id === topicRootId
-  );
+  if (typeof topicRootId !== "number") return true;
+  return getTopicRootIdFromMessage(message) === topicRootId;
 }
 
 /**
@@ -339,51 +563,44 @@ async function adaptiveBatchDelete(
   chatEntity: any,
   messageIds: number[]
 ): Promise<{ deletedCount: number; failedCount: number }> {
-  if (messageIds.length === 0) {
-    return { deletedCount: 0, failedCount: 0 };
-  }
-
   let deletedCount = 0;
   let failedCount = 0;
-  let currentBatchSize: number = CONFIG.BATCH_SIZE;
-  
-  console.log(`[DME] 开始自适应批次删除，总计 ${messageIds.length} 条消息`);
-  
+  let currentBatchSize = CONFIG.BATCH_SIZE;
+
   for (let i = 0; i < messageIds.length; i += currentBatchSize) {
     const batch = messageIds.slice(i, i + currentBatchSize);
     
     try {
-      const deleted = await deleteMessagesWithRetry(client, chatEntity, batch);
-      deletedCount += deleted;
+      await deleteMessagesWithRetry(client, chatEntity, batch);
+      deletedCount += batch.length;
       
-      // 成功则逐步增大批次
+      // 成功则可以适当增加批次大小
       if (currentBatchSize < CONFIG.MAX_BATCH_SIZE) {
-        currentBatchSize = Math.min(currentBatchSize + 10, CONFIG.MAX_BATCH_SIZE);
+        currentBatchSize = Math.min(currentBatchSize + 5, CONFIG.MAX_BATCH_SIZE);
       }
       
-      console.log(`[DME] 批次删除成功: ${deleted}/${batch.length} 条，下批大小: ${currentBatchSize}`);
+      console.log(`[DME] 成功删除批次 ${batch.length} 条，当前批次大小: ${currentBatchSize}`);
       await sleep(CONFIG.DELAYS.BATCH);
       
     } catch (error: any) {
-      console.error(`[DME] 批次删除失败:`, error.message);
-      failedCount += batch.length;
+      console.log(`[DME] 批次删除失败，减少批次大小:`, error.message);
       
-      // 失败则减小批次大小
-      if (currentBatchSize > CONFIG.MIN_BATCH_SIZE) {
-        currentBatchSize = Math.max(CONFIG.MIN_BATCH_SIZE, Math.floor(currentBatchSize / 2));
-        console.log(`[DME] 调整批次大小为: ${currentBatchSize}`);
-      }
+      // 失败则减少批次大小
+      currentBatchSize = Math.max(Math.floor(currentBatchSize / 2), CONFIG.MIN_BATCH_SIZE);
       
-      // 网络错误时等待更长时间
-      if (error.message?.includes('FLOOD') || error.message?.includes('NETWORK')) {
-        await sleep(CONFIG.DELAYS.NETWORK_ERROR);
+      if (currentBatchSize <= CONFIG.MIN_BATCH_SIZE && batch.length === 1) {
+        // 单条消息删除失败，跳过
+        failedCount += 1;
+        console.log(`[DME] 跳过无法删除的消息: ${batch[0]}`);
       } else {
-        await sleep(CONFIG.DELAYS.RETRY);
+        // 重新尝试当前批次（使用更小的批次大小）
+        i -= batch.length;
       }
+      
+      await sleep(CONFIG.DELAYS.RETRY);
     }
   }
-  
-  console.log(`[DME] 批次删除完成，成功: ${deletedCount}，失败: ${failedCount}`);
+
   return { deletedCount, failedCount };
 }
 
@@ -395,26 +612,23 @@ async function deleteInSavedMessages(
   chatEntity: any,
   userRequestedCount: number
 ): Promise<{ processedCount: number; actualCount: number; editedCount: number }> {
-  const target =
-    userRequestedCount === CONFIG.UNLIMITED_REQUEST_COUNT
-      ? Infinity
-      : userRequestedCount;
+  const targetCount =
+    userRequestedCount === CONFIG.UNLIMITED_REQUEST_COUNT ? Infinity : userRequestedCount;
   let offsetId = 0;
-  let totalMatched = 0;
-  let totalDeleted = 0;
+  let collected = 0;
+  let deleted = 0;
+  const batchLimit = 100;
 
-  while (target === Infinity || totalMatched < target) {
-    const searchLimit =
-      target === Infinity
-        ? CONFIG.SEARCH_LIMIT
-        : Math.min(CONFIG.SEARCH_LIMIT, target - totalMatched);
+  while (collected < targetCount) {
+    const limit =
+      targetCount === Infinity ? batchLimit : Math.min(batchLimit, targetCount - collected);
     const history = await client.invoke(
       new Api.messages.GetHistory({
         peer: chatEntity,
         offsetId,
         offsetDate: 0,
         addOffset: 0,
-        limit: searchLimit,
+        limit,
         maxId: 0,
         minId: 0,
         hash: 0 as any,
@@ -423,28 +637,16 @@ async function deleteInSavedMessages(
     const msgs: any[] = (history as any).messages || [];
     const justMsgs = msgs.filter((m: any) => m.className === "Message");
     if (justMsgs.length === 0) break;
-    const ids = justMsgs.map((m: any) => m.id);
-    totalMatched += ids.length;
-
-    for (let i = 0; i < ids.length; i += CONFIG.BATCH_SIZE) {
-      const batch = ids.slice(i, i + CONFIG.BATCH_SIZE);
-      try {
-        totalDeleted += await deleteMessagesUniversal(client, chatEntity, batch);
-        await sleep(CONFIG.DELAYS.BATCH);
-      } catch (e) {
-        console.error("[DME] 收藏夹删除批次失败:", e);
-        await sleep(1000);
-      }
-    }
 
     offsetId = justMsgs[justMsgs.length - 1].id;
-    await sleep(200);
+    const ids = justMsgs.map((m: any) => m.id);
+    const result = await deleteMessagesUniversal(client, chatEntity, ids);
+    deleted += result;
+    collected += ids.length;
+    await sleep(CONFIG.DELAYS.BATCH);
   }
 
-  if (totalMatched === 0)
-    return { processedCount: 0, actualCount: 0, editedCount: 0 };
-
-  return { processedCount: totalDeleted, actualCount: totalMatched, editedCount: 0 };
+  return { processedCount: deleted, actualCount: collected, editedCount: 0 };
 }
 
 /**
@@ -452,42 +654,21 @@ async function deleteInSavedMessages(
  */
 async function isRestrictedGroup(client: TelegramClient, chatEntity: any): Promise<boolean> {
   try {
-    // 检查群组类型和权限
-    if (chatEntity.className === "Chat" || chatEntity.className === "Channel") {
-      // 尝试获取群组完整信息
-      const fullChat = await client.invoke(
-        new Api.messages.GetFullChat({ chatId: chatEntity.id })
-      ).catch(() => null);
-      
-      if (fullChat) {
-        const chatFull = (fullChat as any).fullChat;
-        // 检查是否有内容保护标志
-        if (chatFull.noforwards === true) {
-          console.log(`[DME] 检测到禁止转发群组`);
-          return true;
-        }
-      }
-      
-      // 检查频道权限
-      if (chatEntity.className === "Channel") {
-        const channelFull = await client.invoke(
-          new Api.channels.GetFullChannel({ channel: chatEntity })
-        ).catch(() => null);
-        
-        if (channelFull) {
-          const fullChannel = (channelFull as any).fullChat;
-          if (fullChannel.noforwards === true) {
-            console.log(`[DME] 检测到禁止转发频道`);
-            return true;
-          }
-        }
-      }
+    // 获取聊天信息以检查限制
+    if (chatEntity.className === "Channel") {
+      // 对于频道/超级群，检查noforwards属性
+      return (chatEntity as any).noforwards === true;
+    }
+    
+    if (chatEntity.className === "Chat") {
+      // 对于普通群组，检查migratedTo属性等
+      return false; // 普通群组通常不受此限制
     }
     
     return false;
-  } catch (error: any) {
-    console.log(`[DME] 权限检测失败，假设为受限群组:`, error.message);
-    return true; // 检测失败时保守处理，使用传统模式
+  } catch (error) {
+    console.log(`[DME] 检测群组限制失败:`, error);
+    return false;
   }
 }
 
@@ -583,8 +764,7 @@ async function traditionalStreamProcessing(
 
       console.log(`[DME] 传统模式找到 ${messagesToProcess.length} 条自己的消息`);
 
-      // 防撤回模式：先编辑媒体消息
-      if (isAntiRecallMode && trollImagePath) {
+      if (isAntiRecallMode) {
         const mediaMessages = messagesToProcess.filter((m: Api.Message) => {
           if (!m.media || m.media instanceof Api.MessageMediaWebPage) return false;
           if (m.media instanceof Api.MessageMediaDocument) {
@@ -598,8 +778,11 @@ async function traditionalStreamProcessing(
           }
           return true;
         });
+        const textMessages = messagesToProcess.filter(
+          (m: Api.Message) => !m.media && typeof m.message === "string"
+        );
 
-        if (mediaMessages.length > 0) {
+        if (mediaMessages.length > 0 && trollImagePath) {
           console.log(`[DME] 传统模式编辑 ${mediaMessages.length} 条媒体消息`);
           const editPromises = mediaMessages.map((msg: Api.Message) => 
             editMediaMessageToAntiRecall(client, msg, trollImagePath, chatEntity)
@@ -609,8 +792,22 @@ async function traditionalStreamProcessing(
           const edited = editResults.filter(r => r.status === "fulfilled" && r.value === true).length;
           totalEdited += edited;
           console.log(`[DME] 传统模式成功编辑 ${edited} 条媒体`);
-          
-          // 编辑后等待一段时间
+        }
+
+        if (textMessages.length > 0) {
+          console.log(`[DME] 传统模式编辑 ${textMessages.length} 条文本消息`);
+          const textEditPromises = textMessages.map((msg: Api.Message) =>
+            editTextMessageToPlaceholder(client, msg, chatEntity).catch(() => false)
+          );
+          const textEditResults = await Promise.allSettled(textEditPromises);
+          const textEdited = textEditResults.filter(
+            (r) => r.status === "fulfilled" && r.value === true
+          ).length;
+          totalEdited += textEdited;
+          console.log(`[DME] 传统模式成功编辑 ${textEdited} 条文本`);
+        }
+        
+        if (mediaMessages.length > 0 || textMessages.length > 0) {
           await sleep(CONFIG.DELAYS.EDIT_WAIT);
         }
       }
@@ -930,7 +1127,6 @@ async function searchEditAndDeleteMyMessages(
         continue;
       }
 
-      // 立即处理这批消息的媒体编辑
       const mediaMessages = batchMessages.filter((m: Api.Message) => {
         if (!m.media || m.media instanceof Api.MessageMediaWebPage) return false;
         if (m.media instanceof Api.MessageMediaDocument) {
@@ -944,8 +1140,10 @@ async function searchEditAndDeleteMyMessages(
         }
         return true;
       });
+      const textMessages = batchMessages.filter(
+        (m: Api.Message) => !m.media && typeof m.message === "string"
+      );
 
-      // 并发编辑媒体（不等待全部完成）
       if (mediaMessages.length > 0 && trollImagePath) {
         const editPromises = mediaMessages.map((msg: Api.Message) => 
           editMediaMessageToAntiRecall(client, msg, trollImagePath, chatEntity)
@@ -955,6 +1153,22 @@ async function searchEditAndDeleteMyMessages(
         const edited = editResults.filter(r => r.status === "fulfilled" && r.value === true).length;
         totalEdited += edited;
         console.log(`[DME] 批次编辑 ${edited}/${mediaMessages.length} 条媒体`);
+      }
+
+      if (textMessages.length > 0) {
+        const textEditPromises = textMessages.map((msg: Api.Message) =>
+          editTextMessageToPlaceholder(client, msg, chatEntity).catch(() => false)
+        );
+        const textEditResults = await Promise.allSettled(textEditPromises);
+        const textEdited = textEditResults.filter(
+          (r) => r.status === "fulfilled" && r.value === true
+        ).length;
+        totalEdited += textEdited;
+        console.log(`[DME] 批次编辑 ${textEdited}/${textMessages.length} 条文本`);
+      }
+
+      if ((mediaMessages.length > 0 && trollImagePath) || textMessages.length > 0) {
+        await sleep(CONFIG.DELAYS.EDIT_WAIT);
       }
 
       // 立即删除这批消息
@@ -1141,24 +1355,15 @@ const dme = async (msg: Api.Message) => {
             topicRootId
           );
 
-    const result = {
-      processedCount: 0,
-      actualCount: 0,
-      editedCount: 0,
-    };
+    let result = { processedCount: 0, actualCount: 0, editedCount: 0 };
 
     if (!shouldRunInRounds) {
-      const singleResult = await runOneRound(requestedTotalCount);
-      result.processedCount = singleResult.processedCount;
-      result.actualCount = singleResult.actualCount;
-      result.editedCount = singleResult.editedCount;
+      result = await runOneRound(requestedTotalCount);
     } else {
       let remaining = requestedTotalCount;
-      let round = 0;
-
+      let round = 1;
       while (remaining > 0) {
-        round++;
-        const roundTarget = Math.min(CONFIG.MAX_SAFE_REQUEST_COUNT, remaining);
+        const roundTarget = Math.min(remaining, CONFIG.MAX_SAFE_REQUEST_COUNT);
         console.log(
           `[DME] 第 ${round} 轮开始，请求 ${roundTarget} 条，剩余目标 ${remaining} 条`
         );
