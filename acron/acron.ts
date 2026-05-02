@@ -293,10 +293,11 @@ async function scheduleTask(task: AcronTask) {
       if (task.type === "send") {
         const t = task as SendTask;
         const entities = reviveEntities(t.entities);
+        const replyTo = t.replyTo ? toInt(t.replyTo) : undefined;
         await client.sendMessage(entityLike, {
           message: t.message,
           formattingEntities: entities,
-          replyTo: t.replyTo ? toInt(t.replyTo) : undefined,
+          ...(replyTo ? { replyTo } : {}),
         });
         if (idx >= 0) {
           db.data.tasks[idx].lastRunAt = String(now);
@@ -307,9 +308,10 @@ async function scheduleTask(task: AcronTask) {
       } else if (task.type === "cmd") {
         const t = task as CmdTask;
         const cmd = await getCommandFromMessage(t.message);
+        const replyTo = t.replyTo ? toInt(t.replyTo) : undefined;
         const sudoMsg = await client.sendMessage(entityLike, {
           message: t.message,
-          replyTo: t.replyTo ? toInt(t.replyTo) : undefined,
+          ...(replyTo ? { replyTo } : {}),
         });
         if (cmd && sudoMsg)
           await dealCommandPluginWithMessage({ cmd, msg: sudoMsg as any });
@@ -333,9 +335,10 @@ async function scheduleTask(task: AcronTask) {
           if (!realtimeMsg) throw new Error("未能获取源消息");
 
           // 复制发送（保留文本/实体/媒体）
+          const replyTo = t.replyTo ? toInt(t.replyTo) : undefined;
           await client.sendMessage(entityLike, {
             message: realtimeMsg, // 直接传入消息对象以便自动处理媒体/实体
-            replyTo: t.replyTo ? toInt(t.replyTo) : undefined,
+            ...(replyTo ? { replyTo } : {}),
             formattingEntities: realtimeMsg.entities,
           });
 
