@@ -314,14 +314,10 @@ class AutoDeleteService {
     // 处理每个待删除的消息
     for (const exitMsg of exitMsgs) {
       try {
-        // 先确保聊天实体被缓存
         try {
-           // 尝试获取对话列表以刷新缓存，应对重启后实体丢失问题
-           await this.client.getDialogs({ limit: 20 });
-           // 尝试解析聊天实体
-           await this.client.getEntity(exitMsg.cid);
+          await this.client.getEntity(exitMsg.cid);
         } catch (e) {
-           console.error(`[autodelcmd] 刷新实体缓存失败:`, e);
+          console.error(`[autodelcmd] 解析聊天实体失败:`, e);
         }
 
         const message = await this.client.getMessages(exitMsg.cid, { ids: [exitMsg.mid] });
