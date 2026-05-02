@@ -55,9 +55,6 @@ const mainPrefix = prefixes[0];
 const sleep = (ms: number): Promise<void> =>
   new Promise((resolve) => setTimeout(resolve, ms));
 
-const formatProgress = (current: number, total: number): string =>
-  `<code>${current}/${total}</code>`;
-
 /**
  * 获取防撤回图片，支持缓存
  */
@@ -190,84 +187,6 @@ async function editMediaMessageToAntiRecall(
   }
 }
 
-/**
- * 增强的消息搜索函数 - 带容错机制
- */
-async function searchMyMessagesOptimized(
-  client: TelegramClient,
-  chatEntity: any,
-  myId: bigint,
-  userRequestedCount: number
-): Promise<Api.Message[]> {
-  const allMyMessages: Api.Message[] = [];
-  let offsetId = 0;
-  const targetCount = userRequestedCount === 999999 ? Infinity : userRequestedCount;
-  let consecutiveFailures = 0;
-  const maxFailures = 3;
-
-  console.log(`[DME] 使用增强搜索模式，直接定位自己的消息`);
-
-  try {
-    while (allMyMessages.length < targetCount && consecutiveFailures < maxFailures) {
-      try {
-        const searchResult = await client.invoke(
-          new Api.messages.Search({
-            peer: chatEntity,
-            q: "",
-            fromId: await client.getInputEntity(myId.toString()),
-            filter: new Api.InputMessagesFilterEmpty(),
-            minDate: 0,
-            maxDate: 0,
-            offsetId: offsetId,
-            addOffset: 0,
-            limit: Math.min(100, targetCount - allMyMessages.length),
-            maxId: 0,
-            minId: 0,
-            hash: 0 as any
-          })
-        );
-
-        const resultMessages = (searchResult as any).messages;
-        if (!resultMessages || resultMessages.length === 0) {
-          console.log(`[DME] 搜索完成，共找到 ${allMyMessages.length} 条自己的消息`);
-          break;
-        }
-
-        const messages = resultMessages.filter(
-          (m: any) =>
-            m.className === "Message" &&
-            (m.senderId?.toString() === myId.toString() || m.out === true)
-        );
-
-        if (messages.length > 0) {
-          allMyMessages.push(...messages);
-          offsetId = messages[messages.length - 1].id;
-          console.log(`[DME] 批次搜索到 ${messages.length} 条消息，总计 ${allMyMessages.length} 条`);
-          consecutiveFailures = 0; // 重置失败计数
-        } else {
-          break;
-        }
-
-        await sleep(CONFIG.DELAYS.SEARCH);
-      } catch (searchError: any) {
-        consecutiveFailures++;
-        console.log(`[DME] 搜索失败 ${consecutiveFailures}/${maxFailures}:`, searchError.message);
-        if (consecutiveFailures < maxFailures) {
-          await sleep(CONFIG.DELAYS.NETWORK_ERROR);
-        }
-      }
-    }
-  } catch (error: any) {
-    console.error("[DME] 优化搜索失败，回退到传统模式:", error);
-    return [];
-  }
-
-  return allMyMessages.slice(0, targetCount === Infinity ? allMyMessages.length : targetCount);
-}
-
-/**
- * 判断是否为“收藏夹/保存的消息”会话
- */
 function isSavedMessagesPeer(chatEntity: any, myId: bigint): boolean {
   return (
     (chatEntity?.className === "User" && chatEntity?.id?.toString?.() === myId.toString()) ||
@@ -383,6 +302,33 @@ function isMyMessageByIdentity(
     }
   }
   return false;
+}
+
+function getTopicRootIdFromReplyHeader(replyHeader: any): number | undefined {
+  const topId =
+    replyHeader?.replyToTopId ??
+    replyHeader?.topMsgId ??
+    replyHeader?.replyToMsgId ??
+    replyHeader?.replyToMsg?.id;
+  return typeof topId === "number" ? topId : undefined;
+}
+
+function getTopicRootIdFromMessage(message: any): number | undefined {
+  return (
+    getTopicRootIdFromReplyHeader(message?.replyTo) ??
+    (typeof message?.replyToMsgId === "number" ? message.replyToMsgId : undefined)
+  );
+}
+
+function isMessageInTopic(message: any, topicRootId?: number): boolean {
+  if (typeof topicRootId !== "number") {
+    return true;
+  }
+
+  return (
+    getTopicRootIdFromMessage(message) === topicRootId ||
+    message?.id === topicRootId
+  );
 }
 
 /**
@@ -502,44 +448,6 @@ async function deleteInSavedMessages(
 }
 
 /**
- * 兼容“频道身份发言”的搜索：扫描历史并筛选 out=true
- */
-async function searchMyOutgoingMessages(
-  client: TelegramClient,
-  chatEntity: any,
-  userRequestedCount: number
-): Promise<Api.Message[]> {
-  const targetCount = userRequestedCount === 999999 ? Infinity : userRequestedCount;
-  const results: Api.Message[] = [];
-  let offsetId = 0;
-
-  while (true) {
-    if (targetCount !== Infinity && results.length >= targetCount) break;
-    const history = await client.invoke(
-      new Api.messages.GetHistory({
-        peer: chatEntity,
-        offsetId,
-        offsetDate: 0,
-        addOffset: 0,
-        limit: Math.min(100, targetCount === Infinity ? 100 : targetCount - results.length),
-        maxId: 0,
-        minId: 0,
-        hash: 0 as any,
-      })
-    );
-    const msgs: any[] = (history as any).messages || [];
-    const justMsgs = msgs.filter((m: any) => m.className === "Message");
-    if (justMsgs.length === 0) break;
-    const outMsgs = justMsgs.filter((m: any) => m.out === true);
-    results.push(...outMsgs);
-    offsetId = justMsgs[justMsgs.length - 1].id;
-    await sleep(150);
-  }
-
-  return targetCount === Infinity ? results : results.slice(0, targetCount);
-}
-
-/**
  * 检测群组是否禁止转发和复制（受限群组）
  */
 async function isRestrictedGroup(client: TelegramClient, chatEntity: any): Promise<boolean> {
@@ -591,7 +499,8 @@ async function traditionalStreamProcessing(
   chatEntity: any,
   myId: bigint,
   userRequestedCount: number,
-  isAntiRecallMode: boolean = false
+  isAntiRecallMode: boolean = false,
+  topicRootId?: number
 ): Promise<{
   processedCount: number;
   actualCount: number;
@@ -643,13 +552,15 @@ async function traditionalStreamProcessing(
       }
 
       // 筛选出自己的消息
-      const myMessages = validMessages.filter((m: any) =>
-        isMyMessageByIdentity(
-          m,
-          myId,
-          sendAsIdentity.typedKeys,
-          sendAsIdentity.rawIds
-        )
+      const myMessages = validMessages.filter(
+        (m: any) =>
+          isMessageInTopic(m, topicRootId) &&
+          isMyMessageByIdentity(
+            m,
+            myId,
+            sendAsIdentity.typedKeys,
+            sendAsIdentity.rawIds
+          )
       );
 
       if (myMessages.length === 0) {
@@ -767,7 +678,8 @@ async function quickDeleteMyMessages(
   client: TelegramClient,
   chatEntity: any,
   myId: bigint,
-  userRequestedCount: number
+  userRequestedCount: number,
+  topicRootId?: number
 ): Promise<{
   processedCount: number;
   actualCount: number;
@@ -777,14 +689,14 @@ async function quickDeleteMyMessages(
   // 直接改用 out 消息遍历模式，避免快速搜索漏删。
   if (chatEntity.className === "Channel") {
     console.log(`[DME] 频道会话启用出站消息遍历模式（支持频道身份发言）`);
-    return await traditionalStreamProcessing(client, chatEntity, myId, userRequestedCount, false);
+    return await traditionalStreamProcessing(client, chatEntity, myId, userRequestedCount, false, topicRootId);
   }
 
   // 检测是否为受限群组（禁止转发和复制）
   const isRestricted = await isRestrictedGroup(client, chatEntity);
   if (isRestricted) {
     console.log(`[DME] 检测到受限群组，切换到传统遍历模式`);
-    return await traditionalStreamProcessing(client, chatEntity, myId, userRequestedCount, false);
+    return await traditionalStreamProcessing(client, chatEntity, myId, userRequestedCount, false, topicRootId);
   }
   
   console.log(`[DME] 使用快速删除模式`);
@@ -813,6 +725,7 @@ async function quickDeleteMyMessages(
           peer: chatEntity,
           q: "",
           fromId: await client.getInputEntity(myId.toString()),
+          ...(typeof topicRootId === "number" ? { topMsgId: topicRootId } : {}),
           filter: new Api.InputMessagesFilterEmpty(),
           minDate: 0,
           maxDate: 0,
@@ -842,6 +755,7 @@ async function quickDeleteMyMessages(
       const messagesToDelete = allBatchMessages.filter(
         (m: any) =>
           m.className === "Message" &&
+          isMessageInTopic(m, topicRootId) &&
           (m.senderId?.toString() === myId.toString() || m.out === true)
       );
 
@@ -868,7 +782,7 @@ async function quickDeleteMyMessages(
           break;
         }
         console.log(`[DME] API搜索多次失败，切换到传统遍历模式`);
-        return await traditionalStreamProcessing(client, chatEntity, myId, userRequestedCount, false);
+        return await traditionalStreamProcessing(client, chatEntity, myId, userRequestedCount, false, topicRootId);
       }
       await sleep(CONFIG.DELAYS.RETRY);
     }
@@ -876,7 +790,7 @@ async function quickDeleteMyMessages(
 
   if (!hasSearchResult) {
     console.log(`[DME] API搜索无结果，尝试传统遍历模式`);
-    return await traditionalStreamProcessing(client, chatEntity, myId, userRequestedCount, false);
+    return await traditionalStreamProcessing(client, chatEntity, myId, userRequestedCount, false, topicRootId);
   }
   
   return {
@@ -893,7 +807,8 @@ async function searchEditAndDeleteMyMessages(
   client: TelegramClient,
   chatEntity: any,
   myId: bigint,
-  userRequestedCount: number
+  userRequestedCount: number,
+  topicRootId?: number
 ): Promise<{
   processedCount: number;
   actualCount: number;
@@ -944,14 +859,14 @@ async function searchEditAndDeleteMyMessages(
   // 直接改用 out 消息遍历模式，避免流式搜索漏删。
   if (isChannel) {
     console.log(`[DME] 频道会话启用出站消息遍历模式（支持频道身份发言）`);
-    return await traditionalStreamProcessing(client, chatEntity, myId, userRequestedCount, true);
+    return await traditionalStreamProcessing(client, chatEntity, myId, userRequestedCount, true, topicRootId);
   }
   
   // 检测是否为受限群组（禁止转发和复制）
   const isRestricted = await isRestrictedGroup(client, chatEntity);
   if (isRestricted) {
     console.log(`[DME] 检测到受限群组，切换到传统遍历模式`);
-    return await traditionalStreamProcessing(client, chatEntity, myId, userRequestedCount, true);
+    return await traditionalStreamProcessing(client, chatEntity, myId, userRequestedCount, true, topicRootId);
   }
   
   console.log(`[DME] 流式处理模式，目标数量: ${userRequestedCount === 999999 ? "全部" : userRequestedCount}`);
@@ -976,6 +891,7 @@ async function searchEditAndDeleteMyMessages(
           peer: chatEntity,
           q: "",
           fromId: await client.getInputEntity(myId.toString()),
+          ...(typeof topicRootId === "number" ? { topMsgId: topicRootId } : {}),
           filter: new Api.InputMessagesFilterEmpty(),
           minDate: 0,
           maxDate: 0,
@@ -994,13 +910,25 @@ async function searchEditAndDeleteMyMessages(
         break;
       }
 
-      const batchMessages = resultMessages.filter(
+      const allBatchMessages = resultMessages.filter(
+        (m: any) => m.className === "Message"
+      );
+      if (allBatchMessages.length === 0) {
+        break;
+      }
+
+      const batchMessages = allBatchMessages.filter(
         (m: any) =>
-          m.className === "Message" &&
+          isMessageInTopic(m, topicRootId) &&
           (m.senderId?.toString() === myId.toString() || m.out === true)
       );
 
-      if (batchMessages.length === 0) break;
+      offsetId = allBatchMessages[allBatchMessages.length - 1].id;
+
+      if (batchMessages.length === 0) {
+        await sleep(CONFIG.DELAYS.SEARCH);
+        continue;
+      }
 
       // 立即处理这批消息的媒体编辑
       const mediaMessages = batchMessages.filter((m: Api.Message) => {
@@ -1040,7 +968,6 @@ async function searchEditAndDeleteMyMessages(
       }
 
       totalProcessed += batchMessages.length;
-      offsetId = batchMessages[batchMessages.length - 1].id;
       
       await sleep(CONFIG.DELAYS.BATCH);
     } catch (error: any) {
@@ -1050,7 +977,7 @@ async function searchEditAndDeleteMyMessages(
       // 如果连续搜索失败，切换到传统模式
       if (searchFailCount >= maxSearchFails) {
         console.log(`[DME] API搜索多次失败，切换到传统遍历模式`);
-        const traditionalResult = await traditionalStreamProcessing(client, chatEntity, myId, userRequestedCount, true);
+        const traditionalResult = await traditionalStreamProcessing(client, chatEntity, myId, userRequestedCount, true, topicRootId);
         return {
           processedCount: totalDeleted + traditionalResult.processedCount,
           actualCount: totalProcessed + traditionalResult.actualCount,
@@ -1065,8 +992,8 @@ async function searchEditAndDeleteMyMessages(
 
   // 如果API搜索没有找到任何消息，尝试传统模式
   if (totalProcessed === 0) {
-    console.log(`[DME] API搜索无结果，尝试传统遍历模式`);
-    return await traditionalStreamProcessing(client, chatEntity, myId, userRequestedCount, true);
+    console.log(`[DME] API搜索无结果，尝试传统模式`);
+    return await traditionalStreamProcessing(client, chatEntity, myId, userRequestedCount, true, topicRootId);
   }
 
   console.log(`[DME] 流式处理完成，删除 ${totalDeleted} 条，编辑 ${totalEdited} 条`);
@@ -1080,6 +1007,7 @@ async function searchEditAndDeleteMyMessages(
 
 // 已移除频道直接删除功能，避免误删别人消息
 // 所有情况下都使用普通模式，只删除自己的消息
+
 
 // 定义帮助文本常量
 const help_text = `🗑️ <b>智能防撤回删除插件</b>
@@ -1176,6 +1104,11 @@ const dme = async (msg: Api.Message) => {
     const myId = BigInt(me.id.toString());
     const chatId = msg.chatId?.toString() || msg.peerId?.toString() || "";
     const chatEntity = await getEntityWithHash(client, chatId);
+    const topicRootId = getTopicRootIdFromMessage(msg);
+
+    if (typeof topicRootId === "number") {
+      console.log(`[DME] 检测到话题上下文: topMsgId=${topicRootId}`);
+    }
 
     // 删除命令消息
     try {
@@ -1197,13 +1130,15 @@ const dme = async (msg: Api.Message) => {
             client,
             chatEntity as any,
             myId,
-            count
+            count,
+            topicRootId
           )
         : await quickDeleteMyMessages(
             client,
             chatEntity as any,
             myId,
-            count
+            count,
+            topicRootId
           );
 
     const result = {
