@@ -273,9 +273,27 @@ async function findUserFromGroups(
   client: any,
   userId: number
 ): Promise<Api.User | null> {
+  const dialogMap = new Map<string, any>();
+
+  const collectDialogs = async (params: Record<string, any>) => {
+    try {
+      const dialogs = await client.getDialogs(params);
+      for (const dialog of dialogs || []) {
+        const key = `${dialog.id}`;
+        if (!dialogMap.has(key)) {
+          dialogMap.set(key, dialog);
+        }
+      }
+    } catch (error) {
+      console.error("findUserFromGroups getDialogs error:", error);
+    }
+  };
+
   try {
-    const dialogs = await client.getDialogs({ limit: 50 });
-    for (const dialog of dialogs) {
+    await collectDialogs({});
+    await collectDialogs({ folderId: 1 });
+
+    for (const dialog of dialogMap.values()) {
       // 只检查群组和超级群组
       if (
         dialog.entity?.className === "Chat" ||
@@ -346,7 +364,6 @@ class IsAlivePlugin extends Plugin {
           if (/^-?\d+$/.test(input)) {
             const userId = Number(input);
             // 先尝试常规方式获取
-            await client.getDialogs({});
             try {
               entity = (await client.getEntity(userId)) as Api.User;
             } catch {
@@ -358,7 +375,6 @@ class IsAlivePlugin extends Plugin {
               entity = await findUserFromGroups(client, userId);
             }
           } else {
-            await client.getDialogs({});
             const username = input.startsWith("@") ? input : `@${input}`;
             entity = (await client.getEntity(username)) as Api.User;
           }
