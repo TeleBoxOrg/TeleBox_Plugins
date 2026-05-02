@@ -1133,6 +1133,14 @@ const shouldFallbackToReplyOnEditError = (error: any): boolean => {
   );
 };
 
+const getTopicRootId = (msg: Api.Message): number | undefined => {
+  const typedMsg = msg as Api.Message & {
+    replyTo?: { replyToTopId?: number; replyToMsgId?: number };
+    replyToMsgId?: number;
+  };
+  return typedMsg.replyTo?.replyToTopId ?? typedMsg.replyTo?.replyToMsgId ?? typedMsg.replyToMsgId;
+};
+
 class MessageSender {
   static async sendOrEdit(
     msg: Api.Message,
@@ -1168,10 +1176,12 @@ class MessageSender {
       throw new Error("客户端未初始化");
     }
 
+    const topicRootId = getTopicRootId(msg);
+    const replyTo = replyToId ?? topicRootId;
     return await msg.client.sendMessage(msg.chatId || msg.peerId, {
       message: text,
       ...(options || {}),
-      ...(replyToId ? { replyTo: replyToId } : {}),
+      ...(replyTo ? { replyTo } : {}),
     });
   }
 }
@@ -1421,12 +1431,14 @@ class MessageUtils {
           throw new Error("客户端未初始化");
         }
 
+        const topicRootId = getTopicRootId(msg);
+        const replyTo = replyToId ?? topicRootId;
         await msg.client.sendFile(peerId, {
           file: pathToSend,
           forceDocument: !options.previewEnabled,
           caption,
           parseMode: "html",
-          replyTo: replyToId,
+          ...(replyTo ? { replyTo } : {}),
         });
       } finally {
         const cleanupTargets = options.prepareForSend
