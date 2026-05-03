@@ -16,6 +16,7 @@ import {
 } from "@utils/pluginManager";
 import { sleep } from "teleproto/Helpers";
 import dayjs from "dayjs";
+import { safeGetReplyMessage } from "@utils/safeGetMessages";
 
 const prefixes = getPrefixes();
 const mainPrefix = prefixes[0];
@@ -181,7 +182,7 @@ async function exec(
     chat: msg?.chat,
     sender: msg?.sender,
     trigger,
-    reply: await msg.getReplyMessage(),
+    reply: await safeGetReplyMessage(msg),
     client: msg?.client,
     _,
     axios,
