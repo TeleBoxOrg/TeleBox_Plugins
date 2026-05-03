@@ -5,6 +5,7 @@ import { sleep } from "teleproto/Helpers";
 import { createDirectoryInAssets } from "@utils/pathHelpers";
 import * as path from "path";
 import * as fs from "fs";
+import { safeGetReplyMessage } from "@utils/safeGetMessages";
 
 const BOT_USERNAME = "ParseHubot";
 const POLL_INTERVAL_MS = 2000;
@@ -388,7 +389,7 @@ class ParseHubPlugin extends Plugin {
       // 若命令未包含链接且为回复消息，从被回复消息中提取链接
       if (!links.length && msg.replyTo?.replyToMsgId) {
         try {
-          const replied = await msg.getReplyMessage();
+          const replied = await safeGetReplyMessage(msg);
           const replyText = replied?.message || "";
           const replyLinks = extractLinks(replyText);
           if (replyLinks.length) {
@@ -400,7 +401,7 @@ class ParseHubPlugin extends Plugin {
       // 若命令和被回复消息都包含链接，合并去重，命令里的在前
       if (msg.replyTo?.replyToMsgId) {
         try {
-          const replied = await msg.getReplyMessage();
+          const replied = await safeGetReplyMessage(msg);
           const replyText = replied?.message || "";
           const replyLinks = extractLinks(replyText);
           if (replyLinks.length) {
