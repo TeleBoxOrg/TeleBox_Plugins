@@ -8,6 +8,7 @@ import * as path from "path";
 import * as fs from "fs/promises";
 import { statSync, existsSync } from "fs";
 import { CustomFile } from 'teleproto/client/uploads';
+import { safeGetReplyMessage } from "@utils/safeGetMessages";
 
 const prefixes = getPrefixes();
 const mainPrefix = prefixes[0];
@@ -379,12 +380,10 @@ class PrometheusPlugin extends Plugin {
         blocks.push(`⏹ <b>结尾消息</b>\n${this.formatSourceLine(endTitle, endSource.chatId, endSource.messageId)}`);
       }
 
-      const replyTo = forwardedMsg.replyTo?.replyToTopId || forwardedMsg.id;
-
       await client.sendMessage(targetPeer, {
         message: `🔗 <b>范围保存来源</b>\n\n${blocks.join('\n\n')}`,
         parseMode: 'html',
-        replyTo,
+        replyTo: forwardedMsg.id
       });
     } catch (error) {
       console.error(`发送范围来源消息失败:`, error);
@@ -790,8 +789,8 @@ class PrometheusPlugin extends Plugin {
     };
     
     if (caption && type !== 'voice' && type !== 'sticker') {
-      sendOptions.caption = htmlEscape(caption);
-      sendOptions.parseMode = 'html';
+      sendOptions.caption = caption;
+      sendOptions.parseMode = caption.includes('<') ? 'html' : undefined;
     }
     
     if (replyMsg) {
@@ -845,8 +844,8 @@ class PrometheusPlugin extends Plugin {
           if (text) {
             // 发送文本消息，获取发送的消息
             forwardedMessage = await client.sendMessage(targetPeer, {
-              message: htmlEscape(text),
-              parseMode: 'html'
+              message: text,
+              parseMode: sourceMsg.text?.includes('<') ? 'html' : undefined
             });
             
             await this.safeEditMessage(replyMsg, `${progress}✅ 文本内容已发送`, true);
@@ -1123,7 +1122,7 @@ class PrometheusPlugin extends Plugin {
       const parts = text.trim().split(/\s+/);
       
       // 检查是否有回复消息
-      const replyMsg = await msg.getReplyMessage();
+      const replyMsg = await safeGetReplyMessage(msg);
       
       // 处理source子命令
       if (parts.length >= 2 && parts[1].toLowerCase() === "source") {
@@ -1303,7 +1302,7 @@ class PrometheusPlugin extends Plugin {
               });
             }
           } else {
-            await this.safeEditMessage(msg, `❌ 无法获取消息: <code>${htmlEscape(link)}</code>`, true);
+            await this.safeEditMessage(msg, `❌ 无法获取消息: ${link}`, true);
             return;
           }
         }
