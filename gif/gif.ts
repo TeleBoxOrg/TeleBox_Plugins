@@ -8,6 +8,7 @@ import fs from "fs";
 import path from "path";
 import { exec } from "child_process";
 import { promisify } from "util";
+import { safeGetReplyMessage } from "@utils/safeGetMessages";
 
 const prefixes = getPrefixes();
 const mainPrefix = prefixes[0];
@@ -83,7 +84,7 @@ class GifConverter {
     }
 
     // 获取回复的消息
-    const repliedMsg = await msg.getReplyMessage();
+    const repliedMsg = await safeGetReplyMessage(msg);
     if (!repliedMsg) {
       await msg.edit({
         text: "❌ 请回复一个包含 GIF 或视频的消息后使用此命令。\n\n💡 请回复 GIF 或视频后再试。"
