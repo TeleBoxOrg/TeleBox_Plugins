@@ -2,6 +2,7 @@ import { Plugin } from "@utils/pluginBase";
 import { getGlobalClient } from "@utils/globalClient";
 import { getPrefixes } from "@utils/pluginManager";
 import { Api } from "teleproto";
+import { safeGetReplyMessage } from "@utils/safeGetMessages";
 
 // HTML转义工具
 const htmlEscape = (text: string): string => 
@@ -81,7 +82,7 @@ class IdsPlugin extends Plugin {
           targetUser = result.user; targetId = result.id;
         } else {
           try {
-            const reply = await msg.getReplyMessage();
+            const reply = await safeGetReplyMessage(msg);
             if (reply?.senderId) {
               targetId = Number(reply.senderId);
               targetUser = reply.sender;
