@@ -4,6 +4,7 @@ import { Api } from "teleproto";
 import { JSONFilePreset } from "lowdb/node";
 import { createDirectoryInAssets } from "@utils/pathHelpers";
 import * as path from "path";
+import { safeGetReplyMessage } from "@utils/safeGetMessages";
 
 const prefixes = getPrefixes();
 const mainPrefix = prefixes[0];
@@ -235,7 +236,7 @@ class AffPlugin extends Plugin {
 
   // 保存aff信息
   private async saveAffInfo(msg: Api.Message): Promise<void> {
-    const replyMsg = await msg.getReplyMessage();
+    const replyMsg = await safeGetReplyMessage(msg);
     
     if (!replyMsg) {
       await msg.edit({
