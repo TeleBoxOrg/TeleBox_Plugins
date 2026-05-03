@@ -856,6 +856,21 @@ const deleteMessageOrGroup = async (msg: Api.Message): Promise<void> => {
   } catch {}
 };
 
+const getHeaderContentType = (headers: unknown): string | undefined => {
+  if (!headers || typeof headers !== "object") return undefined;
+  const contentType = (headers as Record<string, unknown>)["content-type"];
+  if (typeof contentType === "string") {
+    return contentType.split(";")[0];
+  }
+  if (Array.isArray(contentType)) {
+    const first = contentType.find((value) => typeof value === "string");
+    if (typeof first === "string") {
+      return first.split(";")[0];
+    }
+  }
+  return undefined;
+};
+
 const resolveAIImageData = async (
   image: AIImage,
   httpClient: HttpClient,
@@ -872,7 +887,7 @@ const resolveAIImageData = async (
     token,
   );
   const contentType =
-    response.headers?.["content-type"]?.split(";")[0] ||
+    getHeaderContentType(response.headers) ||
     image.mimeType ||
     "image/jpeg";
   return { data: Buffer.from(response.data), mimeType: contentType };
@@ -900,7 +915,7 @@ const resolveAIVideoData = async (
     token,
   );
   const contentType =
-    response.headers?.["content-type"]?.split(";")[0] ||
+    getHeaderContentType(response.headers) ||
     video.mimeType ||
     "video/mp4";
   return { data: Buffer.from(response.data), mimeType: contentType };
@@ -3417,8 +3432,7 @@ class AIService implements ConfigChangeListener {
         },
         token,
       );
-      const contentType =
-        download.headers?.["content-type"]?.split(";")[0] || "video/mp4";
+      const contentType = getHeaderContentType(download.headers) || "video/mp4";
       return [{ data: Buffer.from(download.data), mimeType: contentType }];
     }
 
@@ -3482,8 +3496,7 @@ class AIService implements ConfigChangeListener {
         },
         token,
       );
-      const contentType =
-        download.headers?.["content-type"]?.split(";")[0] || "video/mp4";
+      const contentType = getHeaderContentType(download.headers) || "video/mp4";
       return [{ data: Buffer.from(download.data), mimeType: contentType }];
     }
 
