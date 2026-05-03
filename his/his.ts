@@ -9,6 +9,7 @@ import { Plugin } from "@utils/pluginBase";
 import { getGlobalClient } from "@utils/globalClient";
 import { getPrefixes } from "@utils/pluginManager";
 import { Api } from "teleproto";
+import { safeGetReplyMessage } from "@utils/safeGetMessages";
 
 // 获取命令前缀
 const prefixes = getPrefixes();
@@ -99,7 +100,7 @@ class HisPlugin extends Plugin {
         if (args.length === 0) {
           // 如果是回复消息，则查询被回复者
           if (msg.isReply) {
-            const reply = await msg.getReplyMessage();
+            const reply = await safeGetReplyMessage(msg);
             if (reply && reply.senderId) {
               const target = reply.senderId.toString();
               await this.queryHistory(msg, target, DEFAULT_COUNT, client);
@@ -121,7 +122,7 @@ class HisPlugin extends Plugin {
           
           // 如果是数字且在回复消息的情况下，作为数量参数
           if (!isNaN(num) && num > 0 && msg.isReply) {
-            const reply = await msg.getReplyMessage();
+            const reply = await safeGetReplyMessage(msg);
             if (reply && reply.senderId) {
               const target = reply.senderId.toString();
               const count = Math.min(num, 100); // 最大限制100条
