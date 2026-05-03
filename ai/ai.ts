@@ -18,6 +18,7 @@ import sharp from "sharp";
 import http from "http";
 import https from "https";
 import { promisify } from "util";
+import { safeGetReplyMessage } from "@utils/safeGetMessages";
 
 interface ProviderConfig {
   tag: string;
@@ -4402,7 +4403,7 @@ class QuestionFeature extends BaseFeatureHandler {
   }
 
   async askFromReply(msg: Api.Message, trigger?: Api.Message): Promise<void> {
-    const replyMsg = await msg.getReplyMessage();
+    const replyMsg = await safeGetReplyMessage(msg);
     requireUser(!!replyMsg, "至少需要一条提示");
     const question = getMessageText(replyMsg).trim();
     await this.runQuestion(msg, question, trigger);
@@ -4431,7 +4432,7 @@ class QuestionFeature extends BaseFeatureHandler {
 
     await sendProcessing(msg, "chat");
 
-    const replyMsg = await msg.getReplyMessage();
+    const replyMsg = await safeGetReplyMessage(msg);
     let context = getMessageText(replyMsg);
     const replyToId = replyMsg?.id;
     const imageParts = [
@@ -4556,7 +4557,7 @@ class SearchFeature extends BaseFeatureHandler {
 
     const promptInput = args.slice(1).join(" ").trim();
 
-    const replyMsg = await msg.getReplyMessage();
+    const replyMsg = await safeGetReplyMessage(msg);
     requireUser(!!promptInput || !!replyMsg, "至少需要一条提示");
 
     if (
@@ -4709,7 +4710,7 @@ class ImageFeature extends BaseFeatureHandler {
     const prefixes = getPrefixes();
     const configManager = await this.getConfigManager();
     const config = configManager.getConfig();
-    const replyMsg = await msg.getReplyMessage();
+    const replyMsg = await safeGetReplyMessage(msg);
     const replyToId = replyMsg?.id;
 
     const subCommand = args[1]?.toLowerCase();
@@ -4820,7 +4821,7 @@ class VideoFeature extends BaseFeatureHandler {
     const prefixes = getPrefixes();
     const configManager = await this.getConfigManager();
     const config = configManager.getConfig();
-    const replyMsg = await msg.getReplyMessage();
+    const replyMsg = await safeGetReplyMessage(msg);
     const replyToId = replyMsg?.id;
 
     const subCommand = args[1]?.toLowerCase();
