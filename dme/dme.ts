@@ -506,7 +506,7 @@ async function resolveChatEntity(client: TelegramClient, chatId: string): Promis
     console.log(`[DME] 尝试通过对话列表查找实体`);
     const [defaultDialogs, archivedDialogs] = await Promise.all([
       client.getDialogs({}),
-      client.getDialogs({ folderId: 1 }).catch(() => [] as any[]),
+      client.getDialogs({ folder: 1 }).catch(() => [] as any[]),
     ]);
     const dialogs = [...defaultDialogs, ...archivedDialogs];
     for (const dialog of dialogs) {
@@ -565,7 +565,7 @@ async function adaptiveBatchDelete(
 ): Promise<{ deletedCount: number; failedCount: number }> {
   let deletedCount = 0;
   let failedCount = 0;
-  let currentBatchSize = CONFIG.BATCH_SIZE;
+  let currentBatchSize: number = CONFIG.BATCH_SIZE;
 
   for (let i = 0; i < messageIds.length; i += currentBatchSize) {
     const batch = messageIds.slice(i, i + currentBatchSize);
