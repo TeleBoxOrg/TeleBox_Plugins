@@ -7,6 +7,7 @@ import { getPrefixes } from "@utils/pluginManager";
 import { Api } from "teleproto";
 import { CustomFile } from "teleproto/client/uploads.js";
 import { createDirectoryInAssets } from "@utils/pathHelpers";
+import { safeGetReplyMessage } from "@utils/safeGetMessages";
 
 const prefixes = getPrefixes();
 const mainPrefix = prefixes[0];
@@ -307,7 +308,7 @@ async function handleImageEdit(
     return;
   }
 
-  const replyMsg = await msg.getReplyMessage();
+  const replyMsg = await safeGetReplyMessage(msg);
   if (!replyMsg || !replyMsg.media) {
     await msg.edit({ text: "❌ 请回复一条包含图片的消息后再执行命令" });
     return;
