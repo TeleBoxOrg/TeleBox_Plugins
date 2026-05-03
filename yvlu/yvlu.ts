@@ -106,6 +106,7 @@ async function convertTgsToWebm(tgsBuffer: Buffer): Promise<Buffer> {
 
     const pythonScript = `
 import sys
+import { safeGetReplyMessage } from "@utils/safeGetMessages";
 from rlottie_python import LottieAnimation
 anim = LottieAnimation.from_tgs(sys.argv[1])
 anim.save_animation(sys.argv[2])
@@ -591,7 +592,7 @@ class YvluPlugin extends Plugin {
         // 处理保存贴纸/图片到贴纸包的逻辑
         await this.handleSaveStickerToSet(msg);
       } else if (valid) {
-        let replied = await msg.getReplyMessage();
+        let replied = await safeGetReplyMessage(msg);
         if (!replied) {
           await msg.edit({ text: "请回复一条消息" });
           return;
@@ -742,7 +743,7 @@ class YvluPlugin extends Plugin {
 
                   // 尝试拿到被回复消息以获取发送者名称
                   try {
-                    const repliedMsg = await message.getReplyMessage();
+                    const repliedMsg = await safeGetReplyMessage(message);
                     if (repliedMsg) {
                       const repliedSender = await repliedMsg.getSender();
                       if (repliedSender) {
@@ -775,7 +776,7 @@ class YvluPlugin extends Plugin {
                   replyHeader?.replyToMsgId
                 ) {
                   try {
-                    const repliedMsg = await message.getReplyMessage();
+                    const repliedMsg = await safeGetReplyMessage(message);
                     if (repliedMsg) {
                       const repliedSender = await repliedMsg.getSender();
                       let replyName = "unknown";
@@ -1209,7 +1210,7 @@ ${codeTag(this.configPath)}
       }
 
       // 获取回复的消息
-      const replied = await msg.getReplyMessage();
+      const replied = await safeGetReplyMessage(msg);
       if (!replied) {
         await msg.edit({ text: "❌ 请回复一张贴纸或图片" });
         return;
