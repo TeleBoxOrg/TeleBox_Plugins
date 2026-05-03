@@ -7,6 +7,7 @@ import { exec } from "child_process";
 import { promisify } from "util";
 import path from "path";
 import { createDirectoryInAssets } from "@utils/pathHelpers";
+import { safeGetReplyMessage } from "@utils/safeGetMessages";
 
 const prefixes = getPrefixes();
 const mainPrefix = prefixes[0];
@@ -253,7 +254,7 @@ async function tts(msg: Api.Message) {
     const cover = userData.covers?.[cfg.defaultRole];
 
     // 优先被你回复的那条消息
-    const rep = msg.replyTo?.replyToMsgId ? await msg.getReplyMessage() : null;
+    const rep = msg.replyTo?.replyToMsgId ? await safeGetReplyMessage(msg) : null;
     const replyToId = rep?.id ?? msg.id;
 
     const file = await generateMusic(cleanTextForTTS(text), cfg.defaultRoleId, cfg.apiKey, { title, artist, album, cover });
@@ -282,7 +283,7 @@ async function tts(msg: Api.Message) {
   let text = parts.join(" ");
   let replyToId = msg.id;
   if (msg.replyTo?.replyToMsgId) {
-    const rep = await msg.getReplyMessage();
+    const rep = await safeGetReplyMessage(msg);
     if (rep?.text) text = text || rep.text;
     if (rep?.id) replyToId = rep.id;
   }
