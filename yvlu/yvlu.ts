@@ -21,6 +21,7 @@ import {
   getCommandFromMessage,
 } from "@utils/pluginManager";
 import { sleep } from "teleproto/Helpers";
+import { safeGetReplyMessage } from "@utils/safeGetMessages";
 import dayjs from "dayjs";
 import { CustomFile } from "teleproto/client/uploads.js";
 import * as zlib from "zlib";
@@ -106,7 +107,7 @@ async function convertTgsToWebm(tgsBuffer: Buffer): Promise<Buffer> {
 
     const pythonScript = `
 import sys
-import { safeGetReplyMessage } from "@utils/safeGetMessages";
+
 from rlottie_python import LottieAnimation
 anim = LottieAnimation.from_tgs(sys.argv[1])
 anim.save_animation(sys.argv[2])
