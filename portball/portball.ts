@@ -2,6 +2,7 @@ import { Plugin } from "@utils/pluginBase";
 import { getPrefixes } from "@utils/pluginManager";
 import { Api } from "teleproto";
 import { getGlobalClient } from "@utils/globalClient";
+import { safeGetReplyMessage } from "@utils/safeGetMessages";
 
 // HTML转义函数
 const prefixes = getPrefixes();
@@ -80,7 +81,7 @@ class PortballPlugin extends Plugin {
       }
 
       // 获取回复消息
-      const replyMsg = await msg.getReplyMessage();
+      const replyMsg = await safeGetReplyMessage(msg);
       if (!replyMsg) {
         await msg.edit({
           text: "❌ <b>错误：</b>请回复要禁言用户的消息",
