@@ -4,6 +4,7 @@ import axios from "axios";
 import Database from "better-sqlite3";
 import path from "path";
 import { createDirectoryInAssets } from "@utils/pathHelpers";
+import { safeGetReplyMessage } from "@utils/safeGetMessages";
 
 const CONFIG_KEYS = {
   API_KEY: "aitc_api_key",
@@ -400,7 +401,7 @@ async function handleAitcCommand(msg: Api.Message): Promise<void> {
 
   if (!userInput) {
     try {
-      const reply = await msg.getReplyMessage();
+      const reply = await safeGetReplyMessage(msg);
       const replyText =
         reply?.message || ("text" in (reply || {}) ? (reply as any).text : "");
       if (typeof replyText === "string") {
