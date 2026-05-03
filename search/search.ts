@@ -5,6 +5,7 @@ import { getGlobalClient } from "@utils/globalClient";
 import { getPrefixes } from "@utils/pluginManager";
 import fs from "fs/promises";
 import path from "path";
+import { safeGetReplyMessage } from "@utils/safeGetMessages";
 
 const prefixes = getPrefixes();
 const mainPrefix = prefixes[0];
@@ -363,7 +364,7 @@ class SearchService {
   }
 
   private async handleImport(msg: Api.Message) {
-    const replied = await msg.getReplyMessage();
+    const replied = await safeGetReplyMessage(msg);
     if (!replied || !replied.document) throw new Error("❌ 请回复备份文件。");
     
     const buffer = await this.client.downloadMedia(replied.media!);
