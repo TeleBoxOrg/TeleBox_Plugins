@@ -3,6 +3,7 @@ import { Plugin } from "@utils/pluginBase";
 import { Api } from "teleproto";
 import { getPrefixes } from "@utils/pluginManager";
 import axios from "axios";
+import { safeGetReplyMessage } from "@utils/safeGetMessages";
 
 // HTML转义函数
 const htmlEscape = (text: string): string =>
@@ -77,7 +78,7 @@ class SoutuPlugin extends Plugin {
       return;
     }
 
-    const replied = await msg.getReplyMessage();
+    const replied = await safeGetReplyMessage(msg);
     if (!replied?.photo) {
       await msg.edit({ text: "❌ <b>错误:</b> 回复的消息不包含图片", parseMode: "html" });
       return;
