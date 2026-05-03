@@ -1,5 +1,6 @@
 import { Plugin } from "@utils/pluginBase";
 import { Api, TelegramClient } from "teleproto";
+import { safeGetReplyMessage } from "@utils/safeGetMessages";
 
 const htmlEscape = (text: string): string =>
   text.replace(/[&<>"']/g, (m) => ({
@@ -71,7 +72,7 @@ const gt = async (msg: Api.Message) => {
     // If no text provided, try to get from replied message
     if (!text.trim()) {
       try {
-        const reply = await msg.getReplyMessage();
+        const reply = await safeGetReplyMessage(msg);
         if (reply && reply.text) {
           text = reply.text.trim();
         } else {
