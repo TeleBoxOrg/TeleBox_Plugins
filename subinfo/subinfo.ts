@@ -6,6 +6,7 @@ import axios from "axios";
 import * as yaml from "js-yaml";
 import * as cheerio from "cheerio";
 import dayjs from "dayjs";
+import { safeGetReplyMessage } from "@utils/safeGetMessages";
 
 const prefixes = getPrefixes();
 const mainPrefix = prefixes[0];
@@ -483,7 +484,7 @@ class SubinfoPlugin extends Plugin {
     let sourceText = '';
     if (msg.replyToMsgId) {
       try {
-        const replyMsg = await msg.getReplyMessage();
+        const replyMsg = await safeGetReplyMessage(msg);
         if (replyMsg) sourceText = (replyMsg.text ?? '') + ' ' + ((replyMsg as any).caption ?? '');
       } catch { /* 忽略 */ }
     }
@@ -656,7 +657,7 @@ class SubinfoPlugin extends Plugin {
     let sourceText = '';
     if (msg.replyToMsgId) {
       try {
-        const replyMsg = await msg.getReplyMessage();
+        const replyMsg = await safeGetReplyMessage(msg);
         if (replyMsg) sourceText = (replyMsg.text ?? '') + ' ' + ((replyMsg as any).caption ?? '');
       } catch { /* 忽略 */ }
     }
