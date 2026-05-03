@@ -2,6 +2,7 @@ import { Plugin } from "@utils/pluginBase";
 import { getPrefixes } from "@utils/pluginManager";
 import { getGlobalClient } from "@utils/globalClient";
 import { createDirectoryInAssets } from "@utils/pathHelpers";
+import { safeGetMessages } from "@utils/safeGetMessages";
 import { Api, TelegramClient, utils } from "teleproto";
 import { Low } from "lowdb";
 import { JSONFile } from "lowdb/node";
@@ -447,7 +448,11 @@ class CommandHandlers {
       // 1. 如果有回复消息，尝试从转发信息中获取
       if (message.replyTo) {
         try {
-          const repliedMsg = await message.getReplyMessage();
+          const [repliedMsg] = await safeGetMessages(
+            client,
+            message.peerId,
+            { ids: [message.replyTo.replyToMsgId] },
+          );
           if (repliedMsg && repliedMsg.fwdFrom) {
             const fwdChatId = repliedMsg.fwdFrom.fromId;
             if (fwdChatId) {
