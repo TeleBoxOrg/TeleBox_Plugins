@@ -7,6 +7,7 @@ import * as fs from "fs";
 import axios from "axios";
 import * as crypto from "crypto";
 import sharp from "sharp";
+import { safeGetReplyMessage } from "../src/utils/safeGetMessages";
 import {
   createDirectoryInAssets,
   createDirectoryInTemp,
@@ -623,7 +624,7 @@ const speedtest = async (msg: Api.Message): Promise<void> => {
           });
           return;
         }
-        const repliedMsg = await msg.getReplyMessage();
+        const repliedMsg = await safeGetReplyMessage(msg);
         if (!repliedMsg?.document) {
           await msg.edit({
             text: `❌ <b>恢复失败</b>\n\n您回复的消息不包含文件。`,
