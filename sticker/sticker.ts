@@ -6,6 +6,7 @@ import { Api, TelegramClient } from "teleproto";
 import { sleep } from "teleproto/Helpers";
 import { JSONFilePreset } from "lowdb/node";
 import * as path from "path";
+import { safeGetReplyMessage } from "@utils/safeGetMessages";
 
 // 配置键定义
 const CONFIG_KEYS = {
@@ -158,7 +159,7 @@ class StickerPlugin extends Plugin {
       const parts = lines?.[0]?.split(/\s+/) || [];
       const [, ...args] = parts; // 跳过命令本身
       const sub = (args[0] || "").toLowerCase();
-      const repliedMsg = await msg.getReplyMessage();
+      const repliedMsg = await safeGetReplyMessage(msg);
 
       // 处理 help 在前的情况：.s help 或 .s h
       if (sub === "help" || sub === "h") {
