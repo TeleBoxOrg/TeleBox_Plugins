@@ -1,6 +1,7 @@
 import { Plugin } from "@utils/pluginBase";
 import { Api } from "teleproto";
 import axios from "axios";
+import { safeGetReplyMessage } from "@utils/safeGetMessages";
 
 function htmlEscape(text: string): string {
   if (typeof text !== 'string') return '';
@@ -79,7 +80,7 @@ const ip = async (msg: Api.Message) => {
 
     if (!query) {
       try {
-        const reply = await msg.getReplyMessage();
+        const reply = await safeGetReplyMessage(msg);
         if (reply && reply.text) {
           const text = reply.text.trim();
           const ipRegex = /\b(?:[0-9]{1,3}\.){3}[0-9]{1,3}\b/;
