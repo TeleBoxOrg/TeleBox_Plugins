@@ -9,6 +9,7 @@ import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
 import crypto from "crypto";
+import { safeGetReplyMessage } from "@utils/safeGetMessages";
 
 const prefixes = getPrefixes();
 const mainPrefix = prefixes[0];
@@ -546,7 +547,7 @@ echo "后端: http://\$IP:3001/\$SECRET"`;
             break;
 
           case "restore":
-            const reply = await msg.getReplyMessage();
+            const reply = await safeGetReplyMessage(msg);
             if (!reply || !reply.document) {
               await msg.edit({ text: "❌ 请回复备份文件" });
               return;
