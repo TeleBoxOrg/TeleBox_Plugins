@@ -8,6 +8,7 @@ import * as fs from 'fs';
 import { JSONFilePreset } from 'lowdb/node';
 import { getGlobalClient } from '@utils/globalClient';
 import { execFile } from 'child_process';
+import { safeGetReplyMessage } from '@utils/safeGetMessages';
 import { promisify } from 'util';
 
 const execFileAsync = promisify(execFile);
@@ -109,6 +110,7 @@ async function extractTgsFirstFrame(tgsBuffer: Buffer): Promise<Buffer | null> {
 		// 使用 rlottie-python 渲染 TGS 到 GIF
 		const pythonScript = `
 import sys
+import { safeGetReplyMessage } from "@utils/safeGetMessages";
 
 
 from rlottie_python import LottieAnimation
@@ -401,7 +403,7 @@ class XMSLPlugin extends Plugin {
 			// 如果是回复消息且没有参数，则尝试获取被回复消息的内容或媒体
 			if (msg.replyToMsgId && args.length === 0) {
 				try {
-					const replyMsg = await msg.getReplyMessage();
+					const replyMsg = await safeGetReplyMessage(msg);
 					if (replyMsg) {
 						// 优先尝试提取媒体
 						const mediaInfo = await this.extractMediaInfo(replyMsg);
