@@ -6,6 +6,7 @@ import fs from 'fs';
 import path from 'path';
 import { Api } from 'teleproto';
 import { promisify } from 'util';
+import { safeGetReplyMessage } from "@utils/safeGetMessages";
 
 const prefixes = getPrefixes();
 const mainPrefix = prefixes[0];
@@ -76,7 +77,7 @@ class REVPlugin extends Plugin {
 				}
 
 				// 处理媒体反转
-				const replyMsg = await msg.getReplyMessage();
+				const replyMsg = await safeGetReplyMessage(msg);
 				if (replyMsg) {
 					const handled = await this.handleReplyMessage(
 						msg,
