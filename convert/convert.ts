@@ -9,6 +9,7 @@ import { promisify } from "util";
 import axios from "axios";
 import Database from "better-sqlite3";
 import { Converter } from "opencc-js";
+import { safeGetReplyMessage } from "@utils/safeGetMessages";
 
 const execAsync = promisify(exec);
 
@@ -324,7 +325,7 @@ class ConvertPlugin extends Plugin {
 
   private async handleVideoConversion(msg: Api.Message, args: string[]): Promise<void> {
     const client = await getGlobalClient();
-    const reply = await msg.getReplyMessage();
+    const reply = await safeGetReplyMessage(msg);
 
     if (!client || !reply || (!reply.document && !reply.video)) {
       await msg.edit({ text: `❌ <b>使用错误</b>\n\n请回复一个视频消息后再使用此命令。\n\n请回复一个视频消息后再试。`, parseMode: "html" });
