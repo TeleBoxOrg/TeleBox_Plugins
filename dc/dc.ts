@@ -1,6 +1,7 @@
 import { Plugin } from "@utils/pluginBase";
 import { Api, TelegramClient } from "teleproto";
 import { getGlobalClient } from "@utils/globalClient";
+import { safeGetReplyMessage } from "@utils/safeGetMessages";
 
 const htmlEscape = (text: string): string =>
   text.replace(/[&<>"']/g, (m) => ({
@@ -41,7 +42,7 @@ const dc = async (msg: Api.Message) => {
   try {
     // 如果是回复消息
     if (msg.replyTo) {
-      const replyMessage = await msg.getReplyMessage();
+      const replyMessage = await safeGetReplyMessage(msg);
       if (!replyMessage) {
         await msg.edit({
           text: "❌ 无法获取回复的消息",
