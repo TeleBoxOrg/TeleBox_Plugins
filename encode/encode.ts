@@ -2,6 +2,7 @@ import { Plugin } from "@utils/pluginBase";
 import { getGlobalClient } from "@utils/globalClient";
 import { getPrefixes } from "@utils/pluginManager";
 import { Api } from "teleproto";
+import { safeGetReplyMessage } from "@utils/safeGetMessages";
 
 // HTML转义工具
 const htmlEscape = (text: string): string => 
@@ -150,7 +151,7 @@ class EncodePlugin extends Plugin {
     // 如果没有提供文本，尝试从回复消息获取
     if (!text.trim()) {
       try {
-        const reply = await msg.getReplyMessage();
+        const reply = await safeGetReplyMessage(msg);
         if (reply && reply.text) {
           text = reply.text.trim();
         } else {
