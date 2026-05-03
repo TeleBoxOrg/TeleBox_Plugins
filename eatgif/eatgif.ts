@@ -12,6 +12,7 @@ import { Api } from "teleproto";
 import { encode, UnencodedFrame } from "modern-gif";
 import { exec } from "child_process";
 import { promisify } from "util";
+import { safeGetReplyMessage } from "@utils/safeGetMessages";
 
 const execAsync = promisify(exec);
 
@@ -269,14 +270,14 @@ class EatGifPlugin extends Plugin {
             stickerset: new Api.InputStickerSetEmpty(),
           }),
         ],
-        replyTo: await msg.getReplyMessage(),
+        replyTo: await safeGetReplyMessage(msg),
       });
     } catch (e) {
       console.log("exec ffmpeg error", e);
       await msg.edit({ text: `生成 webm 失败 ${e}` });
       await msg.client?.sendFile(msg.peerId, {
         file: gifPath,
-        replyTo: await msg.getReplyMessage(),
+        replyTo: await safeGetReplyMessage(msg),
       });
     }
 
@@ -390,9 +391,9 @@ class EatGifPlugin extends Plugin {
     msg: Api.Message,
     trigger?: Api.Message
   ): Promise<Buffer | undefined> {
-    let replyTo = await msg.getReplyMessage();
+    let replyTo = await safeGetReplyMessage(msg);
     if (!replyTo) {
-      replyTo = await trigger?.getReplyMessage();
+      replyTo = await safeGetReplyMessage(trigger);
     }
     if (!replyTo?.senderId) return;
     const youAvatarBuffer = await msg.client?.downloadProfilePhoto(
