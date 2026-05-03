@@ -7,6 +7,7 @@ import { Low } from "lowdb";
 import { JSONFile } from "lowdb/node";
 import path from "path";
 import bigInt from "big-integer";
+import { safeGetReplyMessage } from "@utils/safeGetMessages";
 
 const prefixes = getPrefixes();
 const mainPrefix = prefixes[0];
@@ -137,7 +138,7 @@ class UserResolver {
     }
     
     // 从回复消息解析
-    const reply = await message.getReplyMessage();
+    const reply = await safeGetReplyMessage(message);
     if (reply?.senderId) {
       const uid = Number(reply.senderId);
       const sender = await this.getReplySender(reply);
