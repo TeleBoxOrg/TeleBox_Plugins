@@ -6,6 +6,7 @@ import { Api } from "teleproto";
 import { JSONFilePreset } from "lowdb/node";
 import * as path from "path";
 import bigInt, { BigInteger } from "big-integer";
+import { safeGetReplyMessage } from "@utils/safeGetMessages";
 
 const prefixes = getPrefixes();
 const mainPrefix = prefixes[0];
@@ -179,7 +180,7 @@ class TracePlugin extends Plugin {
     try {
       const parts = msg.message?.split(/\s+/) || [];
       const [, sub, ...args] = parts;
-      const repliedMsg = await msg.getReplyMessage();
+      const repliedMsg = await safeGetReplyMessage(msg);
 
       if (repliedMsg && !sub) {
         return this.untraceUser(msg, repliedMsg);
