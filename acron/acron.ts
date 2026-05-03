@@ -7,6 +7,7 @@ import * as cron from "cron";
 import { JSONFilePreset } from "lowdb/node";
 import * as path from "path";
 import { getGlobalClient } from "@utils/globalClient";
+import { safeGetMessages } from "@utils/safeGetMessages";
 import { reviveEntities } from "@utils/tlRevive";
 import {
   dealCommandPluginWithMessage,
@@ -328,7 +329,7 @@ async function scheduleTask(task: AcronTask) {
         try {
           // 获取源消息（尽量使用完整实体以避免 hash 失效）
           const fromEntityLike = (fromChatIdNum as any) ?? t.fromChatId;
-          const messages = await client.getMessages(fromEntityLike as any, {
+          const messages = await safeGetMessages(client, fromEntityLike as any, {
             ids: fromMsgIdNum,
           });
           const realtimeMsg = messages?.[0] as any;
@@ -391,7 +392,7 @@ async function scheduleTask(task: AcronTask) {
       } else if (task.type === "del_re") {
         const t = task as DelReTask;
         const limitNum = toInt(t.limit) ?? 100;
-        const messages = await client.getMessages(entityLike, {
+        const messages = await safeGetMessages(client, entityLike, {
           limit: limitNum,
         });
         const re = tryParseRegex(t.regex);
