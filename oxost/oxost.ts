@@ -6,6 +6,7 @@ import { Plugin } from "@utils/pluginBase";
 import { Api } from "teleproto";
 import { getGlobalClient } from "@utils/globalClient";
 import { Buffer } from "buffer";
+import { safeGetReplyMessage } from "@utils/safeGetMessages";
 
 // HTML转义
 const htmlEscape = (text: string): string =>
@@ -87,7 +88,7 @@ class Ox0Plugin extends Plugin {
 
       let replied: Api.Message | undefined;
       try {
-        replied = await msg.getReplyMessage();
+        replied = await safeGetReplyMessage(msg);
       } catch (e: any) {
         await sendLongMessage(msg, `❌ <b>错误:</b> ${htmlEscape(e.message)}`);
         return;
