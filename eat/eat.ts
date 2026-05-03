@@ -4,6 +4,7 @@ import axios from "axios";
 import { Api } from "teleproto";
 import { CustomFile } from "teleproto/client/uploads";
 import { getPrefixes } from "@utils/pluginManager";
+import { safeGetReplyMessage } from "@utils/safeGetMessages";
 
 const prefixes = getPrefixes();
 const mainPrefix = prefixes[0];
@@ -173,7 +174,7 @@ async function iconMaskedFor(params: {
 }
 
 async function downloadProfilePhoto(msg: Api.Message): Promise<Buffer | null> {
-  const replied = await msg.getReplyMessage();
+  const replied = await safeGetReplyMessage(msg);
   const fromId = replied?.senderId;
   if (!fromId) {
     await msg.edit({ text: "无法获取对方头像" });
@@ -188,7 +189,7 @@ async function downloadProfilePhoto(msg: Api.Message): Promise<Buffer | null> {
 }
 
 async function downloadMedia(msg: Api.Message): Promise<Buffer | null> {
-  const replied = await msg.getReplyMessage();
+  const replied = await safeGetReplyMessage(msg);
   if (!replied) {
     await msg.edit({ text: "请回复一条图片消息" });
     return null;
@@ -276,7 +277,7 @@ async function compositeWithEntryConfig(parmas: {
       file,
       forceDocument: false,
       attributes: [stickerAttr, imageSizeAttr, filenameAttr],
-      replyTo: await msg.getReplyMessage(),
+      replyTo: await safeGetReplyMessage(msg),
     });
     return;
   }
@@ -338,7 +339,7 @@ async function compositeWithEntryConfig(parmas: {
     file,
     forceDocument: false,
     attributes: [stickerAttr, imageSizeAttr, filenameAttr],
-    replyTo: await msg.getReplyMessage(),
+    replyTo: await safeGetReplyMessage(msg),
   });
 }
 
