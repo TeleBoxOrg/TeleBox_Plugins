@@ -8,6 +8,7 @@ import * as path from "path";
 import { Api } from "teleproto";
 import { sleep } from "teleproto/Helpers";
 import { RPCError } from "teleproto/errors";
+import { safeGetReplyMessage } from "@utils/safeGetMessages";
 
 const prefixes = getPrefixes();
 const mainPrefix = prefixes[0];
@@ -750,7 +751,7 @@ class BsPlugin extends Plugin {
           return;
         }
 
-        const replyMessage = await msg.getReplyMessage();
+        const replyMessage = await safeGetReplyMessage(msg);
         if (!replyMessage) {
           await msg.edit({
             text: "❌ <b>无法获取被回复的消息</b>",
