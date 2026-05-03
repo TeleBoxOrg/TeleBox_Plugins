@@ -6,6 +6,7 @@ import { Api } from "teleproto";
 import axios from "axios";
 import * as fs from "fs";
 import * as path from "path";
+import { safeGetReplyMessage } from "@utils/safeGetMessages";
 
 const prefixes = getPrefixes();
 const mainPrefix = prefixes[0];
@@ -196,7 +197,7 @@ class FadianPlugin extends Plugin {
 
             // 如果没有提供名字，尝试从回复消息获取
             if (!targetName) {
-              const replyMsg = await msg.getReplyMessage();
+              const replyMsg = await safeGetReplyMessage(msg);
               if (replyMsg) {
                 const sender = (await replyMsg.sender) as any;
                 if (sender) {
