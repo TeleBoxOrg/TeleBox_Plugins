@@ -7,6 +7,7 @@ import { getPrefixes } from "@utils/pluginManager";
 import { createDirectoryInAssets } from "@utils/pathHelpers";
 import { Api } from "teleproto";
 import { CustomFile } from "teleproto/client/uploads.js";
+import { safeGetReplyMessage } from "@utils/safeGetMessages";
 
 const prefixes = getPrefixes();
 const mainPrefix = prefixes[0];
@@ -101,7 +102,7 @@ function getImageMimeType(message: Api.Message): string {
 async function downloadReplyImage(
   msg: Api.Message,
 ): Promise<{ buffer: Buffer; mimeType: string } | null> {
-  const replyMsg = await msg.getReplyMessage();
+  const replyMsg = await safeGetReplyMessage(msg);
   if (!replyMsg?.media) {
     return null;
   }
@@ -466,7 +467,7 @@ async function handleCximg(msg: Api.Message): Promise<void> {
     return;
   }
 
-  const replyMsg = await msg.getReplyMessage();
+  const replyMsg = await safeGetReplyMessage(msg);
   await client.sendFile(msg.peerId, {
     file,
     caption,
