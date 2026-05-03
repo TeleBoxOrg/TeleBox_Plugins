@@ -7,7 +7,7 @@ import * as cron from "cron";
 import { JSONFilePreset } from "lowdb/node";
 import * as path from "path";
 import { getGlobalClient } from "@utils/globalClient";
-import { safeGetMessages } from "@utils/safeGetMessages";
+import { safeGetMessages, safeGetReplyMessage } from "@utils/safeGetMessages";
 import { reviveEntities } from "@utils/tlRevive";
 import {
   dealCommandPluginWithMessage,
@@ -920,7 +920,7 @@ class AcronPlugin extends Plugin {
               await msg.edit({ text: "请回复一条要定时发送的消息" });
               return;
             }
-            const replied = await msg.getReplyMessage();
+            const replied = await safeGetReplyMessage(msg);
             const mm: any = replied || {};
             // 不支持多媒体或按钮
             if (mm.media || mm.replyMarkup) {
@@ -1021,7 +1021,7 @@ class AcronPlugin extends Plugin {
               await msg.edit({ text: "请回复一条要复制/转发的源消息" });
               return;
             }
-            const replied = await msg.getReplyMessage();
+            const replied = await safeGetReplyMessage(msg);
             const mm: any = replied || {};
             const fromMsgId = toInt(mm.id);
             const fromChatId = toInt(mm.chatId);
