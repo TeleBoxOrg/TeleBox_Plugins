@@ -4,6 +4,7 @@ import { Plugin } from "@utils/pluginBase";
 import { Api } from "teleproto";
 import { getGlobalClient } from "@utils/globalClient";
 import { CustomFile } from "teleproto/client/uploads.js";
+import { safeGetReplyMessage } from "@utils/safeGetMessages";
 
 const htmlEscape = (text: string): string =>
   text.replace(/[&<>"']/g, (m) => ({
@@ -47,7 +48,7 @@ class JuPaiPlugin extends Plugin {
         
         // 如果命令后没有文本，检查是否回复了消息
         if (!text) {
-          const replied = msg.replyTo ? await msg.getReplyMessage() : null;
+          const replied = msg.replyTo ? await safeGetReplyMessage(msg) : null;
           if (replied && replied.message) {
             text = replied.message;
           }
