@@ -5,6 +5,7 @@ import { Plugin } from "@utils/pluginBase";
 import { Api } from "teleproto";
 import { sleep } from "teleproto/Helpers";
 import { getGlobalClient } from "@utils/globalClient";
+import { safeGetReplyMessage } from "@utils/safeGetMessages";
 
 const prefixes = getPrefixes();
 const mainPrefix = prefixes[0];
@@ -119,7 +120,7 @@ class ManageAdminPlugin extends Plugin {
       async function resolveUserFromReplyOrArg(arg?: string) {
         const client = await getGlobalClient();
         if (msg.isReply) {
-          const r = await msg.getReplyMessage();
+          const r = await safeGetReplyMessage(msg);
           if (!r) return { id: undefined as any, entity: undefined as any };
           // Prefer real sender entity and ensure it's a user
           let sender: any;
