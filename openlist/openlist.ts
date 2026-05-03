@@ -10,6 +10,7 @@ import { createDirectoryInAssets } from "@utils/pathHelpers";
 
 import { exec } from "child_process";
 import { promisify } from "util";
+import { safeGetReplyMessage } from "@utils/safeGetMessages";
 
 const prefixes = getPrefixes();
 const mainPrefix = prefixes[0];
@@ -546,7 +547,7 @@ class OpenListPlugin extends Plugin {
 
   private async handleSave(msg: Api.Message, targetPath?: string) {
     try {
-      const replyToMsg = await msg.getReplyMessage();
+      const replyToMsg = await safeGetReplyMessage(msg);
       if (!replyToMsg || !replyToMsg.media) {
         await msg.edit({ text: "请回复一个文件、图片或视频来保存。" });
         return;
