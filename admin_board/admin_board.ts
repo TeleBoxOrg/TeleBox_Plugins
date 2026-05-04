@@ -5,6 +5,7 @@ import { createDirectoryInAssets } from "@utils/pathHelpers";
 import { JSONFilePreset } from "lowdb/node";
 import { Api } from "teleproto";
 import path from "path";
+import { safeGetMessages } from "@utils/safeGetMessages";
 
 const prefixes = getPrefixes();
 const mainPrefix = prefixes[0];
@@ -617,7 +618,7 @@ async function collectAdminStat(
   let sortLastMessageTs = 0;
 
   try {
-    const messages = await client.getMessages(target.entity, {
+    const messages = await safeGetMessages(client, target.entity, {
       fromUser: user as any,
       limit: 1,
     });
