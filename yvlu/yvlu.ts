@@ -1,3 +1,4 @@
+import { safeGetMe } from "../src/utils/authGuards";
 // YVLU Plugin - 生成文字语录贴纸
 //@ts-nocheck
 import axios from "axios";
@@ -21,7 +22,7 @@ import {
   getCommandFromMessage,
 } from "@utils/pluginManager";
 import { sleep } from "teleproto/Helpers";
-import { safeGetReplyMessage } from "@utils/safeGetMessages";
+import { safeGetReplyMessage, safeGetMessages } from "@utils/safeGetMessages";
 import dayjs from "dayjs";
 import { CustomFile } from "teleproto/client/uploads.js";
 import * as zlib from "zlib";
@@ -1411,7 +1412,8 @@ ${codeTag(this.configPath)}
       }
 
       // 获取当前用户信息
-      const me = await client.getMe();
+      const me = await safeGetMe(client);
+           if (!me) return;
 
       // 创建贴纸包
       await client.invoke(
