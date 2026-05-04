@@ -6,6 +6,7 @@ import * as fs from "fs";
 import * as path from "path";
 import { execSync } from "child_process";
 import * as os from "os";
+import { safeGetMessages } from "@utils/safeGetMessages";
 
 // 获取命令前缀
 const prefixes = getPrefixes();
@@ -317,7 +318,7 @@ class StickerToPicPlugin extends Plugin {
       if (msg.replyTo && 'replyToMsgId' in msg.replyTo && msg.replyTo.replyToMsgId) {
         try {
           const replyMsgId = msg.replyTo.replyToMsgId;
-          const messages = await client.getMessages(msg.peerId!, {
+          const messages = await safeGetMessages(client, msg.peerId!, {
             ids: [replyMsgId]
           });
           
