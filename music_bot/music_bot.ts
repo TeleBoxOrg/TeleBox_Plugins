@@ -4,6 +4,7 @@ import { getPrefixes } from "@utils/pluginManager";
 import { Plugin } from "@utils/pluginBase";
 import { Api } from "teleproto";
 import { sleep } from "teleproto/Helpers";
+import { safeGetMessages } from "@utils/safeGetMessages";
 
 const prefixes = getPrefixes();
 const mainPrefix = prefixes[0];
@@ -131,7 +132,7 @@ async function searchAndSendMusic(
   let replyWithButtons: any | undefined;
   for (let i = 0; i < 15; i++) {
     await sleep(700);
-    const msgs = await client.getMessages(bot, { limit: 1 });
+    const msgs = await safeGetMessages(client, bot, { limit: 1 });
     for (const m of msgs.slice().reverse()) {
       if (!m.out && (m.date || 0) >= startTs && (m.buttonCount || 0) > 0) {
         replyWithButtons = m;
@@ -174,7 +175,7 @@ async function searchAndSendMusic(
   let mediaMsg: any | undefined;
   for (let i = 0; i < 20; i++) {
     await sleep(700);
-    const msgs = await client.getMessages(bot, { limit: 6 });
+    const msgs = await safeGetMessages(client, bot, { limit: 6 });
     for (const m of msgs.slice().reverse()) {
       if (
         !m.out &&
