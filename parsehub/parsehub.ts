@@ -5,7 +5,7 @@ import { sleep } from "teleproto/Helpers";
 import { createDirectoryInAssets } from "@utils/pathHelpers";
 import * as path from "path";
 import * as fs from "fs";
-import { safeGetReplyMessage } from "@utils/safeGetMessages";
+import { safeGetMessages, safeGetReplyMessage } from "@utils/safeGetMessages";
 
 const BOT_USERNAME = "ParseHubot";
 const POLL_INTERVAL_MS = 2000;
@@ -145,7 +145,7 @@ async function ensureBotReady(msg: Api.Message) {
   }
 
   try {
-    const history = await client.getMessages(BOT_USERNAME, { limit: 1 });
+    const history = await safeGetMessages(client, BOT_USERNAME, { limit: 1 });
     if (history.length > 0) {
       hasStartedBot = true;
       return;
@@ -199,7 +199,7 @@ async function ensureBotReady(msg: Api.Message) {
 async function getLatestBotMessageId(client: any): Promise<number> {
   if (!client) return 0;
   try {
-    const history = await client.getMessages(BOT_USERNAME, { limit: 1 });
+    const history = await safeGetMessages(client, BOT_USERNAME, { limit: 1 });
     if (history.length > 0) {
       return history[0].id;
     }
@@ -273,7 +273,7 @@ async function relayParseResult(
 
     let messages: Api.Message[] = [];
     try {
-      messages = await client.getMessages(BOT_USERNAME, { limit: FETCH_LIMIT });
+      messages = await safeGetMessages(client, BOT_USERNAME, { limit: FETCH_LIMIT });
     } catch (error: any) {
       return {
         lastId,
