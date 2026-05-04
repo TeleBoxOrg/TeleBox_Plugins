@@ -4,6 +4,7 @@ import { getGlobalClient } from "@utils/globalClient";
 import { getPrefixes } from "@utils/pluginManager";
 import { sleep } from "teleproto/Helpers";
 import { NewMessage } from "teleproto/events";
+import { safeGetMessages } from "@utils/safeGetMessages";
 
 // HTML转义函数
 const htmlEscape = (text: string): string => 
@@ -181,7 +182,7 @@ async function getBotResponse(client: any, command: string): Promise<Api.Message
     const botEntity = await client.getEntity(BOT_USERNAME);
     
     // 检查是否有对话历史，如果没有先发送 /start
-    const recentMessages = await client.getMessages(botEntity, { limit: 3 });
+    const recentMessages = await safeGetMessages(client, botEntity, { limit: 3 });
     const hasConversation = recentMessages.length > 0;
     
     if (!hasConversation) {
@@ -241,7 +242,7 @@ async function sendCheckinCommand(msg: Api.Message): Promise<void> {
     const botEntity = await client.getEntity(BOT_USERNAME);
     
     // 检查是否有对话历史，如果没有先发送 /start
-    const recentMessages = await client.getMessages(botEntity, { limit: 3 });
+    const recentMessages = await safeGetMessages(client, botEntity, { limit: 3 });
     const hasConversation = recentMessages.length > 0;
     
     if (!hasConversation) {
