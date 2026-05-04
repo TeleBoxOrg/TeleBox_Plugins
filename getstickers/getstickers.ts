@@ -11,6 +11,7 @@ import bigInt from "big-integer";
 import { CustomFile } from "teleproto/client/uploads";
 import { exec } from "child_process";
 import { getPrefixes } from "@utils/pluginManager";
+import { safeGetMessages } from "@utils/safeGetMessages";
 const prefixes = getPrefixes();
 const mainPrefix = prefixes[0];
 
@@ -86,7 +87,7 @@ class GetStickersPlugin extends Plugin {
       if (msg.replyTo && 'replyToMsgId' in msg.replyTo && msg.replyTo.replyToMsgId) {
         try {
           const replyMsgId = msg.replyTo.replyToMsgId;
-          const messages = await client.getMessages(msg.peerId!, {
+          const messages = await safeGetMessages(client, msg.peerId!, {
             ids: [replyMsgId]
           });
           
