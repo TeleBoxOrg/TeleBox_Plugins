@@ -608,7 +608,7 @@ class YvluPlugin extends Plugin {
         try {
           const client = await getGlobalClient();
 
-          const messages = await msg.client?.getMessages(replied?.peerId, {
+          const messages = await safeGetMessages(msg.client, replied.peerId, {
             offsetId: replied!.id - 1,
             limit: count,
             reverse: true,
