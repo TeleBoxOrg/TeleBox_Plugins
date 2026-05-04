@@ -12,6 +12,7 @@ import * as path from "path";
 import { createDirectoryInAssets } from "@utils/pathHelpers";
 import { getGlobalClient } from "@utils/globalClient";
 import { TelegramFormatter } from "@utils/telegramFormatter";
+import { safeGetMessages } from "@utils/safeGetMessages";
 
 const prefixes = getPrefixes();
 const mainPrefix = prefixes[0];
@@ -539,7 +540,7 @@ class UAIPlugin extends Plugin {
                 if (!replyToId) throw new Error("无法获取引用消息");
 
                 const chatPeerId = msg.peerId;  // 使用 peerId 而不是 chatId 字符串
-                const [repliedMsg] = await client.getMessages(chatPeerId, { ids: [replyToId] });
+                const [repliedMsg] = await safeGetMessages(client, chatPeerId, { ids: [replyToId] });
                 if (!repliedMsg) throw new Error("引用的消息不存在");
 
                 // 获取来源：发送者 或 转发来源
