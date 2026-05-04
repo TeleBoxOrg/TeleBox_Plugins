@@ -6,6 +6,7 @@ import { getGlobalClient } from "@utils/globalClient";
 import { TelegramClient } from "teleproto";
 import { NewMessage, NewMessageEvent } from "teleproto/events";
 import { Api } from "teleproto/tl";
+import { safeGetMessages } from "@utils/safeGetMessages";
 import {
   safeForwardMessage,
   parseEntityId,
@@ -825,7 +826,7 @@ class BackupManager {
 
     try {
       // 获取消息总数
-      const messages = await client.getMessages(task.sourceId, { limit: 1 });
+      const messages = await safeGetMessages(client, task.sourceId, { limit: 1 });
       const totalCount = (messages as any).total || 0;
       task.totalMessages = totalCount;
 
@@ -834,7 +835,7 @@ class BackupManager {
       let offsetId = task.lastMessageId || 0;
 
       while (hasMore && task.status === "running") {
-        const batch = await client.getMessages(task.sourceId, {
+        const batch = await safeGetMessages(client, task.sourceId, {
           limit: batchSize,
           offsetId,
         });
