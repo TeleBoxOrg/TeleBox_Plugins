@@ -724,10 +724,13 @@ class AutoRepeatPlugin extends Plugin {
   };
 
   listenMessageHandler = async (msg: Api.Message) => {
-    if (!msg || msg.date === undefined) return;
+    if (!msg) return;
+
+    const msgDate = Number((msg as any).date);
+    if (!Number.isFinite(msgDate) || msgDate <= 0) return;
 
     // 忽略之前的旧消息（只处理实时消息）
-    if (Date.now() / 1000 - msg.date > 60) return;
+    if (Date.now() / 1000 - msgDate > 60) return;
 
     // 忽略自己发送的消息
     if (msg.out) return;
