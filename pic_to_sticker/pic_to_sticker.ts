@@ -8,6 +8,7 @@ import * as fs from "fs";
 import * as path from "path";
 import { JSONFilePreset } from "lowdb/node";
 import { sleep } from "teleproto/Helpers";
+import { safeGetMessages } from "@utils/safeGetMessages";
 
 // 必需工具函数
 const htmlEscape = (text: string): string => 
@@ -289,7 +290,7 @@ class PicToStickerPlugin extends Plugin {
 
       // 获取回复的消息
       const replyMsgId = msg.replyTo.replyToMsgId;
-      const messages = await client.getMessages(msg.peerId!, {
+      const messages = await safeGetMessages(client, msg.peerId!, {
         ids: [replyMsgId]
       } as any);
 
@@ -326,7 +327,7 @@ class PicToStickerPlugin extends Plugin {
           }
         } else if ((targetMsg as any).groupedId) {
           // 媒体组（多张图片）
-          const groupMessages = await client.getMessages(msg.peerId!, {
+          const groupMessages = await safeGetMessages(client, msg.peerId!, {
             limit: 10,
             offsetId: targetMsg.id
           } as any);
@@ -387,7 +388,7 @@ class PicToStickerPlugin extends Plugin {
       // 检查是否回复了消息
       if (msg.replyTo && 'replyToMsgId' in msg.replyTo && msg.replyTo.replyToMsgId) {
         const replyMsgId = msg.replyTo.replyToMsgId;
-        const messages = await client.getMessages(msg.peerId!, {
+        const messages = await safeGetMessages(client, msg.peerId!, {
           ids: [replyMsgId]
         });
         
