@@ -2,6 +2,7 @@ import { Plugin } from "@utils/pluginBase";
 import { Api } from "teleproto";
 import { getPrefixes } from "@utils/pluginManager";
 import { sleep } from "teleproto/Helpers";
+import { safeGetMessages } from "@utils/safeGetMessages";
 
 // 参考 plugins/music_bot.ts 的结构与实现方式
 
@@ -105,7 +106,7 @@ async function fetchAndSendAudio(
   let mediaMsg: any | undefined;
   for (let i = 0; i < 20; i++) {
     await sleep(700);
-    const msgs = await client.getMessages(bot, { limit: 6 });
+    const msgs = await safeGetMessages(client, bot, { limit: 6 });
     for (const m of msgs.slice().reverse()) {
       if (!m.out && (m.date || 0) >= startTs) {
         if (!mediaMsg && m.media) mediaMsg = m;
@@ -128,7 +129,7 @@ async function fetchAndSendAudio(
     // 点击后继续等待媒体
     for (let i = 0; i < 20; i++) {
       await sleep(700);
-      const msgs = await client.getMessages(bot, { limit: 6 });
+      const msgs = await safeGetMessages(client, bot, { limit: 6 });
       for (const m of msgs.slice().reverse()) {
         if (
           !m.out &&
