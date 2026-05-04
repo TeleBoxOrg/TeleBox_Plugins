@@ -1,6 +1,7 @@
+import { Api } from "teleproto";
 import { Plugin } from "@utils/pluginBase";
 import { getPrefixes } from "@utils/pluginManager";
-import { Api } from "teleproto";
+import { safeGetMessages, safeGetReplyMessage } from "@utils/safeGetMessages";
 import { getGlobalClient } from "@utils/globalClient";
 import { createDirectoryInAssets, createDirectoryInTemp } from "@utils/pathHelpers";
 import { JSONFilePreset } from "lowdb/node";
@@ -8,7 +9,6 @@ import * as path from "path";
 import * as fs from "fs/promises";
 import { statSync, existsSync } from "fs";
 import { CustomFile } from 'teleproto/client/uploads';
-import { safeGetReplyMessage } from "@utils/safeGetMessages";
 
 const prefixes = getPrefixes();
 const mainPrefix = prefixes[0];
@@ -512,7 +512,7 @@ class PrometheusPlugin extends Plugin {
     try {
       const client = await getGlobalClient();
       const peer = await client.getInputEntity(chatId);
-      const messages = await client.getMessages(peer, { ids: [messageId] });
+      const messages = await safeGetMessages(client, peer, { ids: [messageId] });
       return messages[0] || null;
     } catch (error) {
       console.error(`获取消息失败:`, error);
@@ -1350,7 +1350,7 @@ class PrometheusPlugin extends Plugin {
             if (id > 0) searchIds.push(id);
           }
           
-          const messages = await client.getMessages(peer, { ids: searchIds });
+          const messages = await safeGetMessages(client, peer, { ids: searchIds });
           const groupMessages = messages.filter((msg): msg is Api.Message => 
             msg && (msg as Api.Message).groupedId?.toString() === messageInfo.groupedId
           );
