@@ -6,7 +6,7 @@ import { Api, TelegramClient } from "teleproto";
 import { sleep } from "teleproto/Helpers";
 import { JSONFilePreset } from "lowdb/node";
 import * as path from "path";
-import { safeGetReplyMessage } from "@utils/safeGetMessages";
+import { safeGetMessages, safeGetReplyMessage } from "@utils/safeGetMessages";
 
 // 配置键定义
 const CONFIG_KEYS = {
@@ -444,7 +444,7 @@ class StickerPlugin extends Plugin {
     try {
         // Helper to get the latest message from the bot
         const getLatestBotResponse = async () => {
-            const history = await client.getMessages(stickersBot, { limit: 1 });
+            const history = await safeGetMessages(client, stickersBot, { limit: 1 });
             return history[0];
         };
 
