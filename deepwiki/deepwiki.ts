@@ -11,6 +11,7 @@ import path from "path";
 import axios from "axios";
 import http from "http";
 import https from "https";
+import { safeGetMessages } from "@utils/safeGetMessages";
 
 type RepoEntry = {
   tag: string;
@@ -81,7 +82,7 @@ const getRepliedMessageText = async (msg: Api.Message): Promise<string> => {
       (msg as any)?.replyTo?.replyToMsg?.id;
     if (!replyToMsgId) return "";
     const peer = (msg.chatId || msg.peerId) as any;
-    const res = await (msg.client as any).getMessages(peer, { ids: [replyToMsgId] });
+    const res = await safeGetMessages(msg.client as any, peer, { ids: [replyToMsgId] });
     const replied = Array.isArray(res) ? res[0] : res;
     return getMessageText(replied).trim();
   } catch {}
