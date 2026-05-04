@@ -8,6 +8,7 @@ import { createDirectoryInAssets } from "@utils/pathHelpers";
 import { Plugin } from "@utils/pluginBase";
 import { getPrefixes } from "@utils/pluginManager";
 import bigInt from "big-integer";
+import { safeGetMessages } from "@utils/safeGetMessages";
 
 const PLUGIN_VERSION = "5.0.6";
 
@@ -1613,7 +1614,7 @@ const pmcaptcha = async (message: Api.Message) => {
         let tid: number | null = null;
         if (message.replyTo?.replyToMsgId) {
           try {
-            const r = await client.getMessages(message.peerId, { ids: [message.replyTo.replyToMsgId] });
+            const r = await safeGetMessages(client, message.peerId, { ids: [message.replyTo.replyToMsgId] });
             if (r[0]?.senderId) tid = Number(r[0].senderId);
           } catch {}
         }
@@ -1674,7 +1675,7 @@ const pmcaptcha = async (message: Api.Message) => {
           let tid: number | null = null;
           if (message.replyTo?.replyToMsgId) {
             try {
-              const r = await client.getMessages(message.peerId, { ids: [message.replyTo.replyToMsgId] });
+              const r = await safeGetMessages(client, message.peerId, { ids: [message.replyTo.replyToMsgId] });
               if (r[0]?.senderId) tid = Number(r[0].senderId);
             } catch {}
           }
