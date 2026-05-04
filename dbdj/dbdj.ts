@@ -3,6 +3,7 @@ import { Api } from "teleproto";
 import { sleep } from "teleproto/Helpers";
 import { getGlobalClient } from "@utils/globalClient";
 import { getPrefixes } from "@utils/pluginManager";
+import { safeGetMessages } from "@utils/safeGetMessages";
 
 const prefixes = getPrefixes();
 const mainPrefix = prefixes[0];
@@ -121,7 +122,7 @@ class DbdjPlugin extends Plugin {
 
         const client = msg.client!;
         const offsetId = (msg.id || 1) - 1; // 从命令消息之前开始
-        const messages = await client.getMessages(msg.peerId, {
+        const messages = await safeGetMessages(client, msg.peerId, {
           offsetId,
           limit: scanCount,
         });
