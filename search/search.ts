@@ -5,7 +5,7 @@ import { getGlobalClient } from "@utils/globalClient";
 import { getPrefixes } from "@utils/pluginManager";
 import fs from "fs/promises";
 import path from "path";
-import { safeGetReplyMessage } from "@utils/safeGetMessages";
+import { safeGetMessages, safeGetReplyMessage } from "@utils/safeGetMessages";
 
 const prefixes = getPrefixes();
 const mainPrefix = prefixes[0];
@@ -127,7 +127,7 @@ class SearchService {
 
     try {
       const linkedGroupEntity = await this.client.getEntity(channelInfo.linkedGroup);
-      const groupMessages = await this.client.getMessages(linkedGroupEntity, {
+      const groupMessages = await safeGetMessages(this.client, linkedGroupEntity, {
         limit: 100,
         search: query,
       });
@@ -135,7 +135,7 @@ class SearchService {
       for (const textMsg of groupMessages) {
         if (this.isMessageMatching(textMsg, query) && textMsg.replies) {
           console.log(`找到匹配消息 #${textMsg.id}，正在精确获取其 ${textMsg.replies.replies} 条评论...`);
-          const comments = await this.client.getMessages(linkedGroupEntity, {
+          const comments = await safeGetMessages(this.client, linkedGroupEntity, {
             limit: 100,
             replyTo: textMsg.id,
           });
@@ -155,7 +155,7 @@ class SearchService {
       }
 
       if (videos.length === 0) {
-        const groupVideoMessages = await this.client.getMessages(linkedGroupEntity, {
+        const groupVideoMessages = await safeGetMessages(this.client, linkedGroupEntity, {
           limit: 100,
           search: query,
           filter: new Api.InputMessagesFilterVideo(),
@@ -457,7 +457,7 @@ class SearchService {
             if (linkedVideos.length > 0) videosInCurrentChannel.push(...linkedVideos);
           }
 
-          const allQueryMessages = await this.client.getMessages(entity, { limit: 200, search: query });
+          const allQueryMessages = await safeGetMessages(this.client, entity, { limit: 200, search: query });
 
           for (const foundMsg of allQueryMessages) {
             if (this.isMessageMatching(foundMsg, query)) {
@@ -465,12 +465,14 @@ class SearchService {
                 const groupIdStr = foundMsg.groupedId.toString();
                 if (processedGroupIds.has(groupIdStr)) continue;
 
-                const surroundingMessages = await this.client.getMessages(entity, {
+                const surroundingMessages = await safeGetMessages(this.client, entity, {
                     limit: 20,
                     offsetId: foundMsg.id + 10,
                 });
                 
-                const albumMessages = surroundingMessages.filter((m: Api.Message) => m.groupedId?.equals(foundMsg.groupedId));
+                const groupedId = foundMsg.groupedId;
+                if (!groupedId) continue;
+                const albumMessages = surroundingMessages.filter((m: Api.Message) => m.groupedId?.equals(groupedId));
                 const videosInAlbum = albumMessages.filter((m: Api.Message) => m.video && !this.isAdContent(m));
 
                 if (videosInAlbum.length > 0) {
@@ -484,7 +486,7 @@ class SearchService {
           }
         } else if (type === "kkp") { 
           const isMegagroup = entity instanceof Api.Channel && entity.megagroup === true;
-          const messages = await this.client.getMessages(entity, {
+          const messages = await safeGetMessages(this.client, entity, {
             limit: isMegagroup ? 200 : 100,
             filter: new Api.InputMessagesFilterVideo(),
           });
