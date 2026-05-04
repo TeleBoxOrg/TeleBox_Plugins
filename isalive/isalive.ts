@@ -2,6 +2,7 @@ import { getPrefixes } from "@utils/pluginManager";
 import { Plugin } from "@utils/pluginBase";
 import { getGlobalClient } from "@utils/globalClient";
 import { Api } from "teleproto";
+import { safeGetMessages } from "@utils/safeGetMessages";
 
 const prefixes = getPrefixes();
 const mainPrefix = prefixes[0];
@@ -412,7 +413,7 @@ class IsAlivePlugin extends Plugin {
         try {
           const chatId = msg.chatId;
           if (chatId) {
-            const messages = await client.getMessages(chatId, {
+            const messages = await safeGetMessages(client, chatId, {
               fromUser: user.id,
               limit: 1,
             });
