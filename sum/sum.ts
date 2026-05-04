@@ -8,6 +8,7 @@ import { JSONFilePreset } from "lowdb/node";
 import * as path from "path";
 import { getGlobalClient } from "@utils/globalClient";
 import axios from "axios";
+import { safeGetMessages } from "@utils/safeGetMessages";
 
 const prefixes = getPrefixes();
 const mainPrefix = prefixes[0];
@@ -508,7 +509,7 @@ async function getGroupMessages(chatId: string, count: number): Promise<MessageD
   const client = await getGlobalClient();
   if (!client) throw new Error("Telegram 客户端未初始化");
 
-  const messages = await client.getMessages(chatId, { limit: count });
+  const messages = await safeGetMessages(client, chatId, { limit: count });
 
   // 获取群组 username（如果有）
   let chatUsername: string | undefined;
@@ -559,7 +560,7 @@ async function getGroupMessagesByTime(chatId: string, hours: number): Promise<Me
   const now = Math.floor(Date.now() / 1000);
   const startTime = now - hours * 3600;
 
-  const messages = await client.getMessages(chatId, { limit: 100 });
+  const messages = await safeGetMessages(client, chatId, { limit: 100 });
 
   // 获取群组 username（如果有）
   let chatUsername: string | undefined;
