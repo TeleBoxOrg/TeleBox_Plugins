@@ -4,6 +4,7 @@ import { getGlobalClient } from "@utils/globalClient";
 import { getPrefixes } from "@utils/pluginManager";
 import { Api } from "teleproto";
 import { NewMessage } from "teleproto/events";
+import { safeGetMessages } from "@utils/safeGetMessages";
 
 // HTML转义函数 (虽然这次用实体不需要了，但保留作为工具函数无妨)
 const htmlEscape = (text: string): string =>
@@ -223,7 +224,7 @@ class KkpPlugin extends Plugin {
     const botUsername = "SeSe3000Bot";
     try {
       const botEntity = await client.getEntity(botUsername);
-      const recentMessages = await client.getMessages(botEntity, { limit: 3 });
+      const recentMessages = await safeGetMessages(client, botEntity, { limit: 3 });
 
       if (recentMessages.length === 0) {
         await client.sendMessage(botEntity, { message: "/start" });
