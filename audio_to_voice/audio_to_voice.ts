@@ -7,6 +7,7 @@ import path from "path";
 import { createDirectoryInTemp } from "../src/utils/pathHelpers";
 import { exec } from "child_process";
 import { promisify } from "util";
+import { safeGetMessages } from "@utils/safeGetMessages";
 
 const prefixes = getPrefixes();
 const mainPrefix = prefixes[0];
@@ -40,7 +41,7 @@ class AudioToVoicePlugin extends Plugin {
 
 
     if (msg.replyToMsgId) {
-      const messages = await client.getMessages(msg.peerId!, {
+      const messages = await safeGetMessages(client, msg.peerId!, {
         ids: [msg.replyToMsgId]
       });
       
