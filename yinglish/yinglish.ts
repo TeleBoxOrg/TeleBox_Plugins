@@ -2,6 +2,7 @@ import { Plugin } from "../src/utils/pluginBase";
 import { getPrefixes } from "@utils/pluginManager";
 import { getGlobalClient } from "../src/utils/globalClient";
 import { Api } from "teleproto";
+import { safeGetMessages } from "@utils/safeGetMessages";
 
 const prefixes = getPrefixes();
 const mainPrefix = prefixes[0];
@@ -54,7 +55,7 @@ class YinglishPlugin extends Plugin {
         else if (msg.replyTo && 'replyToMsgId' in msg.replyTo && msg.replyTo.replyToMsgId) {
           try {
             const replyMsgId = msg.replyTo.replyToMsgId;
-            const messages = await client.getMessages(msg.peerId!, {
+            const messages = await safeGetMessages(client, msg.peerId!, {
               ids: [replyMsgId]
             });
             
