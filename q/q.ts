@@ -2,7 +2,7 @@ import { Plugin } from "@utils/pluginBase";
 import { getPrefixes } from "@utils/pluginManager";
 import { conversation } from "@utils/conversation";
 import { Api } from "teleproto";
-import { safeGetReplyMessage } from "@utils/safeGetMessages";
+import { safeGetMessages, safeGetReplyMessage } from "@utils/safeGetMessages";
 
 const prefixes = getPrefixes();
 const mainPrefix = prefixes[0];
@@ -14,7 +14,7 @@ async function quoteMsgs(msg: Api.Message): Promise<void> {
   const [, ...args] = msg.message.slice(1).split(" ");
   const repliedMessage = await safeGetReplyMessage(msg);
   const count = parseInt(args[0]) || 1;
-  const msgs = await msg.client?.getMessages(msg.peerId, {
+  const msgs = await safeGetMessages(msg.client, msg.peerId, {
     limit: count,
     offsetId: repliedMessage!.id - 1,
     reverse: true,
