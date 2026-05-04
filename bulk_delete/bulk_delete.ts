@@ -4,6 +4,7 @@ import { getPrefixes } from "@utils/pluginManager";
 import { createDirectoryInAssets } from "@utils/pathHelpers";
 import { JSONFilePreset } from "lowdb/node";
 import path from "path";
+import { safeGetMessages } from "@utils/safeGetMessages";
 
 const prefixes = getPrefixes();
 const mainPrefix = prefixes[0];
@@ -90,7 +91,7 @@ const bd = async (msg: Api.Message) => {
       let count = 0;
 
       // 获取最近的消息
-      const recentMessages = await client.getMessages(chatId, { limit: 100 });
+      const recentMessages = await safeGetMessages(client, chatId, { limit: 100 });
       const filteredMessages = recentMessages.filter((m: Api.Message) => {
         return m.senderId?.equals(me.id) && m.id !== msg.id;
       });
@@ -140,7 +141,7 @@ const bd = async (msg: Api.Message) => {
   }
 
   // --- 2. 处理回复消息的情况
-  const startMessage = await client.getMessages(chatId, {
+  const startMessage = await safeGetMessages(client, chatId, {
     ids: [msg.replyTo.replyToMsgId],
   });
   const startMsg = startMessage[0];
@@ -190,7 +191,7 @@ const bd = async (msg: Api.Message) => {
   let successfullyCollected = 0;
 
   try {
-    const messages = await client.getMessages(chatId, {
+    const messages = await safeGetMessages(client, chatId, {
       minId: startId - 1,
       maxId: endId + 1,
       limit: 100, // 注意: Telegram限制单次最多获取100条
