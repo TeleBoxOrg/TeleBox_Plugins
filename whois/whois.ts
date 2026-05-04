@@ -8,6 +8,7 @@ import { JSONFilePreset } from "lowdb/node";
 import path from "path";
 import dayjs from "dayjs";
 import relativeTime from "dayjs/plugin/relativeTime";
+import { safeGetMessages } from "@utils/safeGetMessages";
 import "dayjs/locale/zh-cn";
 
 // 配置 dayjs
@@ -166,7 +167,7 @@ class WhoisPlugin extends Plugin {
       if (msg.replyTo && 'replyToMsgId' in msg.replyTo && msg.replyTo.replyToMsgId) {
         try {
           const replyMsgId = msg.replyTo.replyToMsgId;
-          const messages = await client.getMessages(msg.peerId!, {
+          const messages = await safeGetMessages(client, msg.peerId!, {
             ids: [replyMsgId]
           });
           
