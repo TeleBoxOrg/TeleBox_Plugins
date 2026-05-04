@@ -11,6 +11,7 @@ import * as path from "path";
 import { createDirectoryInAssets, createDirectoryInTemp } from "@utils/pathHelpers";
 import { getGlobalClient } from "@utils/globalClient";
 import * as fs from "fs";
+import { safeGetMessages } from "@utils/safeGetMessages";
 
 const prefixes = getPrefixes();
 const mainPrefix = prefixes[0];
@@ -303,7 +304,7 @@ class TTSPlugin extends Plugin {
                 if (client) {
                     const replyToId = (msg.replyTo as any)?.replyToMsgId;
                     if (replyToId) {
-                        const [repliedMsg] = await client.getMessages(msg.peerId, { ids: [replyToId] });
+                        const [repliedMsg] = await safeGetMessages(client, msg.peerId, { ids: [replyToId] });
                         if (repliedMsg && repliedMsg.message) {
                             textToSynthesize = repliedMsg.message;
                         }
