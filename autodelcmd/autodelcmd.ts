@@ -7,6 +7,7 @@ import { AliasDB } from "@utils/aliasDB";
 import { createDirectoryInAssets } from "@utils/pathHelpers";
 import fs from "fs/promises";
 import path from "path";
+import { safeGetMessages } from "@utils/safeGetMessages";
 
 // HTML转义工具（每个插件必须实现）
 const htmlEscape = (text: string): string => 
@@ -320,7 +321,7 @@ class AutoDeleteService {
           console.error(`[autodelcmd] 解析聊天实体失败:`, e);
         }
 
-        const message = await this.client.getMessages(exitMsg.cid, { ids: [exitMsg.mid] });
+        const message = await safeGetMessages(this.client, exitMsg.cid, { ids: [exitMsg.mid] });
         if (message && message[0]) {
           console.log(`[autodelcmd] 找到消息 ID ${exitMsg.mid}，将在10秒后删除`);
           
@@ -443,7 +444,7 @@ class AutoDeleteService {
         // 删除命令及相关响应
         try {
           const chatId = msg.chatId || msg.peerId;
-          const messages = await this.client.getMessages(chatId, { limit: 100 });
+          const messages = await safeGetMessages(this.client, chatId, { limit: 100 });
 
           // 查找最近的响应消息并删除
           // 在 Saved Messages 中，需要特殊处理消息的归属
