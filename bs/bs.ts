@@ -8,7 +8,7 @@ import * as path from "path";
 import { Api } from "teleproto";
 import { sleep } from "teleproto/Helpers";
 import { RPCError } from "teleproto/errors";
-import { safeGetReplyMessage } from "@utils/safeGetMessages";
+import { safeGetMessages, safeGetReplyMessage } from "@utils/safeGetMessages";
 
 const prefixes = getPrefixes();
 const mainPrefix = prefixes[0];
@@ -573,7 +573,7 @@ async function collectMessages(
 
   while (messageIds.length < desiredCount && currentId < startId + maxSearch) {
     try {
-      const fetched = await client.getMessages(peer, {
+      const fetched = await safeGetMessages(client, peer, {
         ids: [currentId],
       });
       const candidate = Array.isArray(fetched) ? fetched[0] : fetched;
