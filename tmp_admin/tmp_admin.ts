@@ -93,6 +93,11 @@ type TmpAdminDB = {
   jobs: Record<string, StoredJob>;
 };
 
+type CommandResponse = {
+  text: string;
+  parseMode?: "html";
+};
+
 function htmlEscape(text: string): string {
   return text
     .replace(/&/g, "&amp;")
@@ -119,6 +124,60 @@ async function editMessageIgnoringNotModified(
   } catch (error) {
     if (!isMessageNotModified(error)) throw error;
   }
+}
+
+async function deleteMessageQuiet(msg: Api.Message): Promise<void> {
+  try {
+    const target = msg as any;
+    if (typeof target.safeDelete === "function") {
+      await target.safeDelete({ revoke: true });
+      return;
+    }
+    if (typeof target.delete === "function") {
+      await target.delete({ revoke: true });
+    }
+  } catch (error) {
+    console.error("[tmp_admin] 删除 sudo 命令副本失败:", error);
+  }
+}
+
+async function respondToCommand(
+  msg: Api.Message,
+  trigger: Api.Message | undefined,
+  options: CommandResponse,
+  ignoreNotModified?: boolean
+): Promise<void> {
+  if (!trigger) {
+    if (ignoreNotModified) {
+      await editMessageIgnoringNotModified(msg, options);
+      return;
+    }
+    await msg.edit(options);
+    return;
+  }
+
+  const client = trigger.client || msg.client;
+  const peer = trigger.peerId || msg.peerId;
+  if (!client || !peer) {
+    await editMessageIgnoringNotModified(msg, options);
+    return;
+  }
+
+  const sendOptions = {
+    message: options.text,
+    ...(options.parseMode ? { parseMode: options.parseMode } : {}),
+  };
+
+  try {
+    await client.sendMessage(peer, {
+      ...sendOptions,
+      replyTo: trigger.id,
+    });
+  } catch {
+    await client.sendMessage(peer, sendOptions);
+  }
+
+  await deleteMessageQuiet(msg);
 }
 
 function parseDurationMinutes(raw?: string): number {
@@ -314,13 +373,13 @@ class TmpAdminPlugin extends Plugin {
       const sub = (parts[1] || "").toLowerCase();
 
       if (["help", "h"].includes(sub)) {
-        await msg.edit({ text: helpText, parseMode: "html" });
+        await respondToCommand(msg, trigger, { text: helpText, parseMode: "html" });
         return;
       }
 
       const isInChannel = (msg as any).isChannel;
       if (!isInChannel) {
-        await msg.edit({
+        await respondToCommand(msg, trigger, {
           text: `请在超级群/频道中使用 <code>${commandName}</code> 命令`,
           parseMode: "html",
         });
@@ -330,13 +389,13 @@ class TmpAdminPlugin extends Plugin {
       const channel = await msg.getInputChat();
       const chatEntity = await msg.getChat();
       if (!channel || !(chatEntity instanceof Api.Channel)) {
-        await msg.edit({ text: "无法获取当前超级群/频道实体" });
+        await respondToCommand(msg, trigger, { text: "无法获取当前超级群/频道实体" });
         return;
       }
       const chatKey = getChatKey(chatEntity, msg);
 
       if (["ls", "list"].includes(sub)) {
-        await this.listJobs(msg, chatKey);
+        await this.listJobs(msg, trigger, chatKey);
         return;
       }
 
@@ -346,6 +405,7 @@ class TmpAdminPlugin extends Plugin {
         await this.removeTemporaryAdmin({
           msg,
           targetSourceMsg,
+          trigger,
           channel,
           chatEntity,
           targetArg,
@@ -370,7 +430,7 @@ class TmpAdminPlugin extends Plugin {
         return;
       }
 
-      await msg.edit({ text: helpText, parseMode: "html" });
+      await respondToCommand(msg, trigger, { text: helpText, parseMode: "html" });
     },
   };
 
@@ -389,7 +449,7 @@ class TmpAdminPlugin extends Plugin {
     try {
       durationMinutes = parseDurationMinutes(durationArg);
     } catch (e: any) {
-      await msg.edit({
+      await respondToCommand(msg, trigger, {
         text: `设置临时管理员失败：${codeTag(e?.message || e)}`,
         parseMode: "html",
       });
@@ -403,7 +463,7 @@ class TmpAdminPlugin extends Plugin {
     );
 
     if (!userEntity || !userId) {
-      await msg.edit({ text: "请回复一条消息或提供 用户ID/用户名" });
+      await respondToCommand(msg, trigger, { text: "请回复一条消息或提供 用户ID/用户名" });
       return;
     }
 
@@ -413,7 +473,7 @@ class TmpAdminPlugin extends Plugin {
     try {
       participant = await this.getCurrentParticipantOrThrow(channel, userEntity);
     } catch (e: any) {
-      await msg.edit({
+      await respondToCommand(msg, trigger, {
         text:
           `查询当前管理员状态失败：${codeTag(e?.message || e)}\n` +
           "为避免覆盖现有管理员权限, 已取消设置。",
@@ -423,7 +483,7 @@ class TmpAdminPlugin extends Plugin {
     }
 
     if (participant instanceof Api.ChannelParticipantCreator) {
-      await msg.edit({ text: "不能把群主设置为临时管理员" });
+      await respondToCommand(msg, trigger, { text: "不能把群主设置为临时管理员" });
       return;
     }
 
@@ -435,7 +495,7 @@ class TmpAdminPlugin extends Plugin {
         this.clearLocalJob(key);
         await this.deleteStoredJob(key);
       }
-      await msg.edit({
+      await respondToCommand(msg, trigger, {
         text: "目标已经是管理员。为避免覆盖现有权限和头衔, 不会将其改为临时管理员。",
       });
       return;
@@ -443,7 +503,7 @@ class TmpAdminPlugin extends Plugin {
 
     const client = await getGlobalClient();
     if (!client) {
-      await msg.edit({ text: "Telegram 客户端未初始化" });
+      await respondToCommand(msg, trigger, { text: "Telegram 客户端未初始化" });
       return;
     }
 
@@ -492,31 +552,33 @@ class TmpAdminPlugin extends Plugin {
           `\n状态校验失败, 已保留到期解除任务: ${codeTag(e?.message || e)}`;
       }
 
-      await editMessageIgnoringNotModified(msg, {
+      await respondToCommand(msg, trigger, {
         text:
           `已设置临时管理员: ${user.display}\n` +
           `头衔: ${codeTag(tempTitle)}\n` +
           `时长: ${codeTag(formatDuration(durationMinutes))}` +
           `${persistenceWarning}${verificationWarning}`,
         parseMode: "html",
-      });
+      }, true);
     } catch (e: any) {
-      await editMessageIgnoringNotModified(msg, {
+      await respondToCommand(msg, trigger, {
         text: `设置临时管理员失败：${codeTag(e?.message || e)}`,
         parseMode: "html",
-      });
+      }, true);
     }
   }
 
   private async removeTemporaryAdmin(params: {
     msg: Api.Message;
     targetSourceMsg: Api.Message;
+    trigger?: Api.Message;
     channel: any;
     chatEntity: Api.Channel;
     targetArg?: string;
     manual: boolean;
   }): Promise<void> {
-    const { msg, targetSourceMsg, channel, chatEntity, targetArg, manual } = params;
+    const { msg, targetSourceMsg, trigger, channel, chatEntity, targetArg, manual } =
+      params;
     const { entity: userEntity, id: userId } = await this.resolveUserFromReplyOrArg(
       targetSourceMsg,
       channel,
@@ -524,7 +586,7 @@ class TmpAdminPlugin extends Plugin {
     );
 
     if (!userEntity || !userId) {
-      await msg.edit({ text: "请回复一条消息或提供 用户ID/用户名" });
+      await respondToCommand(msg, trigger, { text: "请回复一条消息或提供 用户ID/用户名" });
       return;
     }
 
@@ -535,7 +597,7 @@ class TmpAdminPlugin extends Plugin {
     try {
       participant = await this.getCurrentParticipantOrThrow(channel, userEntity);
     } catch (e: any) {
-      await msg.edit({
+      await respondToCommand(msg, trigger, {
         text:
           `查询当前管理员状态失败：${codeTag(e?.message || e)}\n` +
           "已保留临时管理员记录, 未执行解除。",
@@ -548,12 +610,12 @@ class TmpAdminPlugin extends Plugin {
       if (job) {
         this.clearLocalJob(key);
         await this.deleteStoredJob(key);
-        await msg.edit({
+        await respondToCommand(msg, trigger, {
           text: "目标当前已不再是插件设置的临时管理状态, 已清理记录, 未解除管理员。",
         });
         return;
       }
-      await msg.edit({
+      await respondToCommand(msg, trigger, {
         text: "目标不是当前插件记录的临时管理员, 也没有临时管理头衔。为避免误删真实管理员, 已取消。",
       });
       return;
@@ -569,15 +631,15 @@ class TmpAdminPlugin extends Plugin {
       await this.deleteStoredJob(key);
 
       const user = await formatEntity(userId || userEntity, true);
-      await editMessageIgnoringNotModified(msg, {
+      await respondToCommand(msg, trigger, {
         text: `${manual ? "已提前解除" : "已解除"}临时管理员: ${user.display}`,
         parseMode: "html",
-      });
+      }, true);
     } catch (e: any) {
-      await editMessageIgnoringNotModified(msg, {
+      await respondToCommand(msg, trigger, {
         text: `解除临时管理员失败：${codeTag(e?.message || e)}`,
         parseMode: "html",
-      });
+      }, true);
     }
   }
 
@@ -801,10 +863,14 @@ class TmpAdminPlugin extends Plugin {
     }
   }
 
-  private async listJobs(msg: Api.Message, chatKey: string): Promise<void> {
+  private async listJobs(
+    msg: Api.Message,
+    trigger: Api.Message | undefined,
+    chatKey: string
+  ): Promise<void> {
     const jobs = [...this.jobs.values()].filter((job) => job.chatKey === chatKey);
     if (jobs.length === 0) {
-      await msg.edit({ text: "当前没有等待自动解除的临时管理员" });
+      await respondToCommand(msg, trigger, { text: "当前没有等待自动解除的临时管理员" });
       return;
     }
 
@@ -814,7 +880,7 @@ class TmpAdminPlugin extends Plugin {
       return `- ${job.userDisplay} | 剩余 ${codeTag(`${remainingMinutes} 分钟`)}`;
     });
 
-    await msg.edit({
+    await respondToCommand(msg, trigger, {
       text: `当前临时管理员：\n${lines.join("\n")}`,
       parseMode: "html",
     });
