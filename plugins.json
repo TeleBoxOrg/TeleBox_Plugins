@@ -407,6 +407,10 @@
     "url": "https://github.com/TeleBoxOrg/TeleBox_Plugins/blob/main/teletype/teletype.ts?raw=true",
     "desc": "打字机效果"
   },
+  "tmp_admin": {
+    "url": "https://github.com/TeleBoxOrg/TeleBox_Plugins/blob/main/tmp_admin/tmp_admin.ts?raw=true",
+    "desc": "临时管理员"
+  },
   "trace": {
     "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/trace/trace.ts?raw=true",
     "desc": "全局追踪点赞"
