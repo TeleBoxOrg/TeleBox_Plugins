@@ -111,6 +111,7 @@ tpm i <插件名>
 - `sum` - 群消息总结  
 - `t` - 文字转语音  
 - `teletype` - 打字机效果  
+- `tmp_admin` - 临时管理员  
 - `trace` - 全局追踪点赞  
 - `tts` - Azure文字转语音  
 - `uai` - 引用消息 AI 分析  
