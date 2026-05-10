@@ -495,9 +495,6 @@ const helpText = `⚡ <b>WARP 管理面板</b>
 
 // 插件实现
 class WarpPlugin extends Plugin {
-  cleanup(): void {
-    // 当前插件不持有需要在 reload 时额外释放的长期资源。
-  }
 
   description: string = `Cloudflare WARP 管理\n\n${helpText}`;
 
