@@ -1,5 +1,5 @@
 import { Plugin } from "@utils/pluginBase";
-import { getGlobalClient } from "@utils/globalClient";
+import { getGlobalClient, tryGetCurrentGenerationContext } from "@utils/globalClient";
 import { getPrefixes } from "@utils/pluginManager";
 import { createDirectoryInAssets } from "@utils/pathHelpers";
 import { Api, TelegramClient } from "teleproto";
@@ -8,6 +8,7 @@ import { JSONFilePreset } from "lowdb/node";
 import * as path from "path";
 import { safeGetMessages, safeGetReplyMessage } from "@utils/safeGetMessages";
 
+import { safeGetMe } from "../src/utils/authGuards";
 // 配置键定义
 const CONFIG_KEYS = {
   DEFAULT_PACK: "sticker_default_pack",
@@ -136,6 +137,15 @@ const help_text = `⭐ <b>贴纸收藏插件</b>
 • 若被收藏贴纸未携带基础 emoji，将自动随机选择一个基础表情作为标签。
 `;
 
+async function lifecycleSleep(ms: number, label: string): Promise<void> {
+  const lifecycle = tryGetCurrentGenerationContext();
+  if (lifecycle) {
+    await lifecycle.delay(ms, { label });
+    return;
+  }
+  await sleep(ms);
+}
+
 class StickerPlugin extends Plugin {
   cleanup(): void {
   }
@@ -211,7 +221,8 @@ class StickerPlugin extends Plugin {
         targetPackName = await ConfigManager.get(CONFIG_KEYS.DEFAULT_PACK) || "";
       }
 
-      const me = await client.getMe();
+      const me = await safeGetMe(client);
+           if (!me) return;
       if (!(me instanceof Api.User)) {
           throw new StickerError("无法获取您的用户信息。");
       }
@@ -247,7 +258,7 @@ class StickerPlugin extends Plugin {
       
       // 修复: 增加对 successMsg 的有效性检查
       if (successMsg && typeof successMsg !== 'boolean') {
-        await sleep(5000);
+        await lifecycleSleep(5000, "sticker:success-delete-delay");
         await successMsg.delete();
       }
 
@@ -293,7 +304,8 @@ class StickerPlugin extends Plugin {
       if (defaultPack) {
         text += `当前默认贴纸包: <a href="https://t.me/addstickers/${htmlEscape(defaultPack)}">${htmlEscape(defaultPack)}</a>`;
       } else {
-        const me = await client.getMe();
+        const me = await safeGetMe(client);
+           if (!me) return;
         if (me instanceof Api.User && me.username) {
             text += `未设置默认贴纸包，将自动使用 <code>${htmlEscape(me.username)}_...</code> 系列包。`;
         } else {
@@ -450,11 +462,11 @@ class StickerPlugin extends Plugin {
 
         // Start conversation
         await client.sendMessage(stickersBot, { message: "/addsticker" });
-        await sleep(1500); // Wait for bot to respond
+        await lifecycleSleep(1500, "sticker:bot-start-delay"); // Wait for bot to respond
 
         // Send pack name
         await client.sendMessage(stickersBot, { message: packName });
-        await sleep(1500);
+        await lifecycleSleep(1500, "sticker:bot-pack-delay");
         let response = await getLatestBotResponse();
         if (response?.message.toLowerCase().includes("invalid set")) {
             throw new StickerError(`贴纸包 <code>${htmlEscape(packName)}</code> 无效或您不是该包的所有者。`);
@@ -465,7 +477,7 @@ class StickerPlugin extends Plugin {
             messages: [stickerMsg.id],
             fromPeer: stickerMsg.peerId,
         });
-        await sleep(2500); // Wait for processing and response
+        await lifecycleSleep(2500, "sticker:bot-process-delay"); // Wait for processing and response
         response = await getLatestBotResponse();
         
         if (response?.message) {
@@ -485,7 +497,7 @@ class StickerPlugin extends Plugin {
         
         // Send emoji
         await client.sendMessage(stickersBot, { message: emoji });
-        await sleep(1500);
+        await lifecycleSleep(1500, "sticker:bot-emoji-delay");
 
         // Finish
         await client.sendMessage(stickersBot, { message: "/done" });
