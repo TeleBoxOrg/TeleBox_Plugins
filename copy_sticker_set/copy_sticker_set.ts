@@ -1,11 +1,10 @@
 import { Plugin } from "../src/utils/pluginBase";
-import { getGlobalClient } from "../src/utils/globalClient";
+import { getGlobalClient, tryGetCurrentGenerationContext } from "../src/utils/globalClient";
 import { getPrefixes } from "../src/utils/pluginManager";
 import { Api } from "teleproto";
 
 const prefixes = getPrefixes();
 const mainPrefix = prefixes[0];
-
 
 // HTML转义函数
 function htmlEscape(text: string): string {
@@ -17,6 +16,19 @@ function htmlEscape(text: string): string {
     .replace(/'/g, '&#39;');
 }
 
+
+function timeoutAfter(ms: number, message: string, label: string): Promise<never> {
+  const lifecycle = tryGetCurrentGenerationContext();
+  if (lifecycle) {
+    return lifecycle.delay(ms, { label }).then(() => {
+      throw new Error(message);
+    });
+  }
+
+  return new Promise((_, reject) => {
+    setTimeout(() => reject(new Error(message)), ms);
+  });
+}
 
 class CopyStickerSetPlugin extends Plugin {
   cleanup(): void {
@@ -280,10 +292,11 @@ class CopyStickerSetPlugin extends Plugin {
           })
         );
         
-        // 添加超时处理
-        const timeoutPromise = new Promise((_, reject) => {
-          setTimeout(() => reject(new Error('CreateStickerSet timeout')), 60000); // 60秒超时
-        });
+        const timeoutPromise = timeoutAfter(
+          60000,
+          'CreateStickerSet timeout',
+          'copy-sticker-set:create-timeout'
+        );
         
         const result = await Promise.race([createPromise, timeoutPromise]) as Api.messages.StickerSet;
 
