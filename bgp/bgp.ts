@@ -7,7 +7,6 @@ import * as fs from "fs";
 import * as path from "path";
 import { createDirectoryInTemp } from "@utils/pathHelpers";
 import * as cheerio from "cheerio";
-import { safeGetReplyMessage } from "@utils/safeGetMessages";
 
 function htmlEscape(text: string): string {
     return text
@@ -266,7 +265,7 @@ async function resolveTargetIP(
     }
 
     if (msg.replyTo) {
-        const r = await safeGetReplyMessage(msg);
+        const r = await msg.getReplyMessage();
         if (r?.message) {
             const ipFromReply = extractIPFromText(r.message);
             if (ipFromReply) return ipFromReply;
@@ -484,7 +483,7 @@ class BGPPlugin extends Plugin {
         },
     };
 
-    cleanup(): void {}
+
 }
 
 export default new BGPPlugin();
