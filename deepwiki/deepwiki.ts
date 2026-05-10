@@ -1,4 +1,4 @@
-import { Plugin } from "@utils/pluginBase";
+import { Plugin, type PluginRuntimeContext } from "@utils/pluginBase";
 import { Api } from "teleproto";
 import { getPrefixes } from "@utils/pluginManager";
 import { JSONFilePreset } from "lowdb/node";
@@ -374,6 +374,7 @@ class DeepWikiMcp {
   private connecting: Promise<void> | null = null;
   private repoKey: string | null = null;
   private questionKey: string | null = null;
+  private closed = false;
 
   private extractText(result: any): string {
     const parts = result?.content;
@@ -401,13 +402,23 @@ class DeepWikiMcp {
   }
 
   private async ensureConnected(): Promise<void> {
+    if (this.closed) throw new Error("DeepWiki MCP client is closed");
     if (this.client) return;
     if (this.connecting) return await this.connecting;
 
     this.connecting = (async () => {
       const transport = new StreamableHTTPClientTransport(new URL("https://mcp.deepwiki.com/mcp"));
       const client = new Client({ name: "telebox-deepwiki", version: "1.0.0" });
-      await client.connect(transport as any);
+      try {
+        await client.connect(transport as any);
+      } catch (error) {
+        await client.close().catch(() => undefined);
+        throw error;
+      }
+      if (this.closed) {
+        await client.close();
+        return;
+      }
       this.client = client;
     })();
 
@@ -419,6 +430,7 @@ class DeepWikiMcp {
   }
 
   async ask(repo: string, question: string): Promise<string> {
+    if (this.closed) throw new Error("DeepWiki MCP client is closed");
     const repoKey = repo.trim();
     const questionKey = question.trim();
     if (!repoKey) throw new Error("缺少仓库信息");
@@ -447,16 +459,26 @@ class DeepWikiMcp {
   }
 
   async close(): Promise<void> {
-    if (this.client) {
-      await this.client.close();
-      this.client = null;
-      this.repoKey = null;
-      this.questionKey = null;
+    this.closed = true;
+    const activeClient = this.client;
+    this.client = null;
+    this.repoKey = null;
+    this.questionKey = null;
+
+    if (this.connecting) {
+      await this.connecting.catch(() => undefined);
+    }
+
+    const connectedClient = activeClient ?? this.client;
+    this.client = null;
+    if (connectedClient && connectedClient !== activeClient) {
+      await connectedClient.close();
+    }
+    if (activeClient) {
+      await activeClient.close();
     }
   }
 }
-
-const isHttpUrl = (v: string): boolean => /^https?:\/\//i.test(v.trim());
 
 const normalizeTag = (v: string): string => v.trim();
 
@@ -604,22 +626,56 @@ const toIdString = (v: any): string => {
 };
 
 class DeepWikiPlugin extends Plugin {
-  cleanup(): void {
-    // 当前插件不持有需要在 reload 时额外释放的长期资源。
-  }
-
   name = "deepwiki";
 
   private store = new DeepWikiStore();
   private mcp = new DeepWikiMcp();
   private inited = false;
+  private lifecycleDispose: (() => void | Promise<void>) | null = null;
+  private resourcesClosed = false;
+  private httpAgent = new http.Agent({ keepAlive: true });
+  private httpsAgent = new https.Agent({ keepAlive: true });
 
   private httpClient = axios.create({
-    httpAgent: new http.Agent({ keepAlive: true }),
-    httpsAgent: new https.Agent({ keepAlive: true }),
+    httpAgent: this.httpAgent,
+    httpsAgent: this.httpsAgent,
   });
 
+  setup(context: PluginRuntimeContext): void {
+    this.lifecycleDispose = context.lifecycle.trackDisposable(() => this.closeResources(), {
+      label: "plugin:deepwiki:resources",
+    });
+  }
+
+  async cleanup(): Promise<void> {
+    const dispose = this.lifecycleDispose;
+    this.lifecycleDispose = null;
+    if (dispose) {
+      await dispose();
+      return;
+    }
+    await this.closeResources();
+  }
+
+  private async closeResources(): Promise<void> {
+    if (this.resourcesClosed) return;
+    this.resourcesClosed = true;
+    await this.mcp.close();
+    this.httpAgent.destroy();
+    this.httpsAgent.destroy();
+  }
+
   private async initOnce(): Promise<void> {
+    if (this.resourcesClosed) {
+      this.mcp = new DeepWikiMcp();
+      this.httpAgent = new http.Agent({ keepAlive: true });
+      this.httpsAgent = new https.Agent({ keepAlive: true });
+      this.httpClient = axios.create({
+        httpAgent: this.httpAgent,
+        httpsAgent: this.httpsAgent,
+      });
+      this.resourcesClosed = false;
+    }
     if (this.inited) return;
     await this.store.init();
     this.inited = true;
@@ -941,7 +997,7 @@ class DeepWikiPlugin extends Plugin {
   };
 
   async onUnload(): Promise<void> {
-    await this.mcp.close();
+    await this.cleanup();
   }
 }
 
