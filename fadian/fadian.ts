@@ -135,9 +135,6 @@ const help_text = `🗒️ <b>发电语录插件</b>
 <code>${mainPrefix}fadian cp</code>\n第一个人\n第二个人 - 生成CP语录`;
 
 class FadianPlugin extends Plugin {
-  cleanup(): void {
-    // 当前插件不持有需要在 reload 时额外释放的长期资源。
-  }
 
   description: string = `从远程配置随机生成发电语录\n\n${help_text}`;
 
