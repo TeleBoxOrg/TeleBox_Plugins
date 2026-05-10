@@ -234,9 +234,6 @@ async function setSystemTimeBestEffort(serverTimeMs: number): Promise<{
 }
 
 class NtpPlugin extends Plugin {
-  cleanup(): void {
-    // 当前插件不持有需要在 reload 时额外释放的长期资源。
-  }
   description: string = `\nNTP 对时\n\n${help_text}`;
   cmdHandlers: Record<
     string,
