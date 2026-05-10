@@ -503,7 +503,7 @@ function splitDigest(header: string, lines: string[]): string[] {
 }
 
 class BikoPlugin extends Plugin {
-  cleanup(): void {}
+
 
   description: string = helpText;
 
