@@ -462,9 +462,6 @@ const gif = async (msg: Api.Message) => {
 };
 
 class GifStickerPlugin extends Plugin {
-  cleanup(): void {
-    // 当前插件不持有需要在 reload 时额外释放的长期资源。
-  }
 
   description: string = `GIF 和视频转贴纸插件
 
