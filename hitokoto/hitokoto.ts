@@ -62,9 +62,6 @@ const htmlEscape = (text: string): string =>
   }[m] || m));
 
 class HitokotoPlugin extends Plugin {
-  cleanup(): void {
-    // 当前插件不持有需要在 reload 时额外释放的长期资源。
-  }
 
   // 插件描述（符合开发规范）
   description = help_text;
