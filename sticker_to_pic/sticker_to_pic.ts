@@ -160,9 +160,6 @@ const help_text = `🖼️ <b>贴纸转图片插件</b>
 • 支持Linux/macOS自动安装`;
 
 class StickerToPicPlugin extends Plugin {
-  cleanup(): void {
-    // 当前插件不持有需要在 reload 时额外释放的长期资源。
-  }
 
   description: string = help_text;
   
