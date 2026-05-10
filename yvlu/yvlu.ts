@@ -500,9 +500,6 @@ interface YvluConfig {
 }
 
 class YvluPlugin extends Plugin {
-  cleanup(): void {
-    // 当前插件不持有需要在 reload 时额外释放的长期资源。
-  }
 
   description: string = `\n生成文字语录贴纸\n\n${help_text}`;
   private config: YvluConfig | null = null;
