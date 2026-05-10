@@ -6,7 +6,7 @@
  */
 
 import { Plugin } from "@utils/pluginBase";
-import { getGlobalClient } from "@utils/globalClient";
+import { getGlobalClient, tryGetCurrentGenerationContext } from "@utils/globalClient";
 import { getPrefixes } from "@utils/pluginManager";
 import {
   createDirectoryInAssets,
@@ -22,6 +22,60 @@ import * as http from "http";
 import { JSONFilePreset } from "lowdb/node";
 
 const execAsync = promisify(exec);
+
+async function lifecycleDelay(ms: number, label: string): Promise<void> {
+  const lifecycle = tryGetCurrentGenerationContext();
+  if (lifecycle) {
+    await lifecycle.delay(ms, { label });
+    return;
+  }
+  await new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+type SpawnResult = string;
+
+function runTrackedProcess(command: string, args: string[], label: string): Promise<SpawnResult> {
+  const lifecycle = tryGetCurrentGenerationContext();
+
+  return new Promise((resolve, reject) => {
+    if (lifecycle?.signal.aborted) {
+      reject(new Error("Generation aborted"));
+      return;
+    }
+
+    const child = spawn(command, args);
+    lifecycle?.trackChildProcess(child, { label });
+
+    let data = '';
+    let errorData = '';
+
+    child.stdout.on('data', (chunk) => {
+      data += chunk.toString();
+    });
+
+    child.stderr.on('data', (chunk) => {
+      errorData += chunk.toString();
+    });
+
+    child.on('close', (code) => {
+      if (code === 0 && data) {
+        resolve(data.trim());
+      } else {
+        const idMatch = errorData.match(/\[youtube\]\s+([a-zA-Z0-9_-]{11}):/);
+        if (idMatch && idMatch[1]) {
+          console.log(`[Music] Extracted video ID from error log: ${idMatch[1]}`);
+          resolve(idMatch[1]);
+        } else {
+          reject(new Error(errorData || `Process exited with code ${code}`));
+        }
+      }
+    });
+
+    child.on('error', (err) => {
+      reject(err);
+    });
+  });
+}
 
 // HTML转义函数
 const htmlEscape = (text: string): string =>
@@ -587,7 +641,7 @@ class GeminiClient {
           (error.message.includes('超时') || error.message.includes('timeout') || 
            error.message.includes('网络') || error.message.includes('ECONNRESET'))) {
         console.log(`[music] AI请求失败，重试 ${retryCount + 1}/${CONFIG.DEFAULTS.MAX_RETRIES}: ${error.message}`);
-        await new Promise(resolve => setTimeout(resolve, 2000 * (retryCount + 1))); // Exponential backoff
+        await lifecycleDelay(2000 * (retryCount + 1), "music:gemini-retry"); // Exponential backoff
         return this.searchMusic(query, retryCount + 1);
       }
       throw error;
@@ -971,37 +1025,11 @@ class Downloader {
 
       for (const config of commandConfigs) {
         try {
-          stdout = await new Promise((resolve, reject) => {
-            const process = spawn(config.command, config.args);
-            let data = '';
-            let errorData = '';
-
-            process.stdout.on('data', (chunk) => {
-              data += chunk.toString();
-            });
-
-            process.stderr.on('data', (chunk) => {
-              errorData += chunk.toString();
-            });
-
-            process.on('close', (code) => {
-              if (code === 0 && data) {
-                resolve(data.trim());
-              } else {
-                const idMatch = errorData.match(/\[youtube\]\s+([a-zA-Z0-9_-]{11}):/);
-                if (idMatch && idMatch[1]) {
-                  console.log(`[Music] Extracted video ID from error log: ${idMatch[1]}`);
-                  resolve(idMatch[1]);
-                } else {
-                  reject(new Error(errorData || `Process exited with code ${code}`));
-                }
-              }
-            });
-
-            process.on('error', (err) => {
-              reject(err);
-            });
-          });
+          stdout = await runTrackedProcess(
+            config.command,
+            config.args,
+            "music:yt-dlp-search"
+          );
 
           if (stdout) {
             console.log(`[Music] Search successful with: ${config.command}`);
@@ -2245,7 +2273,11 @@ ${apiKey ? "✅" : "⚪"} <b>AI搜索:</b> ${apiKey ? "已启用" : "未配置"}
       // 删除状态消息
       await statusMsg.delete();
 
-      const timer = setTimeout(() => {
+      const lifecycle = tryGetCurrentGenerationContext();
+      const timer = lifecycle
+        ? lifecycle.setTimeout(cleanupDownloadedFiles, 5000, { label: "music:download-cleanup" })
+        : setTimeout(cleanupDownloadedFiles, 5000);
+      function cleanupDownloadedFiles(): void {
         pendingCleanupTimers.delete(timer);
         try {
           if (
@@ -2263,7 +2295,7 @@ ${apiKey ? "✅" : "⚪"} <b>AI搜索:</b> ${apiKey ? "已启用" : "未配置"}
         } catch (error) {
           console.log("[music] 清理临时文件失败:", error);
         }
-      }, 5000);
+      }
       pendingCleanupTimers.add(timer);
       if (timer.unref) timer.unref();
     } catch (error: any) {
