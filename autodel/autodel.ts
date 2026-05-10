@@ -1,11 +1,12 @@
 import { Plugin } from "../src/utils/pluginBase";
 import { getPrefixes } from "@utils/pluginManager";
-import { getGlobalClient } from "../src/utils/globalClient";
+import { getGlobalClient, type GenerationContext } from "../src/utils/globalClient";
 import { Api } from "teleproto";
 import { createDirectoryInAssets } from "../src/utils/pathHelpers";
 import Database from "better-sqlite3";
 import path from "path";
 
+import { safeGetMe } from "../src/utils/authGuards";
 const prefixes = getPrefixes();
 const mainPrefix = prefixes[0];
 
@@ -19,6 +20,7 @@ class AutoDelPlugin extends Plugin {
     }
     this.db = null;
     this.settings.clear();
+    this.lifecycle = null;
   }
 
   description: string = `🕒 <b>定时自动删除消息</b><br/><br/>
@@ -38,6 +40,11 @@ class AutoDelPlugin extends Plugin {
 • 最小删除时间为5秒`;
   private db: Database.Database | null = null;
   private settings: Map<string, number> = new Map();
+  private lifecycle: GenerationContext | null = null;
+
+  setup(context: { lifecycle: GenerationContext }): void {
+    this.lifecycle = context.lifecycle;
+  }
   
   cmdHandlers: Record<string, (msg: Api.Message) => Promise<void>> = {
     autodel: this.handleAutoDel.bind(this)
@@ -233,7 +240,8 @@ class AutoDelPlugin extends Plugin {
     const client = await getGlobalClient();
     if (!client) return;
     
-    const me = await client.getMe();
+    const me = await safeGetMe(client);
+           if (!me) return;
     const myId = Number(me.id);
     
     // 只删除自己发送的消息
@@ -255,19 +263,25 @@ class AutoDelPlugin extends Plugin {
     }
     
     // 设置定时删除
-    setTimeout(async () => {
-      try {
-        const client = await getGlobalClient();
-        if (!client) return;
-        
-        // 只删除自己的消息，不使用revoke强制删除
-        await client.deleteMessages(msg.peerId, [msg.id], {
-          revoke: false
-        });
-      } catch (error) {
-        console.error("Failed to auto delete message:", error);
-      }
-    }, seconds * 1000);
+    const lifecycle = this.lifecycle;
+    if (!lifecycle || lifecycle.signal.aborted) return;
+    lifecycle.setTimeout(() => {
+      const task = (async () => {
+        try {
+          const client = await getGlobalClient();
+          if (!client) return;
+          
+          // 只删除自己的消息，不使用revoke强制删除
+          await client.deleteMessages(msg.peerId, [msg.id], {
+            revoke: false
+          });
+        } catch (error) {
+          console.error("Failed to auto delete message:", error);
+        }
+      })();
+      lifecycle.trackTask(task, { label: "autodel:delete-message" });
+      task.catch(() => undefined);
+    }, seconds * 1000, { label: "autodel:delete-message-timer" });
   }
 
   private parseTimeString(timeStr: string): number | null {
