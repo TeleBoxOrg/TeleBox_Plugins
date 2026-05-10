@@ -188,9 +188,6 @@ const SYSTEM_PROMPT = `你的任务是对用户的内容（文字或图片）做
 你：羡慕会吃`;
 
 class XMSLPlugin extends Plugin {
-  cleanup(): void {
-    // 当前插件不持有需要在 reload 时额外释放的长期资源。
-  }
 
 	name = 'xmsl';
 	private config: XMSLConfig = {
