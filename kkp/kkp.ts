@@ -35,9 +35,6 @@ const help_text = `🎲 <b>随机色色视频获取</b>
 该插件会自动与SeSe3000Bot交互获取随机视频内容`;
 
 class KkpPlugin extends Plugin {
-  cleanup(): void {
-    // 真实资源清理：释放插件持有的定时器、监听器、运行时状态或临时资源。
-  }
 
   description: string = `🎲 随机色色视频获取\n\n${help_text}`;
 
