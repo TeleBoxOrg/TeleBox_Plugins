@@ -4,6 +4,7 @@ import { getPrefixes } from "@utils/pluginManager";
 import { Api } from "teleproto";
 import { safeGetReplyMessage } from "@utils/safeGetMessages";
 
+import { safeGetMe } from "../src/utils/authGuards";
 // HTML转义工具
 const htmlEscape = (text: string): string => 
   text.replace(/[&<>"']/g, m => ({ 
@@ -38,9 +39,6 @@ const help_text = `🆔 <b>用户信息查询插件</b>
 • @用户名、用户ID、频道ID、回复消息`;
 
 class IdsPlugin extends Plugin {
-  cleanup(): void {
-    // 当前插件不持有需要在 reload 时额外释放的长期资源。
-  }
 
   description: string = `用户信息查询插件\n\n${help_text}`;
 
@@ -91,7 +89,8 @@ class IdsPlugin extends Plugin {
         }
 
         if (!targetUser && !targetId) {
-          const me = await client.getMe();
+          const me = await safeGetMe(client);
+           if (!me) return;
           targetUser = me; targetId = Number(me.id);
         }
 
