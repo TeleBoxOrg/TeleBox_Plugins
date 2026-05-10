@@ -184,9 +184,6 @@ async function decodeQRCode(imageBuffer: Buffer): Promise<string[]> {
 }
 
 class QRPlugin extends Plugin {
-  cleanup(): void {
-    // 当前插件不持有需要在 reload 时额外释放的长期资源。
-  }
 
   description: string = `📱 QR 二维码插件
 从 Python 版本转换而来，支持二维码生成和解码功能。
