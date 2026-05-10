@@ -483,7 +483,7 @@ async function handleCximg(msg: Api.Message): Promise<void> {
 }
 
 class CodexImagePlugin extends Plugin {
-  cleanup(): void {}
+
 
   description: string =
     `通过codex调用gpt-image-2\n\n` +
