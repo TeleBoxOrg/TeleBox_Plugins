@@ -1,3 +1,4 @@
+import { safeGetMe } from "../src/utils/authGuards";
 /**
  * DME (Delete My Messages) Plugin for TeleBox
  * 智能防撤回删除插件 - 优化版本
@@ -1022,7 +1023,8 @@ async function searchEditAndDeleteMyMessages(
   if (isChannel) {
     console.log(`[DME] 检测到频道，检查管理员权限...`);
     try {
-      const me = await client.getMe();
+      const me = await safeGetMe(client);
+      if (!me) return { processedCount: 0, actualCount: 0, editedCount: 0 };
       const participant = await client.invoke(
         new Api.channels.GetParticipant({
           channel: chatEntity,
@@ -1314,7 +1316,8 @@ const dme = async (msg: Api.Message) => {
       );
     }
 
-    const me = await client.getMe();
+    const me = await safeGetMe(client);
+      if (!me) return;
     const myId = BigInt(me.id.toString());
     const chatId = msg.chatId?.toString() || msg.peerId?.toString() || "";
     const chatEntity = await getEntityWithHash(client, chatId);
@@ -1419,9 +1422,6 @@ const dme = async (msg: Api.Message) => {
 };
 
 class DmePlugin extends Plugin {
-  cleanup(): void {
-    // 当前插件不持有需要在 reload 时额外释放的长期资源。
-  }
 
   description: string = `智能防撤回删除插件\n\n${help_text}`;
   cmdHandlers: Record<string, (msg: Api.Message) => Promise<void>> = {
