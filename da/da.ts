@@ -8,6 +8,7 @@ import bigInt from "big-integer";
 import { Low } from "lowdb";
 import { JSONFile } from "lowdb/node";
 
+import { safeGetMe } from "../src/utils/authGuards";
 // 获取命令前缀
 const prefixes = getPrefixes();
 const mainPrefix = prefixes[0];
@@ -405,7 +406,8 @@ const da = async (msg: Api.Message) => {
 
     // 开始执行删除任务
     const chatId = msg.chatId;
-    const me = await client.getMe();
+    const me = await safeGetMe(client);
+           if (!me) return;
     const myId = me.id;
 
     // 检查管理员权限
@@ -586,9 +588,6 @@ const da = async (msg: Api.Message) => {
 };
 
 class DaPlugin extends Plugin {
-  cleanup(): void {
-    // 当前插件不持有需要在 reload 时额外释放的长期资源。
-  }
 
   // 必须在 description 中引用 help_text
   description: string = `群组消息批量删除插件\n\n${help_text}`;
