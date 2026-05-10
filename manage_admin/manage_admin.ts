@@ -88,9 +88,6 @@ function getTxtFromMsg(msg: Api.Message | string, n: number): string {
     .trim();
 }
 class ManageAdminPlugin extends Plugin {
-  cleanup(): void {
-    // 当前插件不持有需要在 reload 时额外释放的长期资源。
-  }
 
   description: string = `\n管理管理员\n\n${help_text}`;
   cmdHandlers: Record<
@@ -214,7 +211,7 @@ class ManageAdminPlugin extends Plugin {
         try {
           const client = await getGlobalClient();
           const me = await client?.getMe();
-          if (!me) return false;
+        if (!me) return false;
           const info = await client?.invoke(
             new Api.channels.GetParticipant({
               channel,
