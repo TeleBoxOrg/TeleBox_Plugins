@@ -262,9 +262,6 @@ await run('${mainPrefix}tpm update', msg); await run('${mainPrefix}dme 1', msg);
 `;
 
 class KittPlugin extends Plugin {
-  cleanup(): void {
-    // 当前插件不持有需要在 reload 时额外释放的长期资源。
-  }
 
   description: string = `\nK.I.T.T <blockquote>As you wish, Michael.</blockquote>\n\n使用 JavaScript 的高级触发器: 匹配 -> 执行, 高度自定义, 逻辑自由\n\n${help_text}`;
   cmdHandlers: Record<
