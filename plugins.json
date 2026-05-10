@@ -458,5 +458,9 @@
   "zpr": {
     "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/zpr/zpr.ts?raw=true",
     "desc": "二次元图片"
+  },
+  "quote": {
+    "url": "https://github.com/yfishyon/TeleBox_Plugins/blob/main/quote/quote.ts?raw=true",
+    "desc": "引用贴纸生成 (本地版)"
   }
 }
