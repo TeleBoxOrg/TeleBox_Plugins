@@ -10,6 +10,36 @@ const mainPrefix = prefixes[0];
 
 const bots = ["QuotLyBot", "PagerMaid_QuotLyBot"];
 
+async function firstSuccessfulBotResponse(
+  promises: Promise<Api.Message>[],
+  controllers: AbortController[]
+): Promise<Api.Message> {
+  return await new Promise<Api.Message>((resolve, reject) => {
+    let pending = promises.length;
+    const errors: unknown[] = [];
+
+    promises.forEach((promise, index) => {
+      promise.then(
+        (response) => {
+          controllers.forEach((controller) => {
+            if (!controller.signal.aborted) {
+              controller.abort("Quote bot race resolved");
+            }
+          });
+          resolve(response);
+        },
+        (error) => {
+          errors[index] = error;
+          pending -= 1;
+          if (pending === 0) {
+            reject(errors);
+          }
+        }
+      );
+    });
+  });
+}
+
 async function quoteMsgs(msg: Api.Message): Promise<void> {
   const [, ...args] = msg.message.slice(1).split(" ");
   const repliedMessage = await safeGetReplyMessage(msg);
@@ -20,28 +50,37 @@ async function quoteMsgs(msg: Api.Message): Promise<void> {
     reverse: true,
   });
 
-  // 创建一个竞速的 Promise 数组，哪个机器人先响应就用哪个
-  const botPromises = bots.map((botName) => 
-    new Promise<Api.Message>(async (resolve, reject) => {
+  const controllers = bots.map(() => new AbortController());
+  const botPromises = bots.map((botName, index) => 
+    (async (): Promise<Api.Message> => {
       try {
-        await conversation(msg.client, botName, async (conv) => {
-          await msg.client?.forwardMessages(botName, {
-            fromPeer: msg.peerId,
-            messages: msgs!.map((msg) => msg.id),
-          });
-          const response = await conv.getResponse();
-          await conv.markAsRead();
-          resolve(response); // 第一个成功的会赢得竞速
-        });
+        let response: Api.Message | undefined;
+        await conversation(
+          msg.client,
+          botName,
+          { signal: controllers[index].signal },
+          async (conv) => {
+            await msg.client?.forwardMessages(botName, {
+              fromPeer: msg.peerId,
+              messages: msgs!.map((msg) => msg.id),
+            });
+            response = await conv.getResponse();
+            await conv.markAsRead();
+          }
+        );
+        if (!response) {
+          throw new Error(`${botName}: 未收到响应`);
+        }
+        return response;
       } catch (error) {
-        reject(`${botName}: ${error}`);
+        throw new Error(`${botName}: ${error}`);
       }
-    })
+    })()
   );
 
   try {
-    // Promise.race 会返回第一个成功的结果
-    const response = await Promise.race(botPromises);
+    const response = await firstSuccessfulBotResponse(botPromises, controllers);
+    await Promise.allSettled(botPromises);
     
     await msg.client?.sendMessage(msg.peerId, {
       message: response,
@@ -49,8 +88,6 @@ async function quoteMsgs(msg: Api.Message): Promise<void> {
     });
     await msg.delete();
   } catch (error) {
-    // 如果 Promise.race 失败，说明所有机器人都失败了
-    // 尝试收集所有错误信息
     const errors: string[] = [];
     for (let i = 0; i < botPromises.length; i++) {
       try {
