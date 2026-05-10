@@ -1511,9 +1511,6 @@ const speedtest = async (msg: Api.Message) => {
 };
 
 class SpeednextPlugin extends Plugin {
-  cleanup(): void {
-    // 当前插件不持有需要在 reload 时额外释放的长期资源。
-  }
 
   description: string = `⚡️ 网络速度测试工具 | SpeedTest by Ookla\n${help_txt}`;
   cmdHandlers: Record<string, (msg: Api.Message) => Promise<void>> = {
