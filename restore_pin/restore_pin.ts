@@ -28,9 +28,6 @@ const helpText = `📌 <b>恢复置顶插件</b>
 3. 自动扫描并恢复最近取消的置顶消息`;
 
 class RestorePinPlugin extends Plugin {
-  cleanup(): void {
-    // 当前插件不持有需要在 reload 时额外释放的长期资源。
-  }
 
   name = "restore_pin";
   description = helpText;
