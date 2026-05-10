@@ -6,6 +6,7 @@ import { createDirectoryInTemp } from "@utils/pathHelpers";
 import fs from "fs";
 import path from "path";
 
+import { safeGetMe } from "../src/utils/authGuards";
 const prefixes = getPrefixes();
 const mainPrefix = prefixes[0];
 
@@ -20,10 +21,6 @@ const help_text = `
 `;
 
 class KeepOnlinePlugin extends Plugin {
-  cleanup(): void {
-    // 当前插件不持有需要在 reload 时额外释放的长期资源。
-  }
-
   cmdHandlers: Record<
     string,
     (msg: Api.Message, trigger?: Api.Message) => Promise<void>
@@ -37,7 +34,7 @@ class KeepOnlinePlugin extends Plugin {
       description: `${help_text}`,
       handler: async (client: Api.Client) => {
         try {
-          await client.getMe();
+          await safeGetMe(client);
           const timestamp = Date.now() / 1000;
           fs.writeFileSync(file, `${timestamp.toFixed(0)}`, "utf-8");
         } catch (e) {}
