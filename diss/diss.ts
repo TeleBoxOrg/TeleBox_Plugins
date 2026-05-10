@@ -7,9 +7,6 @@ const prefixes = getPrefixes();
 const mainPrefix = prefixes[0];
 
 class DissPlugin extends Plugin {
-  cleanup(): void {
-    // 当前插件不持有需要在 reload 时额外释放的长期资源。
-  }
 
   // 插件描述
   description = "🗣️ 儒雅随和版祖安语录\n\n使用 ${mainPrefix}diss 触发";
