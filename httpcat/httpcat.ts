@@ -16,9 +16,6 @@ const help_text = `
 `;
 
 class HttpCatPlugin extends Plugin {
-  cleanup(): void {
-    // 当前插件不持有需要在 reload 时额外释放的长期资源。
-  }
 
   description: string = `\nHTTP猫猫图片\n\n${help_text}`;
   cmdHandlers: Record<string, (msg: Api.Message) => Promise<void>> = {
