@@ -920,9 +920,6 @@ const help_text = `▎群消息总结
 `;
 
 class SummaryPlugin extends Plugin {
-  cleanup(): void {
-    // 当前插件不持有需要在 reload 时额外释放的长期资源。
-  }
 
   description: string = `群消息总结插件\n\n${help_text}`;
 
