@@ -295,9 +295,6 @@ async function getWebsiteInfo(url: string): Promise<{ website: string | null; we
 }
 
 class SubinfoPlugin extends Plugin {
-  cleanup(): void {
-    // 当前插件不持有需要在 reload 时额外释放的长期资源。
-  }
 
   description =
     `📈 <b>订阅链接多维度查询工具</b>
