@@ -2,7 +2,10 @@ import { Plugin } from "@utils/pluginBase";
 import path from "path";
 import Database from "better-sqlite3";
 import { createDirectoryInAssets } from "@utils/pathHelpers";
-import { getGlobalClient } from "@utils/globalClient";
+import {
+  getGlobalClient,
+  tryGetCurrentGenerationContext,
+} from "@utils/globalClient";
 import { TelegramClient } from "teleproto";
 import { NewMessage, NewMessageEvent } from "teleproto/events";
 import { Api } from "teleproto/tl";
@@ -528,22 +531,64 @@ function getMediaType(message: any): string {
   return "text";
 }
 
+type TimerHandle = ReturnType<typeof setTimeout>;
+
+function isAbortError(error: unknown): boolean {
+  return error instanceof Error && error.name === "AbortError";
+}
+
+function throwIfAborted(signal?: AbortSignal): void {
+  if (signal?.aborted) {
+    throw new DOMException("Operation aborted", "AbortError");
+  }
+}
+
+function abortableSleep(ms: number, signal?: AbortSignal): Promise<void> {
+  if (ms <= 0) return Promise.resolve();
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(new DOMException("Operation aborted", "AbortError"));
+      return;
+    }
+
+    const timer = setTimeout(() => {
+      cleanup();
+      resolve();
+    }, ms);
+
+    const onAbort = () => {
+      cleanup();
+      reject(new DOMException("Operation aborted", "AbortError"));
+    };
+
+    const cleanup = () => {
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", onAbort);
+    };
+
+    signal?.addEventListener("abort", onAbort, { once: true });
+  });
+}
+
 // ====== Group forwarding helpers ======
 const groupBuffers = new Map<
   string,
   {
     messages: any[];
-    timer: any;
+    timer: TimerHandle | null;
     sourceId: number;
     targetId: number;
     options?: { silent?: boolean; replyTo?: number };
     shouldForward?: boolean;
+    disposeTimer?: () => void | Promise<void>;
   }
 >();
 
 function cleanupGroupBuffers(): void {
   for (const entry of groupBuffers.values()) {
-    if (entry.timer) {
+    if (entry.disposeTimer) {
+      void entry.disposeTimer();
+    } else if (entry.timer) {
       clearTimeout(entry.timer);
     }
   }
@@ -615,11 +660,20 @@ function enqueueGroupMessage(
     existed.messages.sort((a, b) => Number(a.id) - Number(b.id));
   }
   if (shouldForward) existed.shouldForward = true;
-  if (existed.timer) clearTimeout(existed.timer);
-  existed.timer = setTimeout(async () => {
+  if (existed.disposeTimer) {
+    void existed.disposeTimer();
+    existed.disposeTimer = undefined;
+  } else if (existed.timer) {
+    clearTimeout(existed.timer);
+  }
+
+  const context = tryGetCurrentGenerationContext();
+  const callback = async () => {
     groupBuffers.delete(key);
     try {
+      throwIfAborted(context?.signal);
       const client = await getGlobalClient();
+      throwIfAborted(context?.signal);
       if (existed.shouldForward) {
         const ids = existed.messages.map((m) => Number(m.id));
         await forwardGroupMessages(
@@ -636,9 +690,31 @@ function enqueueGroupMessage(
         console.log("[SHIFT] 组未触发类型过滤，跳过转发");
       }
     } catch (e) {
-      console.error("[SHIFT] 组转发执行失败", e);
+      if (!isAbortError(e)) {
+        console.error("[SHIFT] 组转发执行失败", e);
+      }
     }
-  }, 1200);
+  };
+
+  if (context) {
+    existed.timer = context.setTimeout(() => {
+      if (existed.disposeTimer) {
+        void existed.disposeTimer();
+        existed.disposeTimer = undefined;
+      }
+      const task = context.runTask(callback, { label: "shift-group-forward" });
+      task.catch((error) => {
+        if (!isAbortError(error)) {
+          console.error("[SHIFT] 组转发执行失败", error);
+        }
+      });
+    }, 1200, { label: "shift-group-buffer" });
+    existed.disposeTimer = () => clearTimeout(existed.timer!);
+  } else {
+    existed.timer = setTimeout(() => {
+      void callback();
+    }, 1200);
+  }
   groupBuffers.set(key, existed);
 }
 
@@ -756,8 +832,8 @@ class AdaptiveRateLimiter {
   private minDelay = 100;
   private maxDelay = 5000;
 
-  async throttle(): Promise<void> {
-    await new Promise((resolve) => setTimeout(resolve, this.currentDelay));
+  async throttle(signal?: AbortSignal): Promise<void> {
+    await abortableSleep(this.currentDelay, signal);
   }
 
   onSuccess(): void {
@@ -775,24 +851,37 @@ class AdaptiveRateLimiter {
   }
 }
 
+type BackupCallbacks = {
+  batchSize?: number;
+  delayMs?: number;
+  onProgress?: (current: number, total: number) => void | Promise<void>;
+  onComplete?: (stats: {
+    totalMessages: number;
+    processedMessages: number;
+    failedMessages: number;
+  }) => void | Promise<void>;
+};
+
+interface OwnedBackupTask {
+  task: BackupTask;
+}
+
 // ==================== Backup 管理器 ====================
 class BackupManager {
-  private static tasks = new Map<string, BackupTask>();
+  private static tasks = new Map<string, OwnedBackupTask>();
+  private static completedTaskIds: string[] = [];
   private static rateLimiter = new AdaptiveRateLimiter();
+  private static readonly maxRetainedCompletedTasks = 25;
 
   static async startBackup(
     sourceId: number,
     targetId: number,
-    options: {
-      batchSize?: number;
-      delayMs?: number;
-      onProgress?: (current: number, total: number) => void;
-      onComplete?: (stats: any) => void;
-    } = {}
+    options: BackupCallbacks = {}
   ): Promise<string> {
+    const context = tryGetCurrentGenerationContext();
     const taskId = `backup_${Date.now()}_${Math.random()
       .toString(36)
-      .substr(2, 9)}`;
+      .slice(2, 11)}`;
     const task: BackupTask = {
       sourceId,
       targetId,
@@ -803,28 +892,48 @@ class BackupManager {
       failedMessages: 0,
     };
 
-    this.tasks.set(taskId, task);
+    this.tasks.set(taskId, { task });
 
-    // 异步执行备份
-    this.executeBackup(taskId, options).catch((error) => {
-      console.error(`[SHIFT] 备份任务 ${taskId} 失败:`, error);
-      task.status = "failed";
-    });
+    const execute = async (signal?: AbortSignal) => {
+      try {
+        await this.executeBackup(taskId, options, signal);
+      } catch (error) {
+        if (!isAbortError(error)) {
+          console.error(`[SHIFT] 备份任务 ${taskId} 失败:`, error);
+          task.status = "failed";
+        }
+      } finally {
+        this.pruneTask(taskId);
+      }
+    };
+
+    if (context) {
+      const backupPromise = context.runTask(
+        (signal) => execute(signal),
+        { label: `shift-backup:${taskId}` }
+      );
+      backupPromise.catch(() => undefined);
+    } else {
+      await execute();
+    }
 
     return taskId;
   }
 
   private static async executeBackup(
     taskId: string,
-    options: any
+    options: BackupCallbacks,
+    signal?: AbortSignal
   ): Promise<void> {
-    const task = this.tasks.get(taskId);
+    const ownedTask = this.tasks.get(taskId);
+    const task = ownedTask?.task;
     if (!task) return;
 
     const client = await getGlobalClient();
     const batchSize = options.batchSize || 50;
 
     try {
+      throwIfAborted(signal);
       // 获取消息总数
       const messages = await safeGetMessages(client, task.sourceId, { limit: 1 });
       const totalCount = (messages as any).total || 0;
@@ -835,6 +944,7 @@ class BackupManager {
       let offsetId = task.lastMessageId || 0;
 
       while (hasMore && task.status === "running") {
+        throwIfAborted(signal);
         const batch = await safeGetMessages(client, task.sourceId, {
           limit: batchSize,
           offsetId,
@@ -851,8 +961,10 @@ class BackupManager {
           }
 
           try {
+            throwIfAborted(signal);
             // 限流控制
-            await this.rateLimiter.throttle();
+            await this.rateLimiter.throttle(signal);
+            throwIfAborted(signal);
 
             // 转发消息
             await client.forwardMessages(task.targetId, {
@@ -866,23 +978,27 @@ class BackupManager {
 
             // 进度回调
             if (options.onProgress && task.processedMessages % 10 === 0) {
-              options.onProgress(task.processedMessages, task.totalMessages);
+              await options.onProgress(task.processedMessages, task.totalMessages);
             }
 
             // 成功后调整限流
             this.rateLimiter.onSuccess();
-          } catch (error: any) {
+          } catch (error: unknown) {
+            if (isAbortError(error)) {
+              task.status = "failed";
+              return;
+            }
+
             task.failedMessages++;
 
+            const errorMessage = error instanceof Error ? error.message : String(error);
             // 处理限流错误
-            if (error.message?.includes("FLOOD_WAIT")) {
+            if (errorMessage.includes("FLOOD_WAIT")) {
               const waitTime = parseInt(
-                error.message.match(/\d+/)?.[0] || "60"
+                errorMessage.match(/\d+/)?.[0] || "60"
               );
               this.rateLimiter.onFloodWait(waitTime);
-              await new Promise((resolve) =>
-                setTimeout(resolve, waitTime * 1000)
-              );
+              await abortableSleep(waitTime * 1000, signal);
             }
           }
         }
@@ -908,13 +1024,17 @@ class BackupManager {
 
       // 完成回调
       if (options.onComplete) {
-        options.onComplete({
+        await options.onComplete({
           totalMessages: task.totalMessages,
           processedMessages: task.processedMessages,
           failedMessages: task.failedMessages,
         });
       }
     } catch (error) {
+      if (isAbortError(error)) {
+        task.status = "failed";
+        return;
+      }
       task.status = "failed";
       throw error;
     }
@@ -925,24 +1045,63 @@ class BackupManager {
     if (useLowdb && lowdb) {
       const savedTask = lowdb.data.backups[taskId];
       if (savedTask && savedTask.status !== "completed") {
-        this.tasks.set(taskId, savedTask);
+        const context = tryGetCurrentGenerationContext();
+        this.tasks.set(taskId, { task: savedTask });
         savedTask.status = "running";
-        await this.executeBackup(taskId, {});
+        const execute = async (signal?: AbortSignal) => {
+          try {
+            await this.executeBackup(taskId, {}, signal);
+          } finally {
+            this.pruneTask(taskId);
+          }
+        };
+        if (context) {
+          const resumePromise = context.runTask(
+            (signal) => execute(signal),
+            { label: `shift-backup-resume:${taskId}` }
+          );
+          resumePromise.catch(() => undefined);
+        } else {
+          await execute();
+        }
       }
     }
   }
 
   static getBackupStatus(taskId: string): BackupTask | null {
-    return this.tasks.get(taskId) || null;
+    return this.tasks.get(taskId)?.task || null;
+  }
+
+  private static pruneTask(taskId: string): void {
+    const ownedTask = this.tasks.get(taskId);
+    if (!ownedTask) return;
+
+    if (ownedTask.task.status === "completed" || ownedTask.task.status === "failed") {
+      this.completedTaskIds.push(taskId);
+    }
+
+    while (this.completedTaskIds.length > this.maxRetainedCompletedTasks) {
+      const removeTaskId = this.completedTaskIds.shift();
+      if (removeTaskId) {
+        const removable = this.tasks.get(removeTaskId);
+        if (
+          removable?.task.status === "completed" ||
+          removable?.task.status === "failed"
+        ) {
+          this.tasks.delete(removeTaskId);
+        }
+      }
+    }
   }
 
   static cleanup(): void {
-    for (const task of this.tasks.values()) {
-      if (task.status === "running" || task.status === "pending") {
-        task.status = "failed";
+    for (const ownedTask of this.tasks.values()) {
+      if (ownedTask.task.status === "running" || ownedTask.task.status === "pending") {
+        ownedTask.task.status = "failed";
       }
     }
     this.tasks.clear();
+    this.completedTaskIds = [];
     this.rateLimiter.reset();
   }
 }
@@ -1994,7 +2153,7 @@ async function shiftForwardMessage(
     const nextRule = await getShiftRule(toChatId);
     if (nextRule && !nextRule.paused && nextRule.target_id) {
       // Wait for message to arrive
-      await new Promise((resolve) => setTimeout(resolve, 200));
+      await abortableSleep(200, tryGetCurrentGenerationContext()?.signal);
 
       // Recursive forwarding with depth tracking
       await shiftForwardMessage(
