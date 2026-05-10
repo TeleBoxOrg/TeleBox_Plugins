@@ -3,6 +3,7 @@ import { getPrefixes } from "@utils/pluginManager";
 import { Api, TelegramClient } from "teleproto";
 import { getGlobalClient } from "@utils/globalClient";
 
+import { safeGetMe } from "../src/utils/authGuards";
 const prefixes = getPrefixes();
 const mainPrefix = prefixes[0];
 
@@ -26,9 +27,6 @@ const sleep = (ms: number): Promise<void> =>
   new Promise((resolve) => setTimeout(resolve, ms));
 
 class PaoluPlugin extends Plugin {
-  cleanup(): void {
-    // 当前插件不持有需要在 reload 时额外释放的长期资源。
-  }
 
   description: string = `群组一键跑路插件 - 删除消息并禁言所有成员\n\n${help_text}`;
   
@@ -52,7 +50,8 @@ class PaoluPlugin extends Plugin {
 
     try {
       // 检查管理员权限
-      const me = await client.getMe();
+      const me = await safeGetMe(client);
+           if (!me) return;
       let isAdmin = false;
       
       try {
