@@ -186,7 +186,8 @@ class KeywordTask {
       if (this.delete) {
         try {
           if (this.source_delay_delete > 0) {
-            setTimeout(async () => {
+            const sourceTimer = setTimeout(async () => {
+              pendingDeleteTimers.delete(sourceTimer);
               try {
                 await client.deleteMessages(message.peerId, [message.id], {
                   revoke: true,
@@ -195,6 +196,7 @@ class KeywordTask {
                 console.error("Delayed delete message error:", error);
               }
             }, this.source_delay_delete * 1000);
+            pendingDeleteTimers.add(sourceTimer);
           } else {
             await client.deleteMessages(message.peerId, [message.id], {
               revoke: true,
@@ -206,7 +208,8 @@ class KeywordTask {
       }
 
       if (this.delay_delete > 0 && sentMsg) {
-        setTimeout(async () => {
+        const replyTimer = setTimeout(async () => {
+          pendingDeleteTimers.delete(replyTimer);
           try {
             await client.deleteMessages(message.peerId, [sentMsg!.id], {
               revoke: true,
@@ -215,6 +218,7 @@ class KeywordTask {
             console.error("Delayed delete reply error:", error);
           }
         }, this.delay_delete * 1000);
+        pendingDeleteTimers.add(replyTimer);
       }
     } catch (error) {
       console.error("Process keyword error:", error);
@@ -340,6 +344,9 @@ function htmlEscape(text: string): string {
 function codeTag(text: string | number): string {
   return `<code>${htmlEscape(String(text))}</code>`;
 }
+
+// 跟踪延迟删除定时器，确保 reload 时可以清理
+const pendingDeleteTimers = new Set<ReturnType<typeof setTimeout>>();
 
 class KeywordAlias {
   add(fromCid: number, toCid: number): void {
@@ -829,6 +836,17 @@ reply delete ban3600</code>
 
 class KeywordPlugin extends Plugin {
   cleanup(): void {
+    for (const timer of pendingDeleteTimers) {
+      clearTimeout(timer);
+    }
+    pendingDeleteTimers.clear();
+    try {
+      if (db && typeof db.close === "function") {
+        db.close();
+      }
+    } catch (error) {
+      console.error("Failed to close keyword DB:", error);
+    }
   }
 
   description: string = `关键词回复管理`;
