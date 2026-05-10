@@ -147,9 +147,6 @@ async function lifecycleSleep(ms: number, label: string): Promise<void> {
 }
 
 class StickerPlugin extends Plugin {
-  cleanup(): void {
-  }
-
   description: string = help_text;
 
   cmdHandlers: Record<string, (msg: Api.Message) => Promise<void>> = {
