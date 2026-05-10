@@ -6,6 +6,7 @@ import { JSONFilePreset } from "lowdb/node";
 import { createDirectoryInAssets } from "@utils/pathHelpers";
 import * as path from "path";
 
+import { safeGetMe } from "../src/utils/authGuards";
 const prefixes = getPrefixes();
 const mainPrefix = prefixes[0];
 
@@ -17,9 +18,6 @@ const htmlEscape = (text: string): string =>
   }[m] || m));
 
 class TeletypePlugin extends Plugin {
-  cleanup(): void {
-    // 当前插件不持有需要在 reload 时额外释放的长期资源。
-  }
 
   private readonly PLUGIN_NAME = "teletype";
   private readonly PLUGIN_VERSION = "1.1.0";
@@ -197,7 +195,8 @@ class TeletypePlugin extends Plugin {
     const client = await getGlobalClient();
     if (!client) return;
     
-    const self = await client.getMe();
+    const self = await safeGetMe(client);
+  if (!self) return;
     if (!msg.senderId?.eq(self.id)) return;
     
     try {
