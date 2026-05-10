@@ -228,9 +228,6 @@ const ip = async (msg: Api.Message) => {
 };
 
 class IpPlugin extends Plugin {
-  cleanup(): void {
-    // 当前插件不持有需要在 reload 时额外释放的长期资源。
-  }
 
   description: string = `
 IP 查询插件：
