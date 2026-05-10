@@ -1463,7 +1463,7 @@ async function handleTrimAction(
 }
 
 class AdminBoardPlugin extends Plugin {
-  cleanup(): void {}
+
 
   description: string = helpText;
 
