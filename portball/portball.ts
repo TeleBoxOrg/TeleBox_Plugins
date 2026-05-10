@@ -4,6 +4,7 @@ import { Api } from "teleproto";
 import { getGlobalClient } from "@utils/globalClient";
 import { safeGetReplyMessage } from "@utils/safeGetMessages";
 
+import { safeGetMe } from "../src/utils/authGuards";
 // HTML转义函数
 const prefixes = getPrefixes();
 const mainPrefix = prefixes[0];
@@ -32,9 +33,6 @@ const parseTimeString = (timeStr: string): number => {
 };
 
 class PortballPlugin extends Plugin {
-  cleanup(): void {
-    // 当前插件不持有需要在 reload 时额外释放的长期资源。
-  }
 
   name = "portball";
   description = "🔇 临时禁言工具 - 回复消息实现XX秒禁言";
@@ -103,7 +101,8 @@ class PortballPlugin extends Plugin {
       }
 
       // 检查是否为自己
-      const self = await client.getMe();
+      const self = await safeGetMe(client);
+  if (!self) return;
       if (sender.id?.eq?.(self.id)) {
         await msg.edit({
           text: "❌ <b>错误：</b>无法禁言自己",
