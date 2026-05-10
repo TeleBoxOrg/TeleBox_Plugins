@@ -5,11 +5,14 @@ import fs from "fs";
 import { execSync } from "child_process";
 import { JSONFilePreset } from "lowdb/node";
 import { createDirectoryInAssets } from "@utils/pathHelpers";
-import { Plugin } from "@utils/pluginBase";
+import { Plugin, type PluginRuntimeContext } from "@utils/pluginBase";
+import { getCurrentGeneration, tryGetCurrentGenerationContext } from "@utils/globalClient";
+import type { GenerationContext } from "@utils/generationContext";
 import { getPrefixes } from "@utils/pluginManager";
 import bigInt from "big-integer";
 import { safeGetMessages } from "@utils/safeGetMessages";
 
+import { safeGetMe } from "../src/utils/authGuards";
 const PLUGIN_VERSION = "5.0.6";
 
 function htmlEscape(value: any): string {
@@ -197,9 +200,20 @@ async function initDb() {
   }
 }
 
+async function generationDelay(ms: number): Promise<boolean> {
+  const lifecycle = getActiveLifecycle();
+  if (!lifecycle) return false;
+  return await new Promise<boolean>((resolve) => {
+    lifecycle.setTimeout(() => resolve(!lifecycle.signal.aborted), ms, { label: "pmcaptcha-delay" });
+    if (lifecycle.signal.aborted) resolve(false);
+  });
+}
+
 async function waitDb(ms = 5000): Promise<boolean> {
   const t = Date.now();
-  while (!dbReady && Date.now() - t < ms) await new Promise(r => setTimeout(r, 50));
+  while (!dbReady && Date.now() - t < ms) {
+    if (!(await generationDelay(50))) return false;
+  }
   return dbReady;
 }
 
@@ -295,8 +309,8 @@ let _selfId: number | null = null;
 
 async function getSelfId(client: TelegramClient): Promise<number> {
   if (_selfId !== null) return _selfId;
-  try { _selfId = Number((await client.getMe() as any).id); }
-  catch { _selfId = 0; }
+  const me = await safeGetMe(client);
+  _selfId = me ? Number((me as any).id) : 0;
   return _selfId!;
 }
 
@@ -317,15 +331,22 @@ async function fetchUserInfo(client: TelegramClient, userId: number): Promise<an
   } catch {}
 
   try {
-    const res = await client.invoke(new Api.users.GetUsers({
-      id: [new Api.InputUser({ userId: bigInt(userId), accessHash: bigInt.zero })]
-    })) as any[];
-    const user = res?.[0];
-    if (user && !(user instanceof Api.UserEmpty)) {
-      cacheUserFromSender(user);
-      return user;
+    const input = await client.getInputEntity(bigInt(userId));
+    if (input instanceof Api.InputPeerUser) {
+      const res = await client.invoke(new Api.users.GetUsers({
+        id: [new Api.InputUser({ userId: input.userId, accessHash: input.accessHash })]
+      })) as any[];
+      const user = res?.[0];
+      if (user && !(user instanceof Api.UserEmpty)) {
+        cacheUserFromSender(user);
+        return user;
+      }
     }
-  } catch {}
+  } catch (error) {
+    if (!(error instanceof Error) || !error.message.includes("AUTH_KEY_UNREGISTERED")) {
+      throw error;
+    }
+  }
 
   return null;
 }
@@ -463,7 +484,7 @@ async function tryGetCanvas(): Promise<any> {
   if (_canvasInstalling) {
     const deadline = Date.now() + 60_000;
     while (_canvasInstalling && Date.now() < deadline) {
-      await new Promise(r => setTimeout(r, 500));
+      if (!(await generationDelay(500))) return false;
     }
     return _canvas ?? false;
   }
@@ -600,20 +621,63 @@ async function generateImageCaptcha(
 
 // ─── 验证状态 ─────────────────────────────────────────────────────────────────
 
+type CaptchaTimer = ReturnType<GenerationContext["setTimeout"]>;
+
 interface CaptchaState {
   answer:   string;                             // 正确答案
   question: string;                             // 题目 / 关键词（用于刷新消息）
   isQA:     boolean;                            // TEXT 模式：是否为随机问答（false = keyword 模式）
   tries:    number;                             // 已尝试次数
-  timer:    ReturnType<typeof setTimeout> | null;
+  timer:    CaptchaTimer | null;
   msgIds:   number[];                           // 所有验证消息 ID
   mode:     CaptchaMode;                        // 当前验证模式
+  generation: number;
 }
 
+let runtimeLifecycle: GenerationContext | null = null;
+let runtimeGeneration = 0;
 const states = new Map<number, CaptchaState>();
 
+function getActiveLifecycle(): GenerationContext | null {
+  if (runtimeLifecycle && !runtimeLifecycle.signal.aborted && runtimeGeneration === getCurrentGeneration()) {
+    return runtimeLifecycle;
+  }
+
+  const current = tryGetCurrentGenerationContext();
+  if (!current || current.signal.aborted) return null;
+  runtimeLifecycle = current;
+  runtimeGeneration = current.generation;
+  return current;
+}
+
+function isStateCurrent(state: CaptchaState): boolean {
+  const lifecycle = getActiveLifecycle();
+  return !!lifecycle && state.generation === lifecycle.generation && !lifecycle.signal.aborted;
+}
+
+function clearCaptchaTimer(state: CaptchaState): void {
+  state.timer = null;
+}
+
+function removeCaptchaState(userId: number): CaptchaState | undefined {
+  const state = states.get(userId);
+  if (!state) return undefined;
+  clearCaptchaTimer(state);
+  states.delete(userId);
+  return state;
+}
+
+function drainCaptchaStates(): void {
+  for (const state of states.values()) {
+    clearCaptchaTimer(state);
+  }
+  states.clear();
+}
+
 async function cleanupCaptchaMessages(client: TelegramClient, userId: number, state: CaptchaState) {
+  if (!isStateCurrent(state)) return;
   for (const id of state.msgIds) {
+    if (!isStateCurrent(state)) return;
     try { await client.deleteMessages(userId, [id], { revoke: false }); } catch {}
   }
 }
@@ -768,11 +832,12 @@ function textQuestion(): { question: string; answer: string } {
 }
 
 async function sendCaptcha(client: TelegramClient, userId: number): Promise<void> {
-  const existing = states.get(userId);
+  const lifecycle = getActiveLifecycle();
+  if (!lifecycle) return;
+
+  const existing = removeCaptchaState(userId);
   if (existing) {
-    if (existing.timer) clearTimeout(existing.timer);
     await cleanupCaptchaMessages(client, userId, existing);
-    states.delete(userId);
   }
 
   const mode    = cfg.mode();
@@ -885,23 +950,33 @@ async function sendCaptcha(client: TelegramClient, userId: number): Promise<void
       msgIds.push(m.id);
     }
 
-    const state: CaptchaState = { answer, question, isQA, tries: 0, timer: null, msgIds, mode };
+    if (lifecycle.signal.aborted || lifecycle.generation !== getCurrentGeneration()) return;
+
+    const state: CaptchaState = { answer, question, isQA, tries: 0, timer: null, msgIds, mode, generation: lifecycle.generation };
 
     if (timeout > 0) {
-      state.timer = setTimeout(async () => {
-        const st = states.get(userId);
-        if (!st) return;
-        states.delete(userId);
-        log(LogLevel.INFO, `Captcha timed out: ${userId}`);
-        const name = await getDisplayName(client, userId).catch(() => String(userId));
-        rec.addFailed(userId, name, "timeout", usernameCache.get(userId));
-        rec.delVerified(userId);
-        await cleanupCaptchaMessages(client, userId, st);
-        try {
-          await client.sendMessage(userId, { message: "⏰ 验证超时，对话已被限制。", parseMode: "html" });
-        } catch {}
-        await runFailActions(client, userId);
-      }, timeout * 1000);
+      state.timer = lifecycle.setTimeout(() => {
+        void lifecycle.runTask(async () => {
+          if (!isStateCurrent(state)) return;
+          const st = states.get(userId);
+          if (st !== state) return;
+          removeCaptchaState(userId);
+          log(LogLevel.INFO, `Captcha timed out: ${userId}`);
+          const name = await getDisplayName(client, userId).catch(() => String(userId));
+          if (!isStateCurrent(state)) return;
+          rec.addFailed(userId, name, "timeout", usernameCache.get(userId));
+          rec.delVerified(userId);
+          await cleanupCaptchaMessages(client, userId, st);
+          if (!isStateCurrent(state)) return;
+          try {
+            await client.sendMessage(userId, { message: "⏰ 验证超时，对话已被限制。", parseMode: "html" });
+          } catch {}
+          if (!isStateCurrent(state)) return;
+          await runFailActions(client, userId);
+        }, { label: `pmcaptcha-timeout:${userId}` }).catch((error) => {
+          log(LogLevel.ERROR, `Captcha timeout task failed: ${userId}`, error);
+        });
+      }, timeout * 1000, { label: `pmcaptcha-timer:${userId}` });
     }
 
     states.set(userId, state);
@@ -930,7 +1005,7 @@ function levenshtein(a: string, b: string): number {
 
 async function handleReply(client: TelegramClient, userId: number, input: string, incomingMsgId: number): Promise<void> {
   const state = states.get(userId);
-  if (!state) return;
+  if (!state || !isStateCurrent(state)) return;
 
   if (!input.trim()) return;
 
@@ -938,7 +1013,7 @@ async function handleReply(client: TelegramClient, userId: number, input: string
 
   if (!state.answer) {
     log(LogLevel.WARN, `handleReply: empty answer for user ${userId}`);
-    if (state.timer) clearTimeout(state.timer);
+    clearCaptchaTimer(state);
     states.delete(userId);
     await cleanupCaptchaMessages(client, userId, state);
     try { await client.sendMessage(userId, { message: "❌ 验证状态异常，请联系对方重置。", parseMode: "html" }); } catch {}
@@ -954,14 +1029,16 @@ async function handleReply(client: TelegramClient, userId: number, input: string
     : inputNorm === answerNorm;
 
   if (correct) {
-    if (state.timer) clearTimeout(state.timer);
+    clearCaptchaTimer(state);
     states.delete(userId);
     await cleanupCaptchaMessages(client, userId, state);
     const name = await getDisplayName(client, userId).catch(() => String(userId));
+    if (!isStateCurrent(state)) return;
     rec.addVerified(userId, name, usernameCache.get(userId));
     rec.delFailed(userId);
     log(LogLevel.INFO, `User ${userId} passed captcha`);
     await runPassActions(client, userId);
+    if (!isStateCurrent(state)) return;
     try {
       await client.sendMessage(userId, { message: "✅ 验证通过！欢迎与我对话。", parseMode: "html" });
     } catch {}
@@ -973,21 +1050,24 @@ async function handleReply(client: TelegramClient, userId: number, input: string
   const remaining = max > 0 ? max - state.tries : Infinity;
 
   if (max > 0 && state.tries >= max) {
-    if (state.timer) clearTimeout(state.timer);
+    clearCaptchaTimer(state);
     states.delete(userId);
     await cleanupCaptchaMessages(client, userId, state);
     const name = await getDisplayName(client, userId).catch(() => String(userId));
+    if (!isStateCurrent(state)) return;
     rec.addFailed(userId, name, "max_tries", usernameCache.get(userId));
     rec.delVerified(userId);
     log(LogLevel.INFO, `User ${userId} failed captcha (max tries)`);
     try {
       await client.sendMessage(userId, { message: "❌ 验证失败次数过多，对话已被限制。", parseMode: "html" });
     } catch {}
+    if (!isStateCurrent(state)) return;
     await runFailActions(client, userId);
   } else {
     const hint = remaining === Infinity ? "请重试。" : `请重试（剩余次数：${remaining}）`;
     try {
       const hintMsg = await client.sendMessage(userId, { message: `❌ 答案错误，${htmlEscape(hint)}`, parseMode: "html" });
+      if (!isStateCurrent(state)) return;
       state.msgIds.push(hintMsg.id);
     } catch {}
   }
@@ -996,6 +1076,7 @@ async function handleReply(client: TelegramClient, userId: number, input: string
 // ─── 消息监听 ─────────────────────────────────────────────────────────────────
 
 async function messageListener(message: Api.Message) {
+  if (!getActiveLifecycle()) return;
   if (!(await waitDb())) return;
   try {
     const client = message.client as TelegramClient;
@@ -1285,6 +1366,7 @@ function helpText(section?: string): string {
 // ─── 指令处理器（统一入口）────────────────────────────────────────────────────
 
 const pmcaptcha = async (message: Api.Message) => {
+  if (!getActiveLifecycle()) return;
   if (!(await waitDb())) return;
   const client  = message.client as TelegramClient;
   const args    = message.message.slice(1).split(/\s+/).slice(1);
@@ -1304,7 +1386,9 @@ const pmcaptcha = async (message: Api.Message) => {
         parseMode: "html"
       });
       try { await message.delete(); } catch {}
-      setTimeout(async () => { try { await tmp.delete(); } catch {} }, 3000);
+      getActiveLifecycle()?.setTimeout(() => {
+        void tmp.delete().catch(() => undefined);
+      }, 3000, { label: "pmcaptcha-command-cleanup" });
     } catch (e) { log(LogLevel.ERROR, "pmc on/off error", e); }
     return;
   }
@@ -1709,10 +1793,8 @@ const pmcaptcha = async (message: Api.Message) => {
           if (!args[2]) { await edit(`❌ 用法：<code>${mainPrefix}pmc wl pass &lt;ID/@user&gt;</code>`); break; }
           const tid = await resolveUser(client, args[2]);
           if (!tid || tid <= 0) { await edit("❌ 无法解析目标用户"); break; }
-          const st = states.get(tid);
-          if (st?.timer) clearTimeout(st.timer);
+          const st = removeCaptchaState(tid);
           if (st) await cleanupCaptchaMessages(client, tid, st);
-          states.delete(tid);
           wl.add(tid);
           const name = await getDisplayName(client, tid);
           rec.addVerified(tid, name, usernameCache.get(tid));
@@ -1866,8 +1948,22 @@ const pmcaptcha = async (message: Api.Message) => {
 const pmc = pmcaptcha;
 
 class PMCaptchaPlugin extends Plugin {
+  setup(context: PluginRuntimeContext): void {
+    runtimeLifecycle = context.lifecycle;
+    runtimeGeneration = context.generation;
+    context.lifecycle.trackDisposable(() => {
+      drainCaptchaStates();
+      if (runtimeGeneration === context.generation) {
+        runtimeLifecycle = null;
+        runtimeGeneration = 0;
+      }
+    }, { label: "pmcaptcha-state-drain" });
+  }
+
   cleanup(): void {
-    // 真实资源清理：释放插件持有的定时器、监听器、运行时状态或临时资源。
+    drainCaptchaStates();
+    runtimeLifecycle = null;
+    runtimeGeneration = 0;
   }
 
   name        = "pmcaptcha";
