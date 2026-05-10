@@ -28,9 +28,6 @@ const help_text = `📋 <b>listusernames - 列出公开群组/频道</b>
 <code>${mainPrefix}listusernames</code>`;
 
 class ListUsernamesPlugin extends Plugin {
-  cleanup(): void {
-    // 当前插件不持有需要在 reload 时额外释放的长期资源。
-  }
 
   description = help_text;
   
