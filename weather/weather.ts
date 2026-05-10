@@ -134,9 +134,6 @@ const help_text = `🌤️ <b>天气查询插件</b>
 • 数据来源：Open-Meteo (免费、无需API密钥)`;
 
 class WeatherPlugin extends Plugin {
-  cleanup(): void {
-    // 当前插件不持有需要在 reload 时额外释放的长期资源。
-  }
 
   description: string = help_text;
   private apiUrl: string = "https://api.open-meteo.com/v1";
