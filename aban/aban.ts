@@ -9,6 +9,7 @@ import path from "path";
 import bigInt from "big-integer";
 import { safeGetReplyMessage } from "@utils/safeGetMessages";
 
+import { safeGetMe } from "../src/utils/authGuards";
 const prefixes = getPrefixes();
 const mainPrefix = prefixes[0];
 
@@ -416,7 +417,8 @@ class PermissionManager {
     chatId: any
   ): Promise<boolean> {
     try {
-      const me = await client.getMe();
+      const me = await safeGetMe(client);
+      if (!me) return false;
       if (this.getChatKind(chatId) === 'chat') {
         const participants = await this.getBasicGroupParticipants(client, chatId);
         if (!participants) {
@@ -484,7 +486,8 @@ class PermissionManager {
     chatId: any
   ): Promise<boolean> {
     try {
-      const me = await client.getMe();
+      const me = await safeGetMe(client);
+      if (!me) return false;
       if (this.getChatKind(chatId) === 'chat') {
         const participants = await this.getBasicGroupParticipants(client, chatId);
         if (!participants) {
@@ -1319,9 +1322,6 @@ class CommandHandlers {
 
 // ==================== 插件主类 ====================
 class AbanPlugin extends Plugin {
-  cleanup(): void {
-  }
-
   description: string = HELP_TEXT;
 
   cmdHandlers: Record<string, (msg: Api.Message) => Promise<void>> = {
