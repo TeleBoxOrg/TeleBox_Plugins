@@ -63,9 +63,6 @@ const MEDIA_TYPES: Record<string, string> = {
 };
 
 class HisPlugin extends Plugin {
-  cleanup(): void {
-    // 当前插件不持有需要在 reload 时额外释放的长期资源。
-  }
 
   // 必须在 description 中引用 help_text
   description: string = `消息历史查询插件\n\n${help_text}`;
