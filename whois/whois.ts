@@ -23,6 +23,31 @@ const htmlEscape = (text: string): string =>
     '"': '&quot;', "'": '&#x27;' 
   }[m] || m));
 
+// 解析 namebeta.com 的 SSE 流式响应，返回各事件对象
+function parseSSEResponse(raw: string): Array<{type: string; data: any}> {
+  const events: Array<{type: string; data: any}> = [];
+  for (const line of raw.split('\n')) {
+    const trimmed = line.trim();
+    if (!trimmed.startsWith('data: ')) continue;
+    try {
+      const json = JSON.parse(trimmed.slice(6));
+      events.push(json);
+    } catch { /* skip malformed lines */ }
+  }
+  return events;
+}
+
+// 从 SSE 事件列表中提取 whois 原始文本
+function extractWhoisFromSSE(raw: string): string | null {
+  const events = parseSSEResponse(raw);
+  for (const evt of events) {
+    if (evt.type === 'check' && evt.data?.whois?.whois) {
+      return evt.data.whois.whois;
+    }
+  }
+  return null;
+}
+
 const prefixes = getPrefixes();
 const mainPrefix = prefixes[0];
 
@@ -225,17 +250,18 @@ class WhoisPlugin extends Plugin {
         parseMode: "html"
       });
       
-      // 使用 axios 进行请求
-      const response = await axios.get(`https://namebeta.com/api/search/check`, {
+      // namebeta.com 返回 SSE 流式响应，需获取原始文本并解析
+      const apiResponse = await axios.get<string>(`https://namebeta.com/api/search/check`, {
         params: { query: domain },
         timeout: 10000,
         headers: {
           'User-Agent': 'TeleBox/1.0'
-        }
+        },
+        responseType: 'text'
       });
       
-      if (response.status === 200 && response.data) {
-        const whoisData = response.data.whois?.whois;
+      if (apiResponse.status === 200 && apiResponse.data) {
+        const whoisData = extractWhoisFromSSE(apiResponse.data);
         
         if (!whoisData) {
           await msg.edit({
@@ -292,7 +318,7 @@ class WhoisPlugin extends Plugin {
         
       } else {
         await msg.edit({
-          text: `❌ <b>API 服务器错误</b>\n\n<b>状态码：</b> ${response.status}\n\n💡 请稍后重试`,
+          text: `❌ <b>API 服务器错误</b>\n\n<b>状态码：</b> ${apiResponse.status}\n\n💡 请稍后重试`,
           parseMode: "html"
         });
       }
@@ -474,24 +500,31 @@ class WhoisPlugin extends Plugin {
         }
         
         // 查询域名
-        const response = await axios.get(`https://namebeta.com/api/search/check`, {
+        const batchResponse = await axios.get<string>(`https://namebeta.com/api/search/check`, {
           params: { query: domain },
-          timeout: 5000,
-          headers: { 'User-Agent': 'TeleBox/1.0' }
+          timeout: 10000,
+          headers: { 'User-Agent': 'TeleBox/1.0' },
+          responseType: 'text'
         });
         
-        if (response.status === 200 && response.data?.whois?.whois) {
-          results.push(`✅ <code>${htmlEscape(domain)}</code>`);
-          successCount++;
+        if (batchResponse.status === 200 && batchResponse.data) {
+          const whoisData = extractWhoisFromSSE(batchResponse.data);
           
-          // 保存到缓存
-          const whoisData = response.data.whois.whois;
-          const record: WhoisRecord = {
-            domain,
-            rawData: whoisData,
-            queryTime: new Date().toISOString()
-          };
-          await this.saveWhoisRecord(record);
+          if (whoisData) {
+            results.push(`✅ <code>${htmlEscape(domain)}</code>`);
+            successCount++;
+            
+            // 保存到缓存
+            const record: WhoisRecord = {
+              domain,
+              rawData: whoisData,
+              queryTime: new Date().toISOString()
+            };
+            await this.saveWhoisRecord(record);
+          } else {
+            results.push(`❌ <code>${htmlEscape(domain)}</code> - 查询失败`);
+            failCount++;
+          }
         } else {
           results.push(`❌ <code>${htmlEscape(domain)}</code> - 查询失败`);
           failCount++;
