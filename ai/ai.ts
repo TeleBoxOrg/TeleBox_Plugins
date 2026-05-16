@@ -2473,16 +2473,25 @@ class TimeoutMiddleware implements Middleware {
 class HttpClient {
   private axiosInstance: AxiosInstance;
   private middlewarePipeline: MiddlewarePipeline;
+  private httpAgent: http.Agent;
+  private httpsAgent: https.Agent;
 
   constructor(configManagerPromise: Promise<ConfigManager>) {
+    this.httpAgent = new http.Agent({ keepAlive: true });
+    this.httpsAgent = new https.Agent({ keepAlive: true });
     const keepAliveAgent = {
-      httpAgent: new http.Agent({ keepAlive: true }),
-      httpsAgent: new https.Agent({ keepAlive: true }),
+      httpAgent: this.httpAgent,
+      httpsAgent: this.httpsAgent,
     };
     this.axiosInstance = axios.create(keepAliveAgent);
 
     this.middlewarePipeline = new MiddlewarePipeline();
     this.middlewarePipeline.use(new TimeoutMiddleware(configManagerPromise));
+  }
+
+  destroy(): void {
+    this.httpAgent.destroy();
+    this.httpsAgent.destroy();
   }
 
   async request<T = any>(
@@ -5135,6 +5144,7 @@ class AIPlugin extends Plugin {
 
     this.questionFeature.cancelCurrentOperation();
     await this.aiService.destroy();
+    this.httpClient.destroy();
     const configManager = await this.configManagerPromise;
     await configManager.destroy();
   }

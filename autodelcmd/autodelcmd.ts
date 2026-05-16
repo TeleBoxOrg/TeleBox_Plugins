@@ -696,10 +696,6 @@ async function ensureServiceInitialized(): Promise<boolean> {
 }
 
 class AutoDeletePlugin extends Plugin {
-  cleanup(): void {
-    // 真实资源清理：释放插件持有的定时器、监听器、运行时状态或临时资源。
-  }
-
   // 插件启动时自动初始化
   constructor() {
     super();
