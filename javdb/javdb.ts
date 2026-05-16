@@ -13,7 +13,7 @@ import * as path from "path";
 import * as os from "os";
 
 import { Plugin } from "@utils/pluginBase";
-import { getGlobalClient } from "@utils/globalClient";
+import { getGlobalClient, getCurrentGeneration } from "@utils/globalClient";
 import { getPrefixes } from "@utils/pluginManager";
 
 import { Api } from "teleproto";
@@ -37,19 +37,6 @@ const htmlEscape = (text: string): string =>
   }[m] || m));
 
 /** 分割 HTML 文本为多个分段（避免超过长度限制）*/
-// Timer tracking for safe cleanup
-const pendingTimers = new Set<ReturnType<typeof setTimeout>>();
-
-function scheduleTimer(fn: () => void, ms: number): ReturnType<typeof setTimeout> {
-  const t = scheduleTimer(() => {
-    pendingTimers.delete(t);
-    fn();
-  }, ms);
-  pendingTimers.add(t);
-  return t;
-}
-
-
 function chunkHtml(text: string, limit = MAX_MESSAGE_LENGTH): string[] {
   if (text.length <= limit) return [text];
   const out: string[] = [];
@@ -250,6 +237,9 @@ const help_text = `🎬 <b>JavDB 番号查询</b>
 • 封面图自动添加剧透标记，60秒后自动销毁
 • 附带 JavDB 和 MissAV 在线观看链接`;
 
+// Track pending setTimeout handles for safe cleanup on reload
+const pendingTimers = new Set<ReturnType<typeof setTimeout>>();
+
 class JavDBPlugin extends Plugin {
 
   description: string = `JavDB 番号查询\n\n${help_text}`;
@@ -369,11 +359,15 @@ class JavDBPlugin extends Plugin {
         await sendLongMessage(msg, caption);
       }
 
-      // 定时销毁（60秒）
+      // 定时销毁（60秒）(generation-safe)
       if (sent) {
-        scheduleTimer(async () => {
+        const gen = getCurrentGeneration();
+        const t = setTimeout(async () => {
+          pendingTimers.delete(t);
+          if (getCurrentGeneration() !== gen) return;
           try { await client.deleteMessages(msg.peerId!, [sent!.id], { revoke: true }); } catch {}
         }, 60_000);
+        pendingTimers.add(t);
       }
     } catch (error: any) {
       // 错误处理
@@ -397,8 +391,6 @@ class JavDBPlugin extends Plugin {
       await msg.edit({ text: `❌ <b>查询失败：</b>${htmlEscape(m)}`, parseMode: "html" });
     }
   }
-}
-
 
   cleanup(): void {
     for (const timer of pendingTimers) {
@@ -406,4 +398,6 @@ class JavDBPlugin extends Plugin {
     }
     pendingTimers.clear();
   }
+}
+
 export default new JavDBPlugin();

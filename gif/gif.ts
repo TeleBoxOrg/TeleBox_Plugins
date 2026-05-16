@@ -1,6 +1,6 @@
 // 文件名: plugins/gif.ts
 import { Plugin } from "@utils/pluginBase";
-import { getGlobalClient } from "@utils/globalClient";
+import { getGlobalClient, getCurrentGeneration } from "@utils/globalClient";
 import { getPrefixes } from "@utils/pluginManager";
 import { createDirectoryInAssets } from "@utils/pathHelpers";
 import { Api } from "teleproto";
@@ -236,10 +236,14 @@ class GifConverter {
       await this.sendAsSticker(msg, outputFile);
       await statusMsg?.edit({ text: "✅ 贴纸转换完成！" });
       
-      // 延迟删除状态消息
-      setTimeout(() => {
+      // 延迟删除状态消息 (generation-safe)
+      const gen1 = getCurrentGeneration();
+      const t1 = setTimeout(() => {
+        pendingTimers.delete(t1);
+        if (getCurrentGeneration() !== gen1) return;
         statusMsg?.delete().catch(() => {});
       }, 2000);
+      pendingTimers.add(t1);
 
     } finally {
       // 清理临时文件
@@ -380,10 +384,14 @@ class GifConverter {
         text: "✅ 成功！贴纸已自动添加到贴纸包并发送。" 
       });
       
-      // 延迟删除状态消息
-      setTimeout(() => {
+      // 延迟删除状态消息 (generation-safe)
+      const gen2 = getCurrentGeneration();
+      const t2 = setTimeout(() => {
+        pendingTimers.delete(t2);
+        if (getCurrentGeneration() !== gen2) return;
         statusMsg.delete().catch(() => {});
       }, 3000);
+      pendingTimers.add(t2);
       
     } catch (error: any) {
       console.error("自动添加贴纸包失败:", error);
@@ -393,9 +401,13 @@ class GifConverter {
       
       // 失败后直接发送贴纸
       await this.sendAsSticker(originalMsg, stickerFile);
-      setTimeout(() => {
+      const gen3 = getCurrentGeneration();
+      const t3 = setTimeout(() => {
+        pendingTimers.delete(t3);
+        if (getCurrentGeneration() !== gen3) return;
         statusMsg.delete().catch(() => {});
       }, 5000);
+      pendingTimers.add(t3);
     }
   }
   
@@ -461,6 +473,9 @@ const gif = async (msg: Api.Message) => {
   await converter.handle(msg);
 };
 
+// Track pending setTimeout handles for safe cleanup on reload
+const pendingTimers = new Set<ReturnType<typeof setTimeout>>();
+
 class GifStickerPlugin extends Plugin {
 
   description: string = `GIF 和视频转贴纸插件
@@ -506,6 +521,13 @@ class GifStickerPlugin extends Plugin {
   cmdHandlers: Record<string, (msg: Api.Message) => Promise<void>> = {
     gif,
   };
+
+  cleanup(): void {
+    for (const timer of pendingTimers) {
+      clearTimeout(timer);
+    }
+    pendingTimers.clear();
+  }
 }
 
 export default new GifStickerPlugin();

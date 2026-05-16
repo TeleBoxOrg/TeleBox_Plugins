@@ -1,5 +1,5 @@
 import { Plugin } from "@utils/pluginBase";
-import { getGlobalClient } from "@utils/globalClient";
+import { getGlobalClient, getCurrentGeneration } from "@utils/globalClient";
 import path from "path";
 import Database from "better-sqlite3";
 import { createDirectoryInAssets } from "@utils/pathHelpers";
@@ -8,6 +8,9 @@ import { Api } from "teleproto/tl";
 import { TelegramClient } from "teleproto";
 import { getPrefixes } from "@utils/pluginManager";
 import bigInt from "big-integer";
+
+// Track pending setTimeout handles for safe cleanup on reload
+const pendingTimers = new Set<ReturnType<typeof setTimeout>>();
 
 // Get command prefixes
 const prefixes = getPrefixes();
@@ -25,19 +28,6 @@ function htmlEscape(text: string): string {
 
 function codeTag(text: string | number): string {
   return `<code>${htmlEscape(String(text))}</code>`;
-}
-
-// Timer tracking for safe cleanup
-const pendingTimers = new Set<ReturnType<typeof setTimeout>>();
-
-function trackTimer(timer: ReturnType<typeof setTimeout>): ReturnType<typeof setTimeout> {
-  pendingTimers.add(timer);
-  return timer;
-}
-
-function clearTrackedTimer(timer: ReturnType<typeof setTimeout>): void {
-  clearTimeout(timer);
-  pendingTimers.delete(timer);
 }
 
 // Initialize database
@@ -861,9 +851,11 @@ async function handleEnhancedLotteryJoin(msg: any): Promise<void> {
         parseMode: "html",
       });
       
-      // Delete both messages after delay
-      const dupDeleteTimer = setTimeout(async () => {
-        clearTrackedTimer(dupDeleteTimer);
+      // Delete both messages after delay (generation-safe)
+      const gen1 = getCurrentGeneration();
+      const t1 = setTimeout(async () => {
+        pendingTimers.delete(t1);
+        if (getCurrentGeneration() !== gen1) return;
         try {
           await replyMsg.delete();
           await msg.delete();
@@ -871,7 +863,7 @@ async function handleEnhancedLotteryJoin(msg: any): Promise<void> {
           console.warn("Failed to delete duplicate participation messages:", error);
         }
       }, activeLottery.delete_delay * 1000);
-      trackTimer(dupDeleteTimer);
+      pendingTimers.add(t1);
     } catch (error) {
       console.warn("Failed to handle duplicate participation:", error);
     }
@@ -917,9 +909,11 @@ async function handleEnhancedLotteryJoin(msg: any): Promise<void> {
       parseMode: "html",
     });
     
-    // Delete messages after delay
-    const joinDeleteTimer = setTimeout(async () => {
-      clearTrackedTimer(joinDeleteTimer);
+    // Delete messages after delay (generation-safe)
+    const gen2 = getCurrentGeneration();
+    const t2 = setTimeout(async () => {
+      pendingTimers.delete(t2);
+      if (getCurrentGeneration() !== gen2) return;
       try {
         await replyMsg.delete();
         await msg.delete();
@@ -927,7 +921,7 @@ async function handleEnhancedLotteryJoin(msg: any): Promise<void> {
         console.warn("Failed to delete participation messages:", error);
       }
     }, activeLottery.delete_delay * 1000);
-    trackTimer(joinDeleteTimer);
+    pendingTimers.add(t2);
   } catch (error) {
     console.warn("Failed to send join confirmation:", error);
   }
