@@ -1793,6 +1793,10 @@ class MusicPlugin extends Plugin {
     MusicPlugin.initialized = false;
   }
 
+  async setup(): Promise<void> {
+    await this.initialize();
+  }
+
   private static initialized = false;
   private downloader: Downloader;
 

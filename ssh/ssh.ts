@@ -292,6 +292,11 @@ class SSHPlugin extends Plugin {
     ConfigManager.cleanup();
   }
 
+  async setup(): Promise<void> {
+    // Re-initialize ConfigManager after cleanup/reload
+    await ConfigManager.get(CONFIG_KEYS.TARGET_CHAT);
+  }
+
   description: string = `SSH管理和服务器配置\n\n${help_text}`;
 
   cmdHandlers = {

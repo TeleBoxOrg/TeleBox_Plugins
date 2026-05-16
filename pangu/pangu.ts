@@ -189,6 +189,11 @@ class PanguPlugin extends Plugin {
     this.db = null;
   }
 
+  async setup(): Promise<void> {
+    await this.initDB();
+    this.updateStats();
+  }
+
   name = "pangu";
   description: string = `📝 Pangu 消息格式化插件\n\n${help_text}`;
   private db: any;
@@ -511,6 +516,7 @@ class PanguPlugin extends Plugin {
   cmdHandlers: Record<string, (msg: Api.Message, trigger?: Api.Message) => Promise<void>> = {
     pangu: async (msg: Api.Message) => {
       try {
+        if (!this.db) return;
         const text = msg.text || "";
         const args = text.trim().split(/\s+/);
         const chatId = this.getChatId(msg);
@@ -618,6 +624,7 @@ class PanguPlugin extends Plugin {
   // 消息监听器
   listenMessageHandler = async (msg: Api.Message, options?: { isEdited?: boolean }): Promise<void> => {
     try {
+      if (!this.db) return;
       const savedMessage = (msg as any).savedPeerId;
       // 仅处理自己发出的消息 或 Saved Messages
       if (!(msg.out || savedMessage)) return;

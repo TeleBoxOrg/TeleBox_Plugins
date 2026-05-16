@@ -237,6 +237,12 @@ class DataManager {
       .filter(([_, v]) => v.is_enabled)
       .map(([k]) => parseInt(k, 10));
   }
+
+  static cleanup(): void {
+    // 引用重置：清空 db 和 initPromise，便于 reload 后重新初始化
+    this.db = null;
+    this.initPromise = null;
+  }
 }
 
 // === 昵称管理层 ===
@@ -932,6 +938,12 @@ class NameManager {
     this.isUpdating = false;
   }
 
+  setup(): void {
+    // Re-initialize state after cleanup/reload
+    this.profileCache = null;
+    this.isUpdating = false;
+  }
+
   isSchedulerRunning(): boolean {
     return cronManager.has(this.TASK_NAME);
   }
@@ -954,6 +966,20 @@ async function requireSettings(userId: number, msg: Api.Message): Promise<UserSe
 class AutoChangeNamePlugin extends Plugin {
   cleanup(): void {
     nameManager.cleanup();
+    DataManager.cleanup();
+  }
+
+  async setup(): Promise<void> {
+    // Re-initialize nameManager state after cleanup/reload
+    nameManager.setup();
+    try {
+      const enabledUsers = await DataManager.getAllEnabledUsers();
+      if (enabledUsers.length > 0) {
+        nameManager.startAutoUpdate();
+      }
+    } catch (e) {
+      console.error("[AutoChangeName] setup 重新初始化失败:", e);
+    }
   }
 
   description: string = help_text;

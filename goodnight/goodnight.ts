@@ -52,6 +52,10 @@ class GreetingPlugin extends Plugin {
     this.db = null;
   }
 
+  async setup(): Promise<void> {
+    await this.initDB();
+  }
+
     // 初始化数据库
     private async initDB() {
         // 数据存储在 assets/greeting/data.json

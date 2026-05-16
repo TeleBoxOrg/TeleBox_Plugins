@@ -27,6 +27,10 @@ class AffPlugin extends Plugin {
     this.db = null;
   }
 
+  async setup(): Promise<void> {
+    await this.initDB();
+  }
+
   private db: any = null;
   private readonly PLUGIN_NAME = "aff";
   
@@ -106,6 +110,7 @@ class AffPlugin extends Plugin {
   // 主命令处理
   private async handleAffCommand(msg: Api.Message): Promise<void> {
     try {
+      if (!this.db) return;
       const text = msg.text || "";
       const parts = text.trim().split(/\s+/);
       const subCommand = parts[1]?.toLowerCase();

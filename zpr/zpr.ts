@@ -144,6 +144,20 @@ class ZprConfigManager {
         await this.createDefaultConfig();
     }
 
+    static cleanup(): void {
+        // 引用重置：清空静态 db 和初始化标志，便于 reload 后重新初始化。
+        this.db = null;
+        this.initialized = false;
+        this.isWriting = false;
+    }
+
+    static async reinit(): Promise<void> {
+        // 强制重新初始化，用于 reload 后的 setup
+        this.initialized = false;
+        this.db = null;
+        await this.init();
+    }
+
     private static async createBackup(): Promise<void> {
         try {
             const configExists = await fs.access(this.configPath).then(() => true).catch(() => false);
@@ -533,8 +547,13 @@ async function getResult(message: Api.Message, r18 = 0, tag = "", num = 1): Prom
 
 class ZprPlugin extends Plugin {
   cleanup(): void {
-    // 引用重置：清空实例级 db / cache / manager 引用，便于 reload 后重新初始化。
-    this.db = null;
+    // 引用重置：清空 ZprConfigManager 的静态引用，便于 reload 后重新初始化。
+    ZprConfigManager.cleanup();
+  }
+
+  async setup(): Promise<void> {
+    // 重新初始化配置管理器，确保 reload 后可用
+    await ZprConfigManager.reinit();
   }
 
     description = `随机纸片人插件\n\n${help_text}`;

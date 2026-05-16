@@ -43,6 +43,10 @@ class AnnualReportPlugin extends Plugin {
     this.db = null;
   }
 
+  async setup(): Promise<void> {
+    await this.initDB();
+  }
+
   private readonly PLUGIN_NAME = "annualreport";
   private db: any;
   private configPath: string;
@@ -189,6 +193,7 @@ class AnnualReportPlugin extends Plugin {
   }
 
   private async handleAnnualReport(msg: Api.Message): Promise<void> {
+    if (!this.db) return;
     const client = await getGlobalClient();
     if (!client) {
       await msg.edit({ text: "❌ 无法获取客户端", parseMode: "html" });

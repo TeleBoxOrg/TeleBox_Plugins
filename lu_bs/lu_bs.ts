@@ -41,6 +41,11 @@ class LuBsPlugin extends Plugin {
     this.stickerSet = null;
   }
 
+  async setup(): Promise<void> {
+    await this.initDB();
+    await this.loadStickerSet();
+  }
+
   private db: any = null;
   private stickerSet: any = null;
   private readonly PLUGIN_NAME = "lu_bs";

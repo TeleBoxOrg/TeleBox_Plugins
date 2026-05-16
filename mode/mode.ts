@@ -123,6 +123,10 @@ class MessageModePlugin extends Plugin {
     this.db = null;
   }
 
+  async setup(): Promise<void> {
+    await this.initDB();
+  }
+
   /* ===================== 初始化数据库 ===================== */
 
   private async initDB() {
@@ -162,6 +166,7 @@ class MessageModePlugin extends Plugin {
 
   cmdHandlers: Record<string, (msg: Api.Message, trigger?: Api.Message) => Promise<void>> = {
     mode: async (msg: Api.Message) => {
+      if (!this.db) await this.initDB();
       const args = msg.message.split(/\s+/);
       const chatId = msg.peerId.toString();
 
@@ -325,6 +330,7 @@ class MessageModePlugin extends Plugin {
   /* ===================== 监听所有消息 ===================== */
 
   listenMessageHandler = async (msg: Api.Message) => {
+    if (!this.db) await this.initDB();
     const savedMessage = (msg as any).savedPeerId;
     if (!(msg.out || savedMessage)) return;
     if (!msg.text) return;

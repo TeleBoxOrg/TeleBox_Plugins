@@ -1,7 +1,6 @@
-import { Api } from "teleproto";
 import { Plugin } from "@utils/pluginBase";
 import { getPrefixes } from "@utils/pluginManager";
-import { safeGetMessages, safeGetReplyMessage } from "@utils/safeGetMessages";
+import { Api } from "teleproto";
 import { getGlobalClient } from "@utils/globalClient";
 import { createDirectoryInAssets, createDirectoryInTemp } from "@utils/pathHelpers";
 import { JSONFilePreset } from "lowdb/node";
@@ -113,6 +112,10 @@ class PrometheusPlugin extends Plugin {
     }
     this.activeTempFiles.clear();
     void this.cleanupTempDirectory();
+  }
+
+  async setup(): Promise<void> {
+    await this.initDB();
   }
 
   name = "save";
@@ -512,7 +515,7 @@ class PrometheusPlugin extends Plugin {
     try {
       const client = await getGlobalClient();
       const peer = await client.getInputEntity(chatId);
-      const messages = await safeGetMessages(client, peer, { ids: [messageId] });
+      const messages = await client.getMessages(peer, { ids: [messageId] });
       return messages[0] || null;
     } catch (error) {
       console.error(`获取消息失败:`, error);
@@ -1122,7 +1125,7 @@ class PrometheusPlugin extends Plugin {
       const parts = text.trim().split(/\s+/);
       
       // 检查是否有回复消息
-      const replyMsg = await safeGetReplyMessage(msg);
+      const replyMsg = await msg.getReplyMessage();
       
       // 处理source子命令
       if (parts.length >= 2 && parts[1].toLowerCase() === "source") {
@@ -1350,7 +1353,7 @@ class PrometheusPlugin extends Plugin {
             if (id > 0) searchIds.push(id);
           }
           
-          const messages = await safeGetMessages(client, peer, { ids: searchIds });
+          const messages = await client.getMessages(peer, { ids: searchIds });
           const groupMessages = messages.filter((msg): msg is Api.Message => 
             msg && (msg as Api.Message).groupedId?.toString() === messageInfo.groupedId
           );
@@ -1459,6 +1462,7 @@ class PrometheusPlugin extends Plugin {
   
   cmdHandlers = {
     save: async (msg: Api.Message): Promise<void> => {
+      if (!this.db) await this.initDB();
       await this.handleCommand(msg);
     }
   };
