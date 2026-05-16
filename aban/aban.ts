@@ -1,4 +1,5 @@
 import { Plugin } from "@utils/pluginBase";
+import { getCurrentGenerationContext } from "@utils/globalClient";
 import { getPrefixes } from "@utils/pluginManager";
 import { getGlobalClient } from "@utils/globalClient";
 import { createDirectoryInAssets } from "@utils/pathHelpers";
@@ -338,19 +339,6 @@ class UserResolver {
   }
 }
 
-// ==================== Timer tracking for safe cleanup ====================
-const pendingTimers = new Set<ReturnType<typeof setTimeout>>();
-
-function trackTimer(timer: ReturnType<typeof setTimeout>): ReturnType<typeof setTimeout> {
-  pendingTimers.add(timer);
-  return timer;
-}
-
-function clearTrackedTimer(timer: ReturnType<typeof setTimeout>): void {
-  clearTimeout(timer);
-  pendingTimers.delete(timer);
-}
-
 // ==================== 消息管理器 ====================
 class MessageManager {
   static async smartEdit(
@@ -371,22 +359,31 @@ class MessageManager {
       });
 
       if (deleteAfter > 0) {
-        const timer = setTimeout(async () => {
-          clearTrackedTimer(timer);
-          try {
-            await client.deleteMessages(message.peerId, [message.id], {
-              revoke: true,
-            });
-          } catch (e) {
-            console.error(`删除消息失败: ${e}`);
-          }
-        }, deleteAfter * 1000);
-        trackTimer(timer);
+        const lifecycle = getCurrentGenerationContext();
+        if (lifecycle) {
+          lifecycle.setTimeout(async () => {
+            try {
+              await client.deleteMessages(message.peerId, [message.id], {
+                revoke: true,
+              });
+            } catch (e) {
+              const msg = e instanceof Error ? e.message : String(e);
+              if (!msg.includes('MESSAGE_ID_INVALID')) {
+                console.error(`删除消息失败: ${e}`);
+              }
+            }
+          }, deleteAfter * 1000, { label: 'aban:smartEdit-delayed-delete' });
+        }
       }
 
       return message;
     } catch (error: any) {
-      console.error(`编辑消息失败: ${error.message || error}`);
+      const errMsg = error.message || String(error);
+      if (errMsg.includes('MESSAGE_ID_INVALID')) {
+        // Expected when the target message was already deleted - not actionable
+      } else {
+        console.error(`编辑消息失败: ${errMsg}`);
+      }
       return message;
     }
   }
@@ -1230,9 +1227,12 @@ class CommandHandlers {
         const result = `✅ 在${success}个频道/群组中${finalActionText}该用户 ${htmlEscape(display)}${failureSummary}${capabilityNote}\n🗑️当前群组消息: ${deleteSuccess ? '✓已清理' : '✗'} | ⏱️${elapsed.toFixed(1)}s`;
         
         // 更新为最终结果
-        setTimeout(() => {
-          MessageManager.smartEdit(status, result, 30).catch(() => {});
-        }, 100);
+        const lc1 = getCurrentGenerationContext();
+        if (lc1) {
+          lc1.setTimeout(() => {
+            MessageManager.smartEdit(status, result, 30).catch(() => {});
+          }, 100, { label: 'aban:sb-result-update' });
+        }
       };
 
       // 后台执行，不等待
@@ -1323,9 +1323,12 @@ class CommandHandlers {
           : '';
         const result = `✅ 在${success}个频道/群组中解封该用户 ${htmlEscape(display)}${failureSummary}${capabilityNote} | ⏱️${elapsed.toFixed(1)}s`;
         
-        setTimeout(() => {
-          MessageManager.smartEdit(status, result, 30).catch(() => {});
-        }, 100);
+        const lc2 = getCurrentGenerationContext();
+        if (lc2) {
+          lc2.setTimeout(() => {
+            MessageManager.smartEdit(status, result, 30).catch(() => {});
+          }, 100, { label: 'aban:unsb-result-update' });
+        }
       };
 
       backgroundProcess().catch(() => {});
@@ -1338,6 +1341,11 @@ class CommandHandlers {
 // ==================== 插件主类 ====================
 class AbanPlugin extends Plugin {
   description: string = HELP_TEXT;
+
+  cleanup(): void {
+    // Lifecycle-aware timers are now managed by GenerationContext
+    // and cleaned up automatically on reload. No manual cleanup needed.
+  }
 
   cmdHandlers: Record<string, (msg: Api.Message) => Promise<void>> = {
     // 帮助命令
@@ -1432,11 +1440,4 @@ class AbanPlugin extends Plugin {
 }
 
 // 导出插件实例
-  cleanup(): void {
-    for (const timer of pendingTimers) {
-      clearTimeout(timer);
-    }
-    pendingTimers.clear();
-  }
-
 export default new AbanPlugin();
