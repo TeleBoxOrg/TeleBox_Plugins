@@ -4,7 +4,7 @@ import * as fs from "fs";
 import * as path from "path";
 import * as os from "os";
 import { createDirectoryInTemp } from "@utils/pathHelpers";
-import { npm_install } from "../utils/npm_install";
+import { npm_install } from "@utils/npm_install";
 const { execFile } = require("child_process");
 import { safeGetReplyMessage, safeGetMessages } from "@utils/safeGetMessages";
 import { getPrefixes } from "@utils/pluginManager";
