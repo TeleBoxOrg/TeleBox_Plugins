@@ -32,6 +32,19 @@ const parseTimeString = (timeStr: string): number => {
   return value * (multipliers[unit] || 1);
 };
 
+// Timer tracking for safe cleanup
+const pendingTimers = new Set<ReturnType<typeof setTimeout>>();
+
+function scheduleTimer(fn: () => void, ms: number): ReturnType<typeof setTimeout> {
+  const t = scheduleTimer(() => {
+    pendingTimers.delete(t);
+    fn();
+  }, ms);
+  pendingTimers.add(t);
+  return t;
+}
+
+
 class PortballPlugin extends Plugin {
 
   name = "portball";
@@ -256,7 +269,7 @@ class PortballPlugin extends Plugin {
 
   // 自动删除消息
   private async autoDelete(msg: Api.Message, seconds: number = 5): Promise<void> {
-    setTimeout(async () => {
+    scheduleTimer(async () => {
       try {
         await msg.delete({ revoke: true });
       } catch (error) {
@@ -266,4 +279,11 @@ class PortballPlugin extends Plugin {
   }
 }
 
+
+  cleanup(): void {
+    for (const timer of pendingTimers) {
+      clearTimeout(timer);
+    }
+    pendingTimers.clear();
+  }
 export default new PortballPlugin();

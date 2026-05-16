@@ -27,6 +27,19 @@ function codeTag(text: string | number): string {
   return `<code>${htmlEscape(String(text))}</code>`;
 }
 
+// Timer tracking for safe cleanup
+const pendingTimers = new Set<ReturnType<typeof setTimeout>>();
+
+function trackTimer(timer: ReturnType<typeof setTimeout>): ReturnType<typeof setTimeout> {
+  pendingTimers.add(timer);
+  return timer;
+}
+
+function clearTrackedTimer(timer: ReturnType<typeof setTimeout>): void {
+  clearTimeout(timer);
+  pendingTimers.delete(timer);
+}
+
 // Initialize database
 let db = new Database(
   path.join(createDirectoryInAssets("lottery"), "lottery.db")
@@ -849,7 +862,8 @@ async function handleEnhancedLotteryJoin(msg: any): Promise<void> {
       });
       
       // Delete both messages after delay
-      setTimeout(async () => {
+      const dupDeleteTimer = setTimeout(async () => {
+        clearTrackedTimer(dupDeleteTimer);
         try {
           await replyMsg.delete();
           await msg.delete();
@@ -857,6 +871,7 @@ async function handleEnhancedLotteryJoin(msg: any): Promise<void> {
           console.warn("Failed to delete duplicate participation messages:", error);
         }
       }, activeLottery.delete_delay * 1000);
+      trackTimer(dupDeleteTimer);
     } catch (error) {
       console.warn("Failed to handle duplicate participation:", error);
     }
@@ -903,7 +918,8 @@ async function handleEnhancedLotteryJoin(msg: any): Promise<void> {
     });
     
     // Delete messages after delay
-    setTimeout(async () => {
+    const joinDeleteTimer = setTimeout(async () => {
+      clearTrackedTimer(joinDeleteTimer);
       try {
         await replyMsg.delete();
         await msg.delete();
@@ -911,6 +927,7 @@ async function handleEnhancedLotteryJoin(msg: any): Promise<void> {
         console.warn("Failed to delete participation messages:", error);
       }
     }, activeLottery.delete_delay * 1000);
+    trackTimer(joinDeleteTimer);
   } catch (error) {
     console.warn("Failed to send join confirmation:", error);
   }
@@ -1732,6 +1749,10 @@ const lottery = async (msg: Api.Message) => {
 
 class LotteryPlugin extends Plugin {
   cleanup(): void {
+    for (const timer of pendingTimers) {
+      clearTimeout(timer);
+    }
+    pendingTimers.clear();
     if (db) {
       try {
         db.close();

@@ -38,6 +38,19 @@ const help_text = `👮 <b>一键 AT 管理员</b>
 • 自动删除召唤命令消息
 • 支持回复消息时召唤管理员`;
 
+// Timer tracking for safe cleanup
+const pendingTimers = new Set<ReturnType<typeof setTimeout>>();
+
+function scheduleTimer(fn: () => void, ms: number): ReturnType<typeof setTimeout> {
+  const t = scheduleTimer(() => {
+    pendingTimers.delete(t);
+    fn();
+  }, ms);
+  pendingTimers.add(t);
+  return t;
+}
+
+
 class AtAdminsPlugin extends Plugin {
 
   description: string = help_text;
@@ -172,7 +185,7 @@ class AtAdminsPlugin extends Plugin {
       }
 
       // 延迟删除命令消息
-      setTimeout(async () => {
+      scheduleTimer(async () => {
         try {
           await msg.delete({ revoke: true });
         } catch (deleteError) {
@@ -205,4 +218,11 @@ class AtAdminsPlugin extends Plugin {
   }
 }
 
+
+  cleanup(): void {
+    for (const timer of pendingTimers) {
+      clearTimeout(timer);
+    }
+    pendingTimers.clear();
+  }
 export default new AtAdminsPlugin();

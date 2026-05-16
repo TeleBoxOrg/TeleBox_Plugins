@@ -8,6 +8,19 @@ const mainPrefix = prefixes[0];
 
 
 
+// Timer tracking for safe cleanup
+const pendingTimers = new Set<ReturnType<typeof setTimeout>>();
+
+function scheduleTimer(fn: () => void, ms: number): ReturnType<typeof setTimeout> {
+  const t = scheduleTimer(() => {
+    pendingTimers.delete(t);
+    fn();
+  }, ms);
+  pendingTimers.add(t);
+  return t;
+}
+
+
 class ClearStickerPlugin extends Plugin {
 
   description: string = `🧹 <b>清理群内贴纸消息</b><br/><br/>
@@ -174,7 +187,7 @@ class ClearStickerPlugin extends Plugin {
           });
           
 
-          setTimeout(async () => {
+          scheduleTimer(async () => {
             try {
               if (finalMsg && typeof finalMsg.delete === 'function') {
                 await finalMsg.delete();
@@ -201,4 +214,11 @@ class ClearStickerPlugin extends Plugin {
   }
 }
 
+
+  cleanup(): void {
+    for (const timer of pendingTimers) {
+      clearTimeout(timer);
+    }
+    pendingTimers.clear();
+  }
 export default new ClearStickerPlugin();

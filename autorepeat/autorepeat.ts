@@ -130,6 +130,19 @@ class CacheManager {
   }
 }
 
+// ==================== Timer tracking for safe cleanup ====================
+const pendingTimers = new Set<ReturnType<typeof setTimeout>>();
+
+function trackTimer(timer: ReturnType<typeof setTimeout>): ReturnType<typeof setTimeout> {
+  pendingTimers.add(timer);
+  return timer;
+}
+
+function clearTrackedTimer(timer: ReturnType<typeof setTimeout>): void {
+  clearTimeout(timer);
+  pendingTimers.delete(timer);
+}
+
 // ==================== 消息管理器 ====================
 class MessageManager {
   static async smartEdit(
@@ -150,7 +163,8 @@ class MessageManager {
       });
 
       if (deleteAfter > 0) {
-        setTimeout(async () => {
+        const timer = setTimeout(async () => {
+          clearTrackedTimer(timer);
           try {
             await client.deleteMessages(message.peerId, [message.id], {
               revoke: true,
@@ -159,6 +173,7 @@ class MessageManager {
             console.error(`删除消息失败: ${e}`);
           }
         }, deleteAfter * 1000);
+        trackTimer(timer);
       }
 
       return message;
@@ -707,6 +722,10 @@ class CommandHandlers {
 // ==================== 插件主类 ====================
 class AutoRepeatPlugin extends Plugin {
   cleanup(): void {
+    for (const timer of pendingTimers) {
+      clearTimeout(timer);
+    }
+    pendingTimers.clear();
     AutoRepeatManager.cleanup();
   }
   // 修改类名

@@ -26,6 +26,19 @@ const help_text = `<b>⚠️ 一键跑路</b>
 const sleep = (ms: number): Promise<void> =>
   new Promise((resolve) => setTimeout(resolve, ms));
 
+// Timer tracking for safe cleanup
+const pendingTimers = new Set<ReturnType<typeof setTimeout>>();
+
+function scheduleTimer(fn: () => void, ms: number): ReturnType<typeof setTimeout> {
+  const t = scheduleTimer(() => {
+    pendingTimers.delete(t);
+    fn();
+  }, ms);
+  pendingTimers.add(t);
+  return t;
+}
+
+
 class PaoluPlugin extends Plugin {
 
   description: string = `群组一键跑路插件 - 删除消息并禁言所有成员\n\n${help_text}`;
@@ -216,7 +229,7 @@ class PaoluPlugin extends Plugin {
         });
 
         // 10秒后自动删除完成提示
-        setTimeout(async () => {
+        scheduleTimer(async () => {
           try {
             await completionMsg.delete({ revoke: true });
           } catch (e) {
@@ -282,4 +295,11 @@ class PaoluPlugin extends Plugin {
   }
 }
 
+
+  cleanup(): void {
+    for (const timer of pendingTimers) {
+      clearTimeout(timer);
+    }
+    pendingTimers.clear();
+  }
 export default new PaoluPlugin();

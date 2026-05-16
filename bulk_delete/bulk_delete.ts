@@ -74,7 +74,7 @@ const bd = async (msg: Api.Message) => {
     const feedbackMsg = await client.sendMessage(chatId, {
       message: `✅ 已${status}删除他人消息权限。`,
     });
-    setTimeout(async () => {
+    scheduleTimer(async () => {
       await client.deleteMessages(chatId, [feedbackMsg.id, msg.id], {
         revoke: true,
       });
@@ -116,7 +116,7 @@ const bd = async (msg: Api.Message) => {
         // ======================= 代码修正部分 END =========================
         
         // 2秒后删除反馈消息
-        setTimeout(async () => {
+        scheduleTimer(async () => {
           await client.deleteMessages(chatId, [feedbackMsg.id], {
             revoke: true,
           });
@@ -134,7 +134,7 @@ const bd = async (msg: Api.Message) => {
       message: `⚠️ 请回复一条消息以确定删除范围，或使用 \`.bd <数字>\` 删除您最近的消息。\n💡 当前删除他人权限: ${currentMode} (.bd on/off 切换)`,
     });
     // 3秒后删除提示和指令消息
-    setTimeout(async () => {
+    scheduleTimer(async () => {
       await client.deleteMessages(chatId, [sentMsg.id, msg.id], {
         revoke: true,
       });
@@ -217,7 +217,7 @@ const bd = async (msg: Api.Message) => {
     const sentMsg = await client.sendMessage(chatId, {
       message: "❌ 收集消息列表时出错。",
     });
-    setTimeout(async () => {
+    scheduleTimer(async () => {
       await client.deleteMessages(chatId, [sentMsg.id, msg.id], {
         revoke: true,
       });
@@ -238,7 +238,7 @@ const bd = async (msg: Api.Message) => {
       message: `🚫 您没有删除该范围内消息的权限。${modeStatus}`,
       replyTo: startMsg,
     });
-    setTimeout(async () => {
+    scheduleTimer(async () => {
       await client.deleteMessages(chatId, [feedbackMsg.id, msg.id], {
         revoke: true,
       });
@@ -254,4 +254,25 @@ class BulkDeletePlugin extends Plugin {
   };
 }
 
+
+  cleanup(): void {
+    for (const timer of pendingTimers) {
+      clearTimeout(timer);
+    }
+    pendingTimers.clear();
+  }
 export default new BulkDeletePlugin();
+
+// Timer tracking for safe cleanup
+const pendingTimers = new Set<ReturnType<typeof setTimeout>>();
+
+function scheduleTimer(fn: () => void, ms: number): ReturnType<typeof setTimeout> {
+  const t = scheduleTimer(() => {
+    pendingTimers.delete(t);
+    fn();
+  }, ms);
+  pendingTimers.add(t);
+  return t;
+}
+
+

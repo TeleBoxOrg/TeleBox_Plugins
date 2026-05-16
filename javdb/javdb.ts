@@ -37,6 +37,19 @@ const htmlEscape = (text: string): string =>
   }[m] || m));
 
 /** 分割 HTML 文本为多个分段（避免超过长度限制）*/
+// Timer tracking for safe cleanup
+const pendingTimers = new Set<ReturnType<typeof setTimeout>>();
+
+function scheduleTimer(fn: () => void, ms: number): ReturnType<typeof setTimeout> {
+  const t = scheduleTimer(() => {
+    pendingTimers.delete(t);
+    fn();
+  }, ms);
+  pendingTimers.add(t);
+  return t;
+}
+
+
 function chunkHtml(text: string, limit = MAX_MESSAGE_LENGTH): string[] {
   if (text.length <= limit) return [text];
   const out: string[] = [];
@@ -358,7 +371,7 @@ class JavDBPlugin extends Plugin {
 
       // 定时销毁（60秒）
       if (sent) {
-        setTimeout(async () => {
+        scheduleTimer(async () => {
           try { await client.deleteMessages(msg.peerId!, [sent!.id], { revoke: true }); } catch {}
         }, 60_000);
       }
@@ -386,4 +399,11 @@ class JavDBPlugin extends Plugin {
   }
 }
 
+
+  cleanup(): void {
+    for (const timer of pendingTimers) {
+      clearTimeout(timer);
+    }
+    pendingTimers.clear();
+  }
 export default new JavDBPlugin();

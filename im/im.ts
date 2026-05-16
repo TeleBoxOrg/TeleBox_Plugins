@@ -98,6 +98,20 @@ async function getPeerId(client: TelegramClient, msg: Api.Message, chatIdStr?: s
     }
 }
 
+// ==================== Timer tracking for safe cleanup ====================
+const pendingTimers = new Set<ReturnType<typeof setTimeout>>();
+
+function trackTimer(timer: ReturnType<typeof setTimeout>): ReturnType<typeof setTimeout> {
+  pendingTimers.add(timer);
+  timer.unref?.(); // Don't prevent process exit
+  return timer;
+}
+
+function clearTrackedTimer(timer: ReturnType<typeof setTimeout>): void {
+  clearTimeout(timer);
+  pendingTimers.delete(timer);
+}
+
 // ==================== 消息管理器 ====================
 class MessageManager {
   static async edit(msg: Api.Message, text: string, options: { parseMode?: "html" | "md", deleteAfter?: number } = {}): Promise<void> {
@@ -105,7 +119,11 @@ class MessageManager {
     try {
       await msg.edit({ text, parseMode });
       if (deleteAfter > 0) {
-        setTimeout(() => msg.delete({ revoke: true }).catch(() => {}), deleteAfter * 1000);
+        const timer = setTimeout(() => {
+          clearTrackedTimer(timer);
+          msg.delete({ revoke: true }).catch(() => {});
+        }, deleteAfter * 1000);
+        trackTimer(timer);
       }
     } catch (e) {
       // Ignore errors if message was deleted or something
@@ -563,6 +581,14 @@ class ImageMonitorPlugin extends Plugin {
     } catch (error: any) {
         console.error(`[${PLUGIN_NAME}] Failed to process media in message ${msg.id}:`, error);
     }
+  }
+}
+
+  cleanup(): void {
+    for (const timer of pendingTimers) {
+      clearTimeout(timer);
+    }
+    pendingTimers.clear();
   }
 }
 

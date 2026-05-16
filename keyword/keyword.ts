@@ -843,9 +843,11 @@ class KeywordPlugin extends Plugin {
     try {
       if (db && typeof db.close === "function") {
         db.close();
+        db = null as any;
       }
     } catch (error) {
       console.error("Failed to close keyword DB:", error);
+      db = null as any;
     }
   }
 
