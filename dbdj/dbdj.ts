@@ -27,7 +27,7 @@ function formatDate(date: Date): string {
 async function formatEntity(
   target: any,
   mention?: boolean,
-  throwErrorIfFailed?: boolean
+  throwErrorIfFailed?: boolean,
 ) {
   const client = await getGlobalClient();
   if (!client) throw new Error("Telegram 客户端未初始化");
@@ -45,7 +45,7 @@ async function formatEntity(
     console.error(e);
     if (throwErrorIfFailed)
       throw new Error(
-        `无法获取 ${target} 的 entity: ${e?.message || "未知错误"}`
+        `无法获取 ${target} 的 entity: ${e?.message || "未知错误"}`,
       );
   }
   const displayParts: string[] = [];
@@ -57,14 +57,14 @@ async function formatEntity(
     displayParts.push(
       mention
         ? htmlEscape(`@${entity.username}`)
-        : `<code>@${htmlEscape(entity.username)}</code>`
+        : `<code>@${htmlEscape(entity.username)}</code>`,
     );
 
   if (id) {
     displayParts.push(
       entity instanceof Api.User
         ? `<a href="tg://user?id=${id}">${id}</a>`
-        : `<a href="https://t.me/c/${id}">${id}</a>`
+        : `<a href="https://t.me/c/${id}">${id}</a>`,
     );
   } else if (!target?.className) {
     displayParts.push(`<code>${htmlEscape(String(target))}</code>`);
@@ -86,7 +86,6 @@ function htmlEscape(text: string): string {
 }
 
 class DbdjPlugin extends Plugin {
-
   description: string = `点兵点将\n<code>${mainPrefix}dbdj 消息数 人数 文案</code> - 从最近的消息中随机抽取指定人数的用户`;
   cmdHandlers: Record<
     string,
@@ -94,6 +93,18 @@ class DbdjPlugin extends Plugin {
   > = {
     dbdj: async (msg: Api.Message, trigger?: Api.Message) => {
       const startAt = Date.now();
+      const replyAndDeleteMsg = async (message: string) => {
+        const replyTarget = trigger || msg;
+        await replyTarget.reply({
+          message,
+          parseMode: "html",
+          linkPreview: false,
+        });
+        try {
+          await msg.delete();
+        } catch {}
+      };
+
       try {
         const parts = msg.message.trim().split(/\s+/);
         // 期望格式: .dbdj 消息数 人数 文案...
@@ -105,10 +116,9 @@ class DbdjPlugin extends Plugin {
         const pickCount = toInt(pickStr);
 
         if (!scanCount || !pickCount || scanCount <= 0 || pickCount <= 0) {
-          await msg.edit({
-            text: `用法: <code>${mainPrefix}dbdj 消息数 人数 文案</code>\n例如: <code>${mainPrefix}dbdj 50 2 恭喜发财</code>`,
-            parseMode: "html",
-          });
+          await replyAndDeleteMsg(
+            `用法: <code>${mainPrefix}dbdj 消息数 人数 文案</code>\n例如: <code>${mainPrefix}dbdj 50 2 恭喜发财</code>`,
+          );
           return;
         }
 
@@ -157,10 +167,9 @@ class DbdjPlugin extends Plugin {
 
         const population = uniqueUserIds.length;
         if (population === 0) {
-          await msg.edit({
-            text: `未在最近的 <code>${scanCount}</code> 条消息中找到可抽取的有效用户。`,
-            parseMode: "html",
-          });
+          await replyAndDeleteMsg(
+            `未在最近的 <code>${scanCount}</code> 条消息中找到可抽取的有效用户。`,
+          );
           return;
         }
 
@@ -178,7 +187,7 @@ class DbdjPlugin extends Plugin {
 
         // 格式化展示
         const winnerDisplays = await Promise.all(
-          winners.map(async (id) => (await formatEntity(id, true)).display)
+          winners.map(async (id) => (await formatEntity(id, true)).display),
         );
 
         const usedNote = note ? ` ${htmlEscape(note)}` : "";
@@ -187,7 +196,7 @@ class DbdjPlugin extends Plugin {
         ).toString();
 
         const head = `点兵点将, 点到谁... ${winnerDisplays.join(
-          ", "
+          ", ",
         )}${usedNote}`;
         const stats = [
           `📊 统计信息:`,
@@ -202,24 +211,13 @@ class DbdjPlugin extends Plugin {
           `• 耗时: ${seconds} 秒`,
         ].join("\n");
 
-        await msg.edit({
-          text: `${head}\n\n${stats}`,
-          parseMode: "html",
-          linkPreview: false,
-        });
+        await replyAndDeleteMsg(`${head}\n\n${stats}`);
       } catch (error: any) {
-        await msg.edit({
-          text: `执行失败: <code>${htmlEscape(
-            error?.message || String(error)
+        await replyAndDeleteMsg(
+          `执行失败: <code>${htmlEscape(
+            error?.message || String(error),
           )}</code>`,
-          parseMode: "html",
-        });
-      }
-
-      if (trigger) {
-        try {
-          await trigger.delete();
-        } catch {}
+        );
       }
     },
   };
