@@ -394,7 +394,47 @@ type ManagedGroup = {
   id: number;
   title: string;
   kind: ChatKind;
+  // bigint 序列化为字符串。channel 必填；basic group 不需要
+  accessHash?: string;
 };
+
+/**
+ * 把 ManagedGroup 转成可以直接喂给 Api.channels.* 的 channel 参数。
+ * - channel 有 accessHash → 构造完整 InputChannel，直接走，不触发 GetChannels 兜底
+ * - channel 无 accessHash（旧缓存或未填）→ 通过 getInputEntity 让 teleproto 自行解析
+ * - basic group → 返回裸 id（调用方应通过 kind 分流到 messages.* 路径）
+ */
+async function resolveChannelInput(
+  client: TelegramClient,
+  group: ManagedGroup
+): Promise<any> {
+  if (group.kind !== 'channel') {
+    return group.id;
+  }
+  if (group.accessHash) {
+    return new Api.InputChannel({
+      channelId: bigInt(group.id),
+      accessHash: bigInt(group.accessHash),
+    });
+  }
+  // 兜底：让 teleproto 走自己的 entity cache / dialogs 解析
+  return await client.getInputEntity(group.id);
+}
+
+/**
+ * 把 ManagedGroup 转成 PermissionManager 那一组方法能识别的 chatId。
+ * - channel：返回 InputChannel（带 accessHash），走 Api.channels.GetParticipant
+ * - basic group：返回 PeerChat-like 对象，让 getChatKind/getBasicGroupChatId 走 chat 路径
+ */
+async function resolvePermissionTarget(
+  client: TelegramClient,
+  group: ManagedGroup
+): Promise<any> {
+  if (group.kind === 'chat') {
+    return { className: 'PeerChat', chatId: bigInt(group.id) };
+  }
+  return await resolveChannelInput(client, group);
+}
 
 class PermissionManager {
   private static getChatKind(chatId: any): ChatKind {
@@ -554,7 +594,7 @@ class GroupManager {
   static async getManagedGroups(
     client: TelegramClient
   ): Promise<ManagedGroup[]> {
-    const cached = await this.cache.get("managed_groups");
+    const cached = await this.cache.get("managed_groups_v2");
     if (cached) return cached;
 
     const groups: ManagedGroup[] = [];
@@ -570,10 +610,15 @@ class GroupManager {
           );
           
           if (hasPermission) {
+            const isChannel = !(dialog.isGroup && !dialog.isChannel);
+            // 仅 channel 需要 accessHash，basic group 用裸 chatId
+            const rawHash = isChannel ? dialog.entity?.accessHash : undefined;
+            const accessHash = rawHash != null ? String(rawHash) : undefined;
             return {
               id: Number(dialog.id),
               title: dialog.title || "Unknown",
-              kind: dialog.isGroup && !dialog.isChannel ? 'chat' as const : 'channel' as const,
+              kind: isChannel ? 'channel' as const : 'chat' as const,
+              accessHash,
             };
           }
         }
@@ -581,10 +626,12 @@ class GroupManager {
       });
       
       const results = await Promise.all(checkPromises);
-      groups.push(...results.filter((g: any): g is ManagedGroup => g !== null));
+      for (const g of results) {
+        if (g !== null) groups.push(g as ManagedGroup);
+      }
       
       try {
-        await this.cache.set("managed_groups", groups);
+        await this.cache.set("managed_groups_v2", groups);
       } catch (cacheError) {
         console.error(`[GroupManager] 缓存群组失败: ${cacheError}`);
       }
@@ -851,21 +898,25 @@ class BanManager {
       embedLinks: true,
     });
     
-    const taskPromises = groups.map((group) => {
-      const request = group.kind === 'chat'
-        ? client.invoke(
-            new Api.messages.DeleteChatUser({
-              chatId: bigInt(this.getBasicGroupChatId(group.id)),
-              userId: resolvedParticipant,
-            })
-          )
-        : client.invoke(
-            new Api.channels.EditBanned({
-              channel: group.id,
-              participant: resolvedParticipant,
-              bannedRights: rights,
-            })
-          );
+    const taskPromises = groups.map(async (group) => {
+      let request: Promise<any>;
+      if (group.kind === 'chat') {
+        request = client.invoke(
+          new Api.messages.DeleteChatUser({
+            chatId: bigInt(this.getBasicGroupChatId(group.id)),
+            userId: resolvedParticipant,
+          })
+        );
+      } else {
+        const channelInput = await resolveChannelInput(client, group);
+        request = client.invoke(
+          new Api.channels.EditBanned({
+            channel: channelInput,
+            participant: resolvedParticipant,
+            bannedRights: rights,
+          })
+        );
+      }
 
       return request
         .then(() => ({ success: true as const, group }))
@@ -957,16 +1008,20 @@ class BanManager {
       untilDate: 0,
     });
 
-    const promises = groups.map(group => {
-      const request = group.kind === 'chat'
-        ? Promise.reject(new Error('BASIC_GROUP_ACTION_UNSUPPORTED'))
-        : client.invoke(
-            new Api.channels.EditBanned({
-              channel: group.id,
-              participant: resolvedParticipant,
-              bannedRights: rights,
-            })
-          );
+    const promises = groups.map(async group => {
+      let request: Promise<any>;
+      if (group.kind === 'chat') {
+        request = Promise.reject(new Error('BASIC_GROUP_ACTION_UNSUPPORTED'));
+      } else {
+        const channelInput = await resolveChannelInput(client, group);
+        request = client.invoke(
+          new Api.channels.EditBanned({
+            channel: channelInput,
+            participant: resolvedParticipant,
+            bannedRights: rights,
+          })
+        );
+      }
 
       return request.then(() => ({ success: true, group }))
         .catch(() => ({ success: false, group }));
@@ -1162,7 +1217,8 @@ class CommandHandlers {
 
       let adminGroups = 0;
       for (const group of groups) {
-        if (await PermissionManager.isTargetAdmin(client, group, uid)) {
+        const target = await resolvePermissionTarget(client, group);
+        if (await PermissionManager.isTargetAdmin(client, target, uid)) {
           adminGroups++;
         }
       }
@@ -1275,7 +1331,8 @@ class CommandHandlers {
       }
 
       for (const group of groups) {
-        if (await PermissionManager.isTargetAdmin(client, group, uid)) {
+        const target = await resolvePermissionTarget(client, group);
+        if (await PermissionManager.isTargetAdmin(client, target, uid)) {
           adminGroups++;
         }
       }
