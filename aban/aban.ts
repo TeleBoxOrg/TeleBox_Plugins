@@ -11,8 +11,42 @@ import bigInt from "big-integer";
 import { safeGetReplyMessage } from "@utils/safeGetMessages";
 
 import { safeGetMe } from "../src/utils/authGuards";
+import { npm_install } from "../src/utils/npm_install";
 const prefixes = getPrefixes();
 const mainPrefix = prefixes[0];
+
+// p-limit 是 ESM-only，必须动态加载
+let pLimit: typeof import("p-limit").default;
+let pLimitReady: Promise<void> | null = null;
+async function ensurePLimit(): Promise<typeof pLimit> {
+  if (pLimit) return pLimit;
+  if (!pLimitReady) {
+    pLimitReady = (async () => {
+      try {
+        npm_install("p-limit");
+      } catch {}
+      pLimit = (await import("p-limit")).default;
+    })();
+  }
+  await pLimitReady;
+  return pLimit;
+}
+
+// 解析 FLOOD_WAIT 错误中的等待秒数；非 flood 错返回 null
+function getFloodWaitSeconds(error: unknown): number | null {
+  const msg = error instanceof Error ? error.message : String(error || "");
+  // teleproto 抛出的 RPCError 里通常带 "FLOOD_WAIT_X" 或 "wait of N seconds"
+  let m = msg.match(/FLOOD_WAIT_(\d+)/);
+  if (m) return parseInt(m[1], 10);
+  m = msg.match(/wait of (\d+) seconds?/i);
+  if (m) return parseInt(m[1], 10);
+  // teleproto FloodWaitError 的 seconds 字段
+  const seconds = (error as any)?.seconds;
+  if (typeof seconds === "number" && Number.isFinite(seconds)) return seconds;
+  return null;
+}
+
+const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
 
 // ==================== 配置常量 ====================
@@ -898,63 +932,75 @@ class BanManager {
       embedLinks: true,
     });
     
-    const taskPromises = groups.map(async (group) => {
-      let request: Promise<any>;
-      if (group.kind === 'chat') {
-        request = client.invoke(
-          new Api.messages.DeleteChatUser({
-            chatId: bigInt(this.getBasicGroupChatId(group.id)),
-            userId: resolvedParticipant,
-          })
-        );
-      } else {
+    const limit = (await ensurePLimit())(4);
+
+    const runOne = async (
+      group: ManagedGroup
+    ): Promise<
+      | { success: true; group: ManagedGroup }
+      | { success: false; group: ManagedGroup; reason: string }
+    > => {
+      const buildRequest = async (): Promise<any> => {
+        if (group.kind === 'chat') {
+          return client.invoke(
+            new Api.messages.DeleteChatUser({
+              chatId: bigInt(this.getBasicGroupChatId(group.id)),
+              userId: resolvedParticipant,
+            })
+          );
+        }
         const channelInput = await resolveChannelInput(client, group);
-        request = client.invoke(
+        return client.invoke(
           new Api.channels.EditBanned({
             channel: channelInput,
             participant: resolvedParticipant,
             bannedRights: rights,
           })
         );
-      }
+      };
 
-      return request
-        .then(() => ({ success: true as const, group }))
-        .catch((error: unknown) => ({
-          success: false as const,
-          group,
-          reason: this.getErrorReason(error),
-        }));
-    });
+      // 单组重试：FLOOD_WAIT 等待 ≤ 8s 时重试一次，其余错误直接返回
+      const attempt = async (retriesLeft: number): Promise<
+        | { success: true; group: ManagedGroup }
+        | { success: false; group: ManagedGroup; reason: string }
+      > => {
+        try {
+          await buildRequest();
+          return { success: true as const, group };
+        } catch (error) {
+          const floodSecs = getFloodWaitSeconds(error);
+          if (floodSecs !== null && floodSecs <= 8 && retriesLeft > 0) {
+            await sleep((floodSecs + 1) * 1000);
+            return attempt(retriesLeft - 1);
+          }
+          return {
+            success: false as const,
+            group,
+            reason: this.getErrorReason(error),
+          };
+        }
+      };
 
-    const timeoutPromise = new Promise<never>((_, reject) => {
-      setTimeout(() => reject(new Error('TIMEOUT')), 3000);
-    });
+      return attempt(1);
+    };
 
-    let results: Array<
+    const settled = await Promise.allSettled(
+      groups.map((group) => limit(() => runOne(group)))
+    );
+
+    const results: Array<
       | { success: true; group: ManagedGroup }
       | { success: false; group: ManagedGroup; reason: string }
-    >;
-    
-    try {
-      results = await Promise.race([
-        Promise.all(taskPromises),
-        timeoutPromise
-      ]);
-    } catch {
-      await new Promise(resolve => setTimeout(resolve, 500));
-      const settled = await Promise.allSettled(taskPromises);
-      results = settled.map((result, index) => {
-        if (result.status === 'fulfilled') {
-          return result.value;
-        }
-        return {
-          success: false as const,
-          group: groups[index],
-          reason: this.getErrorReason(result.reason),
-        };
-      });
-    }
+    > = settled.map((result, index) => {
+      if (result.status === 'fulfilled') {
+        return result.value;
+      }
+      return {
+        success: false as const,
+        group: groups[index],
+        reason: this.getErrorReason(result.reason),
+      };
+    });
     
     let success = 0;
     let failed = 0;
@@ -969,7 +1015,7 @@ class BanManager {
         failedGroups.push(result.group.title);
         failureDetails.push({
           group: result.group,
-          reason: result.reason,
+          reason: (result as { reason: string }).reason,
         });
       }
     });
@@ -1008,46 +1054,58 @@ class BanManager {
       untilDate: 0,
     });
 
-    const promises = groups.map(async group => {
-      let request: Promise<any>;
+    const limit = (await ensurePLimit())(4);
+
+    const runOne = async (
+      group: ManagedGroup
+    ): Promise<{ success: boolean; group: ManagedGroup }> => {
       if (group.kind === 'chat') {
-        request = Promise.reject(new Error('BASIC_GROUP_ACTION_UNSUPPORTED'));
-      } else {
+        // 基础群不支持解封操作
+        return { success: false, group };
+      }
+
+      const buildRequest = async (): Promise<any> => {
         const channelInput = await resolveChannelInput(client, group);
-        request = client.invoke(
+        return client.invoke(
           new Api.channels.EditBanned({
             channel: channelInput,
             participant: resolvedParticipant,
             bannedRights: rights,
           })
         );
-      }
+      };
 
-      return request.then(() => ({ success: true, group }))
-        .catch(() => ({ success: false, group }));
-    });
+      const attempt = async (
+        retriesLeft: number
+      ): Promise<{ success: boolean; group: ManagedGroup }> => {
+        try {
+          await buildRequest();
+          return { success: true, group };
+        } catch (error) {
+          const floodSecs = getFloodWaitSeconds(error);
+          if (floodSecs !== null && floodSecs <= 8 && retriesLeft > 0) {
+            await sleep((floodSecs + 1) * 1000);
+            return attempt(retriesLeft - 1);
+          }
+          return { success: false, group };
+        }
+      };
 
-    const timeoutPromise = new Promise<never>((_, reject) => {
-      setTimeout(() => reject(new Error('TIMEOUT')), 3000);
-    });
+      return attempt(1);
+    };
 
-    let results: Array<{ success: boolean; group: { id: number; title: string } }>;
-    
-    try {
-      results = await Promise.race([
-        Promise.all(promises),
-        timeoutPromise
-      ]);
-    } catch {
-      await new Promise(resolve => setTimeout(resolve, 500));
-      const settled = await Promise.allSettled(promises);
-      results = settled.map((result, index) => {
+    const settled = await Promise.allSettled(
+      groups.map((group) => limit(() => runOne(group)))
+    );
+
+    const results: Array<{ success: boolean; group: ManagedGroup }> = settled.map(
+      (result, index) => {
         if (result.status === 'fulfilled') {
           return result.value;
         }
         return { success: false, group: groups[index] };
-      });
-    }
+      }
+    );
     
     let success = 0;
     let failed = 0;
@@ -1269,10 +1327,22 @@ class CommandHandlers {
           console.error(`[sb] 封禁失败汇总: failed=${failureDetails.length}, unresolved=${unresolved ? 'yes' : 'no'}`);
         }
 
+        const summarizeReasons = (details: BatchGroupFailure[]): string => {
+          const counts = new Map<string, number>();
+          for (const item of details) {
+            counts.set(item.reason, (counts.get(item.reason) || 0) + 1);
+          }
+          return Array.from(counts.entries())
+            .sort((a, b) => b[1] - a[1])
+            .slice(0, 3)
+            .map(([reason, count]) => `${htmlEscape(reason)}×${count}`)
+            .join('、');
+        };
+
         const failureSummary = unresolved
           ? `\n⚠️ 目标实体无法解析：${htmlEscape(unresolvedReason || 'UNKNOWN_ERROR')}`
           : failed > 0
-            ? `\n⚠️ 失败 ${failed} 个频道/群组，请查看日志获取详细原因`
+            ? `\n⚠️ 失败 ${failed} 个频道/群组（${summarizeReasons(failureDetails)}）`
             : '';
         const capabilityNote = hasBasicGroups
           ? `\nℹ️ 基础群仅支持移出现有成员，不支持对未入群目标提前封禁`
