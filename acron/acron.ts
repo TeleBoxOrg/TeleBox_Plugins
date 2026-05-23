@@ -770,7 +770,7 @@ class AcronPlugin extends Plugin {
           const id = args[1];
           if (!id) {
             await msg.edit({
-              text: "请提供定时任务ID: <code>${mainPrefix}acron rm ID</code>",
+              text: `请提供定时任务ID: <code>${mainPrefix}acron rm ID</code>`,
               parseMode: "html",
             });
             return;

@@ -400,7 +400,7 @@ async function downloadAndUploadSong(msg: Api.Message, songQuery: string, prefer
     } catch (error: any) {
         const errorMessage = error.stderr || error.message || "未知错误";
         if (errorMessage.includes("HTTP Error 403")) {
-            throw new Error(toSimplified("下载失败：YouTube拒绝了请求(403)。这通常是由于下载核心版本过旧。\n\n请尝试使用 `${mainPrefix}yt update` 命令更新后再试。"));
+            throw new Error(toSimplified(`下载失败：YouTube拒绝了请求(403)。这通常是由于下载核心版本过旧。\n\n请尝试使用 \`${mainPrefix}yt update\` 命令更新后再试。`));
         }
         throw new Error(toSimplified(`yt-dlp 执行失败: ${errorMessage}`));
     }

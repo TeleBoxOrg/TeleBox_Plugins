@@ -30,9 +30,9 @@ const CONFIG_DEFAULTS: BananaConfig = {
 
 const help_text =
   "🎯 <b>Nano-Banana 图像编辑插件</b>\n" +
-  "• 回复图片并附带 <code>${mainPrefix}banana 提示词</code> 调用 Gemini Nano-Banana 修改图像\n" +
-  "• <code>${mainPrefix}banana key ＜密钥＞</code> 配置 Gemini API Key\n" +
-  "• <code>${mainPrefix}banana limit ＜数值/MB＞</code> 调整图片大小上限（默认 10MB，可用 default 重置）\n" +
+  `• 回复图片并附带 <code>${mainPrefix}banana 提示词</code> 调用 Gemini Nano-Banana 修改图像\n` +
+  `• <code>${mainPrefix}banana key ＜密钥＞</code> 配置 Gemini API Key\n` +
+  `• <code>${mainPrefix}banana limit ＜数值/MB＞</code> 调整图片大小上限（默认 10MB，可用 default 重置）\n` +
   "• 使用 ";
 
 const dataDir = createDirectoryInAssets("banana");
@@ -214,7 +214,7 @@ async function handleConfig(
     case "key": {
       if (!subValue) {
         await msg.edit({
-          text: "❌ 请提供 Gemini API Key，例如 `${mainPrefix}banana key AIza...`",
+          text: `❌ 请提供 Gemini API Key，例如 \`${mainPrefix}banana key AIza...\``,
         });
         return;
       }
@@ -295,7 +295,7 @@ async function handleImageEdit(
   const apiKey = (await getConfigValue("apiKey")).trim();
   if (!apiKey) {
     await msg.edit({
-      text: "❌ 未配置 Gemini API Key，请先执行 `${mainPrefix}banana key <密钥>`",
+      text: `❌ 未配置 Gemini API Key，请先执行 \`${mainPrefix}banana key <密钥>\``,
     });
     return;
   }
@@ -303,7 +303,7 @@ async function handleImageEdit(
   const prompt = promptText.trim();
   if (!prompt) {
     await msg.edit({
-      text: "❌ 请在命令后提供提示词，例如 `${mainPrefix}banana 把猫换成骑士盔甲`",
+      text: `❌ 请在命令后提供提示词，例如 \`${mainPrefix}banana 把猫换成骑士盔甲\``,
     });
     return;
   }
