@@ -36,7 +36,7 @@ const parseTimeString = (timeStr: string): number => {
 const pendingTimers = new Set<ReturnType<typeof setTimeout>>();
 
 function scheduleTimer(fn: () => void, ms: number): ReturnType<typeof setTimeout> {
-  const t = scheduleTimer(() => {
+  const t = setTimeout(() => {
     pendingTimers.delete(t);
     fn();
   }, ms);
@@ -277,13 +277,11 @@ class PortballPlugin extends Plugin {
       }
     }, seconds * 1000);
   }
-}
-
-
   cleanup(): void {
     for (const timer of pendingTimers) {
       clearTimeout(timer);
     }
     pendingTimers.clear();
   }
+}
 export default new PortballPlugin();

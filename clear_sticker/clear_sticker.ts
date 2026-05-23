@@ -12,7 +12,7 @@ const mainPrefix = prefixes[0];
 const pendingTimers = new Set<ReturnType<typeof setTimeout>>();
 
 function scheduleTimer(fn: () => void, ms: number): ReturnType<typeof setTimeout> {
-  const t = scheduleTimer(() => {
+  const t = setTimeout(() => {
     pendingTimers.delete(t);
     fn();
   }, ms);
@@ -212,13 +212,11 @@ class ClearStickerPlugin extends Plugin {
       });
     }
   }
-}
-
-
   cleanup(): void {
     for (const timer of pendingTimers) {
       clearTimeout(timer);
     }
     pendingTimers.clear();
   }
+}
 export default new ClearStickerPlugin();

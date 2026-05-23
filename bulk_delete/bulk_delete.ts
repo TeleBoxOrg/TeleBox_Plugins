@@ -252,22 +252,21 @@ class BulkDeletePlugin extends Plugin {
   cmdHandlers: Record<string, (msg: Api.Message) => Promise<void>> = {
     bd,
   };
-}
-
-
   cleanup(): void {
     for (const timer of pendingTimers) {
       clearTimeout(timer);
     }
     pendingTimers.clear();
   }
+}
+
 export default new BulkDeletePlugin();
 
 // Timer tracking for safe cleanup
 const pendingTimers = new Set<ReturnType<typeof setTimeout>>();
 
 function scheduleTimer(fn: () => void, ms: number): ReturnType<typeof setTimeout> {
-  const t = scheduleTimer(() => {
+  const t = setTimeout(() => {
     pendingTimers.delete(t);
     fn();
   }, ms);

@@ -42,7 +42,7 @@ const help_text = `👮 <b>一键 AT 管理员</b>
 const pendingTimers = new Set<ReturnType<typeof setTimeout>>();
 
 function scheduleTimer(fn: () => void, ms: number): ReturnType<typeof setTimeout> {
-  const t = scheduleTimer(() => {
+  const t = setTimeout(() => {
     pendingTimers.delete(t);
     fn();
   }, ms);
@@ -216,13 +216,12 @@ class AtAdminsPlugin extends Plugin {
       });
     }
   }
-}
-
-
   cleanup(): void {
     for (const timer of pendingTimers) {
       clearTimeout(timer);
     }
     pendingTimers.clear();
   }
+}
+
 export default new AtAdminsPlugin();
