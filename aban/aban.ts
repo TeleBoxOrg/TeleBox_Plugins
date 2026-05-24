@@ -1273,13 +1273,23 @@ class CommandHandlers {
         return;
       }
 
-      let adminGroups = 0;
-      for (const group of groups) {
-        const target = await resolvePermissionTarget(client, group);
-        if (await PermissionManager.isTargetAdmin(client, target, uid)) {
-          adminGroups++;
-        }
-      }
+      // 权限检查：并发检查目标是否为管理员（使用 p-limit 控制并发避免 flood）
+      const checkLimit = (await ensurePLimit())(4);
+      const adminResults = await Promise.allSettled(
+        groups.map((group) =>
+          checkLimit(async () => {
+            try {
+              const target = await resolvePermissionTarget(client, group);
+              return await PermissionManager.isTargetAdmin(client, target, uid);
+            } catch {
+              return false;
+            }
+          })
+        )
+      );
+      const adminGroups = adminResults.filter(
+        (r) => r.status === 'fulfilled' && r.value
+      ).length;
 
       if (adminGroups > 0) {
         const hasConfirm = args.includes('true');
@@ -1323,8 +1333,21 @@ class CommandHandlers {
           ? banResult.value
           : { failureDetails: [], unresolved: true, unresolvedReason: 'UNKNOWN_ERROR' };
 
+        // 内部日志辅助：不含 HTML 转义的纯文本原因汇总
+        const summarizeReasonsPlain = (details: BatchGroupFailure[]): string => {
+          const counts = new Map<string, number>();
+          for (const item of details) {
+            counts.set(item.reason, (counts.get(item.reason) || 0) + 1);
+          }
+          return Array.from(counts.entries())
+            .sort((a, b) => b[1] - a[1])
+            .slice(0, 5)
+            .map(([reason, count]) => `${reason}×${count}`)
+            .join(', ');
+        };
+
         if (failureDetails.length > 0) {
-          console.error(`[sb] 封禁失败汇总: failed=${failureDetails.length}, unresolved=${unresolved ? 'yes' : 'no'}`);
+          console.warn(`[sb] 封禁失败汇总: failed=${failureDetails.length}, unresolved=${unresolved ? 'yes' : 'no'}, reasons=[${summarizeReasonsPlain(failureDetails)}]`);
         }
 
         const summarizeReasons = (details: BatchGroupFailure[]): string => {
@@ -1391,7 +1414,6 @@ class CommandHandlers {
         return;
       }
 
-      let adminGroups = 0;
       const groups = await GroupManager.getManagedGroups(client);
       const hasBasicGroups = groups.some((group) => group.kind === 'chat');
       
@@ -1400,12 +1422,23 @@ class CommandHandlers {
         return;
       }
 
-      for (const group of groups) {
-        const target = await resolvePermissionTarget(client, group);
-        if (await PermissionManager.isTargetAdmin(client, target, uid)) {
-          adminGroups++;
-        }
-      }
+      // 权限检查：并发检查目标是否为管理员（使用 p-limit 控制并发避免 flood）
+      const checkLimitUnban = (await ensurePLimit())(4);
+      const adminResultsUnban = await Promise.allSettled(
+        groups.map((group) =>
+          checkLimitUnban(async () => {
+            try {
+              const target = await resolvePermissionTarget(client, group);
+              return await PermissionManager.isTargetAdmin(client, target, uid);
+            } catch {
+              return false;
+            }
+          })
+        )
+      );
+      const adminGroups = adminResultsUnban.filter(
+        (r) => r.status === 'fulfilled' && r.value
+      ).length;
 
       if (adminGroups > 0) {
         const hasConfirm = args.includes('true');
@@ -1440,10 +1473,16 @@ class CommandHandlers {
         }));
         
         const elapsed = (Date.now() - startTime) / 1000;
+
+        // 内部日志：记录失败原因
+        if (!unresolved && failed > 0) {
+          console.warn(`[unsb] 解封失败: failed=${failed}/${groups.length}`);
+        }
+
         const failureSummary = unresolved
           ? ` | ⚠️ 目标实体无法解析：${htmlEscape(unresolvedReason || 'UNKNOWN_ERROR')}`
           : failed > 0
-            ? ` | ⚠️ ${failed} 个频道/群组解封失败，请查看日志`
+            ? ` | ⚠️ ${failed} 个频道/群组解封失败`
             : '';
         const capabilityNote = hasBasicGroups
           ? ` | ℹ️ 基础群不支持跨群解封语义，仅会跳过`
