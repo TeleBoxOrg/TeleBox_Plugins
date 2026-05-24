@@ -10,8 +10,8 @@ import path from "path";
 import bigInt from "big-integer";
 import { safeGetReplyMessage } from "@utils/safeGetMessages";
 
-import { safeGetMe } from "../src/utils/authGuards";
-import { npm_install } from "../src/utils/npm_install";
+import { safeGetMe } from "@utils/authGuards";
+import { npm_install } from "@utils/npm_install";
 const prefixes = getPrefixes();
 const mainPrefix = prefixes[0];
 
