@@ -110,9 +110,6 @@ async function extractTgsFirstFrame(tgsBuffer: Buffer): Promise<Buffer | null> {
 		// 使用 rlottie-python 渲染 TGS 到 GIF
 		const pythonScript = `
 import sys
-import { safeGetReplyMessage } from "@utils/safeGetMessages";
-
-
 from rlottie_python import LottieAnimation
 anim = LottieAnimation.from_tgs(sys.argv[1])
 anim.save_animation(sys.argv[2])
