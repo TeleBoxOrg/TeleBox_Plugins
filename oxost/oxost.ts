@@ -4,7 +4,7 @@ import axios from "axios";
 import { getPrefixes } from "@utils/pluginManager";
 import { Plugin } from "@utils/pluginBase";
 import { Api } from "teleproto";
-import { getGlobalClient } from "@utils/globalClient";
+import { getGlobalClient, tryGetCurrentGenerationContext } from "@utils/globalClient";
 import { Buffer } from "buffer";
 import { safeGetReplyMessage } from "@utils/safeGetMessages";
 
@@ -135,20 +135,12 @@ class Ox0Plugin extends Plugin {
         }
         if (!filename || filename.length < 3) filename = "file";
 
-        // 临时调试输出
-        let debugInfo = `<b>调试信息</b>\n`;
-        debugInfo += `filename: <code>${htmlEscape(filename)}</code>\n`;
-        debugInfo += `buffer.length: <code>${buffer.length}</code>\n`;
-        debugInfo += `buffer[0:32]: <code>${htmlEscape(buffer.slice(0,32).toString('hex'))}</code>\n`;
-        debugInfo += `expires: <code>${htmlEscape(expires || "")}</code> secret: <code>${secret ? "1" : "0"}</code>\n`;
-
         // 使用 Node.js 原生 FormData（无需 form-data 依赖）
         const form = new globalThis.FormData();
-  form.append("file", new Blob([new Uint8Array(buffer)], { type: "application/octet-stream" }), filename);
+        form.append("file", new Blob([new Uint8Array(buffer)], { type: "application/octet-stream" }), filename);
         if (expires) form.append("expires", expires);
         if (secret) form.append("secret", "1");
-  const headers = { 'User-Agent': 'curl/8.0.1' };
-  debugInfo += `headers: <code>${htmlEscape(JSON.stringify(headers))}</code>\n`;
+        const headers = { 'User-Agent': 'curl/8.0.1' };
 
         try {
           const response = await axios.post("https://0x0.st", form, {
@@ -157,18 +149,22 @@ class Ox0Plugin extends Plugin {
           });
           const url = response.data?.toString().trim();
           if (!url || !url.startsWith("https://0x0.st/")) {
-            await sendLongMessage(msg, `❌ <b>错误:</b> 上传失败或未获取到链接\n${debugInfo}`);
+            await sendLongMessage(msg, `❌ <b>错误:</b> 上传失败或未获取到链接`);
             return;
           }
           await sendLongMessage(msg, `<code>${htmlEscape(url)}</code>`);
         } catch (err: any) {
-          debugInfo += `\n<b>异常:</b> <code>${htmlEscape(err?.message || String(err))}</code>`;
-          await sendLongMessage(msg, `❌ <b>错误:</b> 上传失败\n${debugInfo}`);
+          await sendLongMessage(msg, `❌ <b>错误:</b> 上传失败 — ${htmlEscape(err?.message || String(err))}`);
         }
       } catch (error: any) {
         if (error.message?.includes("FLOOD_WAIT")) {
           const waitTime = parseInt(error.message.match(/\d+/)?.[0] || "60");
-          await new Promise(res => setTimeout(res, (waitTime + 1) * 1000));
+          const lifecycle = tryGetCurrentGenerationContext();
+          if (lifecycle) {
+            await lifecycle.delay((waitTime + 1) * 1000, { label: "oxost:flood-wait" });
+          } else {
+            await new Promise(res => setTimeout(res, (waitTime + 1) * 1000));
+          }
         }
         await sendLongMessage(msg, `❌ <b>错误:</b> ${htmlEscape(error.message)}`);
       }
