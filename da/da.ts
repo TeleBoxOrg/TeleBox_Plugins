@@ -8,7 +8,7 @@ import bigInt from "big-integer";
 import { Low } from "lowdb";
 import { JSONFile } from "lowdb/node";
 
-import { safeGetMe } from "../src/utils/authGuards";
+import { safeGetMe } from "@utils/authGuards";
 // 获取命令前缀
 const prefixes = getPrefixes();
 const mainPrefix = prefixes[0];

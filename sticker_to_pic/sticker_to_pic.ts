@@ -1,6 +1,6 @@
-import { Plugin } from "../src/utils/pluginBase";
-import { getGlobalClient } from "../src/utils/globalClient";
-import { getPrefixes } from "../src/utils/pluginManager";
+import { Plugin } from "@utils/pluginBase";
+import { getGlobalClient } from "@utils/globalClient";
+import { getPrefixes } from "@utils/pluginManager";
 import { Api } from "teleproto";
 import * as fs from "fs";
 import * as path from "path";

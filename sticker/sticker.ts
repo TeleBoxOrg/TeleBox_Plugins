@@ -8,7 +8,7 @@ import { JSONFilePreset } from "lowdb/node";
 import * as path from "path";
 import { safeGetMessages, safeGetReplyMessage } from "@utils/safeGetMessages";
 
-import { safeGetMe } from "../src/utils/authGuards";
+import { safeGetMe } from "@utils/authGuards";
 // 配置键定义
 const CONFIG_KEYS = {
   DEFAULT_PACK: "sticker_default_pack",

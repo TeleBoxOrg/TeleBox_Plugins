@@ -1,4 +1,4 @@
-import { Plugin } from "../src/utils/pluginBase";
+import { Plugin } from "@utils/pluginBase";
 import { Api } from "teleproto";
 import { exec, execSync, ChildProcess } from "child_process";
 import { promisify } from "util";
@@ -7,11 +7,11 @@ import * as fs from "fs";
 import axios from "axios";
 import * as crypto from "crypto";
 import sharp from "sharp";
-import { safeGetReplyMessage } from "../src/utils/safeGetMessages";
+import { safeGetReplyMessage } from "@utils/safeGetMessages";
 import {
   createDirectoryInAssets,
   createDirectoryInTemp,
-} from "../src/utils/pathHelpers";
+} from "@utils/pathHelpers";
 
 // --- Global variables for test control ---
 let DEFAULT_TIMEOUT = 300000; // Default 5 minutes, can be customized

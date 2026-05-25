@@ -6,7 +6,7 @@ import { createDirectoryInTemp } from "@utils/pathHelpers";
 import fs from "fs";
 import path from "path";
 
-import { safeGetMe } from "../src/utils/authGuards";
+import { safeGetMe } from "@utils/authGuards";
 const prefixes = getPrefixes();
 const mainPrefix = prefixes[0];
 

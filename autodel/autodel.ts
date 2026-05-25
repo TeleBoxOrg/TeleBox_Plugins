@@ -1,12 +1,12 @@
-import { Plugin } from "../src/utils/pluginBase";
+import { Plugin } from "@utils/pluginBase";
 import { getPrefixes } from "@utils/pluginManager";
-import { getGlobalClient, type GenerationContext } from "../src/utils/globalClient";
+import { getGlobalClient, type GenerationContext } from "@utils/globalClient";
 import { Api } from "teleproto";
-import { createDirectoryInAssets } from "../src/utils/pathHelpers";
+import { createDirectoryInAssets } from "@utils/pathHelpers";
 import Database from "better-sqlite3";
 import path from "path";
 
-import { safeGetMe } from "../src/utils/authGuards";
+import { safeGetMe } from "@utils/authGuards";
 const prefixes = getPrefixes();
 const mainPrefix = prefixes[0];
 

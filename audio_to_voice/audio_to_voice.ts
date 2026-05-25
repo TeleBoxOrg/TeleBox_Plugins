@@ -1,10 +1,10 @@
-import { Plugin } from "../src/utils/pluginBase";
-import { getGlobalClient } from "../src/utils/globalClient";
+import { Plugin } from "@utils/pluginBase";
+import { getGlobalClient } from "@utils/globalClient";
 import { getPrefixes } from "@utils/pluginManager";
 import { Api } from "teleproto";
 import fs from "fs";
 import path from "path";
-import { createDirectoryInTemp } from "../src/utils/pathHelpers";
+import { createDirectoryInTemp } from "@utils/pathHelpers";
 import { exec } from "child_process";
 import { promisify } from "util";
 import { safeGetMessages } from "@utils/safeGetMessages";

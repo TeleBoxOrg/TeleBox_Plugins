@@ -12,7 +12,7 @@ import { getPrefixes } from "@utils/pluginManager";
 import bigInt from "big-integer";
 import { safeGetMessages } from "@utils/safeGetMessages";
 
-import { safeGetMe } from "../src/utils/authGuards";
+import { safeGetMe } from "@utils/authGuards";
 const PLUGIN_VERSION = "5.0.6";
 
 function htmlEscape(value: any): string {

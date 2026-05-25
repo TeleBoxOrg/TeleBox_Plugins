@@ -6,7 +6,7 @@ import { JSONFilePreset } from "lowdb/node";
 import path from "path";
 import { safeGetMessages } from "@utils/safeGetMessages";
 
-import { safeGetMe } from "../src/utils/authGuards";
+import { safeGetMe } from "@utils/authGuards";
 const prefixes = getPrefixes();
 const mainPrefix = prefixes[0];
 

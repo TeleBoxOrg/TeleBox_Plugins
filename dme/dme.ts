@@ -1,4 +1,4 @@
-import { safeGetMe } from "../src/utils/authGuards";
+import { safeGetMe } from "@utils/authGuards";
 /**
  * DME (Delete My Messages) Plugin for TeleBox
  * 智能防撤回删除插件 - 优化版本

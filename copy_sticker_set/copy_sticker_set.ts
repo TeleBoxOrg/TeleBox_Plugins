@@ -1,6 +1,6 @@
-import { Plugin } from "../src/utils/pluginBase";
-import { getGlobalClient, tryGetCurrentGenerationContext } from "../src/utils/globalClient";
-import { getPrefixes } from "../src/utils/pluginManager";
+import { Plugin } from "@utils/pluginBase";
+import { getGlobalClient, tryGetCurrentGenerationContext } from "@utils/globalClient";
+import { getPrefixes } from "@utils/pluginManager";
 import { Api } from "teleproto";
 
 const prefixes = getPrefixes();

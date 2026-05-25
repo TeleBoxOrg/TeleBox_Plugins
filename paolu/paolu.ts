@@ -3,7 +3,7 @@ import { getPrefixes } from "@utils/pluginManager";
 import { Api, TelegramClient } from "teleproto";
 import { getGlobalClient } from "@utils/globalClient";
 
-import { safeGetMe } from "../src/utils/authGuards";
+import { safeGetMe } from "@utils/authGuards";
 const prefixes = getPrefixes();
 const mainPrefix = prefixes[0];
 

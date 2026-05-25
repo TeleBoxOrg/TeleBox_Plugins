@@ -4,7 +4,7 @@ import { Api } from "teleproto";
 import { getGlobalClient } from "@utils/globalClient";
 import { safeGetReplyMessage } from "@utils/safeGetMessages";
 
-import { safeGetMe } from "../src/utils/authGuards";
+import { safeGetMe } from "@utils/authGuards";
 // HTML转义函数
 const prefixes = getPrefixes();
 const mainPrefix = prefixes[0];

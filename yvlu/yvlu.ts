@@ -1,4 +1,4 @@
-import { safeGetMe } from "../src/utils/authGuards";
+import { safeGetMe } from "@utils/authGuards";
 // YVLU Plugin - 生成文字语录贴纸
 //@ts-nocheck
 import axios from "axios";

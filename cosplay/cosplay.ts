@@ -1,9 +1,9 @@
 // Cosplay Plugin - 从 cosplaytele.com 获取随机cosplay图片
-import { Plugin } from "../src/utils/pluginBase";
+import { Plugin } from "@utils/pluginBase";
 import { Api } from "teleproto";
 import { CustomFile } from "teleproto/client/uploads";
-import { getPrefixes } from "../src/utils/pluginManager";
-import { npm_install } from "../src/utils/npm_install";
+import { getPrefixes } from "@utils/pluginManager";
+import { npm_install } from "@utils/npm_install";
 import axios, { AxiosError, AxiosInstance } from "axios";
 import * as fs from "fs";
 import * as path from "path";
