@@ -54,7 +54,6 @@ class AnnualReportPlugin extends Plugin {
   constructor() {
     super();
     this.configPath = path.join(createDirectoryInAssets(this.PLUGIN_NAME), "stats.json");
-    this.initDB();
   }
 
   private async initDB() {

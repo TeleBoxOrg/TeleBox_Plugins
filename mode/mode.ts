@@ -115,7 +115,6 @@ class MessageModePlugin extends Plugin {
 
   constructor() {
     super();
-    this.initDB();
   }
 
   cleanup(): void {

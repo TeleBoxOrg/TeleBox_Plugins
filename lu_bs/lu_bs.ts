@@ -65,8 +65,6 @@ class LuBsPlugin extends Plugin {
 
   constructor() {
     super();
-    this.initDB();
-    this.loadStickerSet();
   }
 
   // 初始化数据库

@@ -44,7 +44,6 @@ class GreetingPlugin extends Plugin {
 
     constructor() {
         super();
-        this.initDB();
     }
 
   cleanup(): void {

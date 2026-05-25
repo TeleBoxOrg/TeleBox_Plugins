@@ -395,7 +395,6 @@ class PrometheusPlugin extends Plugin {
   
   constructor() {
     super();
-    this.initDB();
   }
   
   // 安全编辑（防 MESSAGE_EMPTY）

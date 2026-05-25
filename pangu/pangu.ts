@@ -202,7 +202,6 @@ class PanguPlugin extends Plugin {
   constructor() {
     super();
     this.prefixes = getPrefixes();
-    this.initDB();
   }
 
   // 初始化数据库
