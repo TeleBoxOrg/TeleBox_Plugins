@@ -457,25 +457,7 @@ echo "后端: http://\$IP:3001/\$SECRET"`;
             await msg.edit({ text: manualText, parseMode: "html" });
             break;
 
-          case "info":
-            const secretFile = "/root/sub-store/.secret";
-            if (!fs.existsSync(secretFile)) {
-              await msg.edit({ text: "❌ 未部署" });
-              return;
-            }
-            const key = fs.readFileSync(secretFile, "utf8").trim();
-            const ip = await sh("curl -s ifconfig.me");
-            await msg.edit({
-              text: `面板: http://${ip.trim()}:3001\n后端: http://${ip.trim()}:3001/${key}`,
-            });
-            break;
 
-          case "status":
-            const status = await sh(
-              "docker ps --format '{{.Names}} {{.Status}}' | grep sub-store || echo '未运行'"
-            );
-            await msg.edit({ text: `📊 ${status}` });
-            break;
 
           case "logs":
             await msg.edit({ text: "📋 生成今日日志文件..." });

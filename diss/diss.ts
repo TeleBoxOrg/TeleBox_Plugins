@@ -9,7 +9,9 @@ const mainPrefix = prefixes[0];
 class DissPlugin extends Plugin {
 
   // 插件描述
-  description = "🗣️ 儒雅随和版祖安语录\n\n使用 ${mainPrefix}diss 触发";
+  description = `🗣️ 儒雅随和版祖安语录
+
+使用 ${mainPrefix}diss 触发`;
 
   // 命令处理器
   cmdHandlers = {
