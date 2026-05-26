@@ -107,6 +107,7 @@ class HisPlugin extends Plugin {
           
           // 否则显示错误提示
           await msg.edit({
+            text: "❌ 请回复一条消息或指定查询目标",
             parseMode: "html"
           });
           return;
@@ -154,6 +155,7 @@ class HisPlugin extends Plugin {
 
         // 参数过多
         await msg.edit({
+          text: "❌ 参数过多，请使用 .his help 查看帮助",
           parseMode: "html"
         });
         return;
