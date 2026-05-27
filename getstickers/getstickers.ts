@@ -201,6 +201,7 @@ class GetStickersPlugin extends Plugin {
   }
   
   private async downloadStickers(client: any, msg: Api.Message, stickerSetName: string): Promise<void> {
+    let packDir: string | undefined;
     try {
       if (!stickerSetName || stickerSetName.trim() === '') {
         await msg.edit({
@@ -251,7 +252,7 @@ class GetStickersPlugin extends Plugin {
       
       const setInfo = stickerSet.set;
       const documents = stickerSet.documents;
-      const packDir = path.join(process.cwd(), 'data', 'sticker', setInfo.shortName);
+      packDir = path.join(process.cwd(), 'data', 'sticker', setInfo.shortName);
       
       // 创建贴纸包目录
       if (fs.existsSync(packDir)) {
@@ -368,6 +369,18 @@ class GetStickersPlugin extends Plugin {
       
     } catch (error: any) {
       console.error('下载贴纸包失败:', error);
+
+      // Clean up temporary sticker directory on failure to avoid disk leaks
+      if (packDir) {
+        try {
+          if (fs.existsSync(packDir)) {
+            fs.rmSync(packDir, { recursive: true, force: true });
+          }
+        } catch (cleanupErr) {
+          console.error('清理贴纸临时目录失败:', cleanupErr);
+        }
+      }
+
       let errorMessage = "❌ 下载贴纸包时出现错误";
       
       if (error.errorMessage) {
