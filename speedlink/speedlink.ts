@@ -859,7 +859,7 @@ const speedtest = async (msg: Api.Message): Promise<void> => {
             serverConfig.host
           } '${remoteSpeedtestCmd}'`;
         } else {
-          finalCommand = `ssh -i ${serverConfig.credentials} -p ${serverConfig.port} -o StrictHostKeyChecking=no -o ConnectTimeout=1to ${serverConfig.username}@${serverConfig.host} '${remoteSpeedtestCmd}'`;
+          finalCommand = `ssh -i ${serverConfig.credentials} -p ${serverConfig.port} -o StrictHostKeyChecking=no -o ConnectTimeout=10 ${serverConfig.username}@${serverConfig.host} '${remoteSpeedtestCmd}'`;
         }
       } else {
         if (!fs.existsSync(SPEEDTEST_PATH)) {
