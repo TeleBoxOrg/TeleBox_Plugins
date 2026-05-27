@@ -2,7 +2,7 @@ import { Plugin } from "@utils/pluginBase";
 import { getGlobalClient } from "@utils/globalClient";
 import { Api } from "teleproto";
 import { Buffer } from "buffer";
-import { exec } from "child_process";
+import { execFile } from "child_process";
 import { promisify } from "util";
 import { writeFileSync, readFileSync, unlinkSync, existsSync } from "fs";
 import { join } from "path";
@@ -10,7 +10,7 @@ import { tmpdir } from "os";
 import { CustomFile } from "teleproto/client/uploads";
 import { safeGetReplyMessage } from "@utils/safeGetMessages";
 
-const execAsync = promisify(exec);
+const execFileAsync = promisify(execFile);
 
 // HTML转义函数
 function htmlEscape(text: string): string {
@@ -27,13 +27,13 @@ async function ensureDependencies(): Promise<void> {
   const missingDeps: string[] = [];
   
   try {
-    await execAsync('which qrencode');
+    await execFileAsync('which', ['qrencode']);
   } catch (error) {
     missingDeps.push('qrencode');
   }
   
   try {
-    await execAsync('which zbarimg');
+    await execFileAsync('which', ['zbarimg']);
   } catch (error) {
     missingDeps.push('zbar-tools/zbar');
   }
@@ -48,15 +48,15 @@ async function ensureDependencies(): Promise<void> {
     } else if (platform === 'linux') {
       // Linux - 检测发行版
       try {
-        await execAsync('which apt-get');
+        await execFileAsync('which', ['apt-get']);
         installCmd = 'sudo apt-get update && sudo apt-get install qrencode zbar-tools';
       } catch {
         try {
-          await execAsync('which yum');
+          await execFileAsync('which', ['yum']);
           installCmd = 'sudo yum install qrencode zbar';
         } catch {
           try {
-            await execAsync('which dnf');
+            await execFileAsync('which', ['dnf']);
             installCmd = 'sudo dnf install qrencode zbar';
           } catch {
             installCmd = '请使用您的包管理器安装 qrencode 和 zbar-tools';
@@ -78,8 +78,8 @@ async function generateQRCode(text: string): Promise<Buffer> {
   const tempFile = join(tmpdir(), `qr_${Date.now()}.png`);
   
   try {
-    // 使用qrencode生成二维码
-    await execAsync(`qrencode -o "${tempFile}" -s 6 -m 2 "${text}"`);
+    // 使用qrencode生成二维码（execFile避免shell注入）
+    await execFileAsync('qrencode', ['-o', tempFile, '-s', '6', '-m', '2', text]);
     
     if (!existsSync(tempFile)) {
       throw new Error('二维码生成失败');
@@ -119,7 +119,7 @@ async function decodeQRCode(imageBuffer: Buffer): Promise<string[]> {
     
     // 使用zbarimg解码二维码，设置环境变量确保UTF-8编码
     const env = { ...process.env, LC_ALL: 'C.UTF-8', LANG: 'C.UTF-8' };
-    const { stdout } = await execAsync(`zbarimg "${tempFile}"`, { 
+    const { stdout } = await execFileAsync('zbarimg', [tempFile], { 
       encoding: 'utf8',
       env: env
     });
