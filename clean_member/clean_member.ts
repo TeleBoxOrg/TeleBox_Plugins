@@ -42,8 +42,20 @@ interface CacheData {
   users: UserInfo[];
 }
 
+const MAX_CACHE_ENTRIES = 50;
 const cache = new Map<string, { data: CacheData; timestamp: number }>();
 const CACHE_TTL = 24 * 60 * 60 * 1000;
+
+function trimCache(): void {
+  if (cache.size <= MAX_CACHE_ENTRIES) return;
+  const excess = cache.size - MAX_CACHE_ENTRIES;
+  let count = 0;
+  for (const key of Array.from(cache.keys())) {
+    if (count >= excess) break;
+    cache.delete(key);
+    count++;
+  }
+}
 
 function getCacheKey(chatId: number, mode: string, day: number): string {
   return `${chatId}_${mode}_${day}`;
@@ -62,6 +74,7 @@ function getFromCache(chatId: number, mode: string, day: number): CacheData | nu
 function setCache(chatId: number, mode: string, day: number, data: CacheData): void {
   const key = getCacheKey(chatId, mode, day);
   cache.set(key, { data, timestamp: Date.now() });
+  trimCache();
 }
 
 async function ensureDirectories(): Promise<void> {
@@ -896,6 +909,11 @@ const clean_member = async (msg: Api.Message) => {
 class CleanMemberPlugin extends Plugin {
 
   description: string = getHelpText();
+
+  cleanup(): void {
+    cache.clear();
+  }
+
   cmdHandlers: Record<string, (msg: Api.Message) => Promise<void>> = {
     clean_member
   };

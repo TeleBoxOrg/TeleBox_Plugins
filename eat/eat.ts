@@ -8,7 +8,19 @@ import { safeGetReplyMessage } from "@utils/safeGetMessages";
 
 const prefixes = getPrefixes();
 const mainPrefix = prefixes[0];
+const MAX_ASSET_CACHE_SIZE = 100;
 const assetBufferCache = new Map<string, Buffer>();
+
+function trimAssetCache(): void {
+  if (assetBufferCache.size <= MAX_ASSET_CACHE_SIZE) return;
+  const excess = assetBufferCache.size - MAX_ASSET_CACHE_SIZE;
+  let count = 0;
+  for (const key of Array.from(assetBufferCache.keys())) {
+    if (count >= excess) break;
+    assetBufferCache.delete(key);
+    count++;
+  }
+}
 
 interface RoleConfig {
   x: number;
@@ -117,6 +129,7 @@ async function getAssetBuffer(url: string): Promise<Buffer> {
   });
   const buf = Buffer.from(response.data);
   assetBufferCache.set(absoluteUrl, buf);
+  trimAssetCache();
   return buf;
 }
 
@@ -441,6 +454,11 @@ ${mainPrefix}eat set</pre>
 class EatPlugin extends Plugin {
 
   description: string = `${help_text}`;
+
+  cleanup(): void {
+    assetBufferCache.clear();
+  }
+
   cmdHandlers: Record<string, (msg: Api.Message) => Promise<void>> = {
     eat: async (msg, trigger?: Api.Message) => {
       await fn(msg, trigger);
