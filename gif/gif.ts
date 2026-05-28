@@ -6,7 +6,7 @@ import { createDirectoryInAssets } from "@utils/pathHelpers";
 import { Api } from "teleproto";
 import fs from "fs";
 import path from "path";
-import { exec } from "child_process";
+import { execFile } from "child_process";
 import { promisify } from "util";
 import { safeGetReplyMessage } from "@utils/safeGetMessages";
 
@@ -14,7 +14,7 @@ const prefixes = getPrefixes();
 const mainPrefix = prefixes[0];
 
 
-const execAsync = promisify(exec);
+const execFileAsync = promisify(execFile);
 
 interface GifConverterConfig {
   maxFileSize: number; // MB
@@ -268,23 +268,19 @@ class GifConverter {
   }
 
   private async convertWithFFmpeg(inputFile: string, outputFile: string): Promise<void> {
-    // 构建 FFmpeg 命令
-    const ffmpegCmd = [
-      "ffmpeg",
-      "-i", `"${inputFile}"`,
-      "-t", this.config.maxDuration.toString(), // 限制时长
-      "-vf", `scale=${this.config.maxWidth}:${this.config.maxHeight}:force_original_aspect_ratio=decrease`, // 等比缩放
-      "-c:v", "libvpx-vp9", // VP9 编码器
-      "-crf", this.config.quality.toString(), // 质量控制
-      "-b:v", "0", // 使用 CRF 模式
-      "-an", // 移除音频
-      "-f", "webm", // WebM 格式
-      "-y", // 覆盖输出文件
-      `"${outputFile}"`
-    ].join(" ");
-
     try {
-      const { stderr } = await execAsync(ffmpegCmd);
+      await execFileAsync("ffmpeg", [
+        "-i", inputFile,
+        "-t", this.config.maxDuration.toString(),
+        "-vf", `scale=${this.config.maxWidth}:${this.config.maxHeight}:force_original_aspect_ratio=decrease`,
+        "-c:v", "libvpx-vp9",
+        "-crf", this.config.quality.toString(),
+        "-b:v", "0",
+        "-an",
+        "-f", "webm",
+        "-y",
+        outputFile
+      ]);
       
       // 检查输出文件是否存在
       if (!fs.existsSync(outputFile)) {
@@ -306,21 +302,18 @@ class GifConverter {
 
   private async convertWithLowerQuality(inputFile: string, outputFile: string): Promise<void> {
     const lowerQuality = Math.min(31, this.config.quality + 10);
-    const ffmpegCmd = [
-      "ffmpeg",
-      "-i", `"${inputFile}"`,
+    await execFileAsync("ffmpeg", [
+      "-i", inputFile,
       "-t", this.config.maxDuration.toString(),
-      "-vf", `scale=320:320:force_original_aspect_ratio=decrease`, // 更小的分辨率
+      "-vf", "scale=320:320:force_original_aspect_ratio=decrease",
       "-c:v", "libvpx-vp9",
-      "-crf", lowerQuality.toString(), // 更低质量
+      "-crf", lowerQuality.toString(),
       "-b:v", "0",
       "-an",
       "-f", "webm",
       "-y",
-      `"${outputFile}"`
-    ].join(" ");
-
-    await execAsync(ffmpegCmd);
+      outputFile
+    ]);
   }
 
   private async sendAsSticker(originalMsg: Api.Message, stickerFile: string): Promise<void> {
