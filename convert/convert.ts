@@ -4,14 +4,14 @@ import { getPrefixes } from "@utils/pluginManager";
 import { Api } from "teleproto";
 import * as fs from "fs";
 import * as path from "path";
-import { exec } from "child_process";
+import { execFile } from "child_process";
 import { promisify } from "util";
 import axios from "axios";
 import Database from "better-sqlite3";
 import { Converter } from "opencc-js";
 import { safeGetReplyMessage } from "@utils/safeGetMessages";
 
-const execAsync = promisify(exec);
+const execFileAsync = promisify(execFile);
 
 // --- Basic Setup ---
 const prefixes = getPrefixes();
@@ -195,8 +195,7 @@ class VideoConverter {
 
   async convertVideoToMp3(inputPath: string, outputPath: string): Promise<boolean> {
     try {
-      const cmd = `ffmpeg -i "${inputPath}" -vn -acodec libmp3lame -q:a 2 -y "${outputPath}"`;
-      await execAsync(cmd, { timeout: 300000 });
+      await execFileAsync("ffmpeg", ["-i", inputPath, "-vn", "-acodec", "libmp3lame", "-q:a", "2", "-y", outputPath], { timeout: 300000 });
       return fs.existsSync(outputPath);
     } catch (error) {
       console.error("Video conversion failed:", error);
@@ -206,16 +205,16 @@ class VideoConverter {
   
   async addMetadataAndCover(inputMp3: string, outputPath: string, metadata: SongInfo, coverPath?: string): Promise<boolean> {
     try {
-        let cmd = `ffmpeg -i "${inputMp3}" -c:a copy -id3v2_version 3`;
+        const args: string[] = ["-i", inputMp3, "-c:a", "copy", "-id3v2_version", "3"];
         if (coverPath) {
-            cmd += ` -i "${coverPath}" -map 0:a -map 1:v -disposition:v:0 attached_pic`;
+            args.push("-i", coverPath, "-map", "0:a", "-map", "1:v", "-disposition:v:0", "attached_pic");
         }
-        cmd += ` -metadata title="${metadata.title.replace(/"/g, '\\"')}"`;
-        cmd += ` -metadata artist="${metadata.artist.replace(/"/g, '\\"')}"`;
-        cmd += ` -metadata album="${metadata.album.replace(/"/g, '\\"')}"`;
-        cmd += ` -y "${outputPath}"`;
+        args.push("-metadata", `title=${metadata.title}`);
+        args.push("-metadata", `artist=${metadata.artist}`);
+        args.push("-metadata", `album=${metadata.album}`);
+        args.push("-y", outputPath);
         
-        await execAsync(cmd, { timeout: 120000 });
+        await execFileAsync("ffmpeg", args, { timeout: 120000 });
         return fs.existsSync(outputPath);
     } catch (error) {
         console.error("Failed to add metadata:", error);
@@ -226,8 +225,7 @@ class VideoConverter {
 
   async getVideoDuration(filePath: string): Promise<number> {
     try {
-      const cmd = `ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 "${filePath}"`;
-      const { stdout } = await execAsync(cmd);
+      const { stdout } = await execFileAsync("ffprobe", ["-v", "error", "-show_entries", "format=duration", "-of", "default=noprint_wrappers=1:nokey=1", filePath]);
       return parseFloat(stdout.trim()) || 0;
     } catch (error) {
       console.error("Failed to get video duration:", error);
