@@ -257,13 +257,16 @@ class PaoluPlugin extends Plugin {
     }
   }
 
+  private static readonly MAX_FLOOD_WAIT_RETRIES = 3;
+
   /**
    * 高速删除批处理（参考da.ts）
    */
   private async fastDeleteBatch(
     client: TelegramClient,
     chatId: bigInt.BigInteger,
-    messages: Api.Message[]
+    messages: Api.Message[],
+    _retryCount: number = 0
   ): Promise<boolean> {
     try {
       await client.deleteMessages(
@@ -273,11 +276,15 @@ class PaoluPlugin extends Plugin {
       );
       return true;
     } catch (error: any) {
-      // FLOOD_WAIT处理
-      if (error.message?.includes("FLOOD_WAIT")) {
+      // FLOOD_WAIT处理（限制最大重试次数，防止无限递归）
+      if (error.message?.includes("FLOOD_WAIT") && _retryCount < PaoluPlugin.MAX_FLOOD_WAIT_RETRIES) {
         const waitTime = parseInt(error.message.match(/\d+/)?.[0] || "30") * 1000;
         await sleep(waitTime);
-        return this.fastDeleteBatch(client, chatId, messages); // 重试
+        return this.fastDeleteBatch(client, chatId, messages, _retryCount + 1);
+      }
+
+      if (error.message?.includes("FLOOD_WAIT")) {
+        console.warn(`[PAOLU] FLOOD_WAIT 重试已达上限 (${PaoluPlugin.MAX_FLOOD_WAIT_RETRIES} 次)，转为逐个删除`);
       }
       
       // 批量失败，逐个删除
