@@ -1,10 +1,30 @@
 import { Plugin } from "@utils/pluginBase";
 import { Api } from "teleproto";
-import { exec } from "child_process";
+import { execFile } from "child_process";
 import util from "util";
 import axios from "axios";
 
-const execPromise = util.promisify(exec);
+const execFilePromise = util.promisify(execFile);
+
+/**
+ * Validate dig arguments to prevent shell injection.
+ * Only allow: domain names, DNS record types, and common dig flags.
+ * Reject any argument containing shell metacharacters.
+ */
+function sanitizeDigArgs(args: string[]): string[] | null {
+  // Allow common dig flags starting with + or -, domain names, and DNS types
+  for (const arg of args) {
+    // Block shell metacharacters and path traversal
+    if (/[;&|`$(){}!#<>'"\\]/.test(arg)) {
+      return null;
+    }
+    // Block path traversal
+    if (arg.includes("..") || arg.includes("/")) {
+      return null;
+    }
+  }
+  return args;
+}
 
 function htmlEscape(text: any): string {
   if (typeof text !== "string") {
@@ -137,7 +157,12 @@ async function getIpLocation(ip: string): Promise<string> {
 
 async function executeDig(args: string[]): Promise<any> {
   try {
-    const modifiedArgs = [...args];
+    const validatedArgs = sanitizeDigArgs(args);
+    if (!validatedArgs) {
+      throw new Error("查询参数包含非法字符，只允许域名、记录类型和 dig 标志");
+    }
+
+    const modifiedArgs = [...validatedArgs];
     const hasAnyPlusOption = modifiedArgs.some((arg) => arg.startsWith("+"));
     const isSimpleQuery =
       !hasAnyPlusOption && !modifiedArgs.some((arg) => arg.startsWith("-"));
@@ -146,11 +171,8 @@ async function executeDig(args: string[]): Promise<any> {
       modifiedArgs.push("+short");
     }
 
-    const command = `dig ${modifiedArgs.join(" ")}`;
-
-    console.log(`Executing command: ${command}`);
-
-    const { stdout, stderr } = await execPromise(command, { timeout: 20000 });
+    // Use execFile to pass args as array — no shell interpolation
+    const { stdout, stderr } = await execFilePromise("dig", modifiedArgs, { timeout: 20000 });
 
     if (stderr && !stdout) {
       throw new Error(`dig 命令执行失败: ${stderr}`);

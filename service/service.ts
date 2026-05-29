@@ -1,9 +1,23 @@
 import { Plugin } from "@utils/pluginBase";
 import { Api } from "teleproto";
-import { exec } from "child_process";
+import { execFile } from "child_process";
 import { promisify } from "util";
 
-const execAsync = promisify(exec);
+const execFileAsync = promisify(execFile);
+
+/**
+ * Validate that a service name only contains characters allowed in systemd
+ * unit names: ASCII letters, digits, hyphens, underscores, dots, and '@' (for
+ * template instances).  Reject anything with shell metacharacters or path
+ * separators to prevent command injection via the `.service <name>` command.
+ */
+function sanitizeServiceName(name: string): string | null {
+  // systemd unit names allow: a-z A-Z 0-9 - _ . @ \  (no spaces, no /, no $, no ;, etc.)
+  if (/^[a-zA-Z0-9_.@\\-]+$/.test(name)) {
+    return name;
+  }
+  return null;
+}
 
 // 状态翻译映射
 const STATUS_TRANSLATIONS: Record<string, string> = {
@@ -40,11 +54,11 @@ const WEEKDAY_MAP: Record<string, string> = {
 // 自动检测当前进程对应的systemd服务名称
 async function getCurrentServiceName(): Promise<string> {
   try {
-    const currentPid = process.pid;
+    const currentPid = String(process.pid);
     
     // 方法1：通过当前进程PID获取服务名称
     try {
-      const { stdout } = await execAsync(`ps -o unit= -p ${currentPid}`);
+      const { stdout } = await execFileAsync("ps", ["-o", "unit=", "-p", currentPid]);
       if (stdout && stdout.trim() && !stdout.trim().startsWith("-")) {
         const unitName = stdout.trim();
         if (unitName.endsWith(".service")) {
@@ -58,10 +72,10 @@ async function getCurrentServiceName(): Promise<string> {
     
     // 方法2：使用systemctl status PID
     try {
-      const { stdout } = await execAsync(`systemctl status ${currentPid} 2>/dev/null | head -n1`);
+      const { stdout } = await execFileAsync("systemctl", ["status", currentPid]);
       if (stdout) {
         // 提取服务名称，格式类似: ● service-name.service - Description
-        const match = stdout.match(/[●◯]\s*([^.\s]+)/);
+        const match = stdout.match(/[●◯]\s*([^.\\s]+)/);
         if (match) {
           return match[1];
         }
@@ -76,7 +90,7 @@ async function getCurrentServiceName(): Promise<string> {
       const commonNames = ["pagermaid", "pgm", "pagermaid-modify", "pgm-sg", "pgm-hk"];
       for (const name of commonNames) {
         try {
-          const { stdout } = await execAsync(`systemctl is-active ${name} 2>/dev/null`);
+          const { stdout } = await execFileAsync("systemctl", ["is-active", name]);
           if (stdout && stdout.includes("active")) {
             return name;
           }
@@ -215,8 +229,13 @@ async function handleServiceRequest(msg: Api.Message): Promise<void> {
     let isAutoDetected = false;
     
     if (args.length > 0) {
-      // 用户指定了服务名称
-      serviceName = args[0];
+      // 用户指定了服务名称 — validate to prevent shell injection
+      const validated = sanitizeServiceName(args[0]);
+      if (!validated) {
+        await msg.edit({ text: `❌ 服务名称包含非法字符，只允许字母、数字、-、_、.和@` });
+        return;
+      }
+      serviceName = validated;
     } else {
       // 自动检测当前服务名称
       await msg.edit({ text: "🔍 正在自动检测当前服务..." });
@@ -225,13 +244,21 @@ async function handleServiceRequest(msg: Api.Message): Promise<void> {
     }
     
     // 显示正在查询的提示
-    await msg.edit({ text: `🔍 正在检查 ${serviceName} 服务状态...` });
+    await msg.edit({ text: `🔍 正在检查 ${htmlEscape(serviceName)} 服务状态...` });
     
     try {
       // 获取完整的systemd状态信息，包括内存限制和告警阈值
-      const { stdout } = await execAsync(
-        `systemctl --no-pager status ${serviceName} | grep -E 'Active|PID|Tasks|Memory|CPU|limit|high|max|available' | grep -v 'grep'`
-      );
+      // Use execFile to avoid shell injection — serviceName is now validated,
+      // and we pass args as an array instead of string interpolation.
+      const { stdout: rawStatus } = await execFileAsync("systemctl", [
+        "--no-pager", "status", serviceName,
+      ]);
+      
+      // Filter lines locally instead of piping through shell
+      const stdout = rawStatus
+        .split("\n")
+        .filter(line => /Active|PID|Tasks|Memory|CPU|limit|high|max|available/i.test(line) && !line.includes("grep"))
+        .join("\n");
       
       if (stdout.includes("not be found") || stdout.includes("could not be found")) {
         await msg.edit({ text: `❌ 服务 '${serviceName}' 未找到。` });
