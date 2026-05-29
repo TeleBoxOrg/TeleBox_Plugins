@@ -1,6 +1,6 @@
 import { Plugin } from "@utils/pluginBase";
 import { Api } from "teleproto";
-import { exec, execSync, ChildProcess } from "child_process";
+import { execSync, execFile, ChildProcess, spawn } from "child_process";
 import { promisify } from "util";
 import * as path from "path";
 import * as fs from "fs";
@@ -73,7 +73,47 @@ async function fillRoundedCorners(
   return { output };
 }
 
-const execAsync = promisify(exec);
+const execFileAsync = promisify(execFile);
+
+/**
+ * Execute a remote or local speedtest command safely using spawn/execFile
+ * to prevent shell injection via user-supplied server config fields.
+ */
+async function runSpeedtestCommand(
+  command: string,
+  args: string[],
+  options: { timeout: number; env?: NodeJS.ProcessEnv },
+  label: string
+): Promise<{ stdout: string; stderr: string }> {
+  return new Promise<{ stdout: string; stderr: string }>((resolve, reject) => {
+    const child = spawn(command, args, {
+      timeout: options.timeout,
+      env: options.env,
+      killSignal: "SIGKILL" as const,
+      shell: false,
+    });
+    let stdout = "";
+    let stderr = "";
+    child.stdout?.on("data", (data: Buffer) => { stdout += data.toString(); });
+    child.stderr?.on("data", (data: Buffer) => { stderr += data.toString(); });
+    child.on("error", (err: Error) => { reject(err); });
+    child.on("close", (code: number | null) => {
+      if (code === 0) {
+        resolve({ stdout, stderr });
+      } else {
+        const err: any = new Error(`${label} exited with code ${code}: ${stderr || stdout}`);
+        err.stderr = stderr;
+        reject(err);
+      }
+    });
+    // Force-kill on timeout (spawn timeout only signals, doesn't kill by default)
+    const timer = setTimeout(() => {
+      child.kill("SIGKILL");
+      reject(new Error(`${label} timed out after ${options.timeout}ms`));
+    }, options.timeout);
+    child.on("close", () => { clearTimeout(timer); });
+  });
+}
 
 // --- Sanitize sensitive information from error messages ---
 function sanitizeErrorMessage(error: string, server?: ServerConfig): string {
@@ -153,7 +193,7 @@ async function installDependencies(msg: Api.Message): Promise<void> {
       require.resolve("better-sqlite3");
     } catch (e: any) {
       console.log("[INSTALLING] 'better-sqlite3' not found. Installing via npm...");
-      await execAsync("npm install better-sqlite3");
+      await execFileAsync("npm", ["install", "better-sqlite3"], { cwd: "/root/telebox" });
       console.log("[SUCCESS] Installed 'better-sqlite3'.");
     }
     try {
@@ -161,9 +201,11 @@ async function installDependencies(msg: Api.Message): Promise<void> {
     } catch (e: any) {
       console.log("[INSTALLING] 'sshpass' not found. Installing via system package manager...");
       if (fs.existsSync("/usr/bin/apt-get"))
-        await execAsync("sudo apt-get update && sudo apt-get install -y sshpass");
+        await execFileAsync("sudo", ["apt-get", "update"], { timeout: 120000 }).then(() =>
+          execFileAsync("sudo", ["apt-get", "install", "-y", "sshpass"], { timeout: 120000 })
+        );
       else if (fs.existsSync("/usr/bin/yum"))
-        await execAsync("sudo yum install -y sshpass");
+        await execFileAsync("sudo", ["yum", "install", "-y", "sshpass"], { timeout: 120000 });
       else throw new Error("Unsupported package manager.");
       console.log("[SUCCESS] Installed 'sshpass'.");
     }
@@ -246,8 +288,8 @@ async function downloadCli(): Promise<void> {
   const tempFile = path.join(ASSETS_DIR, filename);
   fs.writeFileSync(tempFile, response.data);
 
-  await execAsync(`tar -xzf "${tempFile}" -C "${ASSETS_DIR}"`);
-  await execAsync(`chmod +x "${SPEEDTEST_PATH}"`);
+  await execFileAsync("tar", ["-xzf", tempFile, "-C", ASSETS_DIR]);
+  await execFileAsync("chmod", ["+x", SPEEDTEST_PATH]);
   fs.unlinkSync(tempFile);
 
   ["speedtest.5", "speedtest.md"].forEach((file) => {
@@ -703,29 +745,44 @@ const speedtest = async (msg: Api.Message): Promise<void> => {
         });
 
         try {
-          const speedtestCmdBase = `--accept-license --accept-gdpr -f json`;
-          const remoteSpeedtestCmd = `speedtest ${speedtestCmdBase}`;
-          let finalCommand;
+          const speedtestArgs = ["--accept-license", "--accept-gdpr", "-f", "json"];
+          const remoteCmd = "speedtest";
+          const remoteArgs = [remoteCmd, ...speedtestArgs];
+          let command: string;
+          let args: string[];
+          let env: NodeJS.ProcessEnv | undefined;
 
           if (server.auth_method === "password") {
             const password = decrypt(server.credentials);
-            finalCommand = `sshpass -p '${password.replace(/'/g, "'\\''")}' ssh -p ${
-              server.port
-            } -o StrictHostKeyChecking=no -o ConnectTimeout=10 ${server.username}@${
-              server.host
-            } '${remoteSpeedtestCmd}'`;
+            // Pass password via sshpass -p argument — safe from shell injection
+            // because we use spawn() with shell:false and argument array
+            command = "sshpass";
+            args = [
+              "-p", password,
+              "ssh",
+              "-p", String(server.port),
+              "-o", "StrictHostKeyChecking=no",
+              "-o", "ConnectTimeout=10",
+              `${server.username}@${server.host}`,
+              ...remoteArgs,
+            ];
           } else {
-            finalCommand = `ssh -i ${server.credentials} -p ${server.port} -o StrictHostKeyChecking=no -o ConnectTimeout=10 ${server.username}@${server.host} '${remoteSpeedtestCmd}'`;
+            command = "ssh";
+            args = [
+              "-i", server.credentials,
+              "-p", String(server.port),
+              "-o", "StrictHostKeyChecking=no",
+              "-o", "ConnectTimeout=10",
+              `${server.username}@${server.host}`,
+              ...remoteArgs,
+            ];
           }
 
           const startTime = Date.now();
-          const { stdout } = await execAsync(
-            finalCommand,
-            {
-              timeout: DEFAULT_TIMEOUT,
-              killSignal: 'SIGKILL' // Force kill on timeout
-            }
-          );
+          const { stdout } = await runSpeedtestCommand(command, args, {
+            timeout: DEFAULT_TIMEOUT,
+            env,
+          }, `speedtest-${server.name}`);
           const endTime = Date.now();
           const duration = ((endTime - startTime) / 1000).toFixed(2);
           
@@ -846,20 +903,37 @@ const speedtest = async (msg: Api.Message): Promise<void> => {
     }
 
     try {
-      const speedtestCmdBase = `--accept-license --accept-gdpr -f json`;
-      let finalCommand;
+      const speedtestArgs = ["--accept-license", "--accept-gdpr", "-f", "json"];
+      let command: string;
+      let args: string[];
+      let env: NodeJS.ProcessEnv | undefined;
 
       if (isRemote && serverConfig) {
-        const remoteSpeedtestCmd = `speedtest ${speedtestCmdBase}`;
+        const remoteArgs = ["speedtest", ...speedtestArgs];
         if (serverConfig.auth_method === "password") {
           const password = decrypt(serverConfig.credentials);
-          finalCommand = `sshpass -p '${password.replace(/'/g, "'\\''")}' ssh -p ${
-            serverConfig.port
-          } -o StrictHostKeyChecking=no -o ConnectTimeout=10 ${serverConfig.username}@${
-            serverConfig.host
-          } '${remoteSpeedtestCmd}'`;
+          // Pass password via sshpass -p argument — safe from shell injection
+          // because we use spawn() with shell:false and argument array
+          command = "sshpass";
+          args = [
+            "-p", password,
+            "ssh",
+            "-p", String(serverConfig.port),
+            "-o", "StrictHostKeyChecking=no",
+            "-o", "ConnectTimeout=10",
+            `${serverConfig.username}@${serverConfig.host}`,
+            ...remoteArgs,
+          ];
         } else {
-          finalCommand = `ssh -i ${serverConfig.credentials} -p ${serverConfig.port} -o StrictHostKeyChecking=no -o ConnectTimeout=10 ${serverConfig.username}@${serverConfig.host} '${remoteSpeedtestCmd}'`;
+          command = "ssh";
+          args = [
+            "-i", serverConfig.credentials,
+            "-p", String(serverConfig.port),
+            "-o", "StrictHostKeyChecking=no",
+            "-o", "ConnectTimeout=10",
+            `${serverConfig.username}@${serverConfig.host}`,
+            ...remoteArgs,
+          ];
         }
       } else {
         if (!fs.existsSync(SPEEDTEST_PATH)) {
@@ -868,17 +942,16 @@ const speedtest = async (msg: Api.Message): Promise<void> => {
           else await msg.edit({ text: downloadingMsg, parseMode: "html" });
           await downloadCli();
         }
-        finalCommand = `"${SPEEDTEST_PATH}" ${speedtestCmdBase}`;
+        // Local speedtest — use execFile with argument array (no shell injection)
+        command = SPEEDTEST_PATH;
+        args = speedtestArgs;
       }
 
       const startTime = Date.now();
-      const { stdout } = await execAsync(
-        finalCommand,
-        {
-          timeout: DEFAULT_TIMEOUT,
-          killSignal: 'SIGKILL' // Force kill on timeout
-        }
-      );
+      const { stdout } = await runSpeedtestCommand(command, args, {
+        timeout: DEFAULT_TIMEOUT,
+        env,
+      }, isRemote ? "remote-speedtest" : "local-speedtest");
       const endTime = Date.now();
       const duration = ((endTime - startTime) / 1000).toFixed(2);
       
