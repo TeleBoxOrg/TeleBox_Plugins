@@ -628,7 +628,7 @@ class GroupManager {
   static async getManagedGroups(
     client: TelegramClient
   ): Promise<ManagedGroup[]> {
-    const cached = await this.cache.get("managed_groups_v2");
+    const cached = await this.cache.get("managed_groups_v3");
     if (cached) return cached;
 
     const groups: ManagedGroup[] = [];
@@ -648,8 +648,13 @@ class GroupManager {
             // 仅 channel 需要 accessHash，basic group 用裸 chatId
             const rawHash = isChannel ? dialog.entity?.accessHash : undefined;
             const accessHash = rawHash != null ? String(rawHash) : undefined;
+            // ⚠️ dialog.id 是 marked id（channel: -100xxxx，basic group: -xxx），
+            // 而 Api.InputChannel.channelId / Api.messages.DeleteChatUser.chatId 需要 raw 正数 id。
+            // 这里必须用 dialog.entity.id（Channel/Chat 实体上的原始正数 id），否则服务端会
+            // 直接 CHANNEL_INVALID / PEER_ID_INVALID，导致批量 sb 全部失败。
+            const rawId = Number(dialog.entity?.id ?? dialog.id);
             return {
-              id: Number(dialog.id),
+              id: rawId,
               title: dialog.title || "Unknown",
               kind: isChannel ? 'channel' as const : 'chat' as const,
               accessHash,
@@ -665,7 +670,7 @@ class GroupManager {
       }
       
       try {
-        await this.cache.set("managed_groups_v2", groups);
+        await this.cache.set("managed_groups_v3", groups);
       } catch (cacheError) {
         console.error(`[GroupManager] 缓存群组失败: ${cacheError}`);
       }
