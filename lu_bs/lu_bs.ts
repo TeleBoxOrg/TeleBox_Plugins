@@ -347,9 +347,9 @@ class LuBsPlugin extends Plugin {
     text += `• 总订阅数: <code>${totalSubscriptions}</code>\n\n`;
     
     if (isSubscribed) {
-      text += "💡 使用 <code>${mainPrefix}lu_bs unsub</code> 退订";
+      text += `💡 使用 <code>${mainPrefix}lu_bs unsub</code> 退订`;
     } else {
-      text += "💡 使用 <code>${mainPrefix}lu_bs sub</code> 订阅";
+      text += `💡 使用 <code>${mainPrefix}lu_bs sub</code> 订阅`;
     }
 
     await msg.edit({ text, parseMode: "html" });
