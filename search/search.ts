@@ -266,7 +266,7 @@ class SearchService {
   }
 
   private async handleDelete(msg: Api.Message, args: string) {
-    if (!args) throw new Error("用法: ${mainPrefix}so del &lt;频道链接|序号&gt; [...] 或 ${mainPrefix}so del all。");
+    if (!args) throw new Error(`用法: ${mainPrefix}so del &lt;频道链接|序号&gt; [...] 或 ${mainPrefix}so del all。`);
     if (args.toLowerCase().trim() === "all") {
         const count = this.config.channelList.length;
         this.config.channelList = [];
@@ -321,7 +321,7 @@ class SearchService {
   }
 
   private async handleDefault(msg: Api.Message, args: string) {
-    if (!args) throw new Error("用法: ${mainPrefix}so default &lt;频道链接&gt; 或 ${mainPrefix}so default d。");
+    if (!args) throw new Error(`用法: ${mainPrefix}so default &lt;频道链接&gt; 或 ${mainPrefix}so default d。`);
     if (args === "d") {
         this.config.defaultChannel = null;
         await this.saveConfig();
@@ -330,7 +330,7 @@ class SearchService {
     }
     const normalizedHandle = args.trim();
     if (!this.config.channelList.some((c) => c.handle === normalizedHandle)) {
-        throw new Error("请先使用 `${mainPrefix}so add` 添加此频道。");
+        throw new Error(`请先使用 \`${mainPrefix}so add\` 添加此频道。`);
     }
     this.config.defaultChannel = normalizedHandle;
     await this.saveConfig();
@@ -427,7 +427,7 @@ class SearchService {
     type: "kkp" | "search"
   ) {
     if (this.config.channelList.length === 0)
-      throw new Error("请至少使用 `${mainPrefix}so add` 添加一个搜索频道。");
+      throw new Error(`请至少使用 \`${mainPrefix}so add\` 添加一个搜索频道。`);
 
     const initialMessage = type === "kkp" ? "🎲 正在随机寻找视频..." : "🔍 正在搜索视频...";
     await msg.edit({ text: initialMessage });

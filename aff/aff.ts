@@ -151,10 +151,10 @@ class AffPlugin extends Plugin {
       await msg.edit({
         text: "❌ <b>无效的参数</b>\n\n" + 
               "💡 使用方法：\n" +
-              "• <code>${mainPrefix}aff</code> - 发送/列表\n" +
-              "• <code>${mainPrefix}aff &lt;序号&gt;</code> - 发送指定条目\n" +
-              "• <code>${mainPrefix}aff save</code> - 保存回复\n" +
-              "• <code>${mainPrefix}aff remove &lt;序号&gt;</code> - 删除条目",
+              `• <code>${mainPrefix}aff</code> - 发送/列表\n` +
+              `• <code>${mainPrefix}aff &lt;序号&gt;</code> - 发送指定条目\n` +
+              `• <code>${mainPrefix}aff save</code> - 保存回复\n` +
+              `• <code>${mainPrefix}aff remove &lt;序号&gt;</code> - 删除条目`,
         parseMode: "html"
       });
 
@@ -169,7 +169,7 @@ class AffPlugin extends Plugin {
     
     if (affs.length === 0) {
       await msg.edit({
-        text: "❌ <b>暂无Aff信息</b>\n\n💡 请回复一条消息使用 <code>${mainPrefix}aff save</code> 保存",
+        text: `❌ <b>暂无Aff信息</b>\n\n💡 请回复一条消息使用 <code>${mainPrefix}aff save</code> 保存`,
         parseMode: "html"
       });
       return;
@@ -231,7 +231,7 @@ class AffPlugin extends Plugin {
       listText += `<b>${idx + 1}.</b> ${preview}\n`;
     });
 
-    listText += "\n💡 使用 <code>${mainPrefix}aff &lt;序号&gt;</code> 发送指定条目";
+    listText += `\n💡 使用 <code>${mainPrefix}aff &lt;序号&gt;</code> 发送指定条目`;
 
     await msg.edit({
       text: listText,
@@ -278,7 +278,7 @@ class AffPlugin extends Plugin {
   private async handleRemove(msg: Api.Message, param?: string): Promise<void> {
     if (!param) {
       await msg.edit({
-        text: "❌ <b>请指定要删除的序号</b>\n💡 例如：<code>${mainPrefix}aff remove 1</code>",
+        text: `❌ <b>请指定要删除的序号</b>\n💡 例如：<code>${mainPrefix}aff remove 1</code>`,
         parseMode: "html"
       });
       return;

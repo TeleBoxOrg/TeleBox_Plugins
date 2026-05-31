@@ -359,7 +359,7 @@ class ConvertPlugin extends Plugin {
 
         if (useAi && userQuery) {
             const apiKey = GeminiConfigManager.get(GEMINI_API_KEY);
-            if (!apiKey) throw new Error("Gemini API Key 未设置。\n请使用 <code>${mainPrefix}convert apikey &lt;key&gt;</code> 命令设置。");
+            if (!apiKey) throw new Error(`Gemini API Key 未设置。\n请使用 <code>${mainPrefix}convert apikey &lt;key&gt;</code> 命令设置。`);
 
             await msg.edit({ text: "🤖 AI 正在识别歌曲信息...", parseMode: "html" });
             const gemini = new GeminiClient(apiKey);

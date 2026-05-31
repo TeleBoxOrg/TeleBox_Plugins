@@ -228,7 +228,7 @@ async function tts(msg: Api.Message) {
   const userData = await loadUserData();
   const cfg = userData.users[userId];
   if (!cfg || !cfg.apiKey) {
-    await msg.edit({ text: "❌ 请先设置 API Key (${mainPrefix}tk)" });
+    await msg.edit({ text: `❌ 请先设置 API Key (${mainPrefix}tk)` });
     return;
   }
 

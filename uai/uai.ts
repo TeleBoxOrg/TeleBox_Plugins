@@ -501,7 +501,7 @@ class UAIPlugin extends Plugin {
 
             // 检查 AI 配置
             if (!db.data.default_provider || !db.data.providers[db.data.default_provider]) {
-                await msg.edit({ text: "❌ 请先配置 AI 供应商\n\n使用: <code>${mainPrefix}uai add 名称 url key type</code>", parseMode: "html" });
+                await msg.edit({ text: `❌ 请先配置 AI 供应商\n\n使用: <code>${mainPrefix}uai add 名称 url key type</code>`, parseMode: "html" });
                 return;
             }
 

@@ -62,7 +62,7 @@ class ClearStickerPlugin extends Plugin {
         const countArg = parseInt(args[0]);
         if (isNaN(countArg) || countArg < 1) {
           await msg.edit({
-            text: "❌ 请输入有效的贴纸数量，例如：${mainPrefix}clear_sticker 100"
+            text: `❌ 请输入有效的贴纸数量，例如：${mainPrefix}clear_sticker 100`
           });
           return;
         }
