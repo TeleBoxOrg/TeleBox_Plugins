@@ -167,7 +167,9 @@ class ZhijiaoPlugin extends Plugin {
       await msg.edit({ text: buildProgressText(0), parseMode: "html" });
 
       for (let i = 0; i < tosses.length; i++) {
-        await sleep(1);
+        // teleproto sleep() takes milliseconds, not seconds — pace the toss
+        // reveal at ~800ms apiece so the animation actually plays.
+        await sleep(800);
         await msg.edit({
           text: buildProgressText(i + 1),
           parseMode: "html",
@@ -198,7 +200,7 @@ class ZhijiaoPlugin extends Plugin {
         // `<code>${escapedCombination}</code>`,
       ];
 
-      await sleep(0.6);
+      await sleep(600);
       await msg.edit({
         text: finalLines
           .map((line) => (line.length > 0 ? line : ""))
