@@ -285,6 +285,7 @@ class StickerToPicPlugin extends Plugin {
       } else {
         // 未知子命令，提示错误
         await msg.edit({
+          text: `❌ <b>未知子命令:</b> <code>${htmlEscape(sub)}</code>\n\n请使用 <code>${mainPrefix}stp help</code> 查看可用选项`,
           parseMode: "html"
         });
         return;
@@ -329,6 +330,7 @@ class StickerToPicPlugin extends Plugin {
        
       if (!targetMsg.media || !(targetMsg.media instanceof Api.MessageMediaDocument)) {
         await msg.edit({
+          text: "❌ <b>请回复一个贴纸消息</b>",
           parseMode: "html"
         });
         return;
