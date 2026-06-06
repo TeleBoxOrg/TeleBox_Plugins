@@ -656,7 +656,10 @@ function isStateCurrent(state: CaptchaState): boolean {
 }
 
 function clearCaptchaTimer(state: CaptchaState): void {
-  state.timer = null;
+  if (state.timer) {
+    clearTimeout(state.timer);
+    state.timer = null;
+  }
 }
 
 function removeCaptchaState(userId: number): CaptchaState | undefined {
@@ -1013,8 +1016,7 @@ async function handleReply(client: TelegramClient, userId: number, input: string
 
   if (!state.answer) {
     log(LogLevel.WARN, `handleReply: empty answer for user ${userId}`);
-    clearCaptchaTimer(state);
-    states.delete(userId);
+    removeCaptchaState(userId);
     await cleanupCaptchaMessages(client, userId, state);
     try { await client.sendMessage(userId, { message: "❌ 验证状态异常，请联系对方重置。", parseMode: "html" }); } catch {}
     return;
@@ -1029,8 +1031,7 @@ async function handleReply(client: TelegramClient, userId: number, input: string
     : inputNorm === answerNorm;
 
   if (correct) {
-    clearCaptchaTimer(state);
-    states.delete(userId);
+    removeCaptchaState(userId);
     await cleanupCaptchaMessages(client, userId, state);
     const name = await getDisplayName(client, userId).catch(() => String(userId));
     if (!isStateCurrent(state)) return;
@@ -1050,8 +1051,7 @@ async function handleReply(client: TelegramClient, userId: number, input: string
   const remaining = max > 0 ? max - state.tries : Infinity;
 
   if (max > 0 && state.tries >= max) {
-    clearCaptchaTimer(state);
-    states.delete(userId);
+    removeCaptchaState(userId);
     await cleanupCaptchaMessages(client, userId, state);
     const name = await getDisplayName(client, userId).catch(() => String(userId));
     if (!isStateCurrent(state)) return;
@@ -1102,6 +1102,10 @@ async function messageListener(message: Api.Message) {
           log(LogLevel.INFO, `Not auto-verifying official service ID ${targetId}`);
           return;
         }
+        if (states.has(targetId)) {
+          log(LogLevel.INFO, `Skip auto-verify ${targetId}: captcha pending`);
+          return;
+        }
         const alreadyVerified = cfg.verified().some(r => r.id === targetId);
         if (!alreadyVerified && !wl.has(targetId)) {
           const sender = (message as any).sender ?? (message as any)._sender;
@@ -1131,12 +1135,12 @@ async function messageListener(message: Api.Message) {
 
     if (wl.has(userId)) return;
 
-    if (cfg.verified().some(r => r.id === userId)) return;
-
     if (states.has(userId)) {
       await handleReply(client, userId, message.text || "", message.id);
       return;
     }
+
+    if (cfg.verified().some(r => r.id === userId)) return;
 
     await archiveChat(client, userId);
     await muteChat(client, userId);
