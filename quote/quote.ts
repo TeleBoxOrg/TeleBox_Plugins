@@ -5,7 +5,7 @@ import * as path from "path";
 import * as os from "os";
 import { createDirectoryInTemp } from "@utils/pathHelpers";
 import { npm_install } from "@utils/npm_install";
-import { execFile } from "child_process";
+const { execFile } = require("child_process");
 import { safeGetReplyMessage, safeGetMessages } from "@utils/safeGetMessages";
 import { getPrefixes } from "@utils/pluginManager";
 
@@ -17,23 +17,11 @@ const EMOJI_SUFFIXES = [
   "😀", "😃", "😄", "😁", "😆", "😅", "😂", "🤣", "😊", "😇", "🙂", "🙃", "😉", "😌", "😍", "🥰", "😘", "😗", "😙", "😚", "😋", "😛", "😝", "😜", "🤪", "🤨", "🧐", "🤓", "😎", "🤩", "🥳", "😏", "😒", "😞", "😔", "😟", "😕", "🙁", "☹️", "😣", "😖", "😫", "😩", "🥺", "😢", "😭", "😤", "😠", "😡", "🤬", "🤯", "😳", "🥵", "🥶", "😱", "😨", "😰", "😥", "😓", "🤗", "🤔", "🤭", "🤫", "🤥", "😶", "😐", "😑", "😬", "🙄", "😯", "😦", "😧", "😮", "😲", "🥱", "😴", "🤤", "😪", "😵", "🤐", "🥴", "🤢", "🤮", "🤧", "😷", "🤒", "🤕", "🤑", "🤠", "😈", "👿", "👹", "👺", "🤡", "💩", "👻", "💀", "☠️", "👽", "👾", "🤖", "🎃", "😺", "😸", "😹", "😻", "😼", "😽", "🙀", "😿", "😾"
 ];
 
-const MAX_CACHE_SIZE = 500;
 const customEmojiCache = new Map<string, Buffer | undefined>();
 const animatedCustomEmojiCache = new Map<string, Buffer | undefined>();
 const animatedFrameCache = new Map<string, AnimatedFrameSet>();
 const entityCache = new Map<string, any>();
 const avatarCache = new Map<string, Buffer | undefined>();
-
-function trimCache<K, V>(cache: Map<K, V>): void {
-  if (cache.size <= MAX_CACHE_SIZE) return;
-  const excess = cache.size - MAX_CACHE_SIZE;
-  let count = 0;
-  for (const key of Array.from(cache.keys())) {
-    if (count >= excess) break;
-    cache.delete(key);
-    count++;
-  }
-}
 const EMOJI_FETCH_CONCURRENCY = 8;
 const QUOTE_MESSAGE_CONCURRENCY = 8;
 const ANIMATED_FRAME_CONCURRENCY = 4;
@@ -365,13 +353,11 @@ async function getPeerEntity(client: any, peer: any): Promise<any | undefined> {
   try {
     const entity = await client.getEntity(peer);
     entityCache.set(key, entity);
-    trimCache(entityCache);
     return entity;
   } catch (_) {
     try {
       const entity = await client.getInputEntity(peer);
       entityCache.set(key, entity);
-      trimCache(entityCache);
       return entity;
     } catch (_) {
       entityCache.set(key, undefined);
@@ -388,13 +374,11 @@ async function senderEntity(msg: Api.Message): Promise<any | undefined> {
     const sender = await (msg as any).getSender?.();
     if (sender) {
       if (key) entityCache.set(key, sender);
-      trimCache(entityCache);
       return sender;
     }
   } catch (_) {}
   const entity = await getPeerEntity((msg as any).client, peer);
   if (key) entityCache.set(key, entity);
-  trimCache(entityCache);
   return entity;
 }
 
@@ -549,7 +533,6 @@ async function downloadEntityAvatar(client: any, entity: any): Promise<Buffer | 
   const [small, big] = await Promise.all([tryDownload(false), tryDownload(true)]);
   const normalized = small ? await normalizeAvatarBuffer(small) : big ? await normalizeAvatarBuffer(big) : undefined;
   if (key) avatarCache.set(key, normalized);
-  trimCache(avatarCache);
   return normalized;
 }
 
@@ -1012,7 +995,6 @@ async function generateAnimatedQuoteWebm(quoteMessages: any[], args: QuoteArgs):
     quoteTiming("animated.extract_source", tx, { kind: source.kind, key: String(source.key), frames: frames.length, size: source.size, rawKind: bufferKind(source.raw), rawBytes: source.raw.length });
     const frameSet: AnimatedFrameSet = { frames, fps, duration: source.info.duration, cacheKey };
     if (source.kind === "emoji" && frames.length) animatedFrameCache.set(cacheKey, frameSet);
-    trimCache(animatedFrameCache);
     return { source, frameSet };
   });
   quoteTiming("animated.extract_all", textract, { sources: sources.length, frameCount });
@@ -1110,10 +1092,8 @@ async function hydrateCustomEmojiBuffers(client: any, messages: any[]): Promise<
     let rawBuffer = await downloadCustomEmojiAnimatedPreferred(client, doc);
     const wasAnimated = looksLikeAnimatedEmoji(rawBuffer);
     if (isAnimatedRasterBuffer(rawBuffer)) animatedCustomEmojiCache.set(id, rawBuffer);
-    trimCache(animatedCustomEmojiCache);
     const buffer = await normalizeCustomEmojiBuffer(rawBuffer);
     customEmojiCache.set(id, buffer);
-    trimCache(customEmojiCache);
     console.warn("quote custom emoji loaded", id, buffer ? buffer.length : 0, wasAnimated ? "animated-converted" : "static", "source", isGifBuffer(rawBuffer) ? "gif" : isWebmBuffer(rawBuffer) ? "webm" : "other", "mime", doc.mimeType || doc.mime_type || "", "thumbs", doc.thumbs?.length || 0, "videoThumbs", doc.videoThumbs?.length || doc.video_thumbs?.length || 0);
   });
   const loadedDocIds = new Set(docs.map((doc: any) => String(doc.id ?? doc.documentId ?? doc.document_id ?? "")).filter(Boolean));
@@ -1301,14 +1281,6 @@ export class QuotePlugin {
     q: async (msg: Api.Message) => this.handleQuote(msg, "q"),
     quote: async (msg: Api.Message) => this.handleQuote(msg, "quote"),
   };
-
-  cleanup(): void {
-    customEmojiCache.clear();
-    animatedCustomEmojiCache.clear();
-    animatedFrameCache.clear();
-    entityCache.clear();
-    avatarCache.clear();
-  }
 
   private async handleQuote(msg: Api.Message, command: "q" | "quote") {
       const rawText = ((msg as any).message || (msg as any).text || "") as string;

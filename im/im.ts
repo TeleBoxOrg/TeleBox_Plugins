@@ -1,8 +1,9 @@
 import { getPrefixes } from "@utils/pluginManager";
+import { Plugin } from "@utils/pluginBase";
 import { getGlobalClient } from "@utils/globalClient";
 import { createDirectoryInAssets } from "@utils/pathHelpers";
 import { banUser } from "@utils/banUtils";
-import { Api, TelegramClient } from "telegram";
+import { Api, TelegramClient } from "teleproto";
 // 使用简化的事件类型定义
 interface NewMessageEvent {
   message: Api.Message;
@@ -582,7 +583,6 @@ class ImageMonitorPlugin extends Plugin {
         console.error(`[${PLUGIN_NAME}] Failed to process media in message ${msg.id}:`, error);
     }
   }
-}
 
   cleanup(): void {
     for (const timer of pendingTimers) {
