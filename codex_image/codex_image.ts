@@ -48,6 +48,9 @@ const htmlEscape = (input: string): string =>
       })[ch] || ch,
   );
 
+const expandableBlock = (input: string): string =>
+  `<blockquote expandable>${htmlEscape(input)}</blockquote>`;
+
 async function getDb(): Promise<Low<CodexImageConfig>> {
   if (!dbPromise) {
     dbPromise = JSONFilePreset<CodexImageConfig>(configPath, {
@@ -452,10 +455,10 @@ async function handleCximg(msg: Api.Message): Promise<void> {
     imageBuffer,
   );
   const caption = [
-    `<b>提示词:</b> ${htmlEscape(prompt)}`,
+    `<b>提示词:</b>\n${expandableBlock(prompt)}`,
     `<b>耗时:</b> ${htmlEscape(elapsed)}`,
     result.revisedPrompt
-      ? `<b>修订提示词:</b> ${htmlEscape(result.revisedPrompt)}`
+      ? `<b>修订提示词:</b>\n${expandableBlock(result.revisedPrompt)}`
       : "",
   ]
     .filter(Boolean)
