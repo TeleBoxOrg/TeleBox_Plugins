@@ -127,8 +127,8 @@ class AutoDeleteService {
       { command: "tpm", delay: 120, parameters: ["s", "search", "ls", "i", "install"] },
       
       // 120秒删除的命令
-      { command: "h", delay: 120 },
-      { command: "help", delay: 120 },
+      { command: "h", delay: 120, deleteResponse: true },
+      { command: "help", delay: 120, deleteResponse: true },
       { command: "dc", delay: 120 },
       { command: "ip", delay: 120 },
       { command: "ping", delay: 120 },
@@ -451,14 +451,20 @@ class AutoDeleteService {
           const msgChatId = this.getChatId(msg);
           const isInSavedMessages = cachedUserId && msgChatId?.toString() === cachedUserId;
           
+          let deletedCount = 0;
+          const MAX_RESPONSE_MESSAGES = 3; // 最多删除3条响应消息
+          
           for (const message of messages) {
             // 跳过命令消息本身
             if (message.id === msg.id) continue;
             
+            // 达到删除上限，停止查找
+            if (deletedCount >= MAX_RESPONSE_MESSAGES) break;
+            
             let shouldDelete = false;
             
             if (isInSavedMessages) {
-              // 在 Saved Messages 中，查找消息ID小于命令消息ID的最近消息作为响应
+              // 在 Saved Messages 中，查找消息ID大于命令消息ID的最近消息作为响应
               // 因为响应通常在命令之后发送，ID会更大，但获取的消息列表是按时间倒序的
               if (message.id > msg.id) {
                 shouldDelete = true;
@@ -471,11 +477,13 @@ class AutoDeleteService {
             }
             
             if (shouldDelete) {
-              console.log(`[autodelcmd] 找到响应消息 ID ${message.id}，将一同删除`);
+              console.log(`[autodelcmd] 找到响应消息 ID ${message.id}，将一同删除 (${deletedCount + 1}/${MAX_RESPONSE_MESSAGES})`);
               await this.delayDelete(message, matchedRule.delay);
-              break;
+              deletedCount++;
             }
           }
+          
+          console.log(`[autodelcmd] 共找到 ${deletedCount} 条响应消息`);
           
           // 删除命令消息本身
           await this.delayDelete(msg, matchedRule.delay);
