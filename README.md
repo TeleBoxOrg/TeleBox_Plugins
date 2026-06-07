@@ -32,6 +32,7 @@ tpm i <插件名>
 - `bs` - 保送  
 - `bulk_delete` - 批量删除消息  
 - `calc` - 计算器  
+- `checkin` - 自动签到插件  
 - `clean` - 账号清理工具 Pro  
 - `clean_member` - 群组成员清理  
 - `clear_sticker` - 批量删除群组内贴纸  
@@ -40,6 +41,7 @@ tpm i <插件名>
 - `copy_sticker_set` - 复制贴纸包  
 - `cosplay` - 获取随机cos写真  
 - `crazy4` - 疯狂星期四文案  
+- `cy` - 词云  
 - `da` - 删除群内所有消息  
 - `dbdj` - 点兵点将 - 从最近的消息中随机抽取指定人数的用户  
 - `dc` - 获取实体DC  
@@ -61,6 +63,7 @@ tpm i <插件名>
 - `hitokoto` - 获取随机一言  
 - `httpcat` - 发送一张http状态码主题的猫猫图片  
 - `ids` - 用户信息显示以及跳转链接  
+- `im` - 图片监控插件  
 - `ip` - IP 地址查询  
 - `isalive` - 活了么  
 - `javdb` - 寻找番号封面  
@@ -78,6 +81,7 @@ tpm i <插件名>
 - `moyu` - 摸鱼日报  
 - `music` - YouTube音乐  
 - `music_bot` - 多音源音乐搜索  
+- `music_hub` - 多音源音乐搜索下载插件  
 - `netease` - 网易云音乐  
 - `news` - 每日新闻  
 - `nezha` - 哪吒监控  
@@ -99,6 +103,7 @@ tpm i <插件名>
 - `rev` - 反转你的消息  
 - `save` - 本地保存插件  
 - `search` - 频道消息搜索  
+- `sendat` - 定时消息发送插件  
 - `service` - systemd服务状态查看  
 - `shift` - 智能消息转发系统  
 - `soutu` - soutu搜图  
