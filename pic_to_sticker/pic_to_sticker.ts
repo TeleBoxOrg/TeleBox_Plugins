@@ -397,6 +397,7 @@ class PicToStickerPlugin extends Plugin {
       // 检查是否有图片
       if (!targetMsg.media || !(targetMsg.media instanceof Api.MessageMediaPhoto)) {
         await msg.edit({
+          text: `❌ <b>请回复包含图片的消息</b>\n\n使用方法：\n1. 回复包含图片的消息\n2. 发送 <code>${mainPrefix}pts</code> 或 <code>${mainPrefix}pts [表情]</code>`,
           parseMode: "html"
         });
         return;
