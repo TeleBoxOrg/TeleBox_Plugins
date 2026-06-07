@@ -91,6 +91,10 @@
     "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/calc/calc.ts?raw=true",
     "desc": "计算器"
   },
+  "checkin": {
+    "url": "https://github.com/TeleBoxOrg/TeleBox_Plugins/blob/main/checkin/checkin.ts?raw=true",
+    "desc": "自动签到插件"
+  },
   "clean": {
     "url": "https://github.com/TeleBoxOrg/TeleBox_Plugins/blob/main/clean/clean.ts?raw=true",
     "desc": "账号清理工具 Pro"
@@ -103,6 +107,10 @@
     "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/clear_sticker/clear_sticker.ts?raw=true",
     "desc": "批量删除群组内贴纸"
   },
+  "codex_image": {
+    "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/codex_image/codex_image.ts?raw=true",
+    "desc": "通过codex调用gpt-image-2"
+  },
   "convert": {
     "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/convert/convert.ts?raw=true",
     "desc": "视频转音频"
@@ -111,10 +119,6 @@
     "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/copy_sticker_set/copy_sticker_set.ts?raw=true",
     "desc": "复制贴纸包"
   },
-  "codex_image": {
-    "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/codex_image/codex_image.ts?raw=true",
-    "desc": "通过codex调用gpt-image-2"
-  },
   "cosplay": {
     "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/cosplay/cosplay.ts?raw=true",
     "desc": "获取随机cos写真"
@@ -122,6 +126,10 @@
   "crazy4": {
     "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/crazy4/crazy4.ts?raw=true",
     "desc": "疯狂星期四文案"
+  },
+  "cy": {
+    "url": "https://github.com/TeleBoxOrg/TeleBox_Plugins/blob/main/cy/cy.ts?raw=true",
+    "desc": "词云"
   },
   "da": {
     "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/da/da.ts?raw=true",
@@ -207,6 +215,10 @@
     "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/ids/ids.ts?raw=true",
     "desc": "用户信息显示以及跳转链接"
   },
+  "im": {
+    "url": "https://github.com/TeleBoxOrg/TeleBox_Plugins/blob/main/im/im.ts?raw=true",
+    "desc": "图片监控插件"
+  },
   "ip": {
     "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/ip/ip.ts?raw=true",
     "desc": "IP 地址查询"
@@ -275,6 +287,10 @@
     "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/music_bot/music_bot.ts?raw=true",
     "desc": "多音源音乐搜索"
   },
+  "music_hub": {
+    "url": "https://github.com/TeleBoxOrg/TeleBox_Plugins/blob/main/music_hub/music_hub.ts?raw=true",
+    "desc": "多音源音乐搜索下载插件"
+  },
   "netease": {
     "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/netease/netease.ts?raw=true",
     "desc": "网易云音乐"
@@ -335,6 +351,10 @@
     "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/qr/qr.ts?raw=true",
     "desc": "QR 二维码"
   },
+  "quote": {
+    "url": "https://github.com/yfishyon/TeleBox_Plugins/blob/main/quote/quote.ts?raw=true",
+    "desc": "引用贴纸生成 (本地版)"
+  },
   "rate": {
     "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/rate/rate.ts?raw=true",
     "desc": "货币实时汇率查询与计算"
@@ -354,6 +374,10 @@
   "search": {
     "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/search/search.ts?raw=true",
     "desc": "频道消息搜索"
+  },
+  "sendat": {
+    "url": "https://github.com/TeleBoxOrg/TeleBox_Plugins/blob/main/sendat/sendat.ts?raw=true",
+    "desc": "定时消息发送插件"
   },
   "service": {
     "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/service/service.ts?raw=true",
@@ -458,9 +482,5 @@
   "zpr": {
     "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/zpr/zpr.ts?raw=true",
     "desc": "二次元图片"
-  },
-  "quote": {
-    "url": "https://github.com/yfishyon/TeleBox_Plugins/blob/main/quote/quote.ts?raw=true",
-    "desc": "引用贴纸生成 (本地版)"
   }
 }
