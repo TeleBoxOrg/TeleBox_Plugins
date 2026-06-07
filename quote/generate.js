@@ -46,6 +46,59 @@ async function getPatternImage() {
   return cachedPatternImage;
 }
 
+// quote.ts attaches the sender/reply/forward avatar as a raw Buffer in
+// `message.avatarBuffer` (downloaded via client.downloadProfilePhoto and
+// normalized to PNG). The vendor renderer, however, only consumes a pre-built
+// `message.avatarCanvas` (or falls back to drawAvatar(from, telegram), which
+// needs from.photo.url/big_file_id or a telegram client — none of which quote.ts
+// provides; from.photo is always {}). So without this bridge the avatar buffer
+// is silently dropped and no avatar is drawn. Convert the buffer into a canvas
+// here, matching how quote.ts already pre-builds mediaCanvas.
+async function avatarBufferToCanvas(buffer) {
+  if (!buffer || !buffer.length) return undefined;
+  try {
+    const img = await loadImage(buffer);
+    // The composer draws the avatar canvas as-is (no clipping), so it must be
+    // pre-clipped to a circle here — mirroring the vendor's drawAvatar(), which
+    // returns a circular canvas. Without this the avatar renders as a square.
+    const size = img.naturalHeight || img.height || img.width;
+    const canvas = createCanvas(size, size);
+    const ctx = canvas.getContext("2d");
+    ctx.clearRect(0, 0, size, size);
+    ctx.beginPath();
+    ctx.arc(size / 2, size / 2, size / 2, 0, Math.PI * 2, true);
+    ctx.save();
+    ctx.clip();
+    ctx.closePath();
+    ctx.drawImage(img, 0, 0, size, size);
+    ctx.restore();
+    return canvas;
+  } catch (error) {
+    console.warn("quote generate: avatar buffer -> canvas failed", error && error.message);
+    return undefined;
+  }
+}
+
+// Bridge avatarBuffer -> avatarCanvas for a message and its reply, if the
+// vendor-consumed canvas isn't already set.
+async function bridgeAvatar(message) {
+  if (!message) return;
+  if (!message.avatarCanvas && message.avatarBuffer) {
+    const canvas = await avatarBufferToCanvas(message.avatarBuffer);
+    if (canvas) {
+      message.avatarCanvas = canvas;
+      message.avatar = true;
+    }
+  }
+  if (message.replyMessage && !message.replyMessage.avatarCanvas && message.replyMessage.avatarBuffer) {
+    const replyCanvas = await avatarBufferToCanvas(message.replyMessage.avatarBuffer);
+    if (replyCanvas) {
+      message.replyMessage.avatarCanvas = replyCanvas;
+      message.replyMessage.avatar = true;
+    }
+  }
+}
+
 const imageAlpha = (image, alpha) => {
   const canvas = createCanvas(image.width, image.height);
   const canvasCtx = canvas.getContext("2d");
@@ -121,11 +174,13 @@ async function generateQuote(parm) {
 
   const background = parseBackgroundColor(parm.backgroundColor);
 
-  // Normalize all messages first (sync, no I/O)
+  // Normalize all messages first (sync), then bridge avatar buffers into the
+  // avatarCanvas the vendor renderer expects (async — loads the image buffer).
   const validMessages = parm.messages.filter(Boolean);
   for (const message of validMessages) {
     normalizeMessage(message);
   }
+  await Promise.all(validMessages.map((message) => bridgeAvatar(message)));
 
   // Generate quotes with concurrency limit to avoid Telegram API rate limits
   const CONCURRENCY = 3;
