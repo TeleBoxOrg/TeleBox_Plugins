@@ -194,6 +194,39 @@ function quoteTiming(label: string, start: number, extra?: Record<string, any>):
   console.warn("quote timing", label, `${quoteMs(start)}ms`, extra || "");
 }
 
+// Timeout budgets (ms) for MTProto RPCs inside the quote pipeline. Telegram RPCs
+// have NO inherent timeout: when the MTProto connection drops/reconnects (which
+// happens regularly), an in-flight RPC promise neither resolves nor rejects — it
+// sits in the pending-resend queue forever. A bare `.catch()` cannot rescue an
+// unsettled promise, so the whole command hangs silently with no error and the
+// bot appears unresponsive. We race every RPC against a timer so a stuck call
+// rejects, hits the handler's try/catch, and surfaces an error to the user.
+const QUOTE_RPC_TIMEOUT_MS = 20000; // per individual RPC (getMessages / edit / reply / delete)
+const QUOTE_TOTAL_TIMEOUT_MS = 90000; // hard ceiling for the entire command
+
+class QuoteTimeoutError extends Error {
+  constructor(label: string, ms: number) {
+    super(`quote operation "${label}" timed out after ${ms}ms (likely a stalled Telegram RPC during a connection drop)`);
+    this.name = "QuoteTimeoutError";
+  }
+}
+
+/**
+ * Race a promise against a timeout. On timeout the returned promise REJECTS with
+ * QuoteTimeoutError (so the caller's try/catch can report it) and the timer is
+ * always cleared to avoid leaks. The underlying RPC is abandoned, not cancelled —
+ * gramjs has no cancel — but it no longer blocks the command from completing.
+ */
+function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
+  let timer: NodeJS.Timeout;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new QuoteTimeoutError(label, ms)), ms);
+    // Don't keep the event loop alive solely for this timer.
+    if (typeof timer.unref === "function") timer.unref();
+  });
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer)) as Promise<T>;
+}
+
 type QuoteArgs = {
   count: number;
   reply: boolean;
@@ -1228,7 +1261,7 @@ async function toQuoteMessage(msg: Api.Message, args: QuoteArgs): Promise<any> {
 }
 
 async function collectMessages(msg: Api.Message, args: QuoteArgs): Promise<Api.Message[]> {
-  const reply = await safeGetReplyMessage(msg).catch(() => undefined);
+  const reply = await withTimeout(safeGetReplyMessage(msg), QUOTE_RPC_TIMEOUT_MS, "collectMessages.getReply").catch(() => undefined);
   const count = args.count || 1;
 
   const peer = (msg as any).inputChat ?? (msg as any).peerId ?? (msg as any).chatId;
@@ -1242,7 +1275,7 @@ async function collectMessages(msg: Api.Message, args: QuoteArgs): Promise<Api.M
     const params = count > 0
       ? { offsetId: baseId - 1, limit, reverse: true }
       : { offsetId: baseId + 1, limit };
-    const messages = await safeGetMessages(client, peer, params).catch(() => []);
+    const messages = await withTimeout(safeGetMessages(client, peer, params), QUOTE_RPC_TIMEOUT_MS, "collectMessages.getMessages.reply").catch(() => []);
     const result = (Array.isArray(messages) ? messages : []).filter(isApiMessage).sort((a: any, b: any) => a.id - b.id) as Api.Message[];
     console.warn("quote collect messages", { reply: true, count, baseId, params, got: result.map((m: any) => m.id) });
     return result.length ? result : [reply];
@@ -1254,7 +1287,7 @@ async function collectMessages(msg: Api.Message, args: QuoteArgs): Promise<Api.M
   const params = count > 0
     ? { offsetId: commandId, limit }
     : { offsetId: commandId + 1, limit };
-  const messages = await safeGetMessages(client, peer, params).catch(() => []);
+  const messages = await withTimeout(safeGetMessages(client, peer, params), QUOTE_RPC_TIMEOUT_MS, "collectMessages.getMessages.command").catch(() => []);
   const result = (Array.isArray(messages) ? messages : []).filter(isApiMessage).sort((a: any, b: any) => a.id - b.id) as Api.Message[];
   console.warn("quote collect messages", { reply: false, count, commandId, params, got: result.map((m: any) => m.id) });
   return result.length ? result : [msg];
@@ -1265,7 +1298,7 @@ function hasExplicitCount(argsText: string): boolean {
 }
 
 async function quoteStickerReplyTargetId(commandMsg: Api.Message, quoteMessages: Api.Message[], argsText: string): Promise<any> {
-  const replied = await safeGetReplyMessage(commandMsg).catch(() => undefined);
+  const replied = await withTimeout(safeGetReplyMessage(commandMsg), QUOTE_RPC_TIMEOUT_MS, "quoteStickerReplyTargetId.getReply").catch(() => undefined);
   if (replied && (replied as any).id) return (replied as any).id;
 
   // Direct `.q <number>` quotes surrounding messages, so there is no single referenced message.
@@ -1277,10 +1310,12 @@ async function quoteStickerReplyTargetId(commandMsg: Api.Message, quoteMessages:
 
 async function editProgress(msg: Api.Message, text: string): Promise<void> {
   try {
-    if (typeof (msg as any).edit === "function") await (msg as any).edit({ text });
-    else await (msg as any).client?.editMessage?.((msg as any).chatId ?? (msg as any).peerId, { message: msg.id, text });
+    if (typeof (msg as any).edit === "function") await withTimeout((msg as any).edit({ text }), QUOTE_RPC_TIMEOUT_MS, "editProgress.edit");
+    else await withTimeout((msg as any).client?.editMessage?.((msg as any).chatId ?? (msg as any).peerId, { message: msg.id, text }), QUOTE_RPC_TIMEOUT_MS, "editProgress.editMessage");
   } catch (_) {
-    try { await msg.reply({ message: text } as any); } catch (_) {}
+    // Progress text is best-effort. If editing stalls (e.g. connection drop) or
+    // fails, fall back to a reply but never let it block / hang the command.
+    try { await withTimeout(msg.reply({ message: text } as any), QUOTE_RPC_TIMEOUT_MS, "editProgress.reply"); } catch (_) {}
   }
 }
 
@@ -1300,6 +1335,11 @@ export class QuotePlugin {
       await editProgress(msg, quoteResourcesReady() ? "⏳ 正在生成 quote…" : "⏳ 首次使用，正在初始化 quote 资源…");
 
       try {
+        // Hard ceiling on the entire pipeline. Even if some future await inside
+        // here lacks its own timeout (vendor render, on-demand npm install, an
+        // RPC we forgot to wrap), this guarantees the command cannot hang forever:
+        // it rejects after QUOTE_TOTAL_TIMEOUT_MS and the catch below reports it.
+        await withTimeout((async () => {
         const tCollect = Date.now();
         const messages = await collectMessages(msg, args);
         quoteTiming("main.collect_messages", tCollect, { count: messages.length, ids: messages.map((m: any) => m.id) });
@@ -1353,15 +1393,16 @@ export class QuotePlugin {
           sendOptions.attributes = [];
         }
         const tSend = Date.now();
-        await msg.reply(sendOptions as any);
+        await withTimeout(msg.reply(sendOptions as any), QUOTE_RPC_TIMEOUT_MS, "main.send_reply");
         quoteTiming("main.send_reply", tSend, { ext: result.ext, bytes: result.image?.length || 0 });
         try {
-          await (msg as any).delete?.();
+          await withTimeout((msg as any).delete?.(), QUOTE_RPC_TIMEOUT_MS, "main.delete_source");
           console.warn("quote command source deleted", { id: (msg as any).id });
         } catch (deleteErr: any) {
           console.warn("quote command source delete failed", deleteErr?.message || deleteErr);
         }
         console.warn("quote command finished", { ms: Date.now() - quoteStartedAt, bytes: result.image?.length, ext: result.ext, replyTo: replyTargetId });
+        })(), QUOTE_TOTAL_TIMEOUT_MS, "handleQuote.pipeline");
       } catch (err: any) {
         console.error("quote command failed", err?.stack || err?.message || err);
         await editProgress(msg, `❌ quote 失败：${err?.message || err}`);
