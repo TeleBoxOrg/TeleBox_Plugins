@@ -31,12 +31,16 @@ const TG_STICKER_MAX_FRAMES = 100;
 const TG_STICKER_MAX_BYTES = 512 * 1024;
 const WEBM_CRF_STEPS = [38, 44, 50, 56];
 
-const QUOTE_PLUGIN_VERSION = "1.00";
+const QUOTE_PLUGIN_VERSION = "1.01";
 const QUOTE_BASE_URL = "https://raw.githubusercontent.com/TeleBoxOrg/TeleBox_Plugins/main/quote";
 const QUOTE_ASSETS_BASE_URL = "https://raw.githubusercontent.com/LyoSU/quote-api/master/assets";
 const QUOTE_VENDOR_DIR = path.join(quotePluginDir(), "quote", "vendor");
 const QUOTE_ASSETS_DIR = path.join(process.cwd(), "assets", "quote");
+// npm packages required by vendor/ at module load that are NOT in the host
+// package.json. Installed on demand in getQuoteGen() before requiring generate.js.
+const QUOTE_VENDOR_NPM_DEPS = ["telegraf", "lru-cache", "runes", "jimp", "smartcrop-sharp", "emoji-db"];
 const QUOTE_DEP_FILES = [
+  "generate.js",
   "vendor/emoji-db.js",
   "vendor/emoji-image.js",
   "vendor/image-load-path.js",
@@ -171,6 +175,11 @@ async function getQuoteGen(): Promise<any> {
       await ensureQuoteAssets();
       requireOrInstall("canvas");
       requireOrInstall("sharp");
+      // vendor/ pulls these in at module load (quote-generate/index.js requires
+      // telegraf; avatar.js requires lru-cache + runes; media.js requires jimp +
+      // smartcrop-sharp; emoji-db.js requires emoji-db). They are not declared in
+      // the host package.json, so install on demand or generate.js fails to load.
+      for (const dep of QUOTE_VENDOR_NPM_DEPS) requireOrInstall(dep);
       return require("./quote/generate");
     })();
   }
