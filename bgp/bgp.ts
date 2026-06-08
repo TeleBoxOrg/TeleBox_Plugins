@@ -483,7 +483,7 @@ class BGPPlugin extends Plugin {
         },
     };
 
-
+    cleanup(): void {}
 }
 
 export default new BGPPlugin();
