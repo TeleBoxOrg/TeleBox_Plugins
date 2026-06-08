@@ -352,7 +352,7 @@
     "desc": "QR 二维码"
   },
   "quote": {
-    "url": "https://github.com/yfishyon/TeleBox_Plugins/blob/main/quote/quote.ts?raw=true",
+    "url": "https://github.com/TeleBoxOrg/TeleBox_Plugins/blob/main/quote/quote.ts?raw=true",
     "desc": "引用贴纸生成 (本地版)"
   },
   "rate": {
