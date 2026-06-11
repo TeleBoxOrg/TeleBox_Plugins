@@ -42,8 +42,15 @@ class AutoDelPlugin extends Plugin {
   private settings: Map<string, number> = new Map();
   private lifecycle: GenerationContext | null = null;
 
-  setup(context: { lifecycle: GenerationContext }): void {
+  async setup(context: { lifecycle: GenerationContext }): Promise<void> {
     this.lifecycle = context.lifecycle;
+    // Singleton plugin: the constructor's initDatabase() only runs once, but
+    // cleanup() nulls this.db and clears this.settings on every reload. Without
+    // re-initializing here, autodel silently stops working after .reload (db is
+    // null, settings empty) until a full process restart. Re-init on every load.
+    if (!this.db) {
+      await this.initDatabase();
+    }
   }
   
   cmdHandlers: Record<string, (msg: Api.Message) => Promise<void>> = {
