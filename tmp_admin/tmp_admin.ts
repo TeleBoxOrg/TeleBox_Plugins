@@ -61,6 +61,7 @@ type TempAdminJob = {
   userEntity: any;
   userId: number;
   userDisplay: string;
+  originalRank: string;
   replyToMsgId?: number;
   expiresAt: number;
   retryCount: number;
@@ -84,6 +85,7 @@ type StoredJob = {
   user: StoredUser;
   userId: number;
   userDisplay: string;
+  originalRank?: string;
   replyToMsgId?: number;
   expiresAt: number;
   retryCount?: number;
@@ -299,6 +301,11 @@ function isTemporaryAdminParticipant(participant?: any): boolean {
   );
 }
 
+function getParticipantRank(participant?: any): string {
+  const rank = (participant as any)?.rank;
+  return typeof rank === "string" ? rank : "";
+}
+
 async function formatEntity(target: any, mention?: boolean, throwErrorIfFailed?: boolean) {
   const client = await getGlobalClient();
   if (!client) throw new Error("Telegram 客户端未初始化");
@@ -507,6 +514,11 @@ class TmpAdminPlugin extends Plugin {
       return;
     }
 
+    const existingJob = this.jobs.get(key);
+    const originalRank =
+      existingJob?.originalRank ??
+      (isTemporaryAdminParticipant(participant) ? "" : getParticipantRank(participant));
+
     try {
       await client.invoke(
         new Api.channels.EditAdmin({
@@ -526,6 +538,7 @@ class TmpAdminPlugin extends Plugin {
         userEntity,
         userId,
         userDisplay: user.display,
+        originalRank,
         replyToMsgId: getReplyToMsgId(msg, trigger),
         expiresAt,
         retryCount: 0,
@@ -625,7 +638,7 @@ class TmpAdminPlugin extends Plugin {
       const client = await getGlobalClient();
       if (!client) throw new Error("Telegram 客户端未初始化");
 
-      await this.demoteAdmin(client, channel, userEntity);
+      await this.demoteAdmin(client, channel, userEntity, job?.originalRank);
 
       this.clearLocalJob(key);
       await this.deleteStoredJob(key);
@@ -676,7 +689,7 @@ class TmpAdminPlugin extends Plugin {
         }
 
         try {
-          await this.demoteAdmin(job.client, job.channel, job.userEntity);
+          await this.demoteAdmin(job.client, job.channel, job.userEntity, job.originalRank);
         } catch (e) {
           scheduleRetry(e);
           return;
@@ -757,6 +770,7 @@ class TmpAdminPlugin extends Plugin {
       user: serializeUser(job.userEntity),
       userId: job.userId,
       userDisplay: job.userDisplay,
+      originalRank: job.originalRank,
       replyToMsgId: job.replyToMsgId,
       expiresAt: job.expiresAt,
       retryCount: job.retryCount,
@@ -810,6 +824,7 @@ class TmpAdminPlugin extends Plugin {
           userEntity,
           userId: stored.userId,
           userDisplay: stored.userDisplay,
+          originalRank: stored.originalRank || "",
           replyToMsgId: stored.replyToMsgId,
           expiresAt: stored.expiresAt,
           retryCount: stored.retryCount || 0,
@@ -827,13 +842,13 @@ class TmpAdminPlugin extends Plugin {
     }
   }
 
-  private async demoteAdmin(client: any, channel: any, userEntity: any): Promise<void> {
+  private async demoteAdmin(client: any, channel: any, userEntity: any, originalRank?: string): Promise<void> {
     await client.invoke(
       new Api.channels.EditAdmin({
         channel,
         userId: userEntity,
         adminRights: new Api.ChatAdminRights({}),
-        rank: "",
+        rank: originalRank || "",
       })
     );
   }
