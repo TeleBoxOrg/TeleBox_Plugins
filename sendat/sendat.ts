@@ -309,8 +309,8 @@ class SendTaskManager {
   // 从cron管理器中移除任务
   private removeTaskFromCron(taskId: number): void {
     const taskName = `sendat_${taskId}`;
-    if (cronManager.hasTask(taskName)) {
-      cronManager.removeTask(taskName);
+    if (cronManager.has(taskName)) {
+      cronManager.del(taskName);
     }
   }
 
@@ -319,17 +319,17 @@ class SendTaskManager {
     if (task.pause) return;
 
     const taskName = `sendat_${task.task_id}`;
+    // Guard: delete any zombie cron from a previous generation before re-registering
+    if (cronManager.has(taskName)) {
+      cronManager.del(taskName);
+    }
     
     if (task.interval) {
       if (task.cron) {
         // 定时任务（每天固定时间）
         const cronExpression = `${task.second} ${task.minute} ${task.hour} * * *`;
-        cronManager.addTask(taskName, {
-          cron: cronExpression,
-          description: `定时发送任务 #${task.task_id}`,
-          handler: async () => {
+        cronManager.set(taskName, cronExpression, async () => {
             await this.executeTask(task);
-          }
         });
       } else {
         // 间隔任务
@@ -353,12 +353,8 @@ class SendTaskManager {
             cronExpression = `*/${seconds} * * * * *`;
           }
           
-          cronManager.addTask(taskName, {
-            cron: cronExpression,
-            description: `间隔发送任务 #${task.task_id}`,
-            handler: async () => {
-              await this.executeTask(task);
-            }
+          cronManager.set(taskName, cronExpression, async () => {
+            await this.executeTask(task);
           });
         }
       }
@@ -374,14 +370,10 @@ class SendTaskManager {
       
       const cronExpression = `${targetTime.getSeconds()} ${targetTime.getMinutes()} ${targetTime.getHours()} ${targetTime.getDate()} ${targetTime.getMonth() + 1} *`;
       
-      cronManager.addTask(taskName, {
-        cron: cronExpression,
-        description: `单次发送任务 #${task.task_id}`,
-        handler: async () => {
-          await this.executeTask(task);
-          // 单次任务执行后删除
-          await this.removeTask(task.task_id);
-        }
+      cronManager.set(taskName, cronExpression, async () => {
+        await this.executeTask(task);
+        // 单次任务执行后删除
+        await this.removeTask(task.task_id);
       });
     }
   }
@@ -457,6 +449,16 @@ seconds, minutes, hours, date, times`;
       await this.handleSendAtCommand(msg);
     }
   };
+
+  cleanup(): void {
+    // Remove all cron tasks registered by this plugin to prevent zombies on reload
+    for (const task of this.taskManager.getAllTasks()) {
+      const taskName = `sendat_${task.task_id}`;
+      if (cronManager.has(taskName)) {
+        cronManager.del(taskName);
+      }
+    }
+  }
 
   private async handleSendAtCommand(msg: Api.Message): Promise<void> {
     const client = await getGlobalClient();
