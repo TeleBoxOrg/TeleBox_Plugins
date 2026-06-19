@@ -130,6 +130,7 @@ interface BackupTask {
   processedMessages: number;
   failedMessages: number;
   lastMessageId?: number;
+  reverse?: boolean;
 }
 
 // Initialize database (支持双模式)
@@ -801,7 +802,10 @@ const HELP_TEXT = `🚀 <b>转发规则管理插件</b>
 • <code>${mainPrefix}shift clean</code> - 清理损坏的规则数据
 
 <b>🔄 备份功能</b>
-• <code>${mainPrefix}shift backup &lt;源&gt; &lt;目标&gt;</code> - 创建备份任务
+• <code>${mainPrefix}shift backup &lt;源&gt; &lt;目标&gt;</code> - 创建备份任务（默认倒序：新→旧）
+• <code>${mainPrefix}shift backup &lt;源&gt; &lt;目标&gt; --asc</code> - 正序备份（旧→新，保持原始顺序）
+• <code>${mainPrefix}shift backup status &lt;任务ID&gt;</code> - 查看备份进度
+• <code>${mainPrefix}shift backup resume &lt;任务ID&gt;</code> - 恢复中断的备份
 
 <b>🎯 支持的消息类型</b>
 
@@ -821,7 +825,8 @@ const HELP_TEXT = `🚀 <b>转发规则管理插件</b>
 • <code>${mainPrefix}shift set @channel1 @channel2|TopicID</code>
 • <code>${mainPrefix}shift del 1</code>
 • <code>${mainPrefix}shift filter 1 add 广告</code>
-• <code>${mainPrefix}shift backup @oldchat @newchat</code>`;
+• <code>${mainPrefix}shift backup @oldchat @newchat</code>
+• <code>${mainPrefix}shift backup @oldchat @newchat --asc</code>`;
 // 规范：提供 help_text 常量并在 description 中引用
 const help_text = HELP_TEXT;
 
@@ -854,6 +859,7 @@ class AdaptiveRateLimiter {
 type BackupCallbacks = {
   batchSize?: number;
   delayMs?: number;
+  reverse?: boolean; // true = 正序（旧→新），false/undefined = 倒序（新→旧，默认）
   onProgress?: (current: number, total: number) => void | Promise<void>;
   onComplete?: (stats: {
     totalMessages: number;
@@ -890,6 +896,7 @@ class BackupManager {
       totalMessages: 0,
       processedMessages: 0,
       failedMessages: 0,
+      reverse: options.reverse || false,
     };
 
     this.tasks.set(taskId, { task });
@@ -939,72 +946,148 @@ class BackupManager {
       const totalCount = (messages as any).total || 0;
       task.totalMessages = totalCount;
 
-      // 批量处理消息
-      let hasMore = true;
-      let offsetId = task.lastMessageId || 0;
+      if (task.reverse) {
+        // ===== 正序模式：两阶段 =====
+        // Phase 1: 收集所有消息 ID（API 返回顺序：新→旧）
+        const allIds: number[] = [];
+        let collectOffset = 0;
+        let collecting = true;
 
-      while (hasMore && task.status === "running") {
-        throwIfAborted(signal);
-        const batch = await safeGetMessages(client, task.sourceId, {
-          limit: batchSize,
-          offsetId,
-        });
+        while (collecting) {
+          throwIfAborted(signal);
+          const batch = await safeGetMessages(client, task.sourceId, {
+            limit: batchSize,
+            offsetId: collectOffset,
+          });
 
-        if (batch.length === 0) {
-          hasMore = false;
-          break;
-        }
-
-        for (const message of batch) {
-          if (task.status !== "running") {
+          if (batch.length === 0) {
+            collecting = false;
             break;
           }
 
+          for (const msg of batch) {
+            allIds.push(msg.id);
+          }
+          collectOffset = batch[batch.length - 1].id;
+
+          // 收集阶段进度（每 200 条报告一次）
+          if (options.onProgress && allIds.length % 200 === 0) {
+            await options.onProgress(0, totalCount);
+          }
+        }
+
+        // 反转：旧→新（正序）
+        allIds.reverse();
+        task.totalMessages = allIds.length;
+
+        // Phase 2: 按正序逐条转发
+        const startIndex = task.lastMessageId
+          ? allIds.indexOf(task.lastMessageId) + 1
+          : 0;
+
+        for (let i = startIndex; i < allIds.length; i++) {
+          if (task.status !== "running") break;
+
           try {
             throwIfAborted(signal);
-            // 限流控制
             await this.rateLimiter.throttle(signal);
             throwIfAborted(signal);
 
-            // 转发消息
             await client.forwardMessages(task.targetId, {
-              messages: [message.id],
+              messages: [allIds[i]],
               fromPeer: task.sourceId,
             });
 
             task.processedMessages++;
-            task.lastMessageId = message.id;
-            offsetId = message.id;
+            task.lastMessageId = allIds[i];
 
-            // 进度回调
             if (options.onProgress && task.processedMessages % 10 === 0) {
               await options.onProgress(task.processedMessages, task.totalMessages);
             }
 
-            // 成功后调整限流
             this.rateLimiter.onSuccess();
           } catch (error: unknown) {
             if (isAbortError(error)) {
               task.status = "failed";
               return;
             }
-
             task.failedMessages++;
-
             const errorMessage = error instanceof Error ? error.message : String(error);
-            // 处理限流错误
             if (errorMessage.includes("FLOOD_WAIT")) {
-              const waitTime = parseInt(
-                errorMessage.match(/\d+/)?.[0] || "60"
-              );
+              const waitTime = parseInt(errorMessage.match(/\d+/)?.[0] || "60");
               this.rateLimiter.onFloodWait(waitTime);
               await abortableSleep(waitTime * 1000, signal);
             }
           }
         }
+      } else {
+        // ===== 倒序模式（默认）：流式处理 =====
+        let hasMore = true;
+        let offsetId = task.lastMessageId || 0;
 
-        if (task.status !== "running") {
-          break;
+        while (hasMore && task.status === "running") {
+          throwIfAborted(signal);
+          const batch = await safeGetMessages(client, task.sourceId, {
+            limit: batchSize,
+            offsetId,
+          });
+
+          if (batch.length === 0) {
+            hasMore = false;
+            break;
+          }
+
+          for (const message of batch) {
+            if (task.status !== "running") {
+              break;
+            }
+
+            try {
+              throwIfAborted(signal);
+              // 限流控制
+              await this.rateLimiter.throttle(signal);
+              throwIfAborted(signal);
+
+              // 转发消息
+              await client.forwardMessages(task.targetId, {
+                messages: [message.id],
+                fromPeer: task.sourceId,
+              });
+
+              task.processedMessages++;
+              task.lastMessageId = message.id;
+              offsetId = message.id;
+
+              // 进度回调
+              if (options.onProgress && task.processedMessages % 10 === 0) {
+                await options.onProgress(task.processedMessages, task.totalMessages);
+              }
+
+              // 成功后调整限流
+              this.rateLimiter.onSuccess();
+            } catch (error: unknown) {
+              if (isAbortError(error)) {
+                task.status = "failed";
+                return;
+              }
+
+              task.failedMessages++;
+
+              const errorMessage = error instanceof Error ? error.message : String(error);
+              // 处理限流错误
+              if (errorMessage.includes("FLOOD_WAIT")) {
+                const waitTime = parseInt(
+                  errorMessage.match(/\d+/)?.[0] || "60"
+                );
+                this.rateLimiter.onFloodWait(waitTime);
+                await abortableSleep(waitTime * 1000, signal);
+              }
+            }
+          }
+
+          if (task.status !== "running") {
+            break;
+          }
         }
       }
 
@@ -1914,16 +1997,20 @@ class ShiftPlugin extends Plugin {
           }
 
           // 开始新备份
-          if (args.length < 3) {
+          // 解析 --asc 参数（正序：旧→新）
+          const hasAsc = args.some((a: string) => a === "--asc");
+          const filteredArgs = args.filter((a: string) => a !== "--asc");
+
+          if (filteredArgs.length < 3) {
             await msg.edit({
-              text: `❌ <b>参数不足</b>\n\n<b>用法：</b> <code>${mainPrefix}shift backup [源] [目标]</code>`,
+              text: `❌ <b>参数不足</b>\n\n<b>用法：</b> <code>${mainPrefix}shift backup [源] [目标] [--asc]</code>\n\n<b>--asc</b>：正序备份（旧→新），默认为倒序（新→旧）`,
               parseMode: "html",
             });
             return;
           }
 
-          const sourceInput = args[1];
-          const targetInput = args[2];
+          const sourceInput = filteredArgs[1];
+          const targetInput = filteredArgs[2];
 
           let source: any;
           let target: any;
@@ -1945,8 +2032,9 @@ class ShiftPlugin extends Plugin {
           }
 
           // 使用新的 BackupManager
+          const orderLabel = hasAsc ? "正序（旧→新）" : "倒序（新→旧）";
           const progressMsg = await msg.edit({
-            text: `🔄 <b>开始备份</b>\n\n从 ${htmlEscape(
+            text: `🔄 <b>开始备份</b>（${orderLabel}）\n\n从 ${htmlEscape(
               getDisplayName(source)
             )} 到 ${htmlEscape(getDisplayName(target))} 的历史消息...`,
             parseMode: "html",
@@ -1959,6 +2047,7 @@ class ShiftPlugin extends Plugin {
           const taskId = await BackupManager.startBackup(sourceId, targetId, {
             batchSize: 50,
             delayMs: 500,
+            reverse: hasAsc,
             onProgress: async (current, total) => {
               if (current % 50 === 0 && progressMsg) {
                 await progressMsg.edit({
