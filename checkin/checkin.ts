@@ -219,18 +219,18 @@ class CheckInPlugin extends Plugin {
     if (action === "settings" || action === "config" || action === "info") {
       const enabled = conf.targets.filter((t) => t.enabled).length;
       const timeRange = conf.runTimeEnd ? `${conf.runTime} ~ ${conf.runTimeEnd}` : conf.runTime;
-      const timeMode = conf.runTimeEnd ? "🔄 随机时间模式" : "📌 固定时间模式";
-      
+      const timeMode = conf.runTimeEnd ? "🔄 在设定时间段内随机执行" : "📌 按固定时间执行";
+
       await this.edit(
         msg,
         `⚙️ <b>CheckIn 配置信息</b>\n\n` +
           `${timeMode}\n` +
-          `⏰ 运行时间: ${this.escape(timeRange)}\n` +
-          `🎲 随机延迟: ${conf.randomDelay} 分钟\n` +
-          `🤖 Bot推送: ${conf.botToken ? "已配置" : "未配置"}\n` +
-          `📱 推送目标: ${this.escape(conf.pushChatId || "未设置")}\n` +
-          `📅 上次运行: ${this.escape(conf.lastRunDate || "无")}\n` +
-          `🎯 签到目标: ${enabled}/${conf.targets.length} 个启用`
+          `⏰ 执行时间: ${this.escape(timeRange)}\n` +
+          `🎲 额外随机延迟: ${conf.randomDelay} 分钟\n` +
+          `🤖 Bot 通知: ${conf.botToken ? "已配置" : "未配置"}\n` +
+          `📱 通知目标: ${this.escape(conf.pushChatId || "未设置")}\n` +
+          `📅 最近执行日期: ${this.escape(conf.lastRunDate || "无")}\n` +
+          `🎯 已启用目标: ${enabled}/${conf.targets.length}`
       );
       return;
     }
@@ -263,7 +263,7 @@ class CheckInPlugin extends Plugin {
       if (type === "range" || type === "r") {
         if (!value) {
           this.cfg.save({ runTimeEnd: undefined });
-          await this.edit(msg, "✅ 已清除随机时间窗口，使用固定时间模式");
+          await this.edit(msg, "✅ 已清除执行时间范围，改为固定时间执行");
           return;
         }
         
@@ -279,7 +279,7 @@ class CheckInPlugin extends Plugin {
         }
         
         this.cfg.save({ runTimeEnd: value });
-        await this.edit(msg, `✅ 随机时间窗口已设置为: ${conf.runTime} ~ ${value}`);
+        await this.edit(msg, `✅ 执行时间范围已设置为: ${conf.runTime} ~ ${value}（将在该时间段内随机执行）`);
         return;
       }
 
@@ -541,21 +541,21 @@ class CheckInPlugin extends Plugin {
 
 <b>⚙️ 配置管理：</b>
 <code>${PREFIX}qd set time [HH:MM]</code> - 设置开始时间
-<code>${PREFIX}qd set range [HH:MM]</code> - 设置随机窗口结束时间（取消则清除）
-<code>${PREFIX}qd set delay [分钟]</code> - 随机延迟 0-60分钟
-<code>${PREFIX}qd set bot [Token] [ChatID]</code> - 设置Bot推送
+<code>${PREFIX}qd set range [HH:MM]</code> - 设置执行时间结束点（留空则改为固定时间）
+<code>${PREFIX}qd set delay [分钟]</code> - 设置额外随机延迟（0-60 分钟）
+<code>${PREFIX}qd set bot [Token] [ChatID]</code> - 设置 Bot 通知
 <code>${PREFIX}qd set log [ChatID]</code> - 设置日志聊天
 <code>${PREFIX}qd settings</code> - 查看当前配置
 
 <b>💡 使用示例：</b>
 <code>${PREFIX}qd add storm Storm签到 @storm_bot /start data:checkin</code>
-<code>${PREFIX}qd set time 10:00</code> - 从10点开始
-<code>${PREFIX}qd set range 11:30</code> - 到11:30结束（随机时间模式）
-<code>${PREFIX}qd set range</code> - 清除随机窗口（固定时间模式）
+<code>${PREFIX}qd set time 10:00</code> - 从 10:00 开始
+<code>${PREFIX}qd set range 11:30</code> - 在 10:00 到 11:30 之间随机执行
+<code>${PREFIX}qd set range</code> - 清除时间范围，改为固定时间执行
 
-<b>🔄 随机时间说明：</b>
-设置 range 后，每天在 time ~ range 之间随机选择时间执行，
-避免固定时间被检测。支持跨天（如 22:00 ~ 02:00）。`;
+<b>🔄 时间范围说明：</b>
+设置 range 后，系统会每天在 time 到 range 之间随机选择一个时刻执行，
+这样可以避免每天都在同一时间签到。支持跨天，例如 22:00 到次日 02:00。`;
   }
 
   private async edit(msg: Api.Message, text: string): Promise<void> {
