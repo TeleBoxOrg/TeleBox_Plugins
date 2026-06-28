@@ -329,6 +329,9 @@ class CheckInPlugin extends Plugin {
       
       if (conf.lastRunDate === today) return;
 
+      // 每天重新生成随机时间，避免连续多天使用同一时间
+      this.todayRunTime = null;
+
       const runTimeToday = this.getTodayRunTime();
       if (!runTimeToday) {
         this.todayRunTime = conf.runTime;
