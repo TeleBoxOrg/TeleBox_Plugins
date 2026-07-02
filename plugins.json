@@ -176,7 +176,7 @@
     "desc": "检查Epic Games喜加一优惠"
   },
   "fbi": {
-    "url": "https://github.com/xiaochengshiguduo/TeleBox_Plugins/blob/main/fbi/fbi.ts?raw=true",
+    "url": "https://github.com/TeleBoxOrg/TeleBox_Plugins/blob/main/fbi/fbi.ts?raw=true",
     "desc": "FBI - 跨群组消息追踪 / 蹲守 / 活跃群组分析"
   },
   "fadian": {
