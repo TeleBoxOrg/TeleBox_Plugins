@@ -84,6 +84,8 @@ class FbiPlugin extends Plugin {
   private sv = new Map<string, SvEntry>();
   private chatCache = new Map<string, CachedChat>();
   private cacheReady = false;
+  private cacheDirty = false;
+  private cachePersistTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor() {
     super();
@@ -113,6 +115,19 @@ class FbiPlugin extends Plugin {
   private async persistDb() {
     this.db.data.surveillance = Object.fromEntries(this.sv);
     await this.db.write();
+  }
+
+  /** debounced cache persist — at most once every 10s */
+  private schedulePersistCache() {
+    this.cacheDirty = true;
+    if (this.cachePersistTimer) return; // already queued
+    this.cachePersistTimer = setTimeout(async () => {
+      this.cachePersistTimer = null;
+      if (!this.cacheDirty) return;
+      this.cacheDirty = false;
+      this.db.data.cache = Object.fromEntries(this.chatCache);
+      await this.db.write();
+    }, 10_000);
   }
 
   /** scan public groups one-by-one with random delay, fill chatCache */
@@ -299,6 +314,7 @@ class FbiPlugin extends Plugin {
       if (chat) {
         chat.msgs.unshift(stripMsg(msg));
         if (chat.msgs.length > CACHE_MSG_LIMIT) chat.msgs.length = CACHE_MSG_LIMIT;
+        this.schedulePersistCache();
       }
     }
 
