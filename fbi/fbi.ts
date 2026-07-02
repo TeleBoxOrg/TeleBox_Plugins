@@ -256,10 +256,7 @@ class FbiPlugin extends Plugin {
       return;
     }
 
-    // debug: log what we matched
-    console.log(`[fbi:cs] target.id=${target.id} target.name=${target.name}`);
-    console.log(`[fbi:cs] found msg: chat=${found.peer} mid=${found.msg.id} senderId=${found.msg.senderId} date=${found.msg.date} text="${found.msg.text.slice(0,60)}"`);
-    // ponytail: build link from cache, no API call needed
+    // build link from cache, no API call needed
     const chat = this.chatCache.get(found.peer)!;
     const text = htmlEsc(found.msg.text.slice(0, 50));
     const link = chat.username
@@ -391,12 +388,7 @@ class FbiPlugin extends Plugin {
       return;
     }
 
-    // debug: log ds match
-    if (bestMsg) {
-      console.log(`[fbi:ds] target.id=${target.id} target.name=${target.name}`);
-      console.log(`[fbi:ds] best group=${bestPeer} count=${bestCount} mid=${bestMsg.id} senderId=${bestMsg.senderId} date=${bestMsg.date} text="${bestMsg.text.slice(0,60)}"`);
-    }
-    // ponytail: link text = group name, href points to target's latest msg in that group
+    // link text = group name, href points to target's latest msg in that group
     let link = `https://t.me/c/${peelChatId(bestPeer)}`;
     if (bestMsg) {
       const chat = this.chatCache.get(bestPeer)!;
