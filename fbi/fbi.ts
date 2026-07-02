@@ -35,10 +35,8 @@ const htmlEsc = (s: string) =>
 
 const peelChatId = (id: any) => String(typeof id === "bigint" ? id.toString() : id).replace(/^-100/, "");
 
-function msgPreview(msg: Api.Message): string {
-  let t = msg.text || "";
-  if (!t && msg.media) t = "[媒体消息]";
-  return t.length > 50 ? t.slice(0, 50) + "…" : t || "[空消息]";
+function stripMsg(m: Api.Message): CachedMsg {
+  return { id: m.id, senderId: Number(m.senderId), date: m.date, text: m.text || "" };
 }
 
 /** random delay between min and max ms */
@@ -47,10 +45,18 @@ function rndDelay(min = 500, max = 2000): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
 }
 
+/** Minimal serializable representation of a chat message */
+interface CachedMsg {
+  id: number;
+  senderId: number;
+  date: number;
+  text: string;
+}
+
 interface CachedChat {
   username?: string;
   title?: string;
-  msgs: Api.Message[];
+  msgs: CachedMsg[];
 }
 
 interface SvEntry {
@@ -63,9 +69,10 @@ interface SvEntry {
 interface FbiDB {
   surveillance: Record<string, SvEntry>;
   cacheLimit: number;
+  cache: Record<string, CachedChat>;
 }
 
-const DB_DEF: FbiDB = { surveillance: {}, cacheLimit: CACHE_LIMIT_DEF };
+const DB_DEF: FbiDB = { surveillance: {}, cacheLimit: CACHE_LIMIT_DEF, cache: {} };
 
 class FbiPlugin extends Plugin {
   description = `FBI 跨群组追踪\n\n${HELP}`;
@@ -94,7 +101,12 @@ class FbiPlugin extends Plugin {
       await this.db.write();
     }
     for (const [k, v] of Object.entries(this.db.data.surveillance)) this.sv.set(k, v);
-    // cache populated live via onMsg — no startup scan needed
+    // load persisted cache into memory
+    if (this.db.data.cache) {
+      for (const [k, v] of Object.entries(this.db.data.cache))
+        this.chatCache.set(k, v as CachedChat);
+      console.log(`[fbi] cache loaded: ${this.chatCache.size} groups`);
+    }
     this.cacheReady = true;
   }
 
@@ -115,9 +127,9 @@ class FbiPlugin extends Plugin {
 
     let count = 0;
     for (const d of dialogs) {
-      const msgs: Api.Message[] = [];
+      const msgs: CachedMsg[] = [];
       for await (const m of cl.iterMessages(d.id, { limit: CACHE_MSG_LIMIT })) {
-        msgs.push(m);
+        msgs.push(stripMsg(m));
       }
       // get entity for username/title
       let username: string | undefined;
@@ -127,11 +139,17 @@ class FbiPlugin extends Plugin {
         username = entity.username;
         title = entity.title;
       } catch { /* best-effort */ }
-      this.chatCache.set(String(d.id), { username, title, msgs });
-      count++;
+      // ponytail: skip private groups (no username)
+      if (username) {
+        this.chatCache.set(String(d.id), { username, title, msgs });
+        count++;
+      }
       await rndDelay();
     }
 
+    // persist to disk
+    this.db.data.cache = Object.fromEntries(this.chatCache);
+    await this.db.write();
     this.cacheReady = true;
     console.log(`[fbi] cache ready: ${count} groups (limit ${limit})`);
   }
@@ -190,16 +208,6 @@ class FbiPlugin extends Plugin {
     return targetId ? { id: targetId, name } : null;
   }
 
-  /* ====== link builder ====== */
-
-  private async msgLink(cl: any, msg: Api.Message): Promise<string> {
-    const chat = await cl.getEntity(msg.peerId);
-    const text = htmlEsc(msgPreview(msg));
-    const mid = msg.id;
-    if (chat.username) return `<a href="https://t.me/${chat.username}/${mid}">${text}</a>`;
-    return `<a href="https://t.me/c/${peelChatId(chat.id)}/${mid}">${text}</a>`;
-  }
-
   /* ====== cs (zero-request, reads cache) ====== */
 
   private async doCs(msg: Api.Message, args: string[]) {
@@ -215,7 +223,7 @@ class FbiPlugin extends Plugin {
 
     await msg.edit({ text: `🔍 正在搜索嫌疑人 ${target.name} 的蛛丝马迹...`, parseMode: "html" });
 
-    let found: { msg: Api.Message; peer: string } | null = null;
+    let found: { msg: CachedMsg; peer: string } | null = null;
 
     for (const [peer, chat] of this.chatCache) {
       for (const m of chat.msgs) {
@@ -233,12 +241,15 @@ class FbiPlugin extends Plugin {
       return;
     }
 
-    const cl = await getGlobalClient();
-    if (!cl) return;
     // debug: log what we matched
     console.log(`[fbi:cs] target.id=${target.id} target.name=${target.name}`);
-    console.log(`[fbi:cs] found msg: chat=${found.peer} mid=${found.msg.id} senderId=${String(found.msg.senderId)} date=${found.msg.date} text="${found.msg.text?.slice(0,60)}"`);
-    const link = await this.msgLink(cl, found.msg);
+    console.log(`[fbi:cs] found msg: chat=${found.peer} mid=${found.msg.id} senderId=${found.msg.senderId} date=${found.msg.date} text="${found.msg.text.slice(0,60)}"`);
+    // ponytail: build link from cache, no API call needed
+    const chat = this.chatCache.get(found.peer)!;
+    const text = htmlEsc(found.msg.text.slice(0, 50));
+    const link = chat.username
+      ? `<a href="https://t.me/${chat.username}/${found.msg.id}">${text}</a>`
+      : `<a href="https://t.me/c/${peelChatId(found.peer)}/${found.msg.id}">${text}</a>`;
     const userTag = `<a href="tg://user?id=${target.id}">${htmlEsc(target.name)}</a>`;
     await this.sendReply(msg, `👀 发现嫌疑人 ${userTag} 的作案现场：\n\n${link}\n\n<i>要想人不知除非己莫为。</i>`);
   }
@@ -286,7 +297,7 @@ class FbiPlugin extends Plugin {
         }
       }
       if (chat) {
-        chat.msgs.unshift(msg);
+        chat.msgs.unshift(stripMsg(msg));
         if (chat.msgs.length > CACHE_MSG_LIMIT) chat.msgs.length = CACHE_MSG_LIMIT;
       }
     }
@@ -306,7 +317,12 @@ class FbiPlugin extends Plugin {
     const cl = await getGlobalClient();
     if (!cl) return;
 
-    const link = await this.msgLink(cl, msg);
+    // ponytail: link from live msg entity (need peerId for unknown groups)
+    const chatEntity = await cl.getEntity(msg.peerId);
+    const preview = htmlEsc((msg.text || "").slice(0, 50) || "[空消息]");
+    const link = chatEntity.username
+      ? `<a href="https://t.me/${chatEntity.username}/${msg.id}">${preview}</a>`
+      : `<a href="https://t.me/c/${peelChatId(chatEntity.id)}/${msg.id}">${preview}</a>`;
     const userTag = `<a href="tg://user?id=${entry.targetId}">${htmlEsc(entry.targetName)}</a>`;
     const result = `🚨 发现嫌疑人 ${userTag} 最新动向\n\n${link}\n\n<i>天网恢恢疏而不漏。</i>`;
 
@@ -334,11 +350,11 @@ class FbiPlugin extends Plugin {
 
     let bestPeer: string | null = null;
     let bestCount = 0;
-    let bestMsg: Api.Message | null = null;
+    let bestMsg: CachedMsg | null = null;
 
     for (const [peer, chat] of this.chatCache) {
       let cnt = 0;
-      let latest: Api.Message | null = null;
+      let latest: CachedMsg | null = null;
       for (const m of chat.msgs) {
         if (String(m.senderId) === target.id) {
           cnt++;
@@ -362,7 +378,7 @@ class FbiPlugin extends Plugin {
     // debug: log ds match
     if (bestMsg) {
       console.log(`[fbi:ds] target.id=${target.id} target.name=${target.name}`);
-      console.log(`[fbi:ds] best group=${bestPeer} count=${bestCount} mid=${bestMsg.id} senderId=${String(bestMsg.senderId)} date=${bestMsg.date} text="${bestMsg.text?.slice(0,60)}"`);
+      console.log(`[fbi:ds] best group=${bestPeer} count=${bestCount} mid=${bestMsg.id} senderId=${bestMsg.senderId} date=${bestMsg.date} text="${bestMsg.text.slice(0,60)}"`);
     }
     // ponytail: link text = group name, href points to target's latest msg in that group
     let link = `https://t.me/c/${peelChatId(bestPeer)}`;
