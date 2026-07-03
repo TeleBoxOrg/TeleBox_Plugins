@@ -62,13 +62,18 @@ interface SvEntry {
   triggerMsgId: number;
 }
 
-interface FbiDB {
+interface FbiConfig {
   surveillance: Record<string, SvEntry>;
   cacheLimit: number;
+}
+
+interface FbiCache {
   cache: Record<string, CachedChat>;
 }
 
-const DB_DEF: FbiDB = { surveillance: {}, cacheLimit: CACHE_LIMIT_DEF, cache: {} };
+const CONFIG_DEF: FbiConfig = { surveillance: {}, cacheLimit: CACHE_LIMIT_DEF };
+
+const CACHE_EXPIRE_SECS = 30 * 24 * 60 * 60; // 30 days in seconds
 
 function stripMsg(m: Api.Message): CachedMsg {
   return { id: m.id, senderId: Number(m.senderId), date: m.date, text: m.text || "" };
@@ -80,12 +85,21 @@ class FbiPlugin extends Plugin {
   cmdHandlers = { fbi: this.onCmd.bind(this) };
   listenMessageHandler = this.onMsg.bind(this);
 
-  private db: any;
+  private configDb: any;
+  private cacheDb: any;
   private sv = new Map<string, SvEntry>();
   private chatCache = new Map<string, CachedChat>();
   private cacheReady = false;
   private cacheDirty = false;
   private cachePersistTimer: ReturnType<typeof setTimeout> | null = null;
+
+  /** remove messages older than 30 days from a chat cache, return true if any pruned */
+  private pruneExpired(chat: CachedChat): boolean {
+    const cutoff = Math.floor(Date.now() / 1000) - CACHE_EXPIRE_SECS;
+    const before = chat.msgs.length;
+    chat.msgs = chat.msgs.filter(m => m.date > cutoff);
+    return chat.msgs.length !== before;
+  }
 
   constructor() {
     super();
@@ -96,25 +110,48 @@ class FbiPlugin extends Plugin {
 
   private async initDB() {
     const p = path.join(createDirectoryInAssets("fbi"), "db.json");
-    this.db = await JSONFilePreset<FbiDB>(p, DB_DEF);
+    this.configDb = await JSONFilePreset<FbiConfig>(p, CONFIG_DEF);
     // ensure cacheLimit has a default
-    if (typeof this.db.data.cacheLimit !== "number") {
-      this.db.data.cacheLimit = CACHE_LIMIT_DEF;
-      await this.db.write();
+    if (typeof this.configDb.data.cacheLimit !== "number") {
+      this.configDb.data.cacheLimit = CACHE_LIMIT_DEF;
+      await this.configDb.write();
     }
-    for (const [k, v] of Object.entries(this.db.data.surveillance)) this.sv.set(k, v);
-    // load persisted cache into memory
-    if (this.db.data.cache) {
-      for (const [k, v] of Object.entries(this.db.data.cache))
+    for (const [k, v] of Object.entries(this.configDb.data.surveillance)) this.sv.set(k, v as SvEntry);
+    // load cache from separate file
+    const cp = path.join(createDirectoryInAssets("fbi"), "cache.json");
+    this.cacheDb = await JSONFilePreset<FbiCache>(cp, { cache: {} });
+    if (this.cacheDb.data.cache) {
+      for (const [k, v] of Object.entries(this.cacheDb.data.cache))
         this.chatCache.set(k, v as CachedChat);
       console.log(`[fbi] cache loaded: ${this.chatCache.size} groups`);
     }
+
+    // migrate: if cache.json is empty but db.json has old cache field, move it over
+    if (this.chatCache.size === 0 && (this.configDb.data as any).cache) {
+      for (const [k, v] of Object.entries((this.configDb.data as any).cache))
+        this.chatCache.set(k, v as CachedChat);
+      this.cacheDb.data.cache = Object.fromEntries(this.chatCache);
+      await this.cacheDb.write();
+      delete (this.configDb.data as any).cache;
+      await this.configDb.write();
+      console.log(`[fbi] migrated ${this.chatCache.size} groups from db.json to cache.json`);
+    }
+
     this.cacheReady = true;
+
+    // cold sweep every 24h — prune expired messages in silent groups
+    setInterval(() => {
+      if (!this.cacheReady) return;
+      let anyPruned = false;
+      for (const chat of this.chatCache.values())
+        if (this.pruneExpired(chat)) anyPruned = true;
+      if (anyPruned) this.schedulePersistCache();
+    }, 24 * 60 * 60 * 1000);
   }
 
   private async persistDb() {
-    this.db.data.surveillance = Object.fromEntries(this.sv);
-    await this.db.write();
+    this.configDb.data.surveillance = Object.fromEntries(this.sv);
+    await this.configDb.write();
   }
 
   /** debounced cache persist — at most once every 10s */
@@ -125,8 +162,8 @@ class FbiPlugin extends Plugin {
       this.cachePersistTimer = null;
       if (!this.cacheDirty) return;
       this.cacheDirty = false;
-      this.db.data.cache = Object.fromEntries(this.chatCache);
-      await this.db.write();
+      this.cacheDb.data.cache = Object.fromEntries(this.chatCache);
+      await this.cacheDb.write();
     }, 10_000);
   }
 
@@ -135,7 +172,7 @@ class FbiPlugin extends Plugin {
     const cl = await getGlobalClient();
     if (!cl) return;
 
-    const limit = this.db.data.cacheLimit;
+    const limit = this.configDb.data.cacheLimit;
     // paginated getDialogs — respect cacheLimit > 100
     const all: any[] = [];
     let offsetId = 0;
@@ -179,8 +216,8 @@ class FbiPlugin extends Plugin {
     }
 
     // persist to disk
-    this.db.data.cache = Object.fromEntries(this.chatCache);
-    await this.db.write();
+    this.cacheDb.data.cache = Object.fromEntries(this.chatCache);
+    await this.cacheDb.write();
     this.cacheReady = true;
     console.log(`[fbi] cache ready: ${count} groups (limit ${limit})`);
   }
@@ -326,6 +363,7 @@ class FbiPlugin extends Plugin {
       }
       if (chat) {
         chat.msgs.unshift(stripMsg(msg));
+        this.pruneExpired(chat);
         if (chat.msgs.length > CACHE_MSG_LIMIT) chat.msgs.length = CACHE_MSG_LIMIT;
         this.schedulePersistCache();
       }
@@ -455,13 +493,13 @@ class FbiPlugin extends Plugin {
       const n = parseInt(args[1], 10);
       if (isNaN(n) || n < CACHE_LIMIT_MIN || n > CACHE_LIMIT_MAX) {
         await msg.edit({
-          text: `❌ 缓存上限必须为 ${CACHE_LIMIT_MIN}~${CACHE_LIMIT_MAX} 之间的整数。当前：${this.db.data.cacheLimit}`,
+          text: `❌ 缓存上限必须为 ${CACHE_LIMIT_MIN}~${CACHE_LIMIT_MAX} 之间的整数。当前：${this.configDb.data.cacheLimit}`,
           parseMode: "html",
         });
         return;
       }
-      this.db.data.cacheLimit = n;
-      await this.db.write();
+      this.configDb.data.cacheLimit = n;
+      await this.configDb.write();
       await msg.edit({
         text: `✅ 缓存上限已设为 ${n} 个群组。使用 <code>${PREFIX}fbi cache rebuild</code> 重新构建。`,
         parseMode: "html",
@@ -482,7 +520,7 @@ class FbiPlugin extends Plugin {
     }
 
     // status
-    const limit = this.db.data.cacheLimit;
+    const limit = this.configDb.data.cacheLimit;
     await msg.edit({
       text: `📦 <b>FBI 缓存状态</b>
 
