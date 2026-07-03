@@ -35,10 +35,6 @@ const htmlEsc = (s: string) =>
 
 const peelChatId = (id: any) => String(typeof id === "bigint" ? id.toString() : id).replace(/^-100/, "");
 
-function stripMsg(m: Api.Message): CachedMsg {
-  return { id: m.id, senderId: Number(m.senderId), date: m.date, text: m.text || "" };
-}
-
 /** random delay between min and max ms */
 function rndDelay(min = 500, max = 2000): Promise<void> {
   const ms = Math.floor(Math.random() * (max - min + 1)) + min;
@@ -73,6 +69,10 @@ interface FbiDB {
 }
 
 const DB_DEF: FbiDB = { surveillance: {}, cacheLimit: CACHE_LIMIT_DEF, cache: {} };
+
+function stripMsg(m: Api.Message): CachedMsg {
+  return { id: m.id, senderId: Number(m.senderId), date: m.date, text: m.text || "" };
+}
 
 class FbiPlugin extends Plugin {
   description = `FBI 跨群组追踪\n\n${HELP}`;
@@ -136,9 +136,25 @@ class FbiPlugin extends Plugin {
     if (!cl) return;
 
     const limit = this.db.data.cacheLimit;
-    const dialogs = ((await cl.getDialogs({})) as any[])
-      .filter((d: any) => d.isGroup || d.isChat)
-      .slice(0, limit);
+    // paginated getDialogs — respect cacheLimit > 100
+    const all: any[] = [];
+    let offsetId = 0;
+    let offsetDate = 0;
+    let offsetPeer: any = new Api.InputPeerEmpty();
+    while (all.length < limit) {
+      const page = (await cl.getDialogs({ offsetId, offsetDate, offsetPeer, limit: 100 })) as any[];
+      if (!page.length) break;
+      for (const d of page) {
+        if (d.isGroup || d.isChat) all.push(d);
+        if (all.length >= limit) break;
+      }
+      if (page.length < 100) break; // last page
+      const last = page[page.length - 1];
+      offsetId = last.dialog?.topMessage?.id ?? 0;
+      offsetDate = last.dialog?.topMessage?.date ?? 0;
+      offsetPeer = last.dialog?.peer ?? new Api.InputPeerEmpty();
+    }
+    const dialogs = all.slice(0, limit);
 
     let count = 0;
     for (const d of dialogs) {

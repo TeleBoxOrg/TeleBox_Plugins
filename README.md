@@ -1,158 +1,79 @@
-# TeleBox_Plugins
+# TeleBox FBI 🕵️
 
-## 简介
-TeleBox_Plugins 是 [TeleBox](https://github.com/TeleBoxOrg/TeleBox) 项目的官方插件仓库，提供丰富的功能扩展。
+跨群组消息追踪插件 — 单文件，零新增依赖。
 
-## 安装方式
+## 命令
+
+| 命令 | 功能 |
+|---|---|
+| `.fbi cs [目标]` | 🔍 搜索目标在**公开群**的最新消息（内存缓存，零 API） |
+| `.fbi sv [目标]` | 👁️ 蹲守目标下一条消息（实时监听） |
+| `.fbi ds [目标]` | 🧭 分析目标最活跃的**公开群**（内存缓存，零 API） |
+| `.fbi ssv` | 🛑 终止所有蹲守 |
+| `.fbi cache` | 📦 查看缓存状态 |
+| `.fbi cache rebuild` | 🔄 手动重建缓存（拉取全部公开群） |
+| `.fbi cache limit [N]` | 设置拉取上限（10~1000，默认 300） |
+| `.fbi help` | 显示帮助 |
+
+### 目标格式
+
+- `@username`
+- 用户 ID（纯数字）
+- 回复一条消息（自动取被回复者）
+
+## 快速开始
+
 ```bash
-tpm i <插件名>
+# 复制到 TeleBox 插件目录
+scp fbi.ts user@host:/path/to/TeleBox/plugins/
+
+# 重启 TeleBox
+pm2 restart telebox
 ```
 
-## 可用插件列表
-- `aban` - 高级封禁管理  
-- `acron` - 定时发送/转发/复制/置顶/取消置顶/删除消息/执行命令  
-- `admin_board` - 管理员排行榜 末位淘汰  
-- `aff` - 机场Aff信息管理  
-- `ai` - ai聚合  
-- `aitc` - AI Prompt 转写  
-- `annualreport` - 年度报告  
-- `atadmins` - 一键艾特全部管理员  
-- `atall` - 一键艾特全部成员  
-- `audio_to_voice` - 音乐转音频  
-- `autochangename` - 自动定时修改用户名插  
-- `autodel` - 定时删除消息  
-- `autodelcmd` - 自动删除命令消息  
-- `autorepeat` - 智能自动复读机  
-- `banana` - Nano-Banana 图像编辑  
-- `bgp` - BGP路由图查询工具  
-- `biko` - 批量获取整理发送指定对话中指定用户的消息  
-- `bin` - 卡头检测  
-- `bizhi` - 发送一张壁纸  
-- `botmzt` - 随机获取写真图片  
-- `bs` - 保送  
-- `bulk_delete` - 批量删除消息  
-- `calc` - 计算器  
-- `checkin` - 自动签到插件  
-- `clean` - 账号清理工具 Pro  
-- `clean_member` - 群组成员清理  
-- `clear_sticker` - 批量删除群组内贴纸  
-- `codex_image` - 通过codex调用gpt-image-2  
-- `convert` - 视频转音频  
-- `copy_sticker_set` - 复制贴纸包  
-- `cosplay` - 获取随机cos写真  
-- `crazy4` - 疯狂星期四文案  
-- `cy` - 词云  
-- `da` - 删除群内所有消息  
-- `dbdj` - 点兵点将 - 从最近的消息中随机抽取指定人数的用户  
-- `dc` - 获取实体DC  
-- `deepwiki` - DeepWiki多项目聚合  
-- `dig` - DNS 查询  
-- `diss` - 儒雅随和版祖安语录  
-- `dme` - 删除指定数量的自己发送的消息  
-- `eat` - 生成带头像表情包  
-- `eatgif` - 生成"吃掉"动图表情包  
-- `encode` - 简单的编码解码  
-- `epic` - 检查Epic Games喜加一优惠  
-- `fadian` - fadian语录  
-- `getstickers` - 下载整个贴纸包  
-- `gif` - GIF与视频转贴纸  
-- `git_PR` - Git PR 管理  
-- `goodnight` - 自动统计晚安/早安  
-- `gt` - 谷歌中英文互译  
-- `his` - 查看被回复者最近消息  
-- `hitokoto` - 获取随机一言  
-- `httpcat` - 发送一张http状态码主题的猫猫图片  
-- `ids` - 用户信息显示以及跳转链接  
-- `im` - 图片监控插件  
-- `ip` - IP 地址查询  
-- `isalive` - 活了么  
-- `javdb` - 寻找番号封面  
-- `jupai` - 举牌小人  
-- `keep_online` - 保活自动重启(测试版) 请查看说明操作  
-- `keyword` - 关键词自动回复  
-- `kitt` - 高级触发器: 匹配 -> 执行, 高度自定义, 逻辑自由  
-- `kkp` - 获取NSFW视频  
-- `komari` - Komari 服务器监控  
-- `listusernames` - 列出属于自己的公开群组/频道  
-- `lottery` - 抽奖  
-- `lu_bs` - 鲁小迅整点报时  
-- `manage_admin` - 管理管理员  
-- `mode` - 自定义消息格式  
-- `moyu` - 摸鱼日报  
-- `music` - YouTube音乐  
-- `music_bot` - 多音源音乐搜索  
-- `music_hub` - 多音源音乐搜索下载插件  
-- `netease` - 网易云音乐  
-- `news` - 每日新闻  
-- `nezha` - 哪吒监控  
-- `ntp` - NTP 时间同步  
-- `openlist` - openlist管理  
-- `oxost` - 回复聊天中的文件与媒体 得到一个临时的下载链接  
-- `pangu` - 消息自动pangu化  
-- `paolu` - 群组一键跑路  
-- `parsehub` - 社交媒体链接解析助手  
-- `pic_to_sticker` - 图片转表情  
-- `pmcaptcha` - 简单防私聊  
-- `portball` - 临时禁言  
-- `premium` - 群组大会员统计  
-- `q` - 消息引用生成贴纸  
-- `qr` - QR 二维码  
-- `quote` - 引用贴纸生成 (本地版)  
-- `rate` - 货币实时汇率查询与计算  
-- `restore_pin` - 恢复群组被取消的置顶消息  
-- `rev` - 反转你的消息  
-- `save` - 本地保存插件  
-- `search` - 频道消息搜索  
-- `sendat` - 定时消息发送插件  
-- `service` - systemd服务状态查看  
-- `shift` - 智能消息转发系统  
-- `soutu` - soutu搜图  
-- `speedlink` - 对其他服务器测速  
-- `speedtest` - 网络速度测试  
-- `ssh` - ssh管理  
-- `sticker` - 偷表情  
-- `sticker_to_pic` - 表情转图片  
-- `sub` - substore简单管理  
-- `subinfo` - 订阅链接信息查询  
-- `sum` - 群消息总结  
-- `t` - 文字转语音  
-- `teletype` - 打字机效果  
-- `tmp_admin` - 临时管理员  
-- `trace` - 全局追踪点赞  
-- `tts` - Azure文字转语音  
-- `uai` - 引用消息 AI 分析  
-- `warp` - warp管理  
-- `weather` - 天气查询  
-- `whois` - 域名查询  
-- `xmsl` - 全自动羡慕  
-- `yinglish` - 淫语翻译  
-- `yt-dlp` - YouTube 视频下载  
-- `yvlu` - 为被回复用户生成语录  
-- `zhijiao` - 掷筊 强随机 使用 笅杯卦辞廿七句  
-- `zpr` - 二次元图片  
+## 架构
 
-## 技术栈
+### 缓存
 
-- **开发语言**: TypeScript
-- **数据库**: Lowdb
-- **任务调度**: node-schedule
-- **Telegram API**: Teleproto
-- **图像处理**: Sharp
-- **其他依赖**: axios, lodash 等
-  
+cs 和 ds 不调任何 Telegram API。数据来源是实时的内存 + 磁盘双写缓存：
 
-## 贡献指南
+```
+启动 → 从 db.json 加载缓存到内存 (chatCache)
+     → listenMessageHandler 每收到消息更新内存
+     → debounced 10s 自动写盘 (schedulePersistCache)
+     → 重启从文件恢复，无需 rebuild
+```
 
-欢迎提交新或改进现有。请确保：
-1. 遵循 TypeScript 编码规范
-2. 包含完整的功能说明
-3. 添加适当的错误处理
-4. 更新 plugins.json 配置文件
+- **`chatCache`**：`Map<chatId, { username?, title?, msgs: CachedMsg[] }>`
+- **`CachedMsg`**：只存 id/senderId/date/text，省 80%+ 内存
+- 每个群最多 200 条消息（`CACHE_MSG_LIMIT`），新消息顶掉最旧的
+- **只缓存公开群**：onMsg 第一条消息调 `getEntity` 检查 username + className
+- 缓存自动写盘（debounced 10s），**重启不丢**
 
-## 声明
+### 命令与缓存的关系
 
-本仓库的表情素材等均来自网络，如有侵权请联系作者删除
+| 命令 | 数据来源 | API 调用 |
+|------|----------|----------|
+| cs | 遍历 `chatCache` | 零 |
+| ds | 遍历 `chatCache` | 零 |
+| sv | 实时监听 + lowdb 持久化 | 仅确认目标 |
+| cache rebuild | 逐个拉取所有公开群 | 有 |
 
-## 许可证
+### 手动重建
 
-本项目采用开源许可证，具体请查看各的许可证声明。
+`.fbi cache rebuild` 逐个拉取公开群的最近 200 条消息（500~2000ms 随机间隔），写盘。仅在刚启动就需要 cs/ds 可用时使用。
+
+## 持久化
+
+- **LowDB**：`assets/fbi/db.json`
+- 持久化内容：蹲守任务 + **消息缓存**
+- 缓存自动落盘，**重启不丢**
+
+## 依赖
+
+- `teleproto` — Telegram MTProto 层（TeleBox 内置）
+- `lowdb@1.0.0` — JSON 持久化（TeleBox 内置）
+- `@utils/*` — TeleBox 内部工具函数（pluginBase, globalClient 等）
+  - `createDirectoryInAssets`
+  - `safeGetReplyMessage`
+  - `getPrefixes`
