@@ -19,7 +19,7 @@ const HELP = `🕵️ <b>FBI 跨群组追踪</b>
 
 目标可为 @用户名、用户ID，或回复消息自动取被回复者。`;
 
-const CACHE_MSG_LIMIT = 200; // max messages stored per group
+const CACHE_MSG_LIMIT = 3000; // max messages stored per group
 const CACHE_LIMIT_DEF = 300; // default max groups to cache
 const CACHE_LIMIT_MIN = 10;
 const CACHE_LIMIT_MAX = 1000;
@@ -36,7 +36,7 @@ const htmlEsc = (s: string) =>
 const peelChatId = (id: any) => String(typeof id === "bigint" ? id.toString() : id).replace(/^-100/, "");
 
 /** random delay between min and max ms */
-function rndDelay(min = 500, max = 2000): Promise<void> {
+function rndDelay(min: number, max: number): Promise<void> {
   const ms = Math.floor(Math.random() * (max - min + 1)) + min;
   return new Promise((r) => setTimeout(r, ms));
 }
@@ -126,17 +126,6 @@ class FbiPlugin extends Plugin {
       console.log(`[fbi] cache loaded: ${this.chatCache.size} groups`);
     }
 
-    // migrate: if cache.json is empty but db.json has old cache field, move it over
-    if (this.chatCache.size === 0 && (this.configDb.data as any).cache) {
-      for (const [k, v] of Object.entries((this.configDb.data as any).cache))
-        this.chatCache.set(k, v as CachedChat);
-      this.cacheDb.data.cache = Object.fromEntries(this.chatCache);
-      await this.cacheDb.write();
-      delete (this.configDb.data as any).cache;
-      await this.configDb.write();
-      console.log(`[fbi] migrated ${this.chatCache.size} groups from db.json to cache.json`);
-    }
-
     this.cacheReady = true;
 
     // cold sweep every 24h — prune expired messages in silent groups
@@ -169,57 +158,60 @@ class FbiPlugin extends Plugin {
 
   /** scan public groups one-by-one with random delay, fill chatCache */
   private async buildCache() {
-    const cl = await getGlobalClient();
-    if (!cl) return;
+    try {
+      const cl = await getGlobalClient();
+      if (!cl) return;
 
-    const limit = this.configDb.data.cacheLimit;
-    // paginated getDialogs — respect cacheLimit > 100
-    const all: any[] = [];
-    let offsetId = 0;
-    let offsetDate = 0;
-    let offsetPeer: any = new Api.InputPeerEmpty();
-    while (all.length < limit) {
-      const page = (await cl.getDialogs({ offsetId, offsetDate, offsetPeer, limit: 100 })) as any[];
-      if (!page.length) break;
-      for (const d of page) {
-        if (d.isGroup || d.isChat) all.push(d);
-        if (all.length >= limit) break;
+      const limit = this.configDb.data.cacheLimit;
+      // paginated getDialogs — respect cacheLimit > 100
+      const all: any[] = [];
+      let offsetId = 0;
+      let offsetDate = 0;
+      let offsetPeer: any = new Api.InputPeerEmpty();
+      while (all.length < limit) {
+        const page = (await cl.getDialogs({ offsetId, offsetDate, offsetPeer, limit: 100 })) as any[];
+        if (!page.length) break;
+        for (const d of page) {
+          if (d.isGroup || d.isChat) all.push(d);
+          if (all.length >= limit) break;
+        }
+        if (page.length < 100) break; // last page
+        const last = page[page.length - 1];
+        offsetId = last.dialog?.topMessage?.id ?? 0;
+        offsetDate = last.dialog?.topMessage?.date ?? 0;
+        offsetPeer = last.dialog?.peer ?? new Api.InputPeerEmpty();
       }
-      if (page.length < 100) break; // last page
-      const last = page[page.length - 1];
-      offsetId = last.dialog?.topMessage?.id ?? 0;
-      offsetDate = last.dialog?.topMessage?.date ?? 0;
-      offsetPeer = last.dialog?.peer ?? new Api.InputPeerEmpty();
+      const dialogs = all.slice(0, limit);
+
+      let count = 0;
+      for (const d of dialogs) {
+        const msgs: CachedMsg[] = [];
+        for await (const m of cl.iterMessages(d.id, { limit: CACHE_MSG_LIMIT })) {
+          msgs.push(stripMsg(m));
+        }
+        // get entity for username/title
+        let username: string | undefined;
+        let title: string | undefined;
+        try {
+          const entity = await cl.getEntity(d.id);
+          username = entity.username;
+          title = entity.title;
+        } catch { /* best-effort */ }
+        // ponytail: skip private groups (no username)
+        if (username) {
+          this.chatCache.set(String(d.id), { username, title, msgs });
+          count++;
+        }
+        await rndDelay(1000, 10000);
+      }
+
+      // persist to disk
+      this.cacheDb.data.cache = Object.fromEntries(this.chatCache);
+      await this.cacheDb.write();
+      console.log(`[fbi] cache ready: ${count} groups (limit ${limit})`);
+    } finally {
+      this.cacheReady = true;
     }
-    const dialogs = all.slice(0, limit);
-
-    let count = 0;
-    for (const d of dialogs) {
-      const msgs: CachedMsg[] = [];
-      for await (const m of cl.iterMessages(d.id, { limit: CACHE_MSG_LIMIT })) {
-        msgs.push(stripMsg(m));
-      }
-      // get entity for username/title
-      let username: string | undefined;
-      let title: string | undefined;
-      try {
-        const entity = await cl.getEntity(d.id);
-        username = entity.username;
-        title = entity.title;
-      } catch { /* best-effort */ }
-      // ponytail: skip private groups (no username)
-      if (username) {
-        this.chatCache.set(String(d.id), { username, title, msgs });
-        count++;
-      }
-      await rndDelay();
-    }
-
-    // persist to disk
-    this.cacheDb.data.cache = Object.fromEntries(this.chatCache);
-    await this.cacheDb.write();
-    this.cacheReady = true;
-    console.log(`[fbi] cache ready: ${count} groups (limit ${limit})`);
   }
 
   /* ====== router ====== */
