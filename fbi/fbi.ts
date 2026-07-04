@@ -377,6 +377,8 @@ class FbiPlugin extends Plugin {
 
     // ponytail: link from live msg entity (need peerId for unknown groups)
     const chatEntity = await cl.getEntity(msg.peerId);
+    // skip private groups — no username → no public link, not cached
+    if (!chatEntity.username) return;
     const preview = htmlEsc((msg.text || "").slice(0, 50) || "[空消息]");
     const link = chatEntity.username
       ? `<a href="https://t.me/${chatEntity.username}/${msg.id}">${preview}</a>`
