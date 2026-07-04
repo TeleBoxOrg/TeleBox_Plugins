@@ -307,8 +307,7 @@ class FbiPlugin extends Plugin {
     const link = chat.username
       ? `<a href="https://t.me/${chat.username}/${found.msg.id}">${text}</a>`
       : `<a href="https://t.me/c/${peelChatId(found.peer)}/${found.msg.id}">${text}</a>`;
-    const userTag = `<a href="tg://user?id=${target.id}">${htmlEsc(target.name)}</a>`;
-    await this.sendReply(msg, `👀 发现嫌疑人 ${userTag} 的作案现场：\n\n${link}\n\n<i>要想人不知除非己莫为。</i>`);
+    await this.sendReply(msg, `👀 发现嫌疑人 ${target.name} 的作案现场：\n\n${link}\n\n<i>要想人不知除非己莫为。</i>`);
   }
 
   /* ====== sv ====== */
@@ -382,8 +381,7 @@ class FbiPlugin extends Plugin {
     const link = chatEntity.username
       ? `<a href="https://t.me/${chatEntity.username}/${msg.id}">${preview}</a>`
       : `<a href="https://t.me/c/${peelChatId(chatEntity.id)}/${msg.id}">${preview}</a>`;
-    const userTag = `<a href="tg://user?id=${entry.targetId}">${htmlEsc(entry.targetName)}</a>`;
-    const result = `🚨 发现嫌疑人 ${userTag} 最新动向\n\n${link}\n\n<i>天网恢恢疏而不漏。</i>`;
+    const result = `🚨 发现嫌疑人 ${entry.targetName} 最新动向\n\n${link}\n\n<i>天网恢恢疏而不漏。</i>`;
 
     // ponytail: client handles channel/normal, one call suffices
     try { await cl.deleteMessages(entry.triggerPeer, [entry.triggerMsgId], { revoke: false }); } catch {}
@@ -442,8 +440,7 @@ class FbiPlugin extends Plugin {
       const href = chat.username ? `https://t.me/${chat.username}/${mid}` : `https://t.me/c/${peelChatId(bestPeer)}/${mid}`;
       link = `<a href="${href}">${htmlEsc(chat.title || chat.username || bestPeer)}</a>`;
     }
-    const userTag = `<a href="tg://user?id=${target.id}">${htmlEsc(target.name)}</a>`;
-    await this.sendReply(msg, `🏚 发现嫌疑人 ${userTag} 的窝点：\n\n${link}\n\n<i>跑得了和尚跑不了庙。</i>`);
+    await this.sendReply(msg, `🏚 发现嫌疑人 ${target.name} 的窝点：\n\n${link}\n\n<i>跑得了和尚跑不了庙。</i>`);
   }
 
   /* ====== ssv ====== */
