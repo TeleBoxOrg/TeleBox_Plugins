@@ -104,11 +104,13 @@ async function fetchAndSendAudio(
   // 轮询新消息：优先寻找按钮消息，其次直接媒体消息
   let replyWithButtons: any | undefined;
   let mediaMsg: any | undefined;
+  let lastMsgId: number | undefined;
   for (let i = 0; i < 20; i++) {
     await sleep(700);
     const msgs = await safeGetMessages(client, bot, { limit: 6 });
     for (const m of msgs.slice().reverse()) {
       if (!m.out && (m.date || 0) >= startTs) {
+        if (!lastMsgId) lastMsgId = m.id;
         if (!mediaMsg && m.media) mediaMsg = m;
         if (!replyWithButtons && (m.buttonCount || 0) > 0) replyWithButtons = m;
       }
@@ -122,6 +124,18 @@ async function fetchAndSendAudio(
       await replyWithButtons.click({});
     } catch (e) {
         await msg.edit({ text: `❌ 点击按钮失败：${htmlEscape((e as any)?.message || String(e))}`, parseMode: "html" });
+
+      // 对 bot 的消息标记为已读
+      try {
+        if (lastMsgId) {
+          await client.invoke(
+            new Api.messages.ReadHistory({
+              peer: await client.getInputEntity(bot),
+              maxId: lastMsgId,
+            })
+          );
+        }
+      } catch {}
 
       return;
     }
@@ -137,6 +151,7 @@ async function fetchAndSendAudio(
           (m.date || 0) >= (replyWithButtons.date || startTs)
         ) {
           mediaMsg = m;
+          lastMsgId = m.id;
           break;
         }
       }
@@ -144,15 +159,30 @@ async function fetchAndSendAudio(
     }
   }
 
+  // 对 bot 的消息标记为已读（无论是否成功获取到媒体）
+  try {
+    if (lastMsgId) {
+      await client.invoke(
+        new Api.messages.ReadHistory({
+          peer: await client.getInputEntity(bot),
+          maxId: lastMsgId,
+        })
+      );
+    }
+  } catch {}
+
   if (!mediaMsg || !mediaMsg.media) {
     await msg.edit({ text: `❌ 未获取到音乐文件。` });
     return;
   }
 
+  // 提取 bot 消息文本，去掉 via @Music163bot
+  let botCaption = (mediaMsg.message || "").replace(/\s*via\s+@Music163bot\s*$/i, "").trim();
+
   // 以纯上传形式回传
   await client.sendFile(msg.peerId, {
     file: mediaMsg.media,
-    caption,
+    caption: botCaption || caption,
     replyTo: msg.replyTo?.replyToTopId || msg.replyTo?.replyToMsgId,
   });
 }
@@ -174,7 +204,7 @@ class NeteasePlugin extends Plugin {
 
       try {
         await msg.edit({
-          text: `🔎 处理中：<code>${htmlEscape(keyword)}</code>`,
+          text: `处理中...`,
           parseMode: "html",
         });
       } catch {}
