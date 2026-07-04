@@ -369,16 +369,16 @@ class FbiPlugin extends Plugin {
     // prevent self-trigger
     if (String(msg.chatId) === entry.triggerPeer && msg.id === entry.triggerMsgId) return;
 
+    // check group is public (has username) before consuming the sv entry
+    const cl = await getGlobalClient();
+    if (!cl) return;
+    const chatEntity = await cl.getEntity(msg.peerId);
+    if (!chatEntity.username) return; // private group — skip silently, keep sv alive
+
     this.sv.delete(sid);
     this.persistDb().catch(() => {});
 
-    const cl = await getGlobalClient();
-    if (!cl) return;
-
     // ponytail: link from live msg entity (need peerId for unknown groups)
-    const chatEntity = await cl.getEntity(msg.peerId);
-    // skip private groups — no username → no public link, not cached
-    if (!chatEntity.username) return;
     const preview = htmlEsc((msg.text || "").slice(0, 50) || "[空消息]");
     const link = chatEntity.username
       ? `<a href="https://t.me/${chatEntity.username}/${msg.id}">${preview}</a>`
