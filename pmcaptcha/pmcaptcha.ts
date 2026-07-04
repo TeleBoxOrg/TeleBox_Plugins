@@ -124,6 +124,13 @@ const K = {
   CAP_KEYWORD:      "captcha_text_keyword",
   CAP_PROMPT:       "captcha_prompt",
   CAP_PASS_ACTIONS: "captcha_pass_actions",
+  // ── 自动过白规则 ──
+  INITIATIVE:       "auto_initiative",        // 主动对话过白开关
+  HISTORY_COUNT:    "auto_history_count",      // 聊天记录过白阈值（-1=禁用）
+  GROUPS_IN_COMMON: "auto_groups_in_common",   // 共同群过白阈值（-1=禁用）
+  WL_WORDS:         "auto_whitelist_words",    // 白名单关键词列表
+  BL_WORDS:         "auto_blacklist_words",    // 黑名单关键词列表
+  PREMIUM:          "auto_premium",            // Premium 用户策略: "allow"|"ban"|"only"|"none"
 } as const;
 
 const D = {
@@ -145,6 +152,24 @@ const DEFAULT_CONFIG = {
   [K.CAP_KEYWORD]:     "我同意",
   [K.CAP_PROMPT]:      "",
   [K.CAP_PASS_ACTIONS]: [] as PassAction[],
+  // ── 自动过白规则默认值 ──
+  [K.INITIATIVE]:       true,              // 默认启用主动对话过白
+  [K.HISTORY_COUNT]:    -1 as number,      // -1 = 禁用聊天记录过白
+  [K.GROUPS_IN_COMMON]: -1 as number,      // -1 = 禁用共同群过白
+  [K.WL_WORDS]:         [] as string[],    // 白名单关键词列表
+  [K.BL_WORDS]:         [] as string[],    // 黑名单关键词列表
+  [K.PREMIUM]:          "none" as string,  // Premium 策略: allow|ban|only|none
+};
+
+/** Premium 用户策略枚举 */
+type PremiumStrategy = "allow" | "ban" | "only" | "none";
+const PREMIUM_STRATEGIES: PremiumStrategy[] = ["allow", "ban", "only", "none"];
+
+const PREMIUM_LABEL: Record<PremiumStrategy, string> = {
+  allow: "允许（Premium 用户自动通过）",
+  ban:   "封禁（拒绝 Premium 用户）",
+  only:  "仅限（仅允许 Premium 用户）",
+  none:  "无（不做特殊处理）",
 };
 
 const DEFAULT_DATA = {
@@ -259,6 +284,16 @@ const cfg = {
   verified:    () => get<VerifiedRecord[]>(D.VERIFIED, []),
   failed:      () => get<FailedRecord[]>(D.FAILED, []),
   passActions: () => get<PassAction[]>(K.CAP_PASS_ACTIONS, []),
+  // ── 自动过白规则访问器 ──
+  initiative:      () => get<boolean>(K.INITIATIVE, true),
+  historyCount:    () => get<number>(K.HISTORY_COUNT, -1),
+  groupsInCommon:  () => get<number>(K.GROUPS_IN_COMMON, -1),
+  wlWords:         () => get<string[]>(K.WL_WORDS, []),
+  blWords:         () => get<string[]>(K.BL_WORDS, []),
+  premium:         (): PremiumStrategy => {
+    const v = get<string>(K.PREMIUM, "none");
+    return PREMIUM_STRATEGIES.includes(v as PremiumStrategy) ? v as PremiumStrategy : "none";
+  },
 };
 
 // ─── 白名单 ───────────────────────────────────────────────────────────────────
@@ -1073,6 +1108,234 @@ async function handleReply(client: TelegramClient, userId: number, input: string
   }
 }
 
+// ─── 自动过白规则检查 ─────────────────────────────────────────────────────────
+
+/** 结果类型：pass=自动通过, block=自动拦截, skip=继续下一规则 */
+type AutoRuleResult = "pass" | "block" | "skip";
+
+/**
+ * 1. 主动对话过白 (initiative)
+ *    当我方主动发起私聊时，对方自动加入白名单。
+ *    此规则在 message.out 分支中已内置处理，此处仅作为占位标识。
+ *    实际逻辑在 messageListener 的 message.out 分支中。
+ */
+
+/**
+ * 2. 聊天记录过白 (chat_history)
+ *    用户历史消息数 >= N 时自动通过
+ */
+async function checkChatHistory(client: TelegramClient, userId: number, currentMsgId: number): Promise<AutoRuleResult> {
+  const threshold = cfg.historyCount();
+  if (threshold <= 0) return "skip"; // 禁用
+
+  try {
+    // 获取与该用户的聊天记录（排除当前消息）
+    const messages = await client.getMessages(userId, { limit: threshold + 1 });
+    let count = 0;
+    for (const msg of messages) {
+      if (msg.id !== currentMsgId) count++;
+    }
+    if (count >= threshold) {
+      wl.add(userId);
+      log(LogLevel.INFO, `Auto-pass user ${userId} by chat_history (${count} >= ${threshold})`);
+      return "pass";
+    }
+  } catch (e) {
+    log(LogLevel.WARN, `checkChatHistory failed for ${userId}`, e);
+  }
+  return "skip";
+}
+
+/**
+ * 3. 共同群过白 (groups_in_common)
+ *    用户与自己的共同群 >= N 个时自动通过
+ */
+async function checkGroupsInCommon(client: TelegramClient, userId: number): Promise<AutoRuleResult> {
+  const threshold = cfg.groupsInCommon();
+  if (threshold < 0) return "skip"; // 禁用
+
+  try {
+    const result = await client.invoke(
+      new Api.users.GetFullUser({ id: userId })
+    ) as any;
+    const commonChatsCount = result?.fullUser?.commonChatsCount ?? 0;
+    if (commonChatsCount >= threshold) {
+      wl.add(userId);
+      log(LogLevel.INFO, `Auto-pass user ${userId} by groups_in_common (${commonChatsCount} >= ${threshold})`);
+      return "pass";
+    }
+  } catch (e) {
+    log(LogLevel.WARN, `checkGroupsInCommon failed for ${userId}`, e);
+  }
+  return "skip";
+}
+
+/**
+ * 4. 关键词过白 (word_filter)
+ *    消息包含白名单关键词 → 自动通过
+ *    消息包含黑名单关键词 → 自动拦截
+ */
+async function checkWordFilter(client: TelegramClient, userId: number, message: Api.Message): Promise<AutoRuleResult> {
+  const text = message.text || (message as any).caption || "";
+  if (!text) return "skip";
+
+  // 白名单关键词检查
+  const wlWords = cfg.wlWords();
+  if (wlWords.length > 0) {
+    for (const word of wlWords) {
+      if (text.includes(word)) {
+        wl.add(userId);
+        log(LogLevel.INFO, `Auto-pass user ${userId} by whitelist word: "${word}"`);
+        return "pass";
+      }
+    }
+  }
+
+  // 黑名单关键词检查
+  const blWords = cfg.blWords();
+  if (blWords.length > 0) {
+    for (const word of blWords) {
+      if (text.includes(word)) {
+        log(LogLevel.INFO, `Auto-block user ${userId} by blacklist word: "${word}"`);
+        return "block";
+      }
+    }
+  }
+
+  return "skip";
+}
+
+/**
+ * 5. Premium 用户处理 (premium)
+ *    allow: Premium 用户自动通过
+ *    ban:   Premium 用户自动拦截
+ *    only:  仅允许 Premium 用户（非 Premium 自动拦截）
+ *    none:  不做特殊处理
+ */
+async function checkPremium(client: TelegramClient, userId: number, message: Api.Message): Promise<AutoRuleResult> {
+  const strategy = cfg.premium();
+  if (strategy === "none") return "skip";
+
+  // 获取用户 premium 状态
+  const sender = (message as any).sender ?? (message as any)._sender;
+  let isPremium = false;
+  if (sender) {
+    isPremium = !!(sender.premium);
+  } else {
+    try {
+      const result = await client.invoke(
+        new Api.users.GetFullUser({ id: userId })
+      ) as any;
+      isPremium = !!(result?.users?.[0]?.premium);
+    } catch (e) {
+      log(LogLevel.WARN, `checkPremium: cannot get premium status for ${userId}`, e);
+      return "skip";
+    }
+  }
+
+  switch (strategy) {
+    case "allow":
+      if (isPremium) {
+        wl.add(userId);
+        log(LogLevel.INFO, `Auto-pass Premium user ${userId} (strategy=allow)`);
+        return "pass";
+      }
+      return "skip";
+
+    case "ban":
+      if (isPremium) {
+        log(LogLevel.INFO, `Auto-block Premium user ${userId} (strategy=ban)`);
+        return "block";
+      }
+      return "skip";
+
+    case "only":
+      if (!isPremium) {
+        log(LogLevel.INFO, `Auto-block non-Premium user ${userId} (strategy=only)`);
+        return "block";
+      }
+      wl.add(userId);
+      log(LogLevel.INFO, `Auto-pass Premium user ${userId} (strategy=only)`);
+      return "pass";
+
+    default:
+      return "skip";
+  }
+}
+
+/**
+ * 执行所有自动过白规则（按优先级顺序）
+ * 返回 true 表示已处理（通过或拦截），messageListener 应直接返回
+ * 返回 false 表示继续走验证码流程
+ */
+async function runAutoRules(client: TelegramClient, userId: number, message: Api.Message): Promise<boolean> {
+  // 规则 1: initiative 已在 message.out 分支中处理
+
+  // 规则 2: 聊天记录过白
+  const historyResult = await checkChatHistory(client, userId, message.id);
+  if (historyResult === "pass") return true;
+  if (historyResult === "block") {
+    await executeBlockActions(client, userId);
+    return true;
+  }
+
+  // 规则 3: 共同群过白
+  const groupsResult = await checkGroupsInCommon(client, userId);
+  if (groupsResult === "pass") return true;
+  if (groupsResult === "block") {
+    await executeBlockActions(client, userId);
+    return true;
+  }
+
+  // 规则 4: 关键词过白 / 黑名单拦截
+  const wordResult = await checkWordFilter(client, userId, message);
+  if (wordResult === "pass") return true;
+  if (wordResult === "block") {
+    await executeBlockActions(client, userId);
+    return true;
+  }
+
+  // 规则 5: Premium 用户策略
+  const premiumResult = await checkPremium(client, userId, message);
+  if (premiumResult === "pass") return true;
+  if (premiumResult === "block") {
+    await executeBlockActions(client, userId);
+    return true;
+  }
+
+  return false; // 所有规则都未触发，继续正常验证流程
+}
+
+/**
+ * 执行自动拦截操作（黑名单/Premium ban 等触发时）
+ * 复用 captcha 失败的操作逻辑
+ */
+async function executeBlockActions(client: TelegramClient, userId: number) {
+  try {
+    await archiveChat(client, userId);
+    await muteChat(client, userId);
+    const actions = cfg.failActions();
+    for (const action of actions) {
+      switch (action) {
+        case FailAction.BLOCK:
+          try { await client.invoke(new Api.contacts.Block({ id: userId })); } catch {}
+          break;
+        case FailAction.REPORT:
+          try { await client.invoke(new Api.account.ReportPeer({ peer: userId, reason: new Api.InputReportReasonSpam(), message: "" })); } catch {}
+          break;
+        case FailAction.DELETE:
+          try { await client.invoke(new Api.messages.DeleteHistory({ peer: userId, maxId: 0, justClear: false, revoke: true })); } catch {}
+          break;
+      }
+    }
+    const name = await getDisplayName(client, userId).catch(() => String(userId));
+    rec.addFailed(userId, name, "max_tries", usernameCache.get(userId));
+    log(LogLevel.INFO, `Auto-block actions executed for user ${userId}`);
+  } catch (e) {
+    log(LogLevel.ERROR, `executeBlockActions failed for ${userId}`, e);
+  }
+}
+
 // ─── 消息监听 ─────────────────────────────────────────────────────────────────
 
 async function messageListener(message: Api.Message) {
@@ -1141,6 +1404,9 @@ async function messageListener(message: Api.Message) {
     }
 
     if (cfg.verified().some(r => r.id === userId)) return;
+
+    // ── 运行自动过白规则 ──
+    if (await runAutoRules(client, userId, message)) return;
 
     await archiveChat(client, userId);
     await muteChat(client, userId);
@@ -1259,10 +1525,26 @@ function helpText(section?: string): string {
 • <code>${p}pmc record del failed <ID>/all</code>
   删除失败记录</blockquote>
 
+<b>🤖 自动过白规则：</b>
+<blockquote expandable>优先级顺序依次检查（有规则触发即停止）：
+1️⃣ 主动对话 — 我方主动发起私聊时对方自动通过
+2️⃣ 聊天记录 — 用户历史消息数 ≥ N 时自动通过
+3️⃣ 共同群 — 用户与自己的共同群 ≥ N 个时自动通过
+4️⃣ 关键词 — 消息包含白名单词自动通过，黑名单词自动拦截
+5️⃣ Premium — 根据策略自动通过/拦截 Premium 用户
+
+• <code>${p}pmc set initiative on/off</code> — 启用/禁用主动对话过白
+• <code>${p}pmc set history &lt;N&gt;</code> — 聊天记录过白（-1=禁用）
+• <code>${p}pmc set groups &lt;N&gt;</code> — 共同群过白（-1=禁用）
+• <code>${p}pmc set wl-words &lt;词1 词2…&gt;</code> — 白名单关键词
+• <code>${p}pmc set bl-words &lt;词1 词2…&gt;</code> — 黑名单关键词
+• <code>${p}pmc set premium allow/ban/only/none</code> — Premium 策略</blockquote>
+
 <b>ℹ️ 使用说明：</b>
 • 验证失败默认执行静音+归档
 • 我方主动发起对话时对方自动通过验证
-• 支持中/英文设置（如：屏蔽/block）`,
+• 支持中/英文设置（如：屏蔽/block）
+• 自动过白规则按优先级检查，任何规则触发立即处理`,
 
     basic: `<b>🔒 基础命令</b>
 
@@ -1292,13 +1574,11 @@ function helpText(section?: string): string {
 
     set: `<b>⚙️ 参数设置</b>
 
-<blockquote expandable><b>超时 / 次数</b>
+<blockquote expandable><b>验证参数</b>
 • <code>${p}pmc set time &lt;秒&gt;</code>
   验证超时（0 = 不限时，默认 30）
 • <code>${p}pmc set tries &lt;次&gt;</code>
   最大尝试次数（0 = 不限，默认 3）
-
-<b>文字模式</b>
 • <code>${p}pmc set keyword &lt;关键词&gt;</code>
   文字模式关键词（默认"我同意"）
 • <code>${p}pmc set prompt &lt;文本&gt;</code>
@@ -1306,31 +1586,33 @@ function helpText(section?: string): string {
   └ math 模式：<code>{question}</code> → 题目占位符
   └ text 模式：<code>{keyword}</code> → 关键词占位符
 
-<b>失败操作</b>（可复选，空格分隔）
-• <code>${p}pmc set fail block</code> / <code>屏蔽</code>
-  屏蔽用户
-• <code>${p}pmc set fail delete</code> / <code>删除</code>
-  双方撤回全部对话
-• <code>${p}pmc set fail report</code> / <code>举报</code>
-  举报为垃圾信息
-• <code>${p}pmc set fail mute</code> / <code>静音</code>
-  永久静音（失败时已默认执行）
-• <code>${p}pmc set fail archive</code> / <code>归档</code>
-  归档（失败时已默认执行）
-• <code>${p}pmc set fail none</code> / <code>无</code>
-  清除所有额外操作
-  ✏️ 示例：<code>${p}pmc set fail 屏蔽 举报</code>
+<b>失败/通过操作</b>（可复选，空格分隔）
+• <code>${p}pmc set fail block</code> / <code>屏蔽</code> — 屏蔽用户
+• <code>${p}pmc set fail delete</code> / <code>删除</code> — 双方撤回全部对话
+• <code>${p}pmc set fail report</code> / <code>举报</code> — 举报为垃圾信息
+• <code>${p}pmc set fail mute</code> / <code>静音</code> — 永久静音（默认已执行）
+• <code>${p}pmc set fail archive</code> / <code>归档</code> — 归档（默认已执行）
+• <code>${p}pmc set pass unmute</code> / <code>取消静音</code> — 验证通过后取消静音
+• <code>${p}pmc set pass unarchive</code> / <code>取消归档</code> — 验证通过后取消归档
+• <code>${p}pmc set pass wl</code> / <code>白名单</code> — 验证通过后加入白名单
+  ✏️ 示例：<code>${p}pmc set fail 屏蔽 举报</code>、<code>${p}pmc set pass 取消静音</code>
   ℹ️ 修改后正在进行中的验证消息实时更新
 
-<b>通过操作</b>（可复选）
-• <code>${p}pmc set pass unmute</code> / <code>取消静音</code>
-  通过后取消静音
-• <code>${p}pmc set pass unarchive</code> / <code>取消归档</code>
-  通过后取消归档
-• <code>${p}pmc set pass wl</code> / <code>白名单</code>
-  通过后加入白名单
-• <code>${p}pmc set pass none</code> / <code>无</code>
-  清除所有通过操作</blockquote>`,
+<b>自动过白规则</b>（优先级依次检查）
+• <code>${p}pmc set initiative on/off</code>
+  主动对话过白（默认 on）— 我方主动发起私聊时对方自动通过
+• <code>${p}pmc set history &lt;数字&gt;</code>
+  聊天记录过白（-1=禁用）— 用户历史消息数 ≥ N 时自动通过
+• <code>${p}pmc set groups &lt;数字&gt;</code>
+  共同群过白（-1=禁用）— 用户与自己的共同群 ≥ N 个时自动通过
+• <code>${p}pmc set wl-words &lt;词1 词2…&gt;</code>
+  白名单关键词 — 消息包含这些词时自动通过（none清空）
+• <code>${p}pmc set bl-words &lt;词1 词2…&gt;</code>
+  黑名单关键词 — 消息包含这些词时自动拦截（none清空）
+• <code>${p}pmc set premium allow/ban/only/none</code>
+  Premium 用户策略
+  └ allow: Premium 用户自动通过 / ban: Premium 用户自动拦截
+  └ only: 仅允许 Premium 用户 / none: 不做特殊处理（默认）</blockquote>`,
 
     wl: `<b>👥 白名单管理</b>
 
@@ -1436,16 +1718,38 @@ const pmcaptcha = async (message: Api.Message) => {
         const pa  = cfg.passActions();
         const rawMode = get<string>(K.CAP_MODE, CaptchaMode.MATH);
         const modeInvalid = !(Object.values(CaptchaMode) as string[]).includes(rawMode);
+        
+        // 自动过白规则状态
+        const autoRulesStatus = [
+          cfg.initiative() ? "✅ 主动对话" : undefined,
+          cfg.historyCount() > 0 ? `✅ 聊天记录(${cfg.historyCount()})` : undefined,
+          cfg.groupsInCommon() > 0 ? `✅ 共同群(${cfg.groupsInCommon()})` : undefined,
+          cfg.wlWords().length > 0 ? `✅ 白词(${cfg.wlWords().length})` : undefined,
+          cfg.blWords().length > 0 ? `✅ 黑词(${cfg.blWords().length})` : undefined,
+          cfg.premium() !== "none" ? `✅ Premium` : undefined,
+        ].filter(Boolean).join(" | ");
+        
         await edit(
           `📊 <b>PMCaptcha v${PLUGIN_VERSION}</b>\n\n` +
+          `<b>核心设置</b>\n` +
           `• 插件：${cfg.pluginOn() ? "✅ 启用" : "🚫 禁用"}\n` +
           `• 验证：${cfg.captchaOn() ? "✅ 开启" : "❌ 关闭（默认）"}\n` +
           `• 模式：${htmlEscape(modeLabel(cfg.mode()))}${modeInvalid ? " ⚠️ 原设置无效已自动降级" : ""}\n` +
           `• 超时：${htmlEscape(cfg.timeout() > 0 ? cfg.timeout() + " 秒" : "不限")}\n` +
-          `• 最大次数：${htmlEscape(cfg.maxTries() > 0 ? cfg.maxTries() + " 次" : "不限")}\n` +
+          `• 最大次数：${htmlEscape(cfg.maxTries() > 0 ? cfg.maxTries() + " 次" : "不限")}\n\n` +
+          `<b>动作配置</b>\n` +
           `• 失败操作：${htmlEscape(fa.length ? fa.map(a => FAIL_ACTION_LABEL[a] ?? a).join("、") : "仅归档静音")}\n` +
           `• 通过操作：${htmlEscape(pa.length ? pa.map(a => PASS_ACTION_LABEL[a] ?? a).join("、") : "无")}\n` +
-          `• 文字关键词：${codeTag(cfg.keyword())}\n` +
+          `• 文字关键词：${codeTag(cfg.keyword())}\n\n` +
+          `<b>自动过白规则</b>\n` +
+          `${autoRulesStatus || "（全部禁用）"}\n` +
+          `• 主动对话：${cfg.initiative() ? "✅" : "❌"}\n` +
+          `• 聊天记录：${cfg.historyCount() > 0 ? `✅ ≥${cfg.historyCount()}条` : "❌"}\n` +
+          `• 共同群：${cfg.groupsInCommon() > 0 ? `✅ ≥${cfg.groupsInCommon()}个` : "❌"}\n` +
+          `• 白名单词：${cfg.wlWords().length} 个\n` +
+          `• 黑名单词：${cfg.blWords().length} 个\n` +
+          `• Premium策略：${PREMIUM_LABEL[cfg.premium()]}\n\n` +
+          `<b>统计信息</b>\n` +
           `• 白名单：${htmlEscape(cfg.whitelist().length)} 人\n` +
           `• 待验证：${htmlEscape(states.size)} 人\n` +
           `• 通过记录：${htmlEscape(cfg.verified().length)}\n` +
@@ -1522,14 +1826,21 @@ const pmcaptcha = async (message: Api.Message) => {
 
         if (!param) {
           await edit(
-            `❌ 用法：<code>${mainPrefix}pmc set &lt;三级命令&gt; &lt;值&gt;</code>\n\n` +
-            `三级命令：\n` +
+            `❌ 用法：<code>${mainPrefix}pmc set &lt;参数&gt; &lt;值&gt;</code>\n\n` +
+            `<b>验证参数</b>\n` +
             `<code>time</code>     — 验证超时秒数（0=不限，默认 30）\n` +
             `<code>tries</code>    — 最大尝试次数（0=不限，默认 3）\n` +
             `<code>keyword</code>  — 文字模式关键词\n` +
             `<code>prompt</code>   — 自定义提示语（留空恢复默认）\n` +
             `<code>fail</code>     — 失败操作（支持中文，如：屏蔽/删除/举报/静音/归档）\n` +
             `<code>pass</code>     — 通过操作（支持中文，如：取消静音/取消归档/白名单）\n\n` +
+            `<b>自动过白规则</b>\n` +
+            `<code>initiative</code> — 主动对话过白 (on/off)\n` +
+            `<code>history</code>    — 聊天记录过白 (数字 或 -1禁用)\n` +
+            `<code>groups</code>     — 共同群过白 (数字 或 -1禁用)\n` +
+            `<code>wl-words</code>   — 白名单关键词 (空格分隔 或 none清空)\n` +
+            `<code>bl-words</code>   — 黑名单关键词 (空格分隔 或 none清空)\n` +
+            `<code>premium</code>    — Premium用户策略 (allow/ban/only/none)\n\n` +
             ``
           );
           break;
@@ -1668,6 +1979,131 @@ const pmcaptcha = async (message: Api.Message) => {
             break;
           }
 
+          // ── 自动过白规则：主动对话 ────────────────────────────────────
+          case "initiative": {
+            const v = args[2]?.toLowerCase();
+            if (!v || !["on", "off"].includes(v)) {
+              await edit(
+                `当前设置：${cfg.initiative() ? "✅ 启用" : "❌ 禁用"}\n\n` +
+                `用法：<code>${mainPrefix}pmc set initiative on/off</code>\n\n` +
+                `说明：启用后，当我方主动发起私聊时，对方自动加入白名单`
+              );
+              break;
+            }
+            set(K.INITIATIVE, v === "on");
+            await edit(`✅ 主动对话过白：${v === "on" ? "✅ 已启用" : "❌ 已禁用"}`);
+            break;
+          }
+
+          // ── 自动过白规则：聊天记录 ────────────────────────────────────
+          case "history": {
+            const n = parseInt(args[2] ?? "");
+            if (isNaN(n) || n < -1) {
+              await edit(
+                `当前设置：${cfg.historyCount() > 0 ? cfg.historyCount() + " 条" : "❌ 禁用"}\n\n` +
+                `用法：<code>${mainPrefix}pmc set history &lt;数字&gt;</code>\n` +
+                `<code>${mainPrefix}pmc set history -1</code> — 禁用此规则\n\n` +
+                `说明：用户历史消息数 ≥ 指定值时自动通过验证`
+              );
+              break;
+            }
+            set(K.HISTORY_COUNT, n);
+            await edit(
+              n > 0
+                ? `✅ 聊天记录过白：历史消息数 ≥ <b>${n}</b> 条时自动通过`
+                : `❌ 聊天记录过白：已禁用`
+            );
+            break;
+          }
+
+          // ── 自动过白规则：共同群 ───────────────────────────────────────
+          case "groups": {
+            const n = parseInt(args[2] ?? "");
+            if (isNaN(n) || n < -1) {
+              await edit(
+                `当前设置：${cfg.groupsInCommon() > 0 ? cfg.groupsInCommon() + " 个" : "❌ 禁用"}\n\n` +
+                `用法：<code>${mainPrefix}pmc set groups &lt;数字&gt;</code>\n` +
+                `<code>${mainPrefix}pmc set groups -1</code> — 禁用此规则\n\n` +
+                `说明：与用户共同所在的群 ≥ 指定值时自动通过验证`
+              );
+              break;
+            }
+            set(K.GROUPS_IN_COMMON, n);
+            await edit(
+              n > 0
+                ? `✅ 共同群过白：共同群数 ≥ <b>${n}</b> 个时自动通过`
+                : `❌ 共同群过白：已禁用`
+            );
+            break;
+          }
+
+          // ── 自动过白规则：关键词白名单 ─────────────────────────────────
+          case "wl-words": case "wl_words": {
+            const words = args.slice(2).filter(Boolean);
+            if (!words.length) {
+              const current = cfg.wlWords();
+              await edit(
+                `当前白名单关键词：${current.length > 0 ? current.map(w => codeTag(w)).join(" ") : "（无）"}\n\n` +
+                `用法：<code>${mainPrefix}pmc set wl-words &lt;关键词1&gt; &lt;关键词2&gt; …</code>\n` +
+                `<code>${mainPrefix}pmc set wl-words none</code> — 清空\n\n` +
+                `说明：消息包含这些关键词时自动通过验证`
+              );
+              break;
+            }
+            if (words.some(w => w.toLowerCase() === "none")) {
+              set(K.WL_WORDS, []);
+              await edit("✅ 白名单关键词已清空");
+              break;
+            }
+            set(K.WL_WORDS, words);
+            await edit(`✅ 白名单关键词已设置：${words.map(w => codeTag(w)).join(" ")}`);
+            break;
+          }
+
+          // ── 自动过白规则：关键词黑名单 ─────────────────────────────────
+          case "bl-words": case "bl_words": {
+            const words = args.slice(2).filter(Boolean);
+            if (!words.length) {
+              const current = cfg.blWords();
+              await edit(
+                `当前黑名单关键词：${current.length > 0 ? current.map(w => codeTag(w)).join(" ") : "（无）"}\n\n` +
+                `用法：<code>${mainPrefix}pmc set bl-words &lt;关键词1&gt; &lt;关键词2&gt; …</code>\n` +
+                `<code>${mainPrefix}pmc set bl-words none</code> — 清空\n\n` +
+                `说明：消息包含这些关键词时自动拦截并执行失败操作`
+              );
+              break;
+            }
+            if (words.some(w => w.toLowerCase() === "none")) {
+              set(K.BL_WORDS, []);
+              await edit("✅ 黑名单关键词已清空");
+              break;
+            }
+            set(K.BL_WORDS, words);
+            await edit(`✅ 黑名单关键词已设置：${words.map(w => codeTag(w)).join(" ")}`);
+            break;
+          }
+
+          // ── 自动过白规则：Premium 用户策略 ────────────────────────────
+          case "premium": {
+            const strategy = args[2]?.toLowerCase() as PremiumStrategy | undefined;
+            if (!strategy || !PREMIUM_STRATEGIES.includes(strategy)) {
+              const current = cfg.premium();
+              await edit(
+                `当前策略：<b>${PREMIUM_LABEL[current]}</b>\n\n` +
+                `用法：<code>${mainPrefix}pmc set premium &lt;策略&gt;</code>\n\n` +
+                `可用策略：\n` +
+                `<code>allow</code> — Premium 用户自动通过\n` +
+                `<code>ban</code>   — Premium 用户自动拦截\n` +
+                `<code>only</code>  — 仅允许 Premium 用户（非 Premium 用户自动拦截）\n` +
+                `<code>none</code>  — 不做特殊处理（默认）`
+              );
+              break;
+            }
+            set(K.PREMIUM, strategy);
+            await edit(`✅ Premium 用户策略：<b>${PREMIUM_LABEL[strategy]}</b>`);
+            break;
+          }
+
           // ── 已废弃参数友好提示 ───────────────────────────────────────────
           case "ext-timeout": case "exttimeout":
             await edit(`❌ ext-timeout 已移除，请使用 <code>${mainPrefix}pmc set time</code>`);
@@ -1686,7 +2122,8 @@ const pmcaptcha = async (message: Api.Message) => {
           default:
             await edit(
               `❌ 未知三级命令：${codeTag(param)}\n\n` +
-              `可用：<code>time</code>、<code>tries</code>、<code>keyword</code>、<code>prompt</code>、<code>fail</code>、<code>pass</code>\n\n` +
+              `验证：<code>time</code>、<code>tries</code>、<code>keyword</code>、<code>prompt</code>、<code>fail</code>、<code>pass</code>\n` +
+              `规则：<code>initiative</code>、<code>history</code>、<code>groups</code>、<code>wl-words</code>、<code>bl-words</code>、<code>premium</code>\n\n` +
               ``
             );
         }
