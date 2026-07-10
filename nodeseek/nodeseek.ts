@@ -20,8 +20,7 @@
  */
 
 import { Plugin } from "@utils/pluginBase";
-import { Api } from "telegram";
-import { TelegramClient } from "telegram";
+import { Api, TelegramClient } from "teleproto";
 import { createDirectoryInAssets } from "@utils/pathHelpers";
 import { Low } from "lowdb";
 import { JSONFilePreset } from "lowdb/node";
