@@ -3,7 +3,7 @@ import { getPrefixes } from "@utils/pluginManager";
 import { Api } from "teleproto";
 import * as fs from "fs/promises";
 import axios from "axios";
-import { exec } from "child_process";
+import { exec, execFile } from "child_process";
 import { promisify } from "util";
 import path from "path";
 import { createDirectoryInAssets } from "@utils/pathHelpers";
@@ -14,6 +14,7 @@ const mainPrefix = prefixes[0];
 
 
 const execPromise = promisify(exec);
+const execFileAsync = promisify(execFile);
 const DATA_FILE_NAME = "tts_data.json";
 
 interface UserConfig {
@@ -144,7 +145,7 @@ async function generateMusic(
     );
     await fs.writeFile(rawFile, res.data);
 
-    const cmd: string[] = [`ffmpeg -y -i "${rawFile}"`];
+    const args: string[] = ["-y", "-i", rawFile];
 
     if (meta.cover) {
       const coverPath = path.join(cacheDir, `${meta.album}.jpg`);
@@ -154,28 +155,30 @@ async function generateMusic(
         await fs.writeFile(coverPath, coverRes.data);
       }
 
-      cmd.push(
-        `-i "${coverPath}"`,
-        `-map 0:a -map 1:v`,
-        `-c:a libmp3lame -q:a 2`,
-        `-c:v mjpeg`,
-        `-id3v2_version 3`,
-        `-disposition:v attached_pic`,
-        `-metadata:s:v title="Album cover"`,
-        `-metadata:s:v comment="Cover (front)"`
+      args.push(
+        "-i", coverPath,
+        "-map", "0:a",
+        "-map", "1:v",
+        "-c:a", "libmp3lame",
+        "-q:a", "2",
+        "-c:v", "mjpeg",
+        "-id3v2_version", "3",
+        "-disposition:v", "attached_pic",
+        "-metadata:s:v", "title=Album cover",
+        "-metadata:s:v", "comment=Cover (front)"
       );
     } else {
-      cmd.push(`-c:a libmp3lame -q:a 2`);
+      args.push("-c:a", "libmp3lame", "-q:a", "2");
     }
 
-    cmd.push(
-      `-metadata title="${meta.title}"`,
-      `-metadata artist="${meta.artist}"`,
-      `-metadata album="${meta.album}"`,
-      `"${finalFile}"`
+    args.push(
+      "-metadata", `title=${meta.title}`,
+      "-metadata", `artist=${meta.artist}`,
+      "-metadata", `album=${meta.album}`,
+      finalFile
     );
 
-    await execPromise(cmd.join(" "));
+    await execFileAsync("ffmpeg", args, { shell: false });
     return finalFile;
   } catch (e: any) {
     console.error("生成音乐失败:", e.message || e);
@@ -199,7 +202,7 @@ async function generateSpeechSimple(
       responseType: "arraybuffer",
     });
     await fs.writeFile(mp3File, res.data);
-    await execPromise(`ffmpeg -y -i "${mp3File}" -c:a libopus -b:a 64k -vbr on "${oggFile}"`);
+    await execFileAsync("ffmpeg", ["-y", "-i", mp3File, "-c:a", "libopus", "-b:a", "64k", "-vbr", "on", oggFile], { shell: false });
     return { oggFile, mp3File };
   } catch {
     return null;
