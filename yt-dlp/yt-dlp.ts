@@ -1,7 +1,7 @@
 import { Api } from "teleproto";
 import { Plugin } from "@utils/pluginBase";
 import { getPrefixes } from "@utils/pluginManager";
-import { exec } from "child_process";
+import { execFile } from "child_process";
 import util from "util";
 import fs from "fs";
 import path from "path";
@@ -15,7 +15,7 @@ const prefixes = getPrefixes();
 const mainPrefix = prefixes[0];
 
 
-const execPromise = util.promisify(exec);
+const execFilePromise = util.promisify(execFile);
 
 const DOWNLOAD_TEMP_PATH = path.join(process.cwd(), "temp", "youtube");
 const BIN_DIR = path.join(process.cwd(), "assets", "ytdlp");
@@ -283,7 +283,7 @@ async function handleUpdateCommand(msg: Api.Message): Promise<void> {
         
         // 获取版本号
         try {
-            const { stdout } = await execPromise(`${YTDLP_PATH} --version`);
+            const { stdout } = await execFilePromise(YTDLP_PATH, ["--version"]);
             const version = stdout.trim();
             await msg.edit({ text: toSimplified(`✅ yt-dlp 已更新至最新版本！\n\n当前版本: ${version}`) });
         } catch {
@@ -305,7 +305,7 @@ async function handleUpdateCommand(msg: Api.Message): Promise<void> {
 
 async function getVideoInfo(query: string): Promise<{ title: string; uploader: string; duration: number } | null> {
     try {
-        const { stdout } = await execPromise(`${YTDLP_PATH} "ytsearch1:${query}" -j --no-download --no-warnings --no-check-certificate`);
+        const { stdout } = await execFilePromise(YTDLP_PATH, ["ytsearch1:" + query, "-j", "--no-download", "--no-warnings", "--no-check-certificate"]);
         if (!stdout) return null;
         const videoData = JSON.parse(stdout.trim().split("\n").pop()!);
         if (videoData?.title) {
@@ -381,22 +381,37 @@ async function downloadAndUploadSong(msg: Api.Message, songQuery: string, prefer
     artistName = toSimplified(artistName);
     if(albumName) albumName = toSimplified(albumName);
 
-    const cleanFileName = buildNormalizedFileName(artistName, songTitle);
-    const outputTemplate = path.join(DOWNLOAD_TEMP_PATH, `${cleanFileName}.%(ext)s`);
-    const escapedTitle = songTitle.replace(/"/g, '\\"');
-    const escapedArtist = artistName.replace(/"/g, '\\"');
-    
-    let command = `${YTDLP_PATH} "ytsearch1:${finalSearchQuery}" -x --audio-format mp3 --audio-quality 0 --embed-thumbnail --write-thumbnail --convert-thumbnails jpg -o "${outputTemplate}" --metadata "title=${escapedTitle}" --metadata "artist=${escapedArtist}" --no-warnings --no-check-certificate --user-agent "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36" --extractor-args "youtube:player_client=android,web"`;
+    const cleanFileName = buildNormalizedFileName(artistName, songTitle);
+    const outputTemplate = path.join(DOWNLOAD_TEMP_PATH, `${cleanFileName}.%(ext)s`);
+
+    // 使用 execFile 参数数组（无 shell 插值），从根本上杜绝命令注入。
+    // finalSearchQuery / songTitle / artistName / albumName 均为用户输入，
+    // 绝不能拼进 shell 字符串。
+    const args: string[] = [
+        `ytsearch1:${finalSearchQuery}`,
+        "-x",
+        "--audio-format", "mp3",
+        "--audio-quality", "0",
+        "--embed-thumbnail",
+        "--write-thumbnail",
+        "--convert-thumbnails", "jpg",
+        "-o", outputTemplate,
+        "--metadata", `title=${songTitle}`,
+        "--metadata", `artist=${artistName}`,
+        "--no-warnings",
+        "--no-check-certificate",
+        "--user-agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "--extractor-args", "youtube:player_client=android,web",
+    ];
 
     if (albumName) {
-        const escapedAlbum = albumName.replace(/"/g, '\\"');
-        command += ` --metadata "album=${escapedAlbum}"`;
+        args.push("--metadata", `album=${albumName}`);
     }
 
-    await msg.edit({ text: `正在下载: ${songTitle}\n歌手: ${artistName}` });
+    await msg.edit({ text: `正在下载: ${songTitle}\n歌手: ${artistName}` });
 
-    try {
-        await execPromise(command, { timeout: 180000 }); 
+    try {
+        await execFilePromise(YTDLP_PATH, args, { timeout: 180000 });
     } catch (error: any) {
         const errorMessage = error.stderr || error.message || "未知错误";
         if (errorMessage.includes("HTTP Error 403")) {
