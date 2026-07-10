@@ -248,7 +248,8 @@ class FbiPlugin extends Plugin {
       try {
         const e = await cl.getEntity(raw);
         targetId = String(e.id);
-        name = e.username ? `@${e.username}` : e.firstName || e.title || targetId;
+        const plain = htmlEsc([e.firstName, e.lastName].filter(Boolean).join(' ') || e.title || targetId);
+        name = e.username ? `<a href="https://t.me/${e.username}">${plain}</a>` : plain;
       } catch {
         name = raw;
         targetId = raw.replace(/^@/, "");
@@ -259,7 +260,8 @@ class FbiPlugin extends Plugin {
         targetId = String(r.senderId);
         try {
           const u = await cl.getEntity(r.senderId as any);
-          name = u.username ? `@${u.username}` : u.firstName || targetId;
+          const plain = htmlEsc([u.firstName, u.lastName].filter(Boolean).join(' ') || targetId);
+          name = u.username ? `<a href="https://t.me/${u.username}">${plain}</a>` : plain;
         } catch {
           name = targetId;
         }
@@ -303,7 +305,7 @@ class FbiPlugin extends Plugin {
 
     // build link from cache, no API call needed
     const chat = this.chatCache.get(found.peer)!;
-    const text = htmlEsc(found.msg.text.slice(0, 50));
+    const text = htmlEsc((found.msg.text || "").slice(0, 50) || "[媒体消息]");
     const link = chat.username
       ? `<a href="https://t.me/${chat.username}/${found.msg.id}">${text}</a>`
       : `<a href="https://t.me/c/${peelChatId(found.peer)}/${found.msg.id}">${text}</a>`;
