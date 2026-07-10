@@ -85,6 +85,7 @@ tpm i <插件名>
 - `netease` - 网易云音乐  
 - `news` - 每日新闻  
 - `nezha` - 哪吒监控  
+- `nodeseek` - NodeSeek 论坛每日签到，领取鸡腿  
 - `ntp` - NTP 时间同步  
 - `openlist` - openlist管理  
 - `oxost` - 回复聊天中的文件与媒体 得到一个临时的下载链接  
@@ -102,6 +103,7 @@ tpm i <插件名>
 - `restore_pin` - 恢复群组被取消的置顶消息  
 - `rev` - 反转你的消息  
 - `save` - 本地保存插件  
+- `say` - 自动语音合成 (MiMo / 火山豆包 / Fish)，每会话独立开关  
 - `search` - 频道消息搜索  
 - `sendat` - 定时消息发送插件  
 - `service` - systemd服务状态查看  
