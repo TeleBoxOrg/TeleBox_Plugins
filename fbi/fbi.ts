@@ -10,9 +10,9 @@ import * as path from "path";
 const PREFIX = getPrefixes()[0];
 const HELP = `🕵️ <b>FBI 跨群组追踪</b>
 
-• <code>${PREFIX}fbi cs [目标]</code> — 搜索目标最新消息
-• <code>${PREFIX}fbi sv [目标]</code> — 蹲守目标下一条消息
-• <code>${PREFIX}fbi ds [目标]</code> — 分析目标最活跃群组
+• <code>${PREFIX}fbi det（detect） [目标]</code> — 现场勘察（搜索目标最新消息）
+• <code>${PREFIX}fbi sur（surveil） [目标]</code> — 监视追踪（蹲守目标下一条消息）
+• <code>${PREFIX}fbi loc（locate） [目标]</code> — 窝点锁定（分析目标最活跃群组）
 • <code>${PREFIX}fbi ssv</code> — 终止所有蹲守
 • <code>${PREFIX}fbi cache</code> — 查看/管理消息缓存
 • <code>${PREFIX}fbi help</code> — 本帮助
@@ -223,9 +223,9 @@ class FbiPlugin extends Plugin {
 
     try {
       switch (sub) {
-        case "cs":    return this.doCs(msg, args);
-        case "sv":    return this.doSv(msg, args);
-        case "ds":    return this.doDs(msg, args);
+        case "det":   return this.doCs(msg, args);
+        case "sur":   return this.doSv(msg, args);
+        case "loc":   return this.doDs(msg, args);
         case "ssv":   return this.doSsv(msg);
         case "cache": return this.doCache(msg, args);
         default:      return msg.edit({ text: HELP, parseMode: "html" });
