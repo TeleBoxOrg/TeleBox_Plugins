@@ -10,9 +10,10 @@ import * as path from "path";
 const PREFIX = getPrefixes()[0];
 const HELP = `🕵️ <b>FBI 跨群组追踪</b>
 
-• <code>${PREFIX}fbi cs [目标]</code> — 搜索目标最新消息
-• <code>${PREFIX}fbi sv [目标]</code> — 蹲守目标下一条消息
-• <code>${PREFIX}fbi ds [目标]</code> — 分析目标最活跃群组
+• <code>${PREFIX}fbi det（detect） [目标]</code> — 现场勘察（搜索目标最新消息）
+• <code>${PREFIX}fbi sur（surveil） [目标]</code> — 监视追踪（蹲守目标下一条消息）
+• <code>${PREFIX}fbi obs（observation） [目标]</code> — 定点监视（蹲守指定群组内目标下一条消息）
+• <code>${PREFIX}fbi loc（locate） [目标]</code> — 窝点锁定（分析目标最活跃群组）
 • <code>${PREFIX}fbi ssv</code> — 终止所有蹲守
 • <code>${PREFIX}fbi cache</code> — 查看/管理消息缓存
 • <code>${PREFIX}fbi help</code> — 本帮助
@@ -60,6 +61,7 @@ interface SvEntry {
   targetName: string;
   triggerPeer: string;
   triggerMsgId: number;
+  scopePeer?: string; // mon only — restrict to a single group
 }
 
 interface FbiConfig {
@@ -92,7 +94,6 @@ class FbiPlugin extends Plugin {
   private cacheReady = false;
   private cacheDirty = false;
   private cachePersistTimer: ReturnType<typeof setTimeout> | null = null;
-  private sweepTimer: ReturnType<typeof setInterval> | null = null;
 
   /** remove messages older than 30 days from a chat cache, return true if any pruned */
   private pruneExpired(chat: CachedChat): boolean {
@@ -130,7 +131,7 @@ class FbiPlugin extends Plugin {
     this.cacheReady = true;
 
     // cold sweep every 24h — prune expired messages in silent groups
-    this.sweepTimer = setInterval(() => {
+    setInterval(() => {
       if (!this.cacheReady) return;
       let anyPruned = false;
       for (const chat of this.chatCache.values())
@@ -224,9 +225,10 @@ class FbiPlugin extends Plugin {
 
     try {
       switch (sub) {
-        case "cs":    return this.doCs(msg, args);
-        case "sv":    return this.doSv(msg, args);
-        case "ds":    return this.doDs(msg, args);
+        case "det":   return this.doDet(msg, args);
+        case "sur":   return this.doSur(msg, args);
+        case "loc":   return this.doLoc(msg, args);
+        case "obs":   return this.doObs(msg, args);
         case "ssv":   return this.doSsv(msg);
         case "cache": return this.doCache(msg, args);
         default:      return msg.edit({ text: HELP, parseMode: "html" });
@@ -273,7 +275,7 @@ class FbiPlugin extends Plugin {
 
   /* ====== cs (zero-request, reads cache) ====== */
 
-  private async doCs(msg: Api.Message, args: string[]) {
+  private async doDet(msg: Api.Message, args: string[]) {
     if (!this.cacheReady) {
       await msg.edit({ text: "⏳ 缓存正在初始化，请稍后再试。", parseMode: "html" });
       return;
@@ -315,7 +317,7 @@ class FbiPlugin extends Plugin {
 
   /* ====== sv ====== */
 
-  private async doSv(msg: Api.Message, args: string[]) {
+  private async doSur(msg: Api.Message, args: string[]) {
     const cl = await getGlobalClient();
     if (!cl) return;
     const target = await this.resolveTarget(msg, args);
@@ -372,6 +374,9 @@ class FbiPlugin extends Plugin {
     // prevent self-trigger
     if (String(msg.chatId) === entry.triggerPeer && msg.id === entry.triggerMsgId) return;
 
+    // mon scope — only trigger if message is in the target group
+    if (entry.scopePeer && String(msg.chatId) !== entry.scopePeer) return;
+
     // check group is public (has username) before consuming the sv entry
     const cl = await getGlobalClient();
     if (!cl) return;
@@ -397,7 +402,7 @@ class FbiPlugin extends Plugin {
 
   /* ====== ds (zero-request, reads cache) ====== */
 
-  private async doDs(msg: Api.Message, args: string[]) {
+  private async doLoc(msg: Api.Message, args: string[]) {
     if (!this.cacheReady) {
       await msg.edit({ text: "⏳ 缓存正在初始化，请稍后再试。", parseMode: "html" });
       return;
@@ -446,6 +451,65 @@ class FbiPlugin extends Plugin {
       link = `<a href="${href}">${htmlEsc(chat.title || chat.username || bestPeer)}</a>`;
     }
     await this.sendReply(msg, `🏚 发现嫌疑人 ${target.name} 的窝点：\n\n${link}\n\n<i>跑得了和尚跑不了庙。</i>`);
+  }
+
+  /* ====== obs (group-scoped surveillance) ====== */
+
+  private async doObs(msg: Api.Message, args: string[]) {
+    const cl = await getGlobalClient();
+    if (!cl) return;
+
+    // parse group link from first arg
+    let scopePeer: string | undefined;
+    const tme = args[0]?.match(/^(?:https?:\/\/)?t\.me\/(\w+)/i);
+    let targetArgs = args;
+    if (tme) {
+      const gn = tme[1].toLowerCase();
+      targetArgs = args.slice(1);
+      for (const [p, c] of this.chatCache)
+        if (c.username?.toLowerCase() === gn) { scopePeer = p; break; }
+      if (!scopePeer) {
+        try {
+          const e = await cl.getEntity(gn as any);
+          if (e.username?.toLowerCase() === gn) scopePeer = String(e.id);
+        } catch {}
+        if (!scopePeer) {
+          await msg.edit({ text: `❌ 无法解析群组 @${gn}`, parseMode: "html" });
+          return;
+        }
+      }
+    } else {
+      scopePeer = msg.chatId?.toString();
+    }
+
+    if (!scopePeer) {
+      await msg.edit({ text: "❌ 无法确定目标群组", parseMode: "html" });
+      return;
+    }
+
+    const target = await this.resolveTarget(msg, targetArgs);
+    if (!target) {
+      await msg.edit({ text: "❌ 无法识别目标", parseMode: "html" });
+      return;
+    }
+
+    // check group is public
+    const chatEntity = await cl.getEntity(scopePeer as any);
+    if (!chatEntity.username) {
+      await msg.edit({ text: "❌ 仅支持公开群组的定点监视", parseMode: "html" });
+      return;
+    }
+
+    await msg.edit({ text: `🎯 正在对嫌疑人 ${target.name} 进行定点监视...`, parseMode: "html" });
+
+    this.sv.set(target.id, {
+      targetId: target.id,
+      targetName: target.name,
+      triggerPeer: String(msg.chatId),
+      triggerMsgId: msg.id,
+      scopePeer,
+    });
+    await this.persistDb();
   }
 
   /* ====== ssv ====== */
@@ -536,18 +600,6 @@ class FbiPlugin extends Plugin {
     const cl = await getGlobalClient();
     if (!cl) return;
     await cl.sendMessage(original.peerId, { message: text, parseMode: "html", linkPreview: false });
-  }
-
-  /** 清理后台定时器，避免 reload 后定时器泄漏（与 cy.ts 等保持一致） */
-  cleanup(): void {
-    if (this.sweepTimer) {
-      clearInterval(this.sweepTimer);
-      this.sweepTimer = null;
-    }
-    if (this.cachePersistTimer) {
-      clearTimeout(this.cachePersistTimer);
-      this.cachePersistTimer = null;
-    }
   }
 }
 
