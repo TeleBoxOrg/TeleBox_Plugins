@@ -7,6 +7,7 @@ import * as path from "path";
 import axios from "axios";
 import { JSONFilePreset } from "lowdb/node";
 import { createDirectoryInAssets } from "@utils/pathHelpers";
+import { sanitizeMediaFileName } from "./sanitizeFileName";
 
 import { exec } from "child_process";
 import { promisify } from "util";
@@ -575,7 +576,7 @@ class OpenListPlugin extends Plugin {
         );
 
         if (fileNameAttr) {
-          fileName = fileNameAttr.fileName;
+          fileName = sanitizeMediaFileName(fileNameAttr.fileName);
         } else {
           // 根据 mimeType 推断后缀
           let ext = "";
@@ -600,6 +601,10 @@ class OpenListPlugin extends Plugin {
         // 其他媒体类型，暂时命名为 media_xxx
         fileName = `media_${Date.now()}`;
       }
+
+      // DocumentAttributeFilename 由发送者控制，必须压成单个安全路径段，
+      // 避免 `../` 或绝对路径逃逸 /root/Openlist 或改变 OpenList 目标目录。
+      fileName = sanitizeMediaFileName(fileName);
 
       await msg.edit({ text: `正在下载: ${htmlEscape(fileName)}`, parseMode: "html" });
 
