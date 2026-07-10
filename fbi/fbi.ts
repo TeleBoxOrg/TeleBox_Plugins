@@ -12,7 +12,7 @@ const HELP = `🕵️ <b>FBI 跨群组追踪</b>
 
 • <code>${PREFIX}fbi det（detect） [目标]</code> — 现场勘察（搜索目标最新消息）
 • <code>${PREFIX}fbi sur（surveil） [目标]</code> — 监视追踪（蹲守目标下一条消息）
-• <code>${PREFIX}fbi mon（monitor） [目标]</code> — 定点监视（蹲守指定群组内目标下一条消息）
+• <code>${PREFIX}fbi obs（observation） [目标]</code> — 定点监视（蹲守指定群组内目标下一条消息）
 • <code>${PREFIX}fbi loc（locate） [目标]</code> — 窝点锁定（分析目标最活跃群组）
 • <code>${PREFIX}fbi ssv</code> — 终止所有蹲守
 • <code>${PREFIX}fbi cache</code> — 查看/管理消息缓存
@@ -94,7 +94,6 @@ class FbiPlugin extends Plugin {
   private cacheReady = false;
   private cacheDirty = false;
   private cachePersistTimer: ReturnType<typeof setTimeout> | null = null;
-  private sweepTimer: ReturnType<typeof setInterval> | null = null;
 
   /** remove messages older than 30 days from a chat cache, return true if any pruned */
   private pruneExpired(chat: CachedChat): boolean {
@@ -132,7 +131,7 @@ class FbiPlugin extends Plugin {
     this.cacheReady = true;
 
     // cold sweep every 24h — prune expired messages in silent groups
-    this.sweepTimer = setInterval(() => {
+    setInterval(() => {
       if (!this.cacheReady) return;
       let anyPruned = false;
       for (const chat of this.chatCache.values())
@@ -229,7 +228,7 @@ class FbiPlugin extends Plugin {
         case "det":   return this.doDet(msg, args);
         case "sur":   return this.doSur(msg, args);
         case "loc":   return this.doLoc(msg, args);
-        case "mon":   return this.doMon(msg, args);
+        case "obs":   return this.doObs(msg, args);
         case "ssv":   return this.doSsv(msg);
         case "cache": return this.doCache(msg, args);
         default:      return msg.edit({ text: HELP, parseMode: "html" });
@@ -454,9 +453,9 @@ class FbiPlugin extends Plugin {
     await this.sendReply(msg, `🏚 发现嫌疑人 ${target.name} 的窝点：\n\n${link}\n\n<i>跑得了和尚跑不了庙。</i>`);
   }
 
-  /* ====== mon (group-scoped surveillance) ====== */
+  /* ====== obs (group-scoped surveillance) ====== */
 
-  private async doMon(msg: Api.Message, args: string[]) {
+  private async doObs(msg: Api.Message, args: string[]) {
     const cl = await getGlobalClient();
     if (!cl) return;
 
@@ -601,18 +600,6 @@ class FbiPlugin extends Plugin {
     const cl = await getGlobalClient();
     if (!cl) return;
     await cl.sendMessage(original.peerId, { message: text, parseMode: "html", linkPreview: false });
-  }
-
-  /** 清理后台定时器，避免 reload 后定时器泄漏（与 cy.ts 等保持一致） */
-  cleanup(): void {
-    if (this.sweepTimer) {
-      clearInterval(this.sweepTimer);
-      this.sweepTimer = null;
-    }
-    if (this.cachePersistTimer) {
-      clearTimeout(this.cachePersistTimer);
-      this.cachePersistTimer = null;
-    }
   }
 }
 
