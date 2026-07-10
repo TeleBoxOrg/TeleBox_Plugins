@@ -12,8 +12,8 @@ const HELP = `🕵️ <b>FBI 跨群组追踪</b>
 
 • <code>${PREFIX}fbi det（detect） [目标]</code> — 现场勘察（搜索目标最新消息）
 • <code>${PREFIX}fbi sur（surveil） [目标]</code> — 监视追踪（蹲守目标下一条消息）
+• <code>${PREFIX}fbi mon（monitor） [目标]</code> — 定点监视（蹲守指定群组内目标下一条消息）
 • <code>${PREFIX}fbi loc（locate） [目标]</code> — 窝点锁定（分析目标最活跃群组）
-• <code>${PREFIX}fbi mon（monitor） [目标]</code> — 定点监视（蹲守指定群组内目标最新消息）
 • <code>${PREFIX}fbi ssv</code> — 终止所有蹲守
 • <code>${PREFIX}fbi cache</code> — 查看/管理消息缓存
 • <code>${PREFIX}fbi help</code> — 本帮助
@@ -61,6 +61,7 @@ interface SvEntry {
   targetName: string;
   triggerPeer: string;
   triggerMsgId: number;
+  scopePeer?: string; // mon only — restrict to a single group
 }
 
 interface FbiConfig {
@@ -373,6 +374,9 @@ class FbiPlugin extends Plugin {
     // prevent self-trigger
     if (String(msg.chatId) === entry.triggerPeer && msg.id === entry.triggerMsgId) return;
 
+    // mon scope — only trigger if message is in the target group
+    if (entry.scopePeer && String(msg.chatId) !== entry.scopePeer) return;
+
     // check group is public (has username) before consuming the sv entry
     const cl = await getGlobalClient();
     if (!cl) return;
@@ -449,55 +453,63 @@ class FbiPlugin extends Plugin {
     await this.sendReply(msg, `🏚 发现嫌疑人 ${target.name} 的窝点：\n\n${link}\n\n<i>跑得了和尚跑不了庙。</i>`);
   }
 
-  /* ====== mon (scoped to one group) ====== */
+  /* ====== mon (group-scoped surveillance) ====== */
 
   private async doMon(msg: Api.Message, args: string[]) {
-    if (!this.cacheReady) {
-      await msg.edit({ text: "⏳ 缓存正在初始化，请稍后再试。", parseMode: "html" });
-      return;
-    }
-    await msg.edit({ text: "🎯 定点监视部署中...", parseMode: "html" });
+    const cl = await getGlobalClient();
+    if (!cl) return;
 
     // parse group link from first arg
-    let peer: string | undefined;
+    let scopePeer: string | undefined;
     const tme = args[0]?.match(/^(?:https?:\/\/)?t\.me\/(\w+)/i);
     let targetArgs = args;
     if (tme) {
       const gn = tme[1].toLowerCase();
       targetArgs = args.slice(1);
       for (const [p, c] of this.chatCache)
-        if (c.username?.toLowerCase() === gn) { peer = p; break; }
-      if (!peer) {
-        await msg.edit({ text: `❌ 群组 @${gn} 不在缓存中`, parseMode: "html" });
-        return;
+        if (c.username?.toLowerCase() === gn) { scopePeer = p; break; }
+      if (!scopePeer) {
+        try {
+          const e = await cl.getEntity(gn as any);
+          if (e.username?.toLowerCase() === gn) scopePeer = String(e.id);
+        } catch {}
+        if (!scopePeer) {
+          await msg.edit({ text: `❌ 无法解析群组 @${gn}`, parseMode: "html" });
+          return;
+        }
       }
     } else {
-      peer = msg.chatId?.toString();
+      scopePeer = msg.chatId?.toString();
     }
 
-    const target = await this.resolveTarget(msg, targetArgs);
-    if (!target) return;
-
-    const chat = peer ? this.chatCache.get(peer) : undefined;
-    if (!chat) {
-      await msg.edit({ text: "❌ 当前群组不在缓存中（可能是私密群组）", parseMode: "html" });
+    if (!scopePeer) {
+      await msg.edit({ text: "❌ 无法确定目标群组", parseMode: "html" });
       return;
     }
 
-    for (const m of chat.msgs) {
-      if (String(m.senderId) === target.id) {
-        const text = htmlEsc((m.text || "").slice(0, 50) || "[媒体消息]");
-        const href = chat.username
-          ? `https://t.me/${chat.username}/${m.id}`
-          : `https://t.me/c/${peelChatId(peer!)}/${m.id}`;
-        const link = `<a href="${href}">${text}</a>`;
-        await msg.delete();
-        await this.sendReply(msg, `🎯 定点监视：嫌疑人 ${target.name} 在 ${htmlEsc((chat.title || chat.username || peer!) as string)} 中的最新动向\\n\\n${link}\\n\\n<i>天网恢恢疏而不漏。</i>`);
-        return;
-      }
+    const target = await this.resolveTarget(msg, targetArgs);
+    if (!target) {
+      await msg.edit({ text: "❌ 无法识别目标", parseMode: "html" });
+      return;
     }
 
-    await msg.edit({ text: `🔭 未发现嫌疑人 ${target.name} 在指定群组中的消息记录。`, parseMode: "html" });
+    // check group is public
+    const chatEntity = await cl.getEntity(scopePeer as any);
+    if (!chatEntity.username) {
+      await msg.edit({ text: "❌ 仅支持公开群组的定点监视", parseMode: "html" });
+      return;
+    }
+
+    await msg.edit({ text: `🎯 正在对嫌疑人 ${target.name} 进行定点监视...`, parseMode: "html" });
+
+    this.sv.set(target.id, {
+      targetId: target.id,
+      targetName: target.name,
+      triggerPeer: String(msg.chatId),
+      triggerMsgId: msg.id,
+      scopePeer,
+    });
+    await this.persistDb();
   }
 
   /* ====== ssv ====== */
