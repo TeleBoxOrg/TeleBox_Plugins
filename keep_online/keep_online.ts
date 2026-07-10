@@ -30,7 +30,7 @@ class KeepOnlinePlugin extends Plugin {
   description: string = `${help_text}`;
   cronTasks = {
     keep_online: {
-      cron: "*/55 * * * * *",
+      cron: "55 * * * * *",
       description: `${help_text}`,
       handler: async (client: Api.Client) => {
         try {

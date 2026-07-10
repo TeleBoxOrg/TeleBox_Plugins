@@ -94,6 +94,7 @@ class FbiPlugin extends Plugin {
   private cacheReady = false;
   private cacheDirty = false;
   private cachePersistTimer: ReturnType<typeof setTimeout> | null = null;
+  private sweepTimer: ReturnType<typeof setInterval> | null = null;
 
   /** remove messages older than 30 days from a chat cache, return true if any pruned */
   private pruneExpired(chat: CachedChat): boolean {
@@ -131,7 +132,7 @@ class FbiPlugin extends Plugin {
     this.cacheReady = true;
 
     // cold sweep every 24h — prune expired messages in silent groups
-    setInterval(() => {
+    this.sweepTimer = setInterval(() => {
       if (!this.cacheReady) return;
       let anyPruned = false;
       for (const chat of this.chatCache.values())
@@ -600,6 +601,18 @@ class FbiPlugin extends Plugin {
     const cl = await getGlobalClient();
     if (!cl) return;
     await cl.sendMessage(original.peerId, { message: text, parseMode: "html", linkPreview: false });
+  }
+
+  /** 清理后台定时器，避免 reload 后定时器泄漏（与 cy.ts 等保持一致） */
+  cleanup(): void {
+    if (this.sweepTimer) {
+      clearInterval(this.sweepTimer);
+      this.sweepTimer = null;
+    }
+    if (this.cachePersistTimer) {
+      clearTimeout(this.cachePersistTimer);
+      this.cachePersistTimer = null;
+    }
   }
 }
 

@@ -482,5 +482,13 @@
   "zpr": {
     "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/zpr/zpr.ts?raw=true",
     "desc": "二次元图片"
+  },
+  "nodeseek": {
+    "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/nodeseek/nodeseek.ts?raw=true",
+    "desc": "NodeSeek 论坛每日签到，领取鸡腿"
+  },
+  "say": {
+    "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/say/say.ts?raw=true",
+    "desc": "自动语音合成 (MiMo / 火山豆包 / Fish)，每会话独立开关"
   }
 }

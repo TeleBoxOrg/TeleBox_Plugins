@@ -187,8 +187,12 @@ class OpenListPlugin extends Plugin {
         return;
       }
 
-      let installBase = dirArg && dirArg.trim() ? dirArg.trim() : "/opt/openlist";
-      const installPath = this.normalizeInstallPath(installBase);
+      const sanitized = this.sanitizeInstallPath(dirArg);
+      if (!sanitized.ok) {
+        await msg.edit({ text: `⚠️ ${sanitized.reason}`, parseMode: "html" });
+        return;
+      }
+      const installPath = sanitized.path;
 
       if (await this.fileExists(`${installPath}/openlist`)) {
         await msg.edit({ text: `检测到已安装于：${codeTag(installPath)}\n请使用：${codeTag(`${commandName} update`)}`, parseMode: "html" });
@@ -820,6 +824,29 @@ class OpenListPlugin extends Plugin {
     let p = input.replace(/\/+$/, "");
     if (!p.endsWith("/openlist")) p = `${p}/openlist`;
     return p;
+  }
+
+  /**
+   * 校验并归一化用户传入的安装目录。
+   * 安装目录会被直接拼接进双引号包裹的 shell 字符串中执行，
+   * 若不过滤会导致命令注入（如传入 `"; rm -rf / #` 或包含 `"` `` `$` `\` 等字符）。
+   * 仅允许绝对路径、白名单字符（字母/数字/./-/_），且不允许 `..` 路径穿越。
+   */
+  private sanitizeInstallPath(input: string | undefined): { ok: true; path: string } | { ok: false; reason: string } {
+    if (!input || !input.trim()) {
+      return { ok: true, path: "/opt/openlist" };
+    }
+    const raw = input.trim();
+    if (!raw.startsWith("/")) {
+      return { ok: false, reason: "安装目录必须是绝对路径（以 / 开头）" };
+    }
+    if (!/^[A-Za-z0-9._/-]+$/.test(raw)) {
+      return { ok: false, reason: "安装目录包含非法字符（仅允许字母、数字、. _ - /）" };
+    }
+    if (raw.includes("..")) {
+      return { ok: false, reason: "安装目录不允许包含路径穿越（..）" };
+    }
+    return { ok: true, path: this.normalizeInstallPath(raw) };
   }
 
   private async detectInstalledPath(): Promise<string> {
