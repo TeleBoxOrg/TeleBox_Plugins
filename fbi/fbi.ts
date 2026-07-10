@@ -13,6 +13,7 @@ const HELP = `🕵️ <b>FBI 跨群组追踪</b>
 • <code>${PREFIX}fbi det（detect） [目标]</code> — 现场勘察（搜索目标最新消息）
 • <code>${PREFIX}fbi sur（surveil） [目标]</code> — 监视追踪（蹲守目标下一条消息）
 • <code>${PREFIX}fbi loc（locate） [目标]</code> — 窝点锁定（分析目标最活跃群组）
+• <code>${PREFIX}fbi mon（monitor） [目标]</code> — 定点监视（蹲守指定群组内目标最新消息）
 • <code>${PREFIX}fbi ssv</code> — 终止所有蹲守
 • <code>${PREFIX}fbi cache</code> — 查看/管理消息缓存
 • <code>${PREFIX}fbi help</code> — 本帮助
@@ -223,9 +224,10 @@ class FbiPlugin extends Plugin {
 
     try {
       switch (sub) {
-        case "det":   return this.doCs(msg, args);
-        case "sur":   return this.doSv(msg, args);
-        case "loc":   return this.doDs(msg, args);
+        case "det":   return this.doDet(msg, args);
+        case "sur":   return this.doSur(msg, args);
+        case "loc":   return this.doLoc(msg, args);
+        case "mon":   return this.doMon(msg, args);
         case "ssv":   return this.doSsv(msg);
         case "cache": return this.doCache(msg, args);
         default:      return msg.edit({ text: HELP, parseMode: "html" });
@@ -272,7 +274,7 @@ class FbiPlugin extends Plugin {
 
   /* ====== cs (zero-request, reads cache) ====== */
 
-  private async doCs(msg: Api.Message, args: string[]) {
+  private async doDet(msg: Api.Message, args: string[]) {
     if (!this.cacheReady) {
       await msg.edit({ text: "⏳ 缓存正在初始化，请稍后再试。", parseMode: "html" });
       return;
@@ -314,7 +316,7 @@ class FbiPlugin extends Plugin {
 
   /* ====== sv ====== */
 
-  private async doSv(msg: Api.Message, args: string[]) {
+  private async doSur(msg: Api.Message, args: string[]) {
     const cl = await getGlobalClient();
     if (!cl) return;
     const target = await this.resolveTarget(msg, args);
@@ -396,7 +398,7 @@ class FbiPlugin extends Plugin {
 
   /* ====== ds (zero-request, reads cache) ====== */
 
-  private async doDs(msg: Api.Message, args: string[]) {
+  private async doLoc(msg: Api.Message, args: string[]) {
     if (!this.cacheReady) {
       await msg.edit({ text: "⏳ 缓存正在初始化，请稍后再试。", parseMode: "html" });
       return;
@@ -445,6 +447,57 @@ class FbiPlugin extends Plugin {
       link = `<a href="${href}">${htmlEsc(chat.title || chat.username || bestPeer)}</a>`;
     }
     await this.sendReply(msg, `🏚 发现嫌疑人 ${target.name} 的窝点：\n\n${link}\n\n<i>跑得了和尚跑不了庙。</i>`);
+  }
+
+  /* ====== mon (scoped to one group) ====== */
+
+  private async doMon(msg: Api.Message, args: string[]) {
+    if (!this.cacheReady) {
+      await msg.edit({ text: "⏳ 缓存正在初始化，请稍后再试。", parseMode: "html" });
+      return;
+    }
+    await msg.edit({ text: "🎯 定点监视部署中...", parseMode: "html" });
+
+    // parse group link from first arg
+    let peer: string | undefined;
+    const tme = args[0]?.match(/^(?:https?:\/\/)?t\.me\/(\w+)/i);
+    let targetArgs = args;
+    if (tme) {
+      const gn = tme[1].toLowerCase();
+      targetArgs = args.slice(1);
+      for (const [p, c] of this.chatCache)
+        if (c.username?.toLowerCase() === gn) { peer = p; break; }
+      if (!peer) {
+        await msg.edit({ text: `❌ 群组 @${gn} 不在缓存中`, parseMode: "html" });
+        return;
+      }
+    } else {
+      peer = msg.chatId?.toString();
+    }
+
+    const target = await this.resolveTarget(msg, targetArgs);
+    if (!target) return;
+
+    const chat = peer ? this.chatCache.get(peer) : undefined;
+    if (!chat) {
+      await msg.edit({ text: "❌ 当前群组不在缓存中（可能是私密群组）", parseMode: "html" });
+      return;
+    }
+
+    for (const m of chat.msgs) {
+      if (String(m.senderId) === target.id) {
+        const text = htmlEsc((m.text || "").slice(0, 50) || "[媒体消息]");
+        const href = chat.username
+          ? `https://t.me/${chat.username}/${m.id}`
+          : `https://t.me/c/${peelChatId(peer!)}/${m.id}`;
+        const link = `<a href="${href}">${text}</a>`;
+        await msg.delete();
+        await this.sendReply(msg, `🎯 定点监视：嫌疑人 ${target.name} 在 ${htmlEsc((chat.title || chat.username || peer!) as string)} 中的最新动向\\n\\n${link}\\n\\n<i>天网恢恢疏而不漏。</i>`);
+        return;
+      }
+    }
+
+    await msg.edit({ text: `🔭 未发现嫌疑人 ${target.name} 在指定群组中的消息记录。`, parseMode: "html" });
   }
 
   /* ====== ssv ====== */
