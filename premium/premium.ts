@@ -117,7 +117,6 @@ class PremiumPlugin extends Plugin {
           if ((participant as any).user) {
             user = (participant as any).user as Api.User;
           }
-          continue;
         } else if (participant instanceof Api.ChatParticipant) {
           user = null;
         } else if (participant instanceof Api.User) {
