@@ -175,6 +175,50 @@ function normalizeMessage(message) {
   }
 }
 
+// ── TeleBox: collect custom emoji buffers for the vendor ──────────────
+// The vendor resolves custom emoji images through loadCustomEmojis(), which
+// either reads buffers from a plain object (PATH 1: no callApi) or fetches
+// from Telegram via a bot token (PATH 2: Telegraf instance). TeleBox runs
+// as a userbot — it has no bot token, so PATH 2 always fails. Instead we
+// pre-download every custom emoji buffer in hydrateCustomEmojiBuffers(),
+// attach them to message entities/emoji_status, and pack them into a plain
+// object map here. This map is then passed as the 8th (telegram) argument
+// to quoteGenerate.generate() so PATH 1 works and every custom emoji
+// (status + inline) renders correctly.
+function collectCustomEmojiBuffers(messages) {
+  const map = {};
+  const add = (entity, id) => {
+    if (!entity || !entity.customEmojiBuffer) return;
+    const key = String(id ?? entity.custom_emoji_id ?? entity.customEmojiId ?? "");
+    if (!key || map[key]) return;
+    map[key] = entity.customEmojiBuffer;
+  };
+
+  const scan = (msg) => {
+    if (!msg) return;
+    // Sender emoji status
+    const status = msg.from?.emoji_status || msg.emoji_status;
+    if (status?.customEmojiBuffer && status?.custom_emoji_id) {
+      add(status, status.custom_emoji_id);
+    }
+    // Inline custom emoji entities (text + caption)
+    for (const list of [msg.entities, msg.caption_entities]) {
+      if (!Array.isArray(list)) continue;
+      for (const e of list) {
+        if (e.customEmojiBuffer) {
+          add(e, e.custom_emoji_id || e.customEmojiId);
+        }
+      }
+    }
+    // Nested: reply & forward
+    scan(msg.replyMessage);
+    if (msg.forward) scan(msg.forward);
+  };
+
+  for (const msg of messages) scan(msg);
+  return map;
+}
+
 // ── Main generate entry point ──────────────────────────────────────────
 async function generateQuote(parm) {
   if (!parm) return { error: "query_empty" };
@@ -210,6 +254,11 @@ async function generateQuote(parm) {
     if (nextSame) validMessages[i].avatar = false;
   }
 
+  // Collect pre-downloaded custom emoji buffers into a plain-object map.
+  // Passed as the 8th (telegram) arg so loadCustomEmojis PATH 1 resolves
+  // every emoji ID → Image without needing a bot token.
+  const customEmojiBuffers = collectCustomEmojiBuffers(validMessages);
+
   // Generate quotes with concurrency limit to avoid Telegram API rate limits
   const CONCURRENCY = 3;
   const quoteImages = new Array(validMessages.length).fill(null);
@@ -229,7 +278,8 @@ async function generateQuote(parm) {
           parm.width,
           parm.height,
           scale,
-          emojiBrand
+          emojiBrand,
+          customEmojiBuffers
         ).then((canvas) => {
           if (canvas) quoteImages[index] = canvas;
           else console.warn("Failed to generate quote for message, skipping");
