@@ -94,6 +94,7 @@ class FbiPlugin extends Plugin {
   private cacheReady = false;
   private cacheDirty = false;
   private cachePersistTimer: ReturnType<typeof setTimeout> | null = null;
+  private coldSweepTimer: ReturnType<typeof setInterval> | null = null;
 
   /** remove messages older than 30 days from a chat cache, return true if any pruned */
   private pruneExpired(chat: CachedChat): boolean {
@@ -131,7 +132,7 @@ class FbiPlugin extends Plugin {
     this.cacheReady = true;
 
     // cold sweep every 24h — prune expired messages in silent groups
-    setInterval(() => {
+    this.coldSweepTimer = setInterval(() => {
       if (!this.cacheReady) return;
       let anyPruned = false;
       for (const chat of this.chatCache.values())
@@ -143,6 +144,18 @@ class FbiPlugin extends Plugin {
   private async persistDb() {
     this.configDb.data.surveillance = Object.fromEntries(this.sv);
     await this.configDb.write();
+  }
+
+  /** Cleanup timers on plugin unload to prevent leaks across reloads */
+  cleanup(): void {
+    if (this.coldSweepTimer) {
+      clearInterval(this.coldSweepTimer);
+      this.coldSweepTimer = null;
+    }
+    if (this.cachePersistTimer) {
+      clearTimeout(this.cachePersistTimer);
+      this.cachePersistTimer = null;
+    }
   }
 
   /** debounced cache persist — at most once every 10s */

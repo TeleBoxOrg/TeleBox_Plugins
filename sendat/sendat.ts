@@ -416,13 +416,7 @@ class SendTaskManager {
 // 插件主类
 class SendAtPlugin extends Plugin {
   private taskManager: SendTaskManager;
-  private readonly helpText: string;
-
-  constructor() {
-    super();
-    this.taskManager = new SendTaskManager();
-    
-    this.helpText = `⏰ <b>定时发送消息插件</b>
+  private readonly helpText: string = `⏰ <b>定时发送消息插件</b>
 
 <b>使用方法：</b>
 <code>.sendat 时间 | 消息内容</code> - 添加定时任务
@@ -440,9 +434,13 @@ class SendAtPlugin extends Plugin {
 
 <b>支持的时间单位：</b>
 seconds, minutes, hours, date, times`;
-  }
 
   description = this.helpText;
+
+  constructor() {
+    super();
+    this.taskManager = new SendTaskManager();
+  }
 
   cmdHandlers = {
     sendat: async (msg: Api.Message) => {
@@ -457,6 +455,17 @@ seconds, minutes, hours, date, times`;
       if (cronManager.has(taskName)) {
         cronManager.del(taskName);
       }
+    }
+  }
+
+  private async isSudoUser(userId?: number): Promise<boolean> {
+    if (!userId) return false;
+    const { SudoDB } = await import("@utils/sudoDB");
+    const sudoDB = new SudoDB();
+    try {
+      return sudoDB.has(userId);
+    } finally {
+      sudoDB.close();
     }
   }
 
@@ -517,11 +526,9 @@ seconds, minutes, hours, date, times`;
 
     if (showAll) {
       // 检查管理员权限
-      const sudoDB = (await import("@utils/sudoDB")).default;
-      const sudoDBInstance = new sudoDB();
       const userId = msg.senderId?.toJSNumber();
       
-      if (!userId || !sudoDBInstance.has(userId)) {
+      if (!(await this.isSudoUser(userId))) {
         await msg.edit({ text: "❌ 只有管理员可以查看所有任务", parseMode: "html" });
         return;
       }
@@ -562,11 +569,9 @@ seconds, minutes, hours, date, times`;
 
     // 权限检查：只能删除自己的任务或者是管理员
     const chatId = msg.chatId?.toJSNumber() || 0;
-    const sudoDB = (await import("@utils/sudoDB")).default;
-    const sudoDBInstance = new sudoDB();
     const userId = msg.senderId?.toJSNumber();
 
-    if (task.cid !== chatId && (!userId || !sudoDBInstance.has(userId))) {
+    if (task.cid !== chatId && !(await this.isSudoUser(userId))) {
       await msg.edit({ text: "❌ 只能删除自己的任务", parseMode: "html" });
       return;
     }
