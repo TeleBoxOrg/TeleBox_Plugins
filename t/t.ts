@@ -3,7 +3,7 @@ import { getPrefixes } from "@utils/pluginManager";
 import { Api } from "teleproto";
 import * as fs from "fs/promises";
 import axios from "axios";
-import { exec, execFile } from "child_process";
+import { execFile } from "child_process";
 import { promisify } from "util";
 import path from "path";
 import { createDirectoryInAssets } from "@utils/pathHelpers";
@@ -13,7 +13,6 @@ const prefixes = getPrefixes();
 const mainPrefix = prefixes[0];
 
 
-const execPromise = promisify(exec);
 const execFileAsync = promisify(execFile);
 const DATA_FILE_NAME = "tts_data.json";
 
