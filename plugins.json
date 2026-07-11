@@ -303,6 +303,10 @@
     "url": "https://github.com/TeleBoxOrg/TeleBox_Plugins/blob/main/nezha/nezha.ts?raw=true",
     "desc": "哪吒监控"
   },
+  "nodeseek": {
+    "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/nodeseek/nodeseek.ts?raw=true",
+    "desc": "NodeSeek 论坛每日签到，领取鸡腿"
+  },
   "ntp": {
     "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/ntp/ntp.ts?raw=true",
     "desc": "NTP 时间同步"
@@ -343,6 +347,10 @@
     "url": "https://github.com/TeleBoxOrg/TeleBox_Plugins/blob/main/premium/premium.ts?raw=true",
     "desc": "群组大会员统计"
   },
+  "q": {
+    "url": "https://github.com/TeleBoxOrg/TeleBox_Plugins/blob/main/q/q.ts?raw=true",
+    "desc": "制作语录表情包（QuotLy）"
+  },
   "qr": {
     "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/qr/qr.ts?raw=true",
     "desc": "QR 二维码"
@@ -366,6 +374,10 @@
   "save": {
     "url": "https://github.com/TiaraBasori/TeleBox_Plugins/blob/main/save/save.ts?raw=true",
     "desc": "本地保存插件"
+  },
+  "say": {
+    "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/say/say.ts?raw=true",
+    "desc": "自动语音合成 (MiMo / 火山豆包 / Fish)，每会话独立开关"
   },
   "search": {
     "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/search/search.ts?raw=true",
@@ -478,13 +490,5 @@
   "zpr": {
     "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/zpr/zpr.ts?raw=true",
     "desc": "二次元图片"
-  },
-  "nodeseek": {
-    "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/nodeseek/nodeseek.ts?raw=true",
-    "desc": "NodeSeek 论坛每日签到，领取鸡腿"
-  },
-  "say": {
-    "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/say/say.ts?raw=true",
-    "desc": "自动语音合成 (MiMo / 火山豆包 / Fish)，每会话独立开关"
   }
 }
