@@ -743,25 +743,31 @@ class AutoRepeatPlugin extends Plugin {
   };
 
   listenMessageHandler = async (msg: Api.Message) => {
-    if (!msg) return;
+    try {
+      if (!msg) return;
 
-    const msgDate = Number((msg as any).date);
-    if (!Number.isFinite(msgDate) || msgDate <= 0) return;
+      const msgDate = Number((msg as any).date);
+      if (!Number.isFinite(msgDate) || msgDate <= 0) return;
 
-    // 忽略之前的旧消息（只处理实时消息）
-    if (Date.now() / 1000 - msgDate > 60) return;
+      // 忽略之前的旧消息（只处理实时消息）
+      if (Date.now() / 1000 - msgDate > 60) return;
 
-    // 忽略自己发送的消息
-    if (msg.out) return;
+      // 忽略自己发送的消息
+      if (msg.out) return;
 
-    // 忽略其他机器人发送的消息
-    const sender = await msg.getSender();
-    if (!sender) return;
-    if (sender instanceof Api.User && sender.bot) {
-      return;
+      // 忽略其他机器人发送的消息
+      const sender = await msg.getSender();
+      if (!sender) return;
+      if (sender instanceof Api.User && sender.bot) {
+        return;
+      }
+
+      await AutoRepeatManager.checkAndRepeat(msg);
+    } catch (e: any) {
+      // getSender() 可能在 bot 被移出频道/频道已删除时抛出 ChannelInvalidError
+      if (e?.message?.includes("channel is invalid") || e?.message?.includes("ChannelInvalid")) return;
+      console.error(`[autorepeat] listenMessageHandler error:`, e?.message || e);
     }
-
-    await AutoRepeatManager.checkAndRepeat(msg);
   };
 }
 
