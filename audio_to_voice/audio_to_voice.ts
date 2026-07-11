@@ -5,14 +5,14 @@ import { Api } from "teleproto";
 import fs from "fs";
 import path from "path";
 import { createDirectoryInTemp } from "@utils/pathHelpers";
-import { exec } from "child_process";
+import { execFile } from "child_process";
 import { promisify } from "util";
 import { safeGetMessages } from "@utils/safeGetMessages";
 
 const prefixes = getPrefixes();
 const mainPrefix = prefixes[0];
 
-const execAsync = promisify(exec);
+const execFileAsync = promisify(execFile);
 
 
 class AudioToVoicePlugin extends Plugin {
@@ -96,7 +96,7 @@ class AudioToVoicePlugin extends Plugin {
 
        // 先检测 ffmpeg 是否可用
        try {
-         await execAsync(`ffmpeg -version`);
+         await execFileAsync('ffmpeg', ['-version']);
        } catch {
          await statusMsg.edit({ text: "❌ 未检测到 ffmpeg，请先在系统安装 ffmpeg 后重试。macOS 可使用：brew install ffmpeg" });
          return;
@@ -115,9 +115,8 @@ class AudioToVoicePlugin extends Plugin {
 
          // 使用 FFmpeg 转码为 OGG/Opus（Telegram 语音格式）
          // 48k-64k 比特率，48k 采样率，单声道
-         const cmd = `ffmpeg -y -i "${audioPath}" -vn -acodec libopus -b:a 64k -ar 48000 -ac 1 "${oggPath}"`;
          try {
-           await execAsync(cmd, { timeout: 180000 });
+           await execFileAsync('ffmpeg', ['-y', '-i', audioPath, '-vn', '-acodec', 'libopus', '-b:a', '64k', '-ar', '48000', '-ac', '1', oggPath], { timeout: 180000 });
          } catch (e) {
            throw new Error(`FFmpeg 转码失败，请确认系统已安装 FFmpeg（macOS: brew install ffmpeg）。`);
          }

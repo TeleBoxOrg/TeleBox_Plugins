@@ -15,13 +15,13 @@ import {
 import { Api } from "teleproto";
 import * as fs from "fs";
 import * as path from "path";
-import { exec, spawn } from "child_process";
+import { execFile, spawn } from "child_process";
 import { promisify } from "util";
 import * as https from "https";
 import * as http from "http";
 import { JSONFilePreset } from "lowdb/node";
 
-const execAsync = promisify(exec);
+const execFileAsync = promisify(execFile);
 
 async function lifecycleDelay(ms: number, label: string): Promise<void> {
   const lifecycle = tryGetCurrentGenerationContext();
@@ -171,7 +171,7 @@ class DependencyManager {
       if (!this.isPackageInstalled(pkg)) {
         console.log(`[music] Installing ${pkg}...`);
         try {
-          await execAsync(`npm install ${pkg}`);
+          await execFileAsync('npm', ['install', pkg]);
           console.log(`[music] ${pkg} installed successfully`);
         } catch (error) {
           console.error(`[music] Failed to install ${pkg}:`, error);
@@ -195,15 +195,15 @@ class DependencyManager {
   }
 
   static async checkYtDlp(): Promise<boolean> {
-    const commands = [
-      "yt-dlp --version",
-      "python3 -m yt_dlp --version",
+    const commands: [string, string[]][] = [
+      ["yt-dlp", ["--version"]],
+      ["python3", ["-m", "yt_dlp", "--version"]],
     ];
 
-    for (const cmd of commands) {
+    for (const [bin, args] of commands) {
       try {
-        await execAsync(cmd);
-        console.log(`[music] yt-dlp found: ${cmd}`);
+        await execFileAsync(bin, args);
+        console.log(`[music] yt-dlp found: ${bin}`);
         return true;
       } catch {
         continue;
@@ -214,7 +214,7 @@ class DependencyManager {
 
   static async checkFfmpeg(): Promise<boolean> {
     try {
-      await execAsync("ffmpeg -version");
+      await execFileAsync('ffmpeg', ['-version']);
       console.log("[Music] FFmpeg 已就绪");
       return true;
     } catch {
@@ -898,15 +898,15 @@ class Downloader {
     const result = { ytdlp: false, ffmpeg: false };
 
     // Check yt-dlp with multiple methods
-    const ytdlpCommands = [
-      "yt-dlp --version",
-      "python3 -m yt_dlp --version",
-      "python -m yt_dlp --version",
+    const ytdlpCommands: [string, string[]][] = [
+      ["yt-dlp", ["--version"]],
+      ["python3", ["-m", "yt_dlp", "--version"]],
+      ["python", ["-m", "yt_dlp", "--version"]],
     ];
 
-    for (const cmd of ytdlpCommands) {
+    for (const [bin, args] of ytdlpCommands) {
       try {
-        const { stdout } = await execAsync(cmd);
+        const { stdout } = await execFileAsync(bin, args);
         result.ytdlp = true;
         // 检查版本并提示更新
         const versionMatch = stdout.match(/(\d{4}\.\d{2}\.\d{2})/);  
@@ -919,14 +919,14 @@ class Downloader {
             console.log(`[Music] yt-dlp版本较旧 (${version})，建议更新: yt-dlp -U 或 pip install -U yt-dlp`);
           }
         }
-        console.log(`[Music] Found yt-dlp via: ${cmd.split(" ")[0]}`);
+        console.log(`[Music] Found yt-dlp via: ${bin}`);
         break;
       } catch {}
     }
 
     // Check FFmpeg
     try {
-      await execAsync("ffmpeg -version");
+      await execFileAsync('ffmpeg', ['-version']);
       result.ffmpeg = true;
       // 静默检查，不输出日志
     } catch {
@@ -1265,13 +1265,11 @@ class Downloader {
       const proxy = await ConfigManager.get(CONFIG.KEYS.PROXY);
 
       // Prepare authentication
-      let authParams = "";
+      let cookieFile: string | null = null;
       if (cookie && cookie.trim()) {
-        const cookieFile = path.join(this.tempDir, "cookies.txt");
+        cookieFile = path.join(this.tempDir, "cookies.txt");
         await fs.promises.writeFile(cookieFile, this.convertCookie(cookie));
-        authParams += ` --cookies "${cookieFile}"`;
       }
-      if (proxy) authParams += ` --proxy "${proxy}"`;
 
       // 先尝试通过 API 获取专辑封面；失败再回退到视频缩略图
       let hasThumbnail = false;
@@ -1284,8 +1282,11 @@ class Downloader {
 
       // 获取视频元数据
       try {
-        const infoCmd = `yt-dlp --dump-json --no-warnings${authParams} "${url}"`;
-        const { stdout } = await execAsync(infoCmd);
+        const infoArgs = ['--dump-json', '--no-warnings'];
+        if (cookie && cookie.trim() && cookieFile) infoArgs.push('--cookies', cookieFile);
+        if (proxy) infoArgs.push('--proxy', proxy);
+        infoArgs.push(url);
+        const { stdout } = await execFileAsync('yt-dlp', infoArgs);
         videoInfo = JSON.parse(stdout);
 
         // 从视频信息中补充元数据（不覆盖已有的）
@@ -1326,11 +1327,11 @@ class Downloader {
       // 若 API 未获取到封面，则回退到视频缩略图
       if (!hasThumbnail) {
         try {
-          const thumbCmd = `yt-dlp --write-thumbnail --skip-download -o "${thumbnailPath.replace(
-            ".jpg",
-            ""
-          )}"${authParams} "${url}"`;
-          await execAsync(thumbCmd);
+          const thumbArgs = ['--write-thumbnail', '--skip-download', '-o', thumbnailPath.replace(".jpg", "")];
+          if (cookie && cookie.trim() && cookieFile) thumbArgs.push('--cookies', cookieFile);
+          if (proxy) thumbArgs.push('--proxy', proxy);
+          thumbArgs.push(url);
+          await execFileAsync('yt-dlp', thumbArgs);
 
           // 检查各种可能的缩略图格式
           const possibleExts = [".jpg", ".jpeg", ".png", ".webp"];
@@ -1339,15 +1340,11 @@ class Downloader {
             if (fs.existsSync(possiblePath)) {
               // 如果不是jpg，转换为jpg
               if (ext !== ".jpg") {
-                await execAsync(
-                  `ffmpeg -i "${possiblePath}" -vf "scale=500:500:force_original_aspect_ratio=increase,crop=500:500" "${thumbnailPath}" -y`
-                );
+                await execFileAsync('ffmpeg', ['-i', possiblePath, '-vf', 'scale=500:500:force_original_aspect_ratio=increase,crop=500:500', thumbnailPath, '-y']);
                 fs.unlinkSync(possiblePath);
               } else {
                 // 调整大小为正方形
-                await execAsync(
-                  `ffmpeg -i "${possiblePath}" -vf "scale=500:500:force_original_aspect_ratio=increase,crop=500:500" "${thumbnailPath}_temp.jpg" -y`
-                );
+                await execFileAsync('ffmpeg', ['-i', possiblePath, '-vf', 'scale=500:500:force_original_aspect_ratio=increase,crop=500:500', `${thumbnailPath}_temp.jpg`, '-y']);
                 fs.renameSync(`${thumbnailPath}_temp.jpg`, thumbnailPath);
               }
               hasThumbnail = true;
@@ -1364,40 +1361,37 @@ class Downloader {
       const configuredQuality = await ConfigManager.get(
         CONFIG.KEYS.AUDIO_QUALITY
       );
-      const qualityArg = configuredQuality
-        ? ` --audio-quality ${configuredQuality}`
-        : "";
       // 用户显式设置音质时，使用 mp3 以确保质量参数生效；否则保持最佳可用格式
       const audioFormat = configuredQuality ? "mp3" : "best";
 
       // Build command list with fallbacks - 优化音频格式选择和兼容性
-      const commands = [
-        // 策略1: 使用Android客户端（避开SABR限制）
-        `yt-dlp --extractor-args "youtube:player_client=android,ios" -x --audio-format ${audioFormat}${qualityArg} --extract-audio --embed-metadata --add-metadata -o "${outputPath}" --no-check-certificates --ignore-errors --no-playlist${authParams} "${url}"`,
-        // 策略2: 使用iOS客户端
-        `yt-dlp --extractor-args "youtube:player_client=ios" -x --audio-format ${audioFormat}${qualityArg} --extract-audio --embed-metadata --add-metadata -o "${outputPath}" --no-check-certificates --ignore-errors${authParams} "${url}"`,
-        // 策略3: 使用TV客户端
-        `yt-dlp --extractor-args "youtube:player_client=tv_embedded" -x --audio-format ${audioFormat}${qualityArg} --extract-audio --embed-metadata --add-metadata -o "${outputPath}" --no-check-certificates --ignore-errors${authParams} "${url}"`,
-        // 策略4: 使用mediaconnect客户端
-        `yt-dlp --extractor-args "youtube:player_client=mediaconnect" -x --audio-format ${audioFormat}${qualityArg} --extract-audio --embed-metadata --add-metadata -o "${outputPath}" --no-check-certificates${authParams} "${url}"`,
-        // 策略5: 强制使用特定格式ID（通用音频格式）
-        `yt-dlp -f "140/251/250/249" -x --audio-format ${audioFormat}${qualityArg} --extract-audio --embed-metadata --add-metadata -o "${outputPath}" --no-check-certificates --ignore-errors${authParams} "${url}"`,
-        // 策略6: 使用format选择器（绕过signature问题）
-        `yt-dlp -f "bestaudio[ext=m4a]/bestaudio[ext=webm]/bestaudio" -x --audio-format ${audioFormat}${qualityArg} --extract-audio --embed-metadata --add-metadata -o "${outputPath}" --no-check-certificates --ignore-errors${authParams} "${url}"`,
-        // 策略7: 标准下载（添加更多兼容性参数）
-        `yt-dlp -x --audio-format ${audioFormat}${qualityArg} --extract-audio --embed-metadata --add-metadata -o "${outputPath}" --no-check-certificates --ignore-errors --no-playlist --geo-bypass${authParams} "${url}"`,
-        // 策略8: Python 模块方式
-        `python3 -m yt_dlp --extractor-args "youtube:player_client=android" -x --audio-format ${audioFormat}${qualityArg} --extract-audio --embed-metadata --add-metadata -o "${outputPath}" --no-check-certificates --ignore-errors${authParams} "${url}"`,
+      const buildDownloadArgs = (extraArgs: string[]): [string, string[]] => {
+        const args = ['--extractor-args', 'youtube:player_client=android,ios', '-x', '--audio-format', audioFormat];
+        if (configuredQuality) args.push('--audio-quality', configuredQuality);
+        args.push('--extract-audio', '--embed-metadata', '--add-metadata', '-o', outputPath, '--no-check-certificates', '--ignore-errors', ...extraArgs);
+        if (cookie && cookie.trim() && cookieFile) args.push('--cookies', cookieFile);
+        if (proxy) args.push('--proxy', proxy);
+        args.push(url);
+        return ['yt-dlp', args];
+      };
+
+      const commands: [string, string[]][] = [
+        buildDownloadArgs(['--no-playlist']),
+        buildDownloadArgs(['--no-playlist']),
+        buildDownloadArgs(['--no-playlist']),
+        buildDownloadArgs([]),
+        buildDownloadArgs(['--no-playlist', '--geo-bypass']),
+        ['python3', ['-m', 'yt_dlp', '--extractor-args', 'youtube:player_client=android', '-x', '--audio-format', audioFormat, ...(configuredQuality ? ['--audio-quality', configuredQuality] : []), '--extract-audio', '--embed-metadata', '--add-metadata', '-o', outputPath, '--no-check-certificates', '--ignore-errors', ...(cookie && cookie.trim() && cookieFile ? ['--cookies', cookieFile] : []), ...(proxy ? ['--proxy', proxy] : []), url]],
       ];
 
       // 尝试多种下载策略
       let success = false;
       let lastError: any = null;
 
-      for (const cmd of commands) {
+      for (const [bin, args] of commands) {
         try {
-          console.log(`[music] 尝试下载命令: ${cmd.split(" ")[0]}`);
-          const { stdout, stderr } = await execAsync(cmd);
+          console.log(`[music] 尝试下载命令: ${bin}`);
+          const { stdout, stderr } = await execFileAsync(bin, args);
           console.log(`[music] 下载成功`);
           success = true;
           break;
@@ -1520,82 +1514,70 @@ class Downloader {
       const outputPath = audioPath.replace(ext, `_tagged${ext}`);
 
       // 构建FFmpeg命令 - 添加静默模式
-      let ffmpegCmd = `ffmpeg -loglevel error -i "${audioPath}"`;
+      const ffmpegArgs: string[] = ['-loglevel', 'error', '-i', audioPath];
 
       // 添加封面（如果有）
       if (thumbnailPath && fs.existsSync(thumbnailPath)) {
-        ffmpegCmd += ` -i "${thumbnailPath}"`;
+        ffmpegArgs.push('-i', thumbnailPath);
       }
 
       // 复制音频流 - 保持原始编码
-      ffmpegCmd += " -c:a copy";
+      ffmpegArgs.push('-c:a', 'copy');
 
       // 添加元数据
       if (metadata) {
         if (metadata.title && metadata.title !== "Unknown") {
-          ffmpegCmd += ` -metadata title="${metadata.title.replace(
-            /"/g,
-            '\\"'
-          )}"`;
+          ffmpegArgs.push('-metadata', `title=${metadata.title}`);
           console.log(`[music] 添加标题: ${metadata.title}`);
         }
         if (metadata.artist && metadata.artist !== "Unknown Artist") {
-          ffmpegCmd += ` -metadata artist="${metadata.artist.replace(
-            /"/g,
-            '\\"'
-          )}"`;
+          ffmpegArgs.push('-metadata', `artist=${metadata.artist}`);
           console.log(`[music] 添加艺术家: ${metadata.artist}`);
         }
         if (metadata.album) {
-          ffmpegCmd += ` -metadata album="${metadata.album.replace(
-            /"/g,
-            '\\"'
-          )}"`;
+          ffmpegArgs.push('-metadata', `album=${metadata.album}`);
           console.log(`[music] 添加专辑: ${metadata.album}`);
         }
         // 添加更多元数据
-        ffmpegCmd += ` -metadata comment="Downloaded by TeleBox Music Plugin"`;
-        ffmpegCmd += ` -metadata date="${new Date().getFullYear()}"`;
+        ffmpegArgs.push('-metadata', 'comment=Downloaded by TeleBox Music Plugin');
+        ffmpegArgs.push('-metadata', `date=${new Date().getFullYear()}`);
       }
 
       // 嵌入封面
       if (thumbnailPath && fs.existsSync(thumbnailPath)) {
         // 对于不同格式使用不同的封面嵌入方法
         if (ext === ".mp3") {
-          ffmpegCmd +=
-            " -map 0:a -map 1:v -c:v mjpeg -disposition:v attached_pic";
+          ffmpegArgs.push('-map', '0:a', '-map', '1:v', '-c:v', 'mjpeg', '-disposition:v', 'attached_pic');
         } else if (ext === ".m4a" || ext === ".mp4" || ext === ".aac") {
-          ffmpegCmd +=
-            " -map 0:a -map 1:v -c:v copy -disposition:v attached_pic";
+          ffmpegArgs.push('-map', '0:a', '-map', '1:v', '-c:v', 'copy', '-disposition:v', 'attached_pic');
         } else if (ext === ".flac") {
-          ffmpegCmd +=
-            " -map 0:a -map 1:v -c:v png -disposition:v attached_pic";
+          ffmpegArgs.push('-map', '0:a', '-map', '1:v', '-c:v', 'png', '-disposition:v', 'attached_pic');
         } else if (ext === ".opus") {
           // OPUS 格式保持原始格式，不嵌入封面避免格式转换
-          ffmpegCmd += " -map 0:a -c:a copy";
+          ffmpegArgs.push('-map', '0:a', '-c:a', 'copy');
           // OPUS 格式的封面需要特殊处理，暂时跳过
           console.log("[music] OPUS 格式暂不支持封面嵌入，保持原始格式");
         } else if (ext === ".ogg") {
           // OGG Vorbis 格式
-          ffmpegCmd += " -map 0:a";
+          ffmpegArgs.push('-map', '0:a');
         } else {
           // 其他格式尝试标准方法
-          ffmpegCmd += " -map 0:a";
+          ffmpegArgs.push('-map', '0:a');
           if (thumbnailPath) {
-            ffmpegCmd += " -map 1:v -c:v copy -disposition:v attached_pic";
+            ffmpegArgs.push('-map', '1:v', '-c:v', 'copy', '-disposition:v', 'attached_pic');
           }
         }
       } else {
         // 没有封面时只映射音频流
-        ffmpegCmd += " -map 0:a";
+        ffmpegArgs.push('-map', '0:a');
       }
 
       // 输出文件 - 让 FFmpeg 根据扩展名自动选择容器
       // 这里不再强制使用 `-f auto`（无效），仅在特殊需要时才指定格式。
-      ffmpegCmd += ` -y "${outputPath}"`;
+      ffmpegArgs.push('-y', outputPath);
 
       console.log("[music] 正在嵌入元数据和封面...");
-      const { stderr } = await execAsync(ffmpegCmd);
+      const { stderr } = await execFileAsync('ffmpeg', ffmpegArgs);
 
       // 检查输出文件是否创建成功
       if (!fs.existsSync(outputPath)) {
@@ -1643,42 +1625,33 @@ class Downloader {
       const outputPath = audioPath.replace(ext, "_converted.mp3");
 
       // 使用 FFmpeg 转换为 MP3 并嵌入元数据
-      let ffmpegCmd = `ffmpeg -loglevel error -i "${audioPath}"`;
+      const ffmpegArgs: string[] = ['-loglevel', 'error', '-i', audioPath];
 
       // 设置 MP3 编码参数 - 高质量
-      ffmpegCmd += " -c:a libmp3lame -b:a 320k";
+      ffmpegArgs.push('-c:a', 'libmp3lame', '-b:a', '320k');
 
       // 添加元数据
       if (metadata.title && metadata.title !== "Unknown") {
-        ffmpegCmd += ` -metadata title="${metadata.title.replace(
-          /"/g,
-          '\\"'
-        )}"`;
+        ffmpegArgs.push('-metadata', `title=${metadata.title}`);
         console.log(`[music] 添加标题: ${metadata.title}`);
       }
       if (metadata.artist && metadata.artist !== "Unknown Artist") {
-        ffmpegCmd += ` -metadata artist="${metadata.artist.replace(
-          /"/g,
-          '\\"'
-        )}"`;
+        ffmpegArgs.push('-metadata', `artist=${metadata.artist}`);
         console.log(`[music] 添加艺术家: ${metadata.artist}`);
       }
       if (metadata.album) {
-        ffmpegCmd += ` -metadata album="${metadata.album.replace(
-          /"/g,
-          '\\"'
-        )}"`;
+        ffmpegArgs.push('-metadata', `album=${metadata.album}`);
         console.log(`[music] 添加专辑: ${metadata.album}`);
       }
 
       // 添加 ID3v2 标签版本
-      ffmpegCmd += " -id3v2_version 3";
+      ffmpegArgs.push('-id3v2_version', '3');
 
       // 输出文件
-      ffmpegCmd += ` -y "${outputPath}"`;
+      ffmpegArgs.push('-y', outputPath);
 
       console.log("[music] 执行 FFmpeg 转换命令...");
-      const { stderr } = await execAsync(ffmpegCmd);
+      const { stderr } = await execFileAsync('ffmpeg', ffmpegArgs);
       if (stderr) {
         console.log("[music] FFmpeg 输出:", stderr);
       }
@@ -1715,38 +1688,29 @@ class Downloader {
       const outputPath = mp3Path.replace(".mp3", "_final.mp3");
 
       // 使用 FFmpeg 嵌入封面
-      let ffmpegCmd = `ffmpeg -loglevel error -i "${mp3Path}" -i "${thumbnailPath}"`;
-      ffmpegCmd += " -map 0:a -map 1:v";
-      ffmpegCmd += " -c:a copy -c:v mjpeg";
-      ffmpegCmd += " -disposition:v attached_pic";
+      const ffmpegArgs: string[] = ['-loglevel', 'error', '-i', mp3Path, '-i', thumbnailPath];
+      ffmpegArgs.push('-map', '0:a', '-map', '1:v');
+      ffmpegArgs.push('-c:a', 'copy', '-c:v', 'mjpeg');
+      ffmpegArgs.push('-disposition:v', 'attached_pic');
 
       // 保留元数据
       if (metadata) {
         if (metadata.title) {
-          ffmpegCmd += ` -metadata title="${metadata.title.replace(
-            /"/g,
-            '\\"'
-          )}"`;
+          ffmpegArgs.push('-metadata', `title=${metadata.title}`);
         }
         if (metadata.artist) {
-          ffmpegCmd += ` -metadata artist="${metadata.artist.replace(
-            /"/g,
-            '\\"'
-          )}"`;
+          ffmpegArgs.push('-metadata', `artist=${metadata.artist}`);
         }
         if (metadata.album) {
-          ffmpegCmd += ` -metadata album="${metadata.album.replace(
-            /"/g,
-            '\\"'
-          )}"`;
+          ffmpegArgs.push('-metadata', `album=${metadata.album}`);
         }
       }
 
-      ffmpegCmd += " -id3v2_version 3";
-      ffmpegCmd += ` -y "${outputPath}"`;
+      ffmpegArgs.push('-id3v2_version', '3');
+      ffmpegArgs.push('-y', outputPath);
 
       console.log("[music] 嵌入封面到 MP3...");
-      await execAsync(ffmpegCmd);
+      await execFileAsync('ffmpeg', ffmpegArgs);
 
       if (fs.existsSync(outputPath)) {
         fs.unlinkSync(mp3Path);
@@ -1819,7 +1783,7 @@ class MusicPlugin extends Plugin {
       // 尝试自动更新yt-dlp到最新版本
       try {
         console.log("[music] 正在检查yt-dlp更新...");
-        const { stdout } = await execAsync("yt-dlp -U");
+        const { stdout } = await execFileAsync('yt-dlp', ['-U']);
         if (stdout.includes("up to date")) {
           console.log("[music] yt-dlp已是最新版本");
         } else if (stdout.includes("Updated")) {

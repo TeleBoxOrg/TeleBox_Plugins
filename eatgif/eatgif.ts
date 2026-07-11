@@ -10,11 +10,11 @@ import path from "path";
 import fs from "fs";
 import { Api } from "teleproto";
 import { encode, UnencodedFrame } from "modern-gif";
-import { exec } from "child_process";
+import { execFile } from "child_process";
 import { promisify } from "util";
 import { safeGetReplyMessage } from "@utils/safeGetMessages";
 
-const execAsync = promisify(exec);
+const execFileAsync = promisify(execFile);
 
 // 由于gif可能很多帧，最好缓存在本地，而不是每次都远程拿不同的帧数
 const ASSET_PATH = createDirectoryInAssets("eatgif");
@@ -254,11 +254,9 @@ class EatGifPlugin extends Plugin {
 
     fs.writeFileSync(gifPath, Buffer.from(output));
 
-    const cmd = `ffmpeg -y -i ${gifPath} -c:v libvpx-vp9 -b:v 0 -crf 41 -pix_fmt yuva420p -auto-alt-ref 0 ${webmPath}`;
-
     try {
       await msg.edit({ text: "⏳ 正在转换为 webm 格式..." });
-      await execAsync(cmd);
+      await execFileAsync('ffmpeg', ['-y', '-i', gifPath, '-c:v', 'libvpx-vp9', '-b:v', '0', '-crf', '41', '-pix_fmt', 'yuva420p', '-auto-alt-ref', '0', webmPath]);
       await msg.client?.sendFile(msg.peerId, {
         file: webmPath,
         attributes: [
