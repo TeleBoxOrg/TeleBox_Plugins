@@ -32,7 +32,7 @@ const TG_STICKER_MAX_FRAMES = 100;
 const TG_STICKER_MAX_BYTES = 512 * 1024;
 const WEBM_CRF_STEPS = [38, 44, 50, 56];
 
-const QUOTE_PLUGIN_VERSION = "1.07";
+const QUOTE_PLUGIN_VERSION = "1.08";
 const QUOTE_BASE_URL = "https://raw.githubusercontent.com/TeleBoxOrg/TeleBox_Plugins/main/quote";
 const QUOTE_ASSETS_BASE_URL = "https://raw.githubusercontent.com/LyoSU/quote-api/master/assets";
 const QUOTE_VENDOR_DIR = path.join(quotePluginDir(), "quote", "vendor");
@@ -394,12 +394,12 @@ async function getPeerEntity(client: any, peer: any): Promise<any | undefined> {
   const key = JSON.stringify(peer, (_, v) => typeof v === "bigint" ? v.toString() : v);
   if (entityCache.has(key)) return entityCache.get(key);
   try {
-    const entity = await client.getEntity(peer);
+    const entity = await withTimeout(client.getEntity(peer), QUOTE_RPC_TIMEOUT_MS, "getPeerEntity.getEntity");
     entityCache.set(key, entity);
     return entity;
   } catch (_) {
     try {
-      const entity = await client.getInputEntity(peer);
+      const entity = await withTimeout(client.getInputEntity(peer), QUOTE_RPC_TIMEOUT_MS, "getPeerEntity.getInputEntity");
       entityCache.set(key, entity);
       return entity;
     } catch (_) {
@@ -414,7 +414,7 @@ async function senderEntity(msg: Api.Message): Promise<any | undefined> {
   const key = peer ? `sender:${stableEntityKey(peer)}` : undefined;
   if (key && entityCache.has(key)) return entityCache.get(key);
   try {
-    const sender = await (msg as any).getSender?.();
+    const sender = await withTimeout((msg as any).getSender?.(), QUOTE_RPC_TIMEOUT_MS, "senderEntity.getSender");
     if (sender) {
       if (key) entityCache.set(key, sender);
       return sender;
@@ -574,7 +574,7 @@ async function downloadEntityAvatar(client: any, entity: any): Promise<Buffer | 
 
   const tryDownload = async (isBig: boolean): Promise<Buffer | undefined> => {
     try {
-      const downloaded = await client.downloadProfilePhoto(entity, { isBig });
+      const downloaded = await withTimeout(client.downloadProfilePhoto(entity, { isBig }), QUOTE_RPC_TIMEOUT_MS, `downloadEntityAvatar.${isBig ? "big" : "small"}`);
       const buffer = Buffer.isBuffer(downloaded) ? downloaded : undefined;
       return buffer && buffer.length > 0 ? buffer : undefined;
     } catch (err: any) {
@@ -627,7 +627,7 @@ async function downloadMediaToBuffer(client: any, target: any): Promise<Buffer |
   if (!client || !target) return undefined;
   const mediaPath = path.join(os.tmpdir(), `telebox_quote_media_${Date.now()}_${Math.random().toString(16).slice(2)}`);
   try {
-    const downloaded = await client.downloadMedia(target, { outputFile: mediaPath });
+    const downloaded = await withTimeout(client.downloadMedia(target, { outputFile: mediaPath }), QUOTE_RPC_TIMEOUT_MS, "downloadMediaToBuffer.downloadMedia");
     let buffer: Buffer | undefined;
     if (Buffer.isBuffer(downloaded)) buffer = downloaded;
     else if (downloaded && typeof downloaded === "string" && fs.existsSync(downloaded)) buffer = await waitForStableFile(downloaded);
@@ -642,8 +642,10 @@ async function downloadMediaToBuffer(client: any, target: any): Promise<Buffer |
 }
 
 async function downloadMessageMedia(msg: Api.Message, enabled: boolean): Promise<Buffer | undefined> {
-  if (!enabled || !(msg as any).media || !(msg as any).client) return undefined;
-  return downloadMediaToBuffer((msg as any).client, msg);
+  if (!enabled || !(msg as any).media) return undefined;
+  const client = (msg as any).client ?? await getGlobalClient().catch(() => undefined);
+  if (!client) return undefined;
+  return downloadMediaToBuffer(client, msg);
 }
 
 async function mediaBufferToCanvas(buffer: Buffer | undefined, kind: string | undefined): Promise<any | undefined> {
@@ -1117,7 +1119,7 @@ async function getCustomEmojiDocuments(client: any, ids: string[]): Promise<any[
   const unique = Array.from(new Set(ids.filter(Boolean)));
   if (!client || unique.length === 0 || !(Api as any).messages?.GetCustomEmojiDocuments) return [];
   try {
-    return await client.invoke(new (Api as any).messages.GetCustomEmojiDocuments({ documentId: unique.map((id) => BigInt(id)) }));
+    return await withTimeout(client.invoke(new (Api as any).messages.GetCustomEmojiDocuments({ documentId: unique.map((id) => BigInt(id)) })), QUOTE_RPC_TIMEOUT_MS, "getCustomEmojiDocuments.invoke");
   } catch (err: any) {
     console.warn("quote custom emoji fetch failed", err?.message || err);
     return [];
@@ -1185,7 +1187,7 @@ async function hydrateCustomEmojiBuffers(client: any, messages: any[]): Promise<
 
 async function replyPreview(msg: Api.Message, includeReply: boolean, args: QuoteArgs): Promise<any | undefined> {
   if (!includeReply) return undefined;
-  const reply = await safeGetReplyMessage(msg).catch(() => undefined);
+  const reply = await withTimeout(safeGetReplyMessage(msg), QUOTE_RPC_TIMEOUT_MS, "replyPreview.getReply").catch(() => undefined);
   if (!reply) return undefined;
   const entity = await senderEntity(reply);
   const name = displayName(entity);
