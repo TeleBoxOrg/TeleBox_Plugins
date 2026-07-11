@@ -1219,7 +1219,8 @@ async function forwardPreview(msg: Api.Message): Promise<any | undefined> {
   if (!fwd) return undefined;
   const src = await forwardedSource(msg);
   const name = src?.name || "Forwarded";
-  const avatarBuffer = src?.entity && !src.anonymous ? await downloadEntityAvatar((msg as any).client, src.entity) : undefined;
+  const avatarClient = (msg as any).client ?? await getGlobalClient().catch(() => undefined);
+  const avatarBuffer = src?.entity && !src.anonymous ? await downloadEntityAvatar(avatarClient, src.entity) : undefined;
   return {
     chatId: peerIdNumber(src?.peer || src?.entity),
     from: { id: peerIdNumber(src?.peer || src?.entity), name, first_name: name, photo: {}, emoji_status: src?.anonymous ? undefined : emojiStatusPayload(src?.entity) },
@@ -1257,9 +1258,10 @@ async function toQuoteMessage(msg: Api.Message, args: QuoteArgs): Promise<any> {
   const fwd = await forwardedSource(msg);
   const effectiveEntity = fwd?.entity ?? entity;
   const effectiveName = fwd?.name || displayName(effectiveEntity);
+  const avatarClient = (msg as any).client ?? await getGlobalClient().catch(() => undefined);
   const [avatarBuffer, media, replyMessage] = await Promise.all([
     fwd && !fwd.anonymous && fwd.entity
-      ? downloadEntityAvatar((msg as any).client, fwd.entity)
+      ? downloadEntityAvatar(avatarClient, fwd.entity)
       : downloadSenderAvatar(msg, entity),
     prepareQuoteMedia(msg, args),
     replyPreview(msg, args.reply, args),
