@@ -32,7 +32,7 @@ const TG_STICKER_MAX_FRAMES = 100;
 const TG_STICKER_MAX_BYTES = 512 * 1024;
 const WEBM_CRF_STEPS = [38, 44, 50, 56];
 
-const QUOTE_PLUGIN_VERSION = "1.06";
+const QUOTE_PLUGIN_VERSION = "1.07";
 const QUOTE_BASE_URL = "https://raw.githubusercontent.com/TeleBoxOrg/TeleBox_Plugins/main/quote";
 const QUOTE_ASSETS_BASE_URL = "https://raw.githubusercontent.com/LyoSU/quote-api/master/assets";
 const QUOTE_VENDOR_DIR = path.join(quotePluginDir(), "quote", "vendor");
@@ -574,24 +574,9 @@ async function downloadEntityAvatar(client: any, entity: any): Promise<Buffer | 
 
   const tryDownload = async (isBig: boolean): Promise<Buffer | undefined> => {
     try {
-      // Ensure we have a full entity with photo — getSender() may return a partial.
-      let fullEntity = entity;
-      try {
-        fullEntity = await client.getEntity(entity);
-      } catch (e) {
-        console.warn("quote avatar getEntity failed, falling back to raw entity", (e as Error)?.message || e);
-      }
-
-      const photo = fullEntity?.photo;
-      if (!photo) return undefined;
-
-      // Only download UserProfilePhoto or ChatPhoto
-      if (photo instanceof Api.UserProfilePhoto || photo instanceof Api.ChatPhoto) {
-        const downloaded = await client.downloadProfilePhoto(fullEntity, { isBig });
-        const buffer = Buffer.isBuffer(downloaded) ? downloaded : undefined;
-        return buffer && buffer.length > 0 ? buffer : undefined;
-      }
-      return undefined;
+      const downloaded = await client.downloadProfilePhoto(entity, { isBig });
+      const buffer = Buffer.isBuffer(downloaded) ? downloaded : undefined;
+      return buffer && buffer.length > 0 ? buffer : undefined;
     } catch (err: any) {
       console.warn(`quote avatar ${isBig ? "big" : "small"} download failed`, err?.message || err);
       return undefined;
