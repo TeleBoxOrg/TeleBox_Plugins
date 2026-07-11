@@ -1,6 +1,6 @@
+//@ts-nocheck
 import { safeGetMe } from "@utils/authGuards";
 // YVLU Plugin - 生成文字语录贴纸
-//@ts-nocheck
 import axios from "axios";
 import _ from "lodash";
 import { getPrefixes } from "@utils/pluginManager";
