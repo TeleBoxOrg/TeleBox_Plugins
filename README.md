@@ -96,7 +96,6 @@ tpm i <插件名>
 - `pmcaptcha` - 简单防私聊  
 - `portball` - 临时禁言  
 - `premium` - 群组大会员统计  
-- `q` - 制作语录表情包（QuotLy）  
 - `qr` - QR 二维码  
 - `quote` - 引用贴纸生成 (本地版)  
 - `rate` - 货币实时汇率查询与计算  
