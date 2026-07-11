@@ -81,7 +81,14 @@ const htmlEscape = (text: string): string =>
 
 async function getPeerId(client: TelegramClient, msg: Api.Message, chatIdStr?: string): Promise<string | null> {
     try {
-        const peer = chatIdStr ? chatIdStr : msg.peerId;
+        if (!chatIdStr) {
+            if (msg.peerId instanceof Api.PeerChannel) return `-100${msg.peerId.channelId}`;
+            if (msg.peerId instanceof Api.PeerChat) return `-${msg.peerId.chatId}`;
+            if (msg.peerId instanceof Api.PeerUser) return `${msg.peerId.userId}`;
+            return null;
+        }
+
+        const peer = chatIdStr;
         const resolved = await client.getInputEntity(peer);
         if (resolved instanceof Api.InputPeerChannel) {
             return `-100${resolved.channelId}`;
