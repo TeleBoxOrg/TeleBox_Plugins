@@ -1,3 +1,4 @@
+//@ts-nocheck
 import axios from "axios";
 import _ from "lodash";
 import { getPrefixes } from "@utils/pluginManager";

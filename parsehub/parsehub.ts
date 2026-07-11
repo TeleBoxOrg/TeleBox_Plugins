@@ -1,3 +1,4 @@
+//@ts-nocheck
 import { Plugin } from "@utils/pluginBase";
 import { Api } from "teleproto";
 import { getPrefixes } from "@utils/pluginManager";

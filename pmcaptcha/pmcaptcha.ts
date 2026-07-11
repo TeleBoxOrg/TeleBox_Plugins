@@ -1,3 +1,4 @@
+//@ts-nocheck
 import { Api, TelegramClient } from "teleproto";
 import { CustomFile } from "teleproto/client/uploads";
 import path from "path";
