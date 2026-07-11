@@ -8,6 +8,7 @@ import { npm_install } from "@utils/npm_install";
 const { execFile } = require("child_process");
 import { safeGetReplyMessage, safeGetMessages } from "@utils/safeGetMessages";
 import { getPrefixes } from "@utils/pluginManager";
+import { getGlobalClient } from "@utils/runtimeManager";
 
 const DEFAULT_BACKGROUND = "#231d2b/#372e44";
 const DEFAULT_EMOJI_BRAND = "apple";
@@ -573,9 +574,24 @@ async function downloadEntityAvatar(client: any, entity: any): Promise<Buffer | 
 
   const tryDownload = async (isBig: boolean): Promise<Buffer | undefined> => {
     try {
-      const downloaded = await client.downloadProfilePhoto(entity, { isBig });
-      const buffer = Buffer.isBuffer(downloaded) ? downloaded : undefined;
-      return buffer && buffer.length > 0 ? buffer : undefined;
+      // Ensure we have a full entity with photo — getSender() may return a partial.
+      let fullEntity = entity;
+      try {
+        fullEntity = await client.getEntity(entity);
+      } catch (e) {
+        console.warn("quote avatar getEntity failed, falling back to raw entity", e?.message || e);
+      }
+
+      const photo = fullEntity?.photo;
+      if (!photo) return undefined;
+
+      // Only download UserProfilePhoto or ChatPhoto
+      if (photo instanceof Api.UserProfilePhoto || photo instanceof Api.ChatPhoto) {
+        const downloaded = await client.downloadProfilePhoto(fullEntity, { isBig });
+        const buffer = Buffer.isBuffer(downloaded) ? downloaded : undefined;
+        return buffer && buffer.length > 0 ? buffer : undefined;
+      }
+      return undefined;
     } catch (err: any) {
       console.warn(`quote avatar ${isBig ? "big" : "small"} download failed`, err?.message || err);
       return undefined;
@@ -589,7 +605,8 @@ async function downloadEntityAvatar(client: any, entity: any): Promise<Buffer | 
 }
 
 async function downloadSenderAvatar(msg: Api.Message, entity?: any): Promise<Buffer | undefined> {
-  return downloadEntityAvatar((msg as any).client, entity ?? await senderEntity(msg));
+  const client = (msg as any).client ?? await getGlobalClient().catch(() => undefined);
+  return downloadEntityAvatar(client, entity ?? await senderEntity(msg));
 }
 
 function sleepMs(ms: number): Promise<void> {
