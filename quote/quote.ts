@@ -616,7 +616,7 @@ async function downloadEntityAvatar(client: any, entity: any): Promise<Buffer | 
         ),
         QUOTE_RPC_TIMEOUT_MS,
         `downloadEntityAvatar.${isBig ? "big" : "small"}`,
-      );
+      ) as { bytes?: unknown };
       const buffer = result?.bytes;
       return Buffer.isBuffer(buffer) && buffer.length > 0 ? buffer : undefined;
     } catch (err: any) {
@@ -658,7 +658,7 @@ async function rawDownloadFile(client: any, location: any, dcId: number | undefi
       ),
       QUOTE_RPC_TIMEOUT_MS,
       "rawDownloadFile",
-    );
+    ) as { bytes?: unknown };
     const buffer = result?.bytes;
     return Buffer.isBuffer(buffer) && buffer.length > 0 ? buffer : undefined;
   } catch (err: any) {
