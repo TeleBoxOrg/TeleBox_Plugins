@@ -54,6 +54,7 @@ tpm i <插件名>
 - `encode` - 简单的编码解码  
 - `epic` - 检查Epic Games喜加一优惠  
 - `fadian` - fadian语录  
+- `fbi` - 欢迎加入联邦调查局  
 - `getstickers` - 下载整个贴纸包  
 - `gif` - GIF与视频转贴纸  
 - `git_PR` - Git PR 管理  
