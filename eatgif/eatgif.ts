@@ -258,7 +258,7 @@ class EatGifPlugin extends Plugin {
 
     try {
       await msg.edit({ text: "⏳ 正在转换为 webm 格式..." });
-      await execAsync(cmd, { maxBuffer: 10 * 1024 * 1024, timeout: 30_000 });
+      await execAsync(cmd);
       await msg.client?.sendFile(msg.peerId, {
         file: webmPath,
         attributes: [
