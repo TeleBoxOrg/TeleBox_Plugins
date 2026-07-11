@@ -429,6 +429,7 @@ class SSHPlugin extends Plugin {
 
         default:
           await msg.edit({
+            text: `❓ 未知子命令，使用 <code>${mainPrefix}ssh help</code> 查看说明`,
             parseMode: "html"
           });
       }
