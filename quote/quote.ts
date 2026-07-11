@@ -1,5 +1,7 @@
 import { Api } from "teleproto";
 import { CustomFile } from "teleproto/client/uploads";
+import { utils } from "teleproto";
+import big_integer from "big-integer";
 import * as fs from "fs";
 import * as path from "path";
 import * as os from "os";
@@ -32,7 +34,7 @@ const TG_STICKER_MAX_FRAMES = 100;
 const TG_STICKER_MAX_BYTES = 512 * 1024;
 const WEBM_CRF_STEPS = [38, 44, 50, 56];
 
-const QUOTE_PLUGIN_VERSION = "1.08";
+const QUOTE_PLUGIN_VERSION = "1.09";
 const QUOTE_BASE_URL = "https://raw.githubusercontent.com/TeleBoxOrg/TeleBox_Plugins/main/quote";
 const QUOTE_ASSETS_BASE_URL = "https://raw.githubusercontent.com/LyoSU/quote-api/master/assets";
 const QUOTE_VENDOR_DIR = path.join(quotePluginDir(), "quote", "vendor");
@@ -572,11 +574,51 @@ async function downloadEntityAvatar(client: any, entity: any): Promise<Buffer | 
   const key = stableEntityKey(entity);
   if (key && avatarCache.has(key)) return avatarCache.get(key);
 
+  // Resolve a full entity with photo + accessHash. getSender() may return a
+  // min entity (no accessHash), and downloadProfilePhoto internally calls
+  // getInputPeer(entity) which throws for min entities.
+  let fullEntity = entity;
+  try {
+    if (!(entity.accessHash !== undefined && !entity.min) && entity.id) {
+      fullEntity = await withTimeout(client.getEntity(entity), QUOTE_RPC_TIMEOUT_MS, "downloadEntityAvatar.getEntity");
+    }
+  } catch (e: any) {
+    console.warn("quote avatar getEntity failed, using raw entity", e?.message || e);
+  }
+
+  const photo = fullEntity?.photo;
+  if (!photo || photo instanceof Api.UserProfilePhotoEmpty || photo instanceof Api.ChatPhotoEmpty) {
+    if (key) avatarCache.set(key, undefined);
+    return undefined;
+  }
+
   const tryDownload = async (isBig: boolean): Promise<Buffer | undefined> => {
     try {
-      const downloaded = await withTimeout(client.downloadProfilePhoto(entity, { isBig }), QUOTE_RPC_TIMEOUT_MS, `downloadEntityAvatar.${isBig ? "big" : "small"}`);
-      const buffer = Buffer.isBuffer(downloaded) ? downloaded : undefined;
-      return buffer && buffer.length > 0 ? buffer : undefined;
+      // Bypass the MediaScheduler (which retries 5×15s = 75s on failure) by
+      // using raw upload.GetFile via client.invoke with the photo's DC.
+      // This gives us a single attempt that our withTimeout can actually cap.
+      const inputPeer = utils.getInputPeer(fullEntity);
+      const location = new Api.InputPeerPhotoFileLocation({
+        peer: inputPeer,
+        photoId: photo.photoId,
+        big: isBig,
+      });
+      const dcId = photo.dcId;
+      const result = await withTimeout(
+        client.invoke(
+          new Api.upload.GetFile({
+            location,
+            offset: big_integer.zero,
+            limit: 512 * 1024,
+            precise: true,
+          }),
+          dcId,
+        ),
+        QUOTE_RPC_TIMEOUT_MS,
+        `downloadEntityAvatar.${isBig ? "big" : "small"}`,
+      );
+      const buffer = result?.bytes;
+      return Buffer.isBuffer(buffer) && buffer.length > 0 ? buffer : undefined;
     } catch (err: any) {
       console.warn(`quote avatar ${isBig ? "big" : "small"} download failed`, err?.message || err);
       return undefined;
@@ -592,6 +634,52 @@ async function downloadEntityAvatar(client: any, entity: any): Promise<Buffer | 
 async function downloadSenderAvatar(msg: Api.Message, entity?: any): Promise<Buffer | undefined> {
   const client = (msg as any).client ?? await getGlobalClient().catch(() => undefined);
   return downloadEntityAvatar(client, entity ?? await senderEntity(msg));
+}
+
+/**
+ * Download a file via raw upload.GetFile, bypassing the MediaScheduler.
+ * The MediaScheduler retries 5×15s (75s total) on failure, which blocks
+ * the quote pipeline for the entire duration. This helper does a single
+ * attempt that our withTimeout can cap at QUOTE_RPC_TIMEOUT_MS.
+ * For small files (avatars, emoji) one chunk of 512KB is enough.
+ */
+async function rawDownloadFile(client: any, location: any, dcId: number | undefined): Promise<Buffer | undefined> {
+  if (!client || !location) return undefined;
+  try {
+    const result = await withTimeout(
+      client.invoke(
+        new Api.upload.GetFile({
+          location,
+          offset: big_integer.zero,
+          limit: 512 * 1024,
+          precise: true,
+        }),
+        dcId,
+      ),
+      QUOTE_RPC_TIMEOUT_MS,
+      "rawDownloadFile",
+    );
+    const buffer = result?.bytes;
+    return Buffer.isBuffer(buffer) && buffer.length > 0 ? buffer : undefined;
+  } catch (err: any) {
+    console.warn("quote rawDownloadFile failed", err?.message || err);
+    return undefined;
+  }
+}
+
+/**
+ * Download a Document (e.g. custom emoji) via raw upload.GetFile,
+ * bypassing the MediaScheduler's 75s retry loop.
+ */
+async function rawDownloadDocument(client: any, doc: any): Promise<Buffer | undefined> {
+  if (!client || !doc) return undefined;
+  const location = new Api.InputDocumentFileLocation({
+    id: doc.id,
+    accessHash: doc.accessHash,
+    fileReference: doc.fileReference,
+    thumbSize: "",
+  });
+  return rawDownloadFile(client, location, doc.dcId);
 }
 
 function sleepMs(ms: number): Promise<void> {
@@ -943,7 +1031,7 @@ async function downloadCustomEmojiAnimatedPreferred(client: any, doc: any): Prom
   const thumbs = customEmojiThumbs(doc);
   console.warn("quote emoji source scan", id, "docMime", mime, "thumbs", thumbs.map((t: any) => `${t?.className || t?.constructor?.name || typeof t}:${t?.type || ""}:${t?.size || ""}`).join(","), "mode", "skip-thumbs-use-original");
   const td = Date.now();
-  const original = await downloadMediaToBuffer(client, doc).catch(() => undefined);
+  const original = await rawDownloadDocument(client, doc).catch(() => undefined);
   console.warn("quote emoji source selected", id, "original", original?.length || 0, bufferKind(original), "downloadMs", quoteMs(td), "totalMs", quoteMs(t0));
   return original;
 }
