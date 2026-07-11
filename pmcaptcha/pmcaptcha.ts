@@ -378,11 +378,7 @@ async function fetchUserInfo(client: TelegramClient, userId: number): Promise<an
         return user;
       }
     }
-  } catch (error) {
-    if (!(error instanceof Error) || !error.message.includes("AUTH_KEY_UNREGISTERED")) {
-      throw error;
-    }
-  }
+  } catch {}
 
   return null;
 }
