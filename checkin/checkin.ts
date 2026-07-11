@@ -29,6 +29,14 @@ interface CheckInConfig {
   currentRunTime?: string;
 }
 
+interface PendingAdd {
+  promptMsgId: number;
+  id: string;
+  name: string;
+  target: string;
+  matcher: Pick<SignTarget, "callbackData" | "buttonText">;
+}
+
 type SignResult = { success: boolean; message?: string; error?: string };
 
 const DEFAULT_CONFIG: CheckInConfig = {
@@ -89,6 +97,7 @@ class CheckInPlugin extends Plugin {
   private timer: NodeJS.Timeout | null = null;
   private running = false;
   private todayRunTime: string | null = null;
+  private pendingAdds = new Map<string, PendingAdd>();
 
   constructor() {
     super();
@@ -101,7 +110,7 @@ class CheckInPlugin extends Plugin {
   }
 
   cmdHandlers: Record<string, (msg: Api.Message) => Promise<void>> = {
-    qd: async (msg: Api.Message) => {
+    checkin: async (msg: Api.Message) => {
       try {
         const parts = (msg.message || msg.text || "").trim().split(/\s+/);
         const args = parts.slice(1);
@@ -134,7 +143,7 @@ class CheckInPlugin extends Plugin {
           return;
         }
 
-        await this.edit(msg, `❌ 未知命令，请使用 ${PREFIX}qd help 查看帮助`);
+        await this.edit(msg, `❌ 未知命令，请使用 ${PREFIX}checkin help 查看帮助`);
       } catch (e: any) {
         console.error("[CheckIn] Command error:", e);
         try {
@@ -144,6 +153,51 @@ class CheckInPlugin extends Plugin {
     },
   };
 
+  // ── 回复式添加：监听用户回复以获取签到命令 ─
+  listenMessageHandler = async (msg: Api.Message, _options?: { isEdited?: boolean }) => {
+    if (_options?.isEdited) return;
+    const chatId = String(msg.chatId || msg.peerId || "");
+    const pending = this.pendingAdds.get(chatId);
+    if (!pending) return;
+
+    const replyToMsgId = (msg as any).replyTo?.replyToMsgId ?? (msg as any).replyToMsgId;
+    if (replyToMsgId !== pending.promptMsgId) return;
+
+    const command = (msg.message || msg.text || "").trim();
+    if (!command) {
+      const client = await getGlobalClient();
+      await client?.sendMessage(chatId, {
+        message: "❌ 签到命令不能为空，请重新回复此消息",
+        parseMode: "html",
+        linkPreview: false,
+      });
+      return;
+    }
+
+    this.pendingAdds.delete(chatId);
+
+    const conf = this.cfg.get();
+    const next: SignTarget = {
+      id: pending.id,
+      name: pending.name,
+      target: pending.target,
+      command,
+      ...pending.matcher,
+      enabled: true,
+    };
+    const i = conf.targets.findIndex((t) => t.id === pending.id);
+    if (i >= 0) conf.targets[i] = next;
+    else conf.targets.push(next);
+    this.cfg.save({ targets: conf.targets });
+
+    const client = await getGlobalClient();
+    await client?.sendMessage(chatId, {
+      message: `✅ 已${i >= 0 ? "更新" : "添加"}签到目标: ${pending.name} (${pending.id})\n命令: ${this.escape(command)}`,
+      parseMode: "html",
+      linkPreview: false,
+    });
+  };
+
   private async handleTargetCommand(action: string, args: string[], msg: Api.Message): Promise<void> {
     const conf = this.cfg.get();
 
@@ -151,25 +205,42 @@ class CheckInPlugin extends Plugin {
       const id = args[1];
       const name = args[2];
       const target = args[3];
-      const command = args[4];
-      if (!id || !name || !target || !command) {
-        await this.edit(msg, `❌ 格式错误：${PREFIX}qd add [ID] [名称] [目标] [命令] [data:回调数据|text:按钮名]`);
+      if (!id || !name || !target) {
+        await this.edit(msg, `❌ 格式错误：${PREFIX}checkin add [ID] [名称] [目标] [可选: data:xxx | text:xxx]`);
         return;
       }
 
-      const matcher = this.parseButtonMatcher(args.slice(5));
-      const next: SignTarget = { id, name, target, command, ...matcher, enabled: true };
-      const i = conf.targets.findIndex((t) => t.id === id);
-      if (i >= 0) conf.targets[i] = next;
-      else conf.targets.push(next);
-      this.cfg.save({ targets: conf.targets });
-      await this.edit(msg, `✅ 已${i >= 0 ? "更新" : "添加"}签到目标: ${name} (${id})`);
+      const matcher = this.parseButtonMatcher(args.slice(4));
+      const chatId = String(msg.chatId || msg.peerId || "");
+
+      const client = await getGlobalClient();
+      const prompt = await client.sendMessage(chatId, {
+        message: [
+          `📝 请<b>回复此消息</b>，发送签到命令（支持空格和特殊字符）`,
+          ``,
+          `ID: ${this.escape(id)}`,
+          `名称: ${this.escape(name)}`,
+          `目标: ${this.escape(target)}`,
+          matcher.callbackData ? `回调: ${this.escape(matcher.callbackData)}` : "",
+          matcher.buttonText ? `按钮: ${this.escape(matcher.buttonText)}` : "",
+        ].filter(Boolean).join("\n"),
+        parseMode: "html",
+        linkPreview: false,
+      });
+
+      this.pendingAdds.set(chatId, {
+        promptMsgId: Number((prompt as any)?.id || 0),
+        id,
+        name,
+        target,
+        matcher,
+      });
       return;
     }
 
     if (action === "del" || action === "delete") {
       const id = args[1];
-      if (!id) return void (await this.edit(msg, `❌ 请指定目标ID：${PREFIX}qd del [ID]`));
+      if (!id) return void (await this.edit(msg, `❌ 请指定目标ID：${PREFIX}checkin del [ID]`));
       const n = conf.targets.length;
       conf.targets = conf.targets.filter((t) => t.id !== id);
       this.cfg.save({ targets: conf.targets });
@@ -192,7 +263,7 @@ class CheckInPlugin extends Plugin {
 
     if (action === "toggle") {
       const id = args[1];
-      if (!id) return void (await this.edit(msg, `❌ 请指定目标ID：${PREFIX}qd toggle [ID]`));
+      if (!id) return void (await this.edit(msg, `❌ 请指定目标ID：${PREFIX}checkin toggle [ID]`));
       const t = conf.targets.find((x) => x.id === id);
       if (!t) return void (await this.edit(msg, `❌ 未找到目标: ${id}`));
       t.enabled = !t.enabled;
@@ -203,7 +274,7 @@ class CheckInPlugin extends Plugin {
 
     if (action === "test") {
       const id = args[1];
-      if (!id) return void (await this.edit(msg, `❌ 请指定目标ID：${PREFIX}qd test [ID]`));
+      if (!id) return void (await this.edit(msg, `❌ 请指定目标ID：${PREFIX}checkin test [ID]`));
       const t = conf.targets.find((x) => x.id === id);
       if (!t) return void (await this.edit(msg, `❌ 未找到目标: ${id}`));
       await this.edit(msg, `🚀 开始测试签到目标: ${this.escape(t.name)}...`);
@@ -296,7 +367,7 @@ class CheckInPlugin extends Plugin {
 
       if (type === "bot" || type === "b") {
         if (!value || !extra) {
-          await this.edit(msg, `❌ 格式错误：${PREFIX}qd set bot [Token] [ChatID]`);
+          await this.edit(msg, `❌ 格式错误：${PREFIX}checkin set bot [Token] [ChatID]`);
           return;
         }
         this.cfg.save({ botToken: value, pushChatId: extra });
@@ -306,7 +377,7 @@ class CheckInPlugin extends Plugin {
 
       if (type === "log" || type === "l") {
         if (!value) {
-          await this.edit(msg, `❌ 请指定日志聊天ID：${PREFIX}qd set log [ChatID]`);
+          await this.edit(msg, `❌ 请指定日志聊天ID：${PREFIX}checkin set log [ChatID]`);
           return;
         }
         this.cfg.save({ logChat: value });
@@ -531,30 +602,31 @@ class CheckInPlugin extends Plugin {
     return `<b>🤖 CheckIn 自动化签到插件</b>
 
 <b>📌 基础指令：</b>
-<code>${PREFIX}qd</code> - 手动触发所有签到
-<code>${PREFIX}qd reset</code> - 重置今日运行状态
-<code>${PREFIX}qd help</code> - 显示此帮助
+<code>${PREFIX}checkin</code> - 手动触发所有签到
+<code>${PREFIX}checkin reset</code> - 重置今日运行状态
+<code>${PREFIX}checkin help</code> - 显示此帮助
 
 <b>🎯 目标管理：</b>
-<code>${PREFIX}qd add [ID] [名称] [目标] [命令] [data:回调|text:按钮]</code>
-<code>${PREFIX}qd del [ID]</code>
-<code>${PREFIX}qd list</code>
-<code>${PREFIX}qd toggle [ID]</code>
-<code>${PREFIX}qd test [ID]</code>
+<code>${PREFIX}checkin add [ID] [名称] [目标] [data:回调|text:按钮]</code> — 添加后<b>回复提示消息</b>发签到命令
+<code>${PREFIX}checkin del [ID]</code>
+<code>${PREFIX}checkin list</code>
+<code>${PREFIX}checkin toggle [ID]</code>
+<code>${PREFIX}checkin test [ID]</code>
 
 <b>⚙️ 配置管理：</b>
-<code>${PREFIX}qd set time [HH:MM]</code> - 设置开始时间
-<code>${PREFIX}qd set range [HH:MM]</code> - 设置执行时间结束点（留空则改为固定时间）
-<code>${PREFIX}qd set delay [分钟]</code> - 设置额外随机延迟（0-60 分钟）
-<code>${PREFIX}qd set bot [Token] [ChatID]</code> - 设置 Bot 通知
-<code>${PREFIX}qd set log [ChatID]</code> - 设置日志聊天
-<code>${PREFIX}qd settings</code> - 查看当前配置
+<code>${PREFIX}checkin set time [HH:MM]</code> - 设置开始时间
+<code>${PREFIX}checkin set range [HH:MM]</code> - 设置执行时间结束点（留空则改为固定时间）
+<code>${PREFIX}checkin set delay [分钟]</code> - 设置额外随机延迟（0-60 分钟）
+<code>${PREFIX}checkin set bot [Token] [ChatID]</code> - 设置 Bot 通知
+<code>${PREFIX}checkin set log [ChatID]</code> - 设置日志聊天
+<code>${PREFIX}checkin settings</code> - 查看当前配置
 
 <b>💡 使用示例：</b>
-<code>${PREFIX}qd add storm Storm签到 @storm_bot /start data:checkin</code>
-<code>${PREFIX}qd set time 10:00</code> - 从 10:00 开始
-<code>${PREFIX}qd set range 11:30</code> - 在 10:00 到 11:30 之间随机执行
-<code>${PREFIX}qd set range</code> - 清除时间范围，改为固定时间执行
+<code>${PREFIX}checkin add storm Storm签到 @storm_bot data:checkin</code>
+→ 然后回复提示消息：<code>/sign 123456</code>（命令可含空格）
+<code>${PREFIX}checkin set time 10:00</code> - 从 10:00 开始
+<code>${PREFIX}checkin set range 11:30</code> - 在 10:00 到 11:30 之间随机执行
+<code>${PREFIX}checkin set range</code> - 清除时间范围，改为固定时间执行
 
 <b>🔄 时间范围说明：</b>
 设置 range 后，系统会每天在 time 到 range 之间随机选择一个时刻执行，
