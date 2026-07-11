@@ -1,6 +1,6 @@
 import { Plugin } from "@utils/pluginBase";
 import { getPrefixes } from "@utils/pluginManager";
-import { getGlobalClient, type GenerationContext } from "@utils/globalClient";
+import { getGlobalClient, type GenerationContext } from "@utils/runtimeManager";
 import { Api } from "teleproto";
 import { createDirectoryInAssets } from "@utils/pathHelpers";
 import Database from "better-sqlite3";

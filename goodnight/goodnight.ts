@@ -8,7 +8,7 @@ import dayjs from "dayjs";
 const prefixes = getPrefixes();
 const mainPrefix = prefixes[0];
 
-import { getGlobalClient } from "@utils/globalClient";
+import { getGlobalClient } from "@utils/runtimeManager";
 
 // 定义数据库结构
 interface GroupData {

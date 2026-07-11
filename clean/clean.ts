@@ -2,7 +2,7 @@ import { safeGetMe } from "@utils/authGuards";
 // file name: clean.ts
 import { Plugin } from "@utils/pluginBase";
 import { Api } from "teleproto";
-import { getGlobalClient } from "@utils/globalClient";
+import { getGlobalClient } from "@utils/runtimeManager";
 import { getPrefixes } from "@utils/pluginManager";
 import { banUser, getBannedUsers, unbanUser } from "@utils/banUtils";
 

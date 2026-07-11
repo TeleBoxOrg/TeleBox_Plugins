@@ -1,7 +1,7 @@
 // plugins/sendat.ts
 import { Plugin } from "@utils/pluginBase";
 import { Api } from "teleproto";
-import { getGlobalClient } from "@utils/globalClient";
+import { getGlobalClient } from "@utils/runtimeManager";
 import { cronManager } from "@utils/cronManager";
 import { JSONFilePreset } from "lowdb/node";
 import { createDirectoryInAssets } from "@utils/pathHelpers";

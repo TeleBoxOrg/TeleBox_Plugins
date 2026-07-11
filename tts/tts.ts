@@ -9,7 +9,7 @@ import axios from "axios";
 import { JSONFilePreset } from "lowdb/node";
 import * as path from "path";
 import { createDirectoryInAssets, createDirectoryInTemp } from "@utils/pathHelpers";
-import { getGlobalClient } from "@utils/globalClient";
+import { getGlobalClient } from "@utils/runtimeManager";
 import * as fs from "fs";
 import { safeGetMessages } from "@utils/safeGetMessages";
 

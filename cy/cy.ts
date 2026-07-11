@@ -1,6 +1,6 @@
 import { Plugin } from "@utils/pluginBase";
 import { getPrefixes } from "@utils/pluginManager";
-import { getGlobalClient } from "@utils/globalClient";
+import { getGlobalClient } from "@utils/runtimeManager";
 import { safeGetMessages } from "@utils/safeGetMessages";
 import { Api } from "teleproto";
 import { CustomFile } from "teleproto/client/uploads";

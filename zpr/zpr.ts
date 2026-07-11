@@ -3,7 +3,7 @@
 import { Plugin } from "@utils/pluginBase";
 import { Api } from "teleproto";
 import { CustomFile } from "teleproto/client/uploads";
-import { getGlobalClient, tryGetCurrentGenerationContext } from "@utils/globalClient";
+import { getGlobalClient, tryGetCurrentGenerationContext } from "@utils/runtimeManager";
 import { getPrefixes } from "@utils/pluginManager";
 import { createDirectoryInAssets } from "@utils/pathHelpers";
 import path from "path";

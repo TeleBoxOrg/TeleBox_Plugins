@@ -1,6 +1,6 @@
 // 文件名: plugins/gif.ts
 import { Plugin } from "@utils/pluginBase";
-import { getGlobalClient, getCurrentGeneration } from "@utils/globalClient";
+import { getGlobalClient, getCurrentGeneration } from "@utils/runtimeManager";
 import { getPrefixes } from "@utils/pluginManager";
 import { createDirectoryInAssets } from "@utils/pathHelpers";
 import { Api } from "teleproto";

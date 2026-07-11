@@ -6,7 +6,7 @@ import { createDirectoryInAssets, createDirectoryInTemp } from '@utils/pathHelpe
 import * as path from 'path';
 import * as fs from 'fs';
 import { JSONFilePreset } from 'lowdb/node';
-import { getGlobalClient } from '@utils/globalClient';
+import { getGlobalClient } from '@utils/runtimeManager';
 import { execFile } from 'child_process';
 import { safeGetReplyMessage } from '@utils/safeGetMessages';
 import { promisify } from 'util';

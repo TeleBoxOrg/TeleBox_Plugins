@@ -5,7 +5,7 @@ import { createDirectoryInAssets } from "@utils/pathHelpers";
 import {
   getGlobalClient,
   tryGetCurrentGenerationContext,
-} from "@utils/globalClient";
+} from "@utils/runtimeManager";
 import { TelegramClient } from "teleproto";
 import { NewMessage, NewMessageEvent } from "teleproto/events";
 import { Api } from "teleproto/tl";

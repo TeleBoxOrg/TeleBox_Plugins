@@ -4,7 +4,7 @@ import axios from "axios";
 import { getPrefixes } from "@utils/pluginManager";
 import { Plugin } from "@utils/pluginBase";
 import { Api } from "teleproto";
-import { getGlobalClient, tryGetCurrentGenerationContext } from "@utils/globalClient";
+import { getGlobalClient, tryGetCurrentGenerationContext } from "@utils/runtimeManager";
 import { Buffer } from "buffer";
 import { safeGetReplyMessage } from "@utils/safeGetMessages";
 

@@ -1,6 +1,6 @@
 import { Api } from "teleproto";
 import { Plugin } from "@utils/pluginBase";
-import { getGlobalClient } from "@utils/globalClient";
+import { getGlobalClient } from "@utils/runtimeManager";
 import { getPrefixes } from "@utils/pluginManager";
 import { sleep } from "teleproto/Helpers";
 import { NewMessage } from "teleproto/events";

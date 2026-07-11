@@ -6,7 +6,7 @@ import { safeGetMe } from "@utils/authGuards";
  */
 
 import { TelegramClient, Api } from "teleproto";
-import { getGlobalClient } from "@utils/globalClient";
+import { getGlobalClient } from "@utils/runtimeManager";
 import { getEntityWithHash } from "@utils/entityHelpers";
 import { Plugin } from "@utils/pluginBase";
 import { CustomFile } from "teleproto/client/uploads";

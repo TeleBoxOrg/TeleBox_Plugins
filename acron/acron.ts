@@ -6,7 +6,7 @@ import { cronManager } from "@utils/cronManager";
 import * as cron from "cron";
 import { JSONFilePreset } from "lowdb/node";
 import * as path from "path";
-import { getGlobalClient } from "@utils/globalClient";
+import { getGlobalClient } from "@utils/runtimeManager";
 import { safeGetMessages, safeGetReplyMessage } from "@utils/safeGetMessages";
 import { reviveEntities } from "@utils/tlRevive";
 import {

@@ -6,7 +6,7 @@
  */
 
 import { Plugin } from "@utils/pluginBase";
-import { getGlobalClient } from "@utils/globalClient";
+import { getGlobalClient } from "@utils/runtimeManager";
 import { getPrefixes } from "@utils/pluginManager";
 import { Api } from "teleproto";
 import { safeGetReplyMessage } from "@utils/safeGetMessages";

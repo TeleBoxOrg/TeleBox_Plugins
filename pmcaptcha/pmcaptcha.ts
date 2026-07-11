@@ -6,7 +6,7 @@ import { execSync } from "child_process";
 import { JSONFilePreset } from "lowdb/node";
 import { createDirectoryInAssets } from "@utils/pathHelpers";
 import { Plugin, type PluginRuntimeContext } from "@utils/pluginBase";
-import { getCurrentGeneration, tryGetCurrentGenerationContext } from "@utils/globalClient";
+import { getCurrentGeneration, tryGetCurrentGenerationContext } from "@utils/runtimeManager";
 import type { GenerationContext } from "@utils/generationContext";
 import { getPrefixes } from "@utils/pluginManager";
 import bigInt from "big-integer";

@@ -1,6 +1,6 @@
 import { Plugin } from "@utils/pluginBase";
 import { Api } from "teleproto";
-import { getGlobalClient } from "@utils/globalClient";
+import { getGlobalClient } from "@utils/runtimeManager";
 import { TelegramClient } from "teleproto";
 import { createDirectoryInAssets } from "@utils/pathHelpers";
 import path from "path";

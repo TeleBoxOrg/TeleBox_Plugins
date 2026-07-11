@@ -1,6 +1,6 @@
 import { Plugin } from "@utils/pluginBase";
 import { Api, TelegramClient } from "teleproto";
-import { getGlobalClient } from "@utils/globalClient";
+import { getGlobalClient } from "@utils/runtimeManager";
 import { safeGetReplyMessage } from "@utils/safeGetMessages";
 
 const htmlEscape = (text: string): string =>

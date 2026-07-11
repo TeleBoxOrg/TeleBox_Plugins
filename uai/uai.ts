@@ -10,7 +10,7 @@ import axios from "axios";
 import { JSONFilePreset } from "lowdb/node";
 import * as path from "path";
 import { createDirectoryInAssets } from "@utils/pathHelpers";
-import { getGlobalClient } from "@utils/globalClient";
+import { getGlobalClient } from "@utils/runtimeManager";
 import { TelegramFormatter } from "@utils/telegramFormatter";
 import { safeGetMessages } from "@utils/safeGetMessages";
 

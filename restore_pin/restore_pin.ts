@@ -1,6 +1,6 @@
 import { Plugin } from "@utils/pluginBase";
 import { Api } from "teleproto";
-import { getGlobalClient } from "@utils/globalClient";
+import { getGlobalClient } from "@utils/runtimeManager";
 import { getPrefixes } from "@utils/pluginManager";
 import bigInt from "big-integer";
 

@@ -1,5 +1,5 @@
 import { Plugin } from "@utils/pluginBase";
-import { getGlobalClient, getCurrentGeneration } from "@utils/globalClient";
+import { getGlobalClient, getCurrentGeneration } from "@utils/runtimeManager";
 import path from "path";
 import Database from "better-sqlite3";
 import { createDirectoryInAssets } from "@utils/pathHelpers";

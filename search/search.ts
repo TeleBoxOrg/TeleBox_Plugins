@@ -1,7 +1,7 @@
 import { Plugin } from "@utils/pluginBase";
 import { Api } from "teleproto/tl";
 import { CustomFile } from "teleproto/client/uploads";
-import { getGlobalClient } from "@utils/globalClient";
+import { getGlobalClient } from "@utils/runtimeManager";
 import { getPrefixes } from "@utils/pluginManager";
 import fs from "fs/promises";
 import path from "path";

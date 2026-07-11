@@ -14,7 +14,7 @@ import * as crypto from "crypto";
 import { execFile } from "child_process";
 import { promisify } from "util";
 import { createDirectoryInAssets, createDirectoryInTemp } from "@utils/pathHelpers";
-import { getGlobalClient } from "@utils/globalClient";
+import { getGlobalClient } from "@utils/runtimeManager";
 import { safeGetMessages } from "@utils/safeGetMessages";
 
 const prefixes = getPrefixes();

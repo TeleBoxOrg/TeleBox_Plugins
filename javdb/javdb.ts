@@ -13,7 +13,7 @@ import * as path from "path";
 import * as os from "os";
 
 import { Plugin } from "@utils/pluginBase";
-import { getGlobalClient, getCurrentGeneration } from "@utils/globalClient";
+import { getGlobalClient, getCurrentGeneration } from "@utils/runtimeManager";
 import { getPrefixes } from "@utils/pluginManager";
 
 import { Api } from "teleproto";
