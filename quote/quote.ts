@@ -579,7 +579,7 @@ async function downloadEntityAvatar(client: any, entity: any): Promise<Buffer | 
       try {
         fullEntity = await client.getEntity(entity);
       } catch (e) {
-        console.warn("quote avatar getEntity failed, falling back to raw entity", e?.message || e);
+        console.warn("quote avatar getEntity failed, falling back to raw entity", (e as Error)?.message || e);
       }
 
       const photo = fullEntity?.photo;
