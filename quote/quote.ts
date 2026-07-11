@@ -31,7 +31,7 @@ const TG_STICKER_MAX_FRAMES = 100;
 const TG_STICKER_MAX_BYTES = 512 * 1024;
 const WEBM_CRF_STEPS = [38, 44, 50, 56];
 
-const QUOTE_PLUGIN_VERSION = "1.02";
+const QUOTE_PLUGIN_VERSION = "1.03";
 const QUOTE_BASE_URL = "https://raw.githubusercontent.com/TeleBoxOrg/TeleBox_Plugins/main/quote";
 const QUOTE_ASSETS_BASE_URL = "https://raw.githubusercontent.com/LyoSU/quote-api/master/assets";
 const QUOTE_VENDOR_DIR = path.join(quotePluginDir(), "quote", "vendor");
@@ -431,6 +431,11 @@ async function senderName(msg: Api.Message): Promise<string> {
 function emojiStatusIdFromEntity(entity: any): string | undefined {
   const status = entity?.emojiStatus ?? entity?.emoji_status;
   if (!status) return undefined;
+  // If status is a primitive (bigint, number, string), treat it as the direct document ID
+  if (typeof status !== "object") {
+    const id = status?.value ?? status;
+    return id ? String(id) : undefined;
+  }
   const documentId = status.documentId ?? status.document_id ?? status.customEmojiId ?? status.custom_emoji_id ?? status.id;
   if (!documentId) return undefined;
   return String(documentId);
@@ -1208,6 +1213,23 @@ async function forwardPreview(msg: Api.Message): Promise<any | undefined> {
   };
 }
 
+async function senderRankInChat(msg: Api.Message, entity: any): Promise<string | undefined> {
+  if (!entity?.accessHash) return undefined;
+  try {
+    const client = (msg as any).client;
+    const chatPeer = (msg as any).peerId ?? (msg as any).chatId ?? (msg as any).inputChat;
+    const inputUser = new Api.InputUser({ userId: entity.id, accessHash: entity.accessHash });
+    const result = await withTimeout(
+      client.invoke(new Api.channels.GetParticipant({ channel: chatPeer, participant: inputUser })),
+      QUOTE_RPC_TIMEOUT_MS,
+      "senderRank.channels.getParticipant",
+    );
+    return result?.participant?.rank?.trim() || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 async function toQuoteMessage(msg: Api.Message, args: QuoteArgs): Promise<any> {
   const entity = await senderEntity(msg);
   const fwd = await forwardedSource(msg);
@@ -1256,7 +1278,7 @@ async function toQuoteMessage(msg: Api.Message, args: QuoteArgs): Promise<any> {
     emoji_status: args.hidden || fwd?.anonymous ? undefined : emojiStatusPayload(effectiveEntity, emojiBuffer),
     date: messageDate(msg),
     via_bot: (msg as any).viaBotId ?? (msg as any).via_bot_id,
-    senderTag: undefined,
+    senderTag: fwd ? undefined : await senderRankInChat(msg, entity),
   };
 }
 
