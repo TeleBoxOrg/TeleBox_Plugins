@@ -755,8 +755,9 @@ class AutoRepeatPlugin extends Plugin {
       // 忽略自己发送的消息
       if (msg.out) return;
 
-      // 忽略其他机器人发送的消息
-      const sender = await msg.getSender();
+      // 仅使用 update 已携带的实体，避免无效/已退出频道触发额外 RPC 和错误日志。
+      // 缺少实体时无法可靠判断机器人身份，宁可跳过本条消息。
+      const sender = msg.sender;
       if (!sender) return;
       if (sender instanceof Api.User && sender.bot) {
         return;
@@ -764,8 +765,6 @@ class AutoRepeatPlugin extends Plugin {
 
       await AutoRepeatManager.checkAndRepeat(msg);
     } catch (e: any) {
-      // getSender() 可能在 bot 被移出频道/频道已删除时抛出 ChannelInvalidError
-      if (e?.message?.includes("channel is invalid") || e?.message?.includes("ChannelInvalid")) return;
       console.error(`[autorepeat] listenMessageHandler error:`, e?.message || e);
     }
   };
