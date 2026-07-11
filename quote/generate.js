@@ -1,11 +1,12 @@
 // High-level quote orchestration module for TeleBox.
 //
-// This is a faithful port of TeleBoxOrg/quote-api `methods/generate.js`
-// (the upstream that TeleBox's vendor/ tree was extracted from), adapted for
+// This is a faithful port of LyoSU/quote-api `methods/generate.js`, adapted for
 // in-plugin use:
 //   * requires point at ./vendor/* instead of ../utils/*
 //   * the pattern asset is resolved from process.cwd()/assets/quote
 //     (where quote.ts downloads/stores assets) instead of repo-root /assets
+//   * TeleBox-specific bridges: avatarBuffer → avatarCanvas, CJK font
+//     registration from assets/quote
 //   * exports the named method `generateQuote` that quote.ts calls, and always
 //     returns `image` as a Buffer (quote.ts does fs.writeFileSync(out, image))
 //
@@ -17,12 +18,10 @@ const path = require("path");
 const { QuoteGenerate } = require("./vendor/index.js");
 const { createCanvas, loadImage } = require("canvas");
 const sharp = require("sharp");
-const { parseBackgroundColor, colorLuminance } = require("./vendor/quote-generate/color");
+const { parseBackgroundColor, colorLuminance, lightOrDark, hexToHsl, hslToHex } = require("./vendor/quote-generate/color");
 const { brands: emojiBrands } = require("./vendor/emoji-image");
 
-// quote.ts only downloads the CJK font files into assets/quote — it never
-// registers them with node-canvas. Font registration MUST happen here (once)
-// before any canvas text is drawn, or CJK glyphs render as tofu boxes.
+// ── TeleBox: register CJK fonts from assets/quote ─────────────────────
 let fontsLoaded = false;
 async function ensureFonts() {
   if (fontsLoaded) return;
@@ -46,25 +45,18 @@ async function getPatternImage() {
   return cachedPatternImage;
 }
 
+// ── TeleBox: bridge avatarBuffer → avatarCanvas ───────────────────────
 // quote.ts attaches the sender/reply/forward avatar as a raw Buffer in
 // `message.avatarBuffer` (downloaded via client.downloadProfilePhoto and
-// normalized to PNG). The vendor renderer, however, only consumes a pre-built
-// `message.avatarCanvas` (or falls back to drawAvatar(from, telegram), which
-// needs from.photo.url/big_file_id or a telegram client — none of which quote.ts
-// provides; from.photo is always {}). So without this bridge the avatar buffer
-// is silently dropped and no avatar is drawn. Convert the buffer into a canvas
-// here, matching how quote.ts already pre-builds mediaCanvas.
+// normalized to PNG). The vendor renderer only consumes a pre-built
+// `message.avatarCanvas`. Convert the buffer into a circular canvas here.
 async function avatarBufferToCanvas(buffer) {
   if (!buffer || !buffer.length) return undefined;
   try {
     const img = await loadImage(buffer);
-    // The composer draws the avatar canvas as-is (no clipping), so it must be
-    // pre-clipped to a circle here — mirroring the vendor's drawAvatar(), which
-    // returns a circular canvas. Without this the avatar renders as a square.
     const size = img.naturalHeight || img.height || img.width;
     const canvas = createCanvas(size, size);
     const ctx = canvas.getContext("2d");
-    ctx.clearRect(0, 0, size, size);
     ctx.beginPath();
     ctx.arc(size / 2, size / 2, size / 2, 0, Math.PI * 2, true);
     ctx.save();
@@ -79,8 +71,6 @@ async function avatarBufferToCanvas(buffer) {
   }
 }
 
-// Bridge avatarBuffer -> avatarCanvas for a message and its reply, if the
-// vendor-consumed canvas isn't already set.
 async function bridgeAvatar(message) {
   if (!message) return;
   if (!message.avatarCanvas && message.avatarBuffer) {
@@ -99,6 +89,7 @@ async function bridgeAvatar(message) {
   }
 }
 
+// ── Drawing helpers ────────────────────────────────────────────────────
 const imageAlpha = (image, alpha) => {
   const canvas = createCanvas(image.width, image.height);
   const canvasCtx = canvas.getContext("2d");
@@ -107,6 +98,53 @@ const imageAlpha = (image, alpha) => {
   return canvas;
 };
 
+async function drawPatternBackground(canvas, centerColor, edgeColor, patternImage, patternAlpha) {
+  const ctx = canvas.getContext("2d");
+
+  const gradient = ctx.createRadialGradient(
+    canvas.width / 2, canvas.height / 2, 0,
+    canvas.width / 2, canvas.height / 2, canvas.width / 2
+  );
+  gradient.addColorStop(0, centerColor);
+  gradient.addColorStop(1, edgeColor);
+
+  ctx.fillStyle = gradient;
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+  const pattern = ctx.createPattern(imageAlpha(patternImage, patternAlpha), "repeat");
+  ctx.fillStyle = pattern;
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+}
+
+// Wallpaper colors derived from the bubble color. The bubble must sit ON the
+// wallpaper, not dissolve into it:
+//  • dark bubbles → a much darker backdrop (luminance drop + vignette);
+//  • light bubbles → a PASTEL backdrop, like Telegram's light wallpapers:
+//    saturate the hue and keep lightness high — darkening a near-white just
+//    makes mud. Near-gray inputs fall back to a soft Telegram-ish blue.
+function wallpaperColors(colorOne) {
+  if (lightOrDark(colorOne) === "dark") {
+    return {
+      center: colorLuminance(colorOne, -0.35),
+      edge: colorLuminance(colorOne, -0.6),
+      patternAlpha: 0.22,
+    };
+  }
+  let [h, s] = hexToHsl(colorOne);
+  if (s < 0.08) {
+    h = 207; // washed-out gray/white → soft blue
+    s = 0.45;
+  } else {
+    s = Math.min(1, Math.max(s * 1.8, 0.35));
+  }
+  return {
+    center: hslToHex(h, s, 0.8),
+    edge: hslToHex(h, s, 0.62),
+    patternAlpha: 0.18,
+  };
+}
+
+// ── Message normalisation ──────────────────────────────────────────────
 function normalizeMessage(message) {
   if (!message.from) {
     message.from = { id: 0 };
@@ -137,28 +175,7 @@ function normalizeMessage(message) {
   }
 }
 
-async function drawPatternBackground(canvas, colorOne, colorTwo, patternImage, lumOne, lumTwo) {
-  const ctx = canvas.getContext("2d");
-
-  const gradient = ctx.createRadialGradient(
-    canvas.width / 2, canvas.height / 2, 0,
-    canvas.width / 2, canvas.height / 2, canvas.width / 2
-  );
-
-  const patternColorOne = colorLuminance(colorOne, lumOne);
-  const patternColorTwo = colorLuminance(colorTwo, lumTwo);
-
-  gradient.addColorStop(0, patternColorOne);
-  gradient.addColorStop(1, patternColorTwo);
-
-  ctx.fillStyle = gradient;
-  ctx.fillRect(0, 0, canvas.width, canvas.height);
-
-  const pattern = ctx.createPattern(imageAlpha(patternImage, 0.3), "repeat");
-  ctx.fillStyle = pattern;
-  ctx.fillRect(0, 0, canvas.width, canvas.height);
-}
-
+// ── Main generate entry point ──────────────────────────────────────────
 async function generateQuote(parm) {
   if (!parm) return { error: "query_empty" };
   if (!Array.isArray(parm.messages) || parm.messages.length < 1) return { error: "messages_empty" };
@@ -174,13 +191,24 @@ async function generateQuote(parm) {
 
   const background = parseBackgroundColor(parm.backgroundColor);
 
-  // Normalize all messages first (sync), then bridge avatar buffers into the
-  // avatarCanvas the vendor renderer expects (async — loads the image buffer).
+  // Normalize all messages first (sync), then bridge avatar buffers into
+  // the avatarCanvas the vendor renderer expects (async — loads image buffer).
   const validMessages = parm.messages.filter(Boolean);
   for (const message of validMessages) {
     normalizeMessage(message);
   }
   await Promise.all(validMessages.map((message) => bridgeAvatar(message)));
+
+  // Same-sender runs render with grouped corners (small radii between
+  // neighbours), like consecutive messages in Telegram. The avatar (and with
+  // it the bubble tail) belongs to the LAST message of a group only — the
+  // reserved left column keeps the other bubbles aligned.
+  for (let i = 0; i < validMessages.length; i++) {
+    const prevSame = i > 0 && validMessages[i - 1].chatId === validMessages[i].chatId;
+    const nextSame = i < validMessages.length - 1 && validMessages[i + 1].chatId === validMessages[i].chatId;
+    validMessages[i].groupPos = prevSame && nextSame ? "middle" : prevSame ? "last" : nextSame ? "first" : "single";
+    if (nextSame) validMessages[i].avatar = false;
+  }
 
   // Generate quotes with concurrency limit to avoid Telegram API rate limits
   const CONCURRENCY = 3;
@@ -218,8 +246,12 @@ async function generateQuote(parm) {
     runNext();
   });
 
-  // Filter nulls (failed messages) while preserving order
-  const filteredImages = quoteImages.filter(Boolean);
+  // Filter nulls (failed messages) while preserving order, keeping each
+  // image paired with its source message (for grouped-margin decisions).
+  const pairs = validMessages
+    .map((message, i) => ({ message, image: quoteImages[i] }))
+    .filter((p) => p.image);
+  const filteredImages = pairs.map((p) => p.image);
 
   if (filteredImages.length === 0) {
     return { error: "empty_messages" };
@@ -236,15 +268,23 @@ async function generateQuote(parm) {
       height += filteredImages[index].height;
     }
 
-    const quoteMargin = 5 * scale;
+    // Tighter spacing inside a same-sender group, roomier between groups.
+    const margins = [];
+    let totalMargin = 0;
+    for (let index = 0; index < pairs.length - 1; index++) {
+      const grouped = pairs[index].message.chatId === pairs[index + 1].message.chatId;
+      const m = (grouped ? 2 : 6) * scale;
+      margins.push(m);
+      totalMargin += m;
+    }
 
-    const canvas = createCanvas(width, height + (quoteMargin * filteredImages.length));
+    const canvas = createCanvas(width, height + totalMargin);
     const canvasCtx = canvas.getContext("2d");
 
     let imageY = 0;
     for (let index = 0; index < filteredImages.length; index++) {
       canvasCtx.drawImage(filteredImages[index], 0, imageY);
-      imageY += filteredImages[index].height + quoteMargin;
+      imageY += filteredImages[index].height + (margins[index] || 0);
     }
     canvasQuote = canvas;
   } else {
@@ -253,11 +293,11 @@ async function generateQuote(parm) {
 
   let quoteImage;
 
-  let { type, format } = parm;
+  let { type, format, ext } = parm;
 
+  // quote.ts sometimes passes ext directly; infer type from ext if absent.
+  if (!type && ext) type = "png";
   if (type !== "image" && type !== "stories" && canvasQuote.height > 1024 * 2) type = "png";
-
-  let ext;
 
   if (type === "quote") {
     const downPadding = 75;
@@ -295,7 +335,8 @@ async function generateQuote(parm) {
     const canvasPicCtx = canvasPic.getContext("2d");
 
     const patternImage = await getPatternImage();
-    await drawPatternBackground(canvasPic, background.colorTwo, background.colorOne, patternImage, 0.15, 0.15);
+    const wp = wallpaperColors(background.colorOne);
+    await drawPatternBackground(canvasPic, wp.center, wp.edge, patternImage, wp.patternAlpha);
 
     canvasPicCtx.shadowOffsetX = 8;
     canvasPicCtx.shadowOffsetY = 8;
@@ -321,7 +362,8 @@ async function generateQuote(parm) {
     const canvasPicCtx = canvasPic.getContext("2d");
 
     const patternImage = await getPatternImage();
-    await drawPatternBackground(canvasPic, background.colorTwo, background.colorOne, patternImage, 0.25, 0.15);
+    const storyWp = wallpaperColors(background.colorOne);
+    await drawPatternBackground(canvasPic, storyWp.center, storyWp.edge, patternImage, storyWp.patternAlpha);
 
     canvasPicCtx.shadowOffsetX = 8;
     canvasPicCtx.shadowOffsetY = 8;
@@ -377,7 +419,7 @@ async function generateQuote(parm) {
     height = canvasQuote.height;
   }
 
-  // quote.ts consumes `image` as a Buffer (fs.writeFileSync) — always return raw bytes.
+  // TeleBox: always return raw Buffer (quote.ts does fs.writeFileSync)
   return { image: quoteImage, type, width, height, ext };
 }
 
