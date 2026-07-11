@@ -271,9 +271,13 @@ async function formatEntity(target: any) {
           );
 
           // 从导入结果中获取 chat 对象
-          if ('chats' in importResult && importResult.chats.length > 0) {
-            entity = importResult.chats[0];
-            id = entity?.id;
+          // importResult 类型为 unknown，使用类型守卫安全访问
+          if (importResult && typeof importResult === 'object' && 'chats' in importResult) {
+            const chats = (importResult as Record<string, unknown>).chats;
+            if (Array.isArray(chats) && chats.length > 0) {
+              entity = chats[0] as typeof entity;
+              id = entity?.id;
+            }
           }
         }
       } catch (inviteError: any) {
