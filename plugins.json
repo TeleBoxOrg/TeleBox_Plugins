@@ -179,6 +179,10 @@
     "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/fadian/fadian.ts?raw=true",
     "desc": "fadian语录"
   },
+  "fbi": {
+    "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/fbi/fbi.ts?raw=true",
+    "desc": "欢迎加入联邦调查局"
+  },
   "getstickers": {
     "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/getstickers/getstickers.ts?raw=true",
     "desc": "下载整个贴纸包"
