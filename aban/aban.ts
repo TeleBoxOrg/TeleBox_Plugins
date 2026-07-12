@@ -638,28 +638,24 @@ class GroupManager {
       
       const checkPromises = dialogs.map(async (dialog: any) => {
         if (dialog.isChannel || dialog.isGroup) {
-          const hasPermission = await PermissionManager.checkAdminPermission(
-            client,
-            dialog.entity
-          );
-          
-          if (hasPermission) {
-            const isChannel = !(dialog.isGroup && !dialog.isChannel);
-            // 仅 channel 需要 accessHash，basic group 用裸 chatId
-            const rawHash = isChannel ? dialog.entity?.accessHash : undefined;
-            const accessHash = rawHash != null ? String(rawHash) : undefined;
-            // ⚠️ dialog.id 是 marked id（channel: -100xxxx，basic group: -xxx），
-            // 而 Api.InputChannel.channelId / Api.messages.DeleteChatUser.chatId 需要 raw 正数 id。
-            // 这里必须用 dialog.entity.id（Channel/Chat 实体上的原始正数 id），否则服务端会
-            // 直接 CHANNEL_INVALID / PEER_ID_INVALID，导致批量 sb 全部失败。
-            const rawId = Number(dialog.entity?.id ?? dialog.id);
-            return {
-              id: rawId,
-              title: dialog.title || "Unknown",
-              kind: isChannel ? 'channel' as const : 'chat' as const,
-              accessHash,
-            };
-          }
+          // 不再预检查管理员权限，统一纳入所有群组/频道。
+          // 批量操作（sb/unsb）会由各群组的实际 API 调用返回权限错误，
+          // 避免了 checkAdminPermission 因 peerId 格式或边缘情况导致的误判。
+          const isChannel = !(dialog.isGroup && !dialog.isChannel);
+          // 仅 channel 需要 accessHash，basic group 用裸 chatId
+          const rawHash = isChannel ? dialog.entity?.accessHash : undefined;
+          const accessHash = rawHash != null ? String(rawHash) : undefined;
+          // ⚠️ dialog.id 是 marked id（channel: -100xxxx，basic group: -xxx），
+          // 而 Api.InputChannel.channelId / Api.messages.DeleteChatUser.chatId 需要 raw 正数 id。
+          // 这里必须用 dialog.entity.id（Channel/Chat 实体上的原始正数 id），否则服务端会
+          // 直接 CHANNEL_INVALID / PEER_ID_INVALID，导致批量 sb 全部失败。
+          const rawId = Number(dialog.entity?.id ?? dialog.id);
+          return {
+            id: rawId,
+            title: dialog.title || "Unknown",
+            kind: isChannel ? 'channel' as const : 'chat' as const,
+            accessHash,
+          };
         }
         return null;
       });
@@ -1138,17 +1134,6 @@ class CommandHandlers {
     action: 'kick' | 'ban' | 'unban' | 'mute' | 'unmute'
   ): Promise<void> {
     try {
-      // 权限检查
-      const hasPermission = await PermissionManager.checkAdminPermission(
-        client,
-        message.peerId
-      );
-      
-      if (!hasPermission) {
-        await MessageManager.smartEdit(message, "❌ 无管理员权限");
-        return;
-      }
-
       // 解析参数
       const args = message.message?.split(" ").slice(1) || [];
       const { user, uid, participant, resolutionError, chatType } = await UserResolver.resolveTarget(client, message, args);
