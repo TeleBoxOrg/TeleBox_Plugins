@@ -8,7 +8,9 @@ import {
 import { getPrefixes } from "@utils/pluginManager";
 import path from "path";
 import fs from "fs";
-import { Api } from "teleproto";
+import { Api, utils } from "teleproto";
+import type { EntityLike } from "teleproto/define";
+import bigInteger from "big-integer";
 import { encode, UnencodedFrame } from "modern-gif";
 import { execFile } from "child_process";
 import { promisify } from "util";
@@ -97,6 +99,49 @@ async function ensureConfig(): Promise<void> {
 async function loadGifDetailConfig(url: string): Promise<EatGifConfig> {
   const res = await axios.get(baseRepoURL + url);
   return res.data;
+}
+
+/**
+ * 头像始终是小文件，直接通过其所属 DC 请求单个 upload.GetFile chunk。
+ * 避免 teleproto downloadProfilePhoto 进入 MediaScheduler 的 5 × 15 秒重试链。
+ */
+export async function downloadAvatarDirect(
+  client: NonNullable<Api.Message["client"]>,
+  entityLike: EntityLike,
+): Promise<Buffer | undefined> {
+  const entity = entityLike instanceof Api.User ||
+    entityLike instanceof Api.Chat ||
+    entityLike instanceof Api.Channel
+    ? entityLike
+    : await client.getEntity(entityLike);
+  if (!("photo" in entity)) return undefined;
+  const photo = entity.photo;
+  if (
+    !photo ||
+    photo instanceof Api.UserProfilePhotoEmpty ||
+    photo instanceof Api.ChatPhotoEmpty
+  ) {
+    return undefined;
+  }
+
+  const result = await client.invoke(
+    new Api.upload.GetFile({
+      location: new Api.InputPeerPhotoFileLocation({
+        peer: utils.getInputPeer(entity),
+        photoId: photo.photoId,
+        big: false,
+      }),
+      offset: bigInteger.zero,
+      limit: 512 * 1024,
+      precise: true,
+    }),
+    photo.dcId,
+  );
+
+  if (!(result instanceof Api.upload.File)) return undefined;
+  return Buffer.isBuffer(result.bytes) && result.bytes.length > 0
+    ? result.bytes
+    : undefined;
 }
 
 // 由于很多帧，每个帧又有不同的mask等配置，最好就是缓存
@@ -376,10 +421,10 @@ class EatGifPlugin extends Plugin {
     if (!meId) {
       return;
     }
-    const meAvatarBuffer = (await msg.client?.downloadProfilePhoto(meId, {
-      isBig: false,
-    })) as Buffer | undefined;
-    return meAvatarBuffer;
+    const client = msg.client;
+    if (!client) return;
+    const meEntity = trigger?.sender ?? msg.sender ?? meId;
+    return downloadAvatarDirect(client, meEntity);
   }
 
   private async getYouAvatarBuffer(
@@ -391,13 +436,9 @@ class EatGifPlugin extends Plugin {
       replyTo = await safeGetReplyMessage(trigger);
     }
     if (!replyTo?.senderId) return;
-    const youAvatarBuffer = await msg.client?.downloadProfilePhoto(
-      replyTo?.senderId,
-      {
-        isBig: false,
-      }
-    );
-    return youAvatarBuffer as Buffer | undefined;
+    const client = msg.client;
+    if (!client) return;
+    return downloadAvatarDirect(client, replyTo.sender ?? replyTo.senderId);
   }
 
 }
