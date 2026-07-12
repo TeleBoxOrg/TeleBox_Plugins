@@ -163,6 +163,7 @@ class WeatherPlugin extends Plugin {
       // 无参数时显示错误提示
       if (args.length === 0) {
         await msg.edit({
+          text: `❌ <b>请指定城市名</b>\n\n<b>用法:</b>\n<code>${mainPrefix}weather &lt;城市名&gt;</code>\n\n<b>示例:</b>\n<code>${mainPrefix}weather 北京</code>\n<code>${mainPrefix}weather London</code>`,
           parseMode: "html"
         });
         return;
