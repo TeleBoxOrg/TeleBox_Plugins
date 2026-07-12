@@ -6,6 +6,7 @@ import { createDirectoryInAssets } from "@utils/pathHelpers";
 import { Api } from "teleproto";
 import { JSONFilePreset } from "lowdb/node";
 import * as path from "path";
+import * as fs from "fs";
 
 const PREFIX = getPrefixes()[0];
 const HELP = `🕵️ <b>FBI 跨群组追踪</b>
@@ -61,7 +62,7 @@ interface SvEntry {
   targetName: string;
   triggerPeer: string;
   triggerMsgId: number;
-  scopePeer?: string; // mon only — restrict to a single group
+  scopePeer?: string; // obs only — restrict to a single group
 }
 
 interface FbiConfig {
@@ -93,6 +94,8 @@ class FbiPlugin extends Plugin {
   private chatCache = new Map<string, CachedChat>();
   private cacheReady = false;
   private cacheDirty = false;
+  private ready = false; // initDB done
+  private cachePath = ""; // persist path for sync flush on cleanup
   private cachePersistTimer: ReturnType<typeof setTimeout> | null = null;
   private coldSweepTimer: ReturnType<typeof setInterval> | null = null;
 
@@ -106,7 +109,10 @@ class FbiPlugin extends Plugin {
 
   constructor() {
     super();
-    this.initDB().catch((e) => console.error("[fbi] initDB error", e));
+    this.initDB().catch((e) => {
+      console.error("[fbi] initDB error", e);
+      this.ready = true; // continue with fresh state
+    });
   }
 
   /* ====== bootstrap ====== */
@@ -122,6 +128,7 @@ class FbiPlugin extends Plugin {
     for (const [k, v] of Object.entries(this.configDb.data.surveillance)) this.sv.set(k, v as SvEntry);
     // load cache from separate file
     const cp = path.join(createDirectoryInAssets("fbi"), "cache.json");
+    this.cachePath = cp;
     this.cacheDb = await JSONFilePreset<FbiCache>(cp, { cache: {} });
     if (this.cacheDb.data.cache) {
       for (const [k, v] of Object.entries(this.cacheDb.data.cache))
@@ -139,6 +146,7 @@ class FbiPlugin extends Plugin {
         if (this.pruneExpired(chat)) anyPruned = true;
       if (anyPruned) this.schedulePersistCache();
     }, 24 * 60 * 60 * 1000);
+    this.ready = true;
   }
 
   private async persistDb() {
@@ -148,6 +156,15 @@ class FbiPlugin extends Plugin {
 
   /** Cleanup timers on plugin unload to prevent leaks across reloads */
   cleanup(): void {
+    // flush pending cache before clearing timers
+    if (this.cacheDirty && this.cachePath) {
+      try {
+        this.cacheDb.data.cache = Object.fromEntries(this.chatCache);
+        fs.writeFileSync(this.cachePath, JSON.stringify(this.cacheDb.data));
+      } catch (e) {
+        console.error("[fbi] cleanup sync flush failed", e);
+      }
+    }
     if (this.coldSweepTimer) {
       clearInterval(this.coldSweepTimer);
       this.coldSweepTimer = null;
@@ -208,7 +225,7 @@ class FbiPlugin extends Plugin {
         let username: string | undefined;
         let title: string | undefined;
         try {
-          const entity = await cl.getEntity(d.id) as any;
+          const entity = await cl.getEntity(d.id);
           username = entity.username;
           title = entity.title;
         } catch { /* best-effort */ }
@@ -236,6 +253,11 @@ class FbiPlugin extends Plugin {
     const sub = parts[1]?.toLowerCase();
     const args = parts.slice(2);
 
+    if (!this.ready) {
+      await msg.edit({ text: "⏳ FBI 正在初始化，请稍后再试。", parseMode: "html" });
+      return;
+    }
+
     try {
       switch (sub) {
         case "det":   return this.doDet(msg, args);
@@ -262,7 +284,7 @@ class FbiPlugin extends Plugin {
     if (args.length) {
       const raw = args[0];
       try {
-        const e = await cl.getEntity(raw) as any;
+        const e = await cl.getEntity(raw);
         targetId = String(e.id);
         const plain = htmlEsc([e.firstName, e.lastName].filter(Boolean).join(' ') || e.title || targetId);
         name = e.username ? `<a href="https://t.me/${e.username}">${plain}</a>` : plain;
@@ -275,7 +297,7 @@ class FbiPlugin extends Plugin {
       if (r?.senderId) {
         targetId = String(r.senderId);
         try {
-          const u = await cl.getEntity(r.senderId as any) as any;
+          const u = await cl.getEntity(r.senderId);
           const plain = htmlEsc([u.firstName, u.lastName].filter(Boolean).join(' ') || targetId);
           name = u.username ? `<a href="https://t.me/${u.username}">${plain}</a>` : plain;
         } catch {
@@ -362,7 +384,7 @@ class FbiPlugin extends Plugin {
         const cl = await getGlobalClient();
         if (cl) {
           try {
-            const entity = await cl.getEntity(msg.chatId) as any;
+            const entity = await cl.getEntity(msg.chatId);
             if (entity.username && (entity.className === 'Channel' || entity.className === 'Chat')) {
               chat = { username: entity.username, title: entity.title, msgs: [] };
               this.chatCache.set(peer, chat);
@@ -393,11 +415,11 @@ class FbiPlugin extends Plugin {
     // check group is public (has username) before consuming the sv entry
     const cl = await getGlobalClient();
     if (!cl) return;
-    const chatEntity = await cl.getEntity(msg.peerId) as any;
+    const chatEntity = await cl.getEntity(msg.peerId);
     if (!chatEntity.username) return; // private group — skip silently, keep sv alive
 
     this.sv.delete(sid);
-    this.persistDb().catch(() => {});
+    this.persistDb().catch((e) => console.error("[fbi] persistDb error", e));
 
     // ponytail: link from live msg entity (need peerId for unknown groups)
     const preview = htmlEsc((msg.text || "").slice(0, 50) || "[媒体消息]");
@@ -483,7 +505,7 @@ class FbiPlugin extends Plugin {
         if (c.username?.toLowerCase() === gn) { scopePeer = p; break; }
       if (!scopePeer) {
         try {
-          const e = await cl.getEntity(gn as any) as any;
+          const e = await cl.getEntity(gn);
           if (e.username?.toLowerCase() === gn) scopePeer = String(e.id);
         } catch {}
         if (!scopePeer) {
@@ -507,7 +529,7 @@ class FbiPlugin extends Plugin {
     }
 
     // check group is public
-    const chatEntity = await cl.getEntity(scopePeer as any) as any;
+    const chatEntity = await cl.getEntity(scopePeer);
     if (!chatEntity.username) {
       await msg.edit({ text: "❌ 仅支持公开群组的定点监视", parseMode: "html" });
       return;
