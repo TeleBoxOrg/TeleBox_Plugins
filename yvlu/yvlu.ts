@@ -3,9 +3,10 @@ import { safeGetMe } from "@utils/authGuards";
 // YVLU Plugin - 生成文字语录贴纸
 import axios from "axios";
 import _ from "lodash";
+import bigInteger from "big-integer";
 import { getPrefixes } from "@utils/pluginManager";
 import { Plugin } from "@utils/pluginBase";
-import { Api } from "teleproto";
+import { Api, utils } from "teleproto";
 import {
   createDirectoryInAssets,
   createDirectoryInTemp,
@@ -28,11 +29,285 @@ import { CustomFile } from "teleproto/client/uploads.js";
 import * as zlib from "zlib";
 import { execFile } from "child_process";
 import { promisify } from "util";
+import * as os from "os";
 
 const execFileAsync = promisify(execFile);
 
 const timeout = 60000; // 超时
 const PYTHON_PATH = "python3"; // Python 路径，可修改为 venv 中的路径，如："/path/to/venv/bin/python"
+
+const QUOTE_RPC_TIMEOUT_MS = 20000;
+
+function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
+  let timer: NodeJS.Timeout;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms);
+    if (timer.unref) timer.unref();
+  });
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
+}
+
+const avatarCache = new Map<string, Buffer | undefined>();
+const customEmojiCache = new Map<string, Buffer | undefined>();
+
+function stableEntityKey(entity: any): string | undefined {
+  const raw = entity?.id ?? entity?.userId ?? entity?.channelId ?? entity?.chatId ?? entity?.accessHash ?? entity;
+  if (!raw) return undefined;
+  try {
+    return typeof raw === "bigint" ? raw.toString() : JSON.stringify(raw, (_, v) => typeof v === "bigint" ? v.toString() : v);
+  } catch (_) {
+    return String(raw);
+  }
+}
+
+async function downloadEntityAvatar(client: any, entity: any): Promise<Buffer | undefined> {
+  if (!client || !entity) return undefined;
+  const key = stableEntityKey(entity);
+  if (key && avatarCache.has(key)) return avatarCache.get(key);
+
+  // Resolve a full entity with photo + accessHash. getSender() may return a
+  // min entity (no accessHash), and we need a full entity for getInputPeer.
+  let fullEntity = entity;
+  try {
+    if (!(entity.accessHash !== undefined && !entity.min) && entity.id) {
+      fullEntity = await withTimeout(client.getEntity(entity), QUOTE_RPC_TIMEOUT_MS, "downloadEntityAvatar.getEntity");
+    }
+  } catch (e: any) {
+    console.warn("yvlu avatar getEntity failed, using raw entity", e?.message || e);
+  }
+
+  const photo = fullEntity?.photo;
+  if (!photo || photo._ === "userProfilePhotoEmpty" || photo._ === "chatPhotoEmpty") {
+    if (key) avatarCache.set(key, undefined);
+    return undefined;
+  }
+
+  const tryDownload = async (isBig: boolean): Promise<Buffer | undefined> => {
+    try {
+      // Bypass the MediaScheduler (which retries 5×15s = 75s on failure) by
+      // using raw upload.GetFile via client.invoke with the photo's DC.
+      // This gives us a single attempt that our withTimeout can actually cap.
+      const inputPeer = client.utils?.getInputPeer ? client.utils.getInputPeer(fullEntity) : (await withTimeout(client.getInputEntity(fullEntity), QUOTE_RPC_TIMEOUT_MS, "downloadEntityAvatar.getInputEntity"));
+      const location = new Api.InputPeerPhotoFileLocation({
+        peer: inputPeer,
+        photoId: photo.photoId,
+        big: isBig,
+      });
+      const dcId = photo.dcId ?? fullEntity?.photo?.dc_id;
+      const result = await withTimeout(
+        client.invoke(
+          new Api.upload.GetFile({
+            location,
+            offset: bigInteger.zero,
+            limit: 512 * 1024,
+            precise: true,
+          }),
+          dcId,
+        ),
+        QUOTE_RPC_TIMEOUT_MS,
+        `downloadEntityAvatar.${isBig ? "big" : "small"}`,
+      ) as { bytes?: unknown };
+      const buffer = result?.bytes;
+      return Buffer.isBuffer(buffer) && buffer.length > 0 ? buffer : undefined;
+    } catch (err: any) {
+      console.warn(`yvlu avatar ${isBig ? "big" : "small"} download failed`, err?.message || err);
+      return undefined;
+    }
+  };
+
+  const [small, big] = await Promise.all([tryDownload(false), tryDownload(true)]);
+  const normalized = small ? await normalizeAvatarBuffer(small) : big ? await normalizeAvatarBuffer(big) : undefined;
+  if (key) avatarCache.set(key, normalized);
+  return normalized;
+}
+
+async function normalizeAvatarBuffer(buffer: Buffer): Promise<Buffer> {
+  try {
+    const sharp = (await import("sharp")).default;
+    return await sharp(buffer)
+      .resize(256, 256, { fit: "cover", position: "centre" })
+      .flatten({ background: { r: 0, g: 0, b: 0 } })
+      .png()
+      .toBuffer();
+  } catch (err: any) {
+    console.warn("yvlu avatar normalize failed", err?.message || err);
+    return buffer.length > 0 ? buffer : undefined;
+  }
+}
+
+async function downloadCustomEmoji(client: any, doc: any): Promise<Buffer | undefined> {
+  if (!client || !doc) return undefined;
+  const id = String(doc.id ?? doc.documentId ?? doc.document_id ?? "");
+  if (!id) return undefined;
+  if (customEmojiCache.has(id)) return customEmojiCache.get(id);
+
+  const location = new Api.InputDocumentFileLocation({
+    id: doc.id,
+    accessHash: doc.accessHash,
+    fileReference: doc.fileReference,
+    thumbSize: "",
+  });
+  const buffer = await rawDownloadFile(client, location, doc.dcId);
+  if (buffer) customEmojiCache.set(id, buffer);
+  return buffer;
+}
+
+async function rawDownloadFile(client: any, location: any, dcId: number | undefined): Promise<Buffer | undefined> {
+  if (!client || !location) return undefined;
+  try {
+    const result = await withTimeout(
+      client.invoke(
+        new Api.upload.GetFile({
+          location,
+          offset: bigInteger.zero,
+          limit: 512 * 1024,
+          precise: true,
+        }),
+        dcId,
+      ),
+      QUOTE_RPC_TIMEOUT_MS,
+      "rawDownloadFile",
+    ) as { bytes?: unknown };
+    const buffer = result?.bytes;
+    return Buffer.isBuffer(buffer) && buffer.length > 0 ? buffer : undefined;
+  } catch (err: any) {
+    console.warn("yvlu rawDownloadFile failed", err?.message || err);
+    return undefined;
+  }
+}
+
+async function downloadMediaBuffer(client: any, target: any): Promise<Buffer | undefined> {
+  if (!client || !target) return undefined;
+  // For small media (thumbnails, static stickers, photos), try raw upload.GetFile first
+  // Fall back to downloadMedia if raw download fails or isn't applicable
+  try {
+    const media = target.media ?? target;
+    // Try to get document/photo info for raw download
+    let doc = media?.document ?? media?.photo;
+    if (doc && doc.id && doc.accessHash) {
+      // Small files: use raw download
+      const isLarge = doc.size && doc.size > 1024 * 1024;
+      if (!isLarge) {
+        const location = new Api.InputDocumentFileLocation({
+          id: doc.id,
+          accessHash: doc.accessHash,
+          fileReference: doc.fileReference,
+          thumbSize: "w",
+        });
+        const rawBuffer = await rawDownloadFile(client, location, doc.dcId);
+        if (rawBuffer) return rawBuffer;
+      }
+    }
+  } catch (_) {}
+  // Fallback to downloadMedia with timeout
+  try {
+    const downloaded = await withTimeout(client.downloadMedia(target, { outputFile: path.join(os.tmpdir(), `yvlu_media_${Date.now()}_${Math.random().toString(16).slice(2)}`) }), QUOTE_RPC_TIMEOUT_MS, "downloadMediaBuffer.downloadMedia");
+    if (Buffer.isBuffer(downloaded)) return downloaded;
+    if (downloaded && typeof downloaded === "string" && fs.existsSync(downloaded)) return fs.readFileSync(downloaded);
+  } catch (err: any) {
+    console.warn("yvlu media download failed", err?.message || err);
+  }
+  return undefined;
+}
+
+// Helper to check if file format needs conversion
+function needsConversion(buffer: Buffer, mimeType: string | undefined): boolean {
+  if (!buffer || !mimeType) return false;
+  return mimeType === "application/x-tgsticker" || // TGS
+    mimeType === "video/mp4" || mimeType === "image/gif" || // GIF/MP4
+    isTgsFormat(buffer) || isMp4Format(buffer) || isWebmFormat(buffer);
+}
+
+async function downloadAndProcessMedia(client: any, message: any): Promise<{ buffer: Buffer; mime: string } | undefined> {
+  if (!message.media) return undefined;
+
+  let mediaTypeForQuote: string | undefined = undefined;
+  const isSticker = message.media instanceof Api.MessageMediaDocument &&
+    message.media.document &&
+    message.media.document.attributes?.some((a: any) => a instanceof Api.DocumentAttributeSticker);
+
+  if (isSticker) mediaTypeForQuote = "sticker";
+  else mediaTypeForQuote = "photo";
+
+  const mimeType = message.media.document?.mimeType;
+  const isTgsSticker = isSticker && mimeType === "application/x-tgsticker";
+  const isGifOrMp4 = mimeType === "video/mp4" || mimeType === "image/gif";
+
+  const buffer = await downloadMediaBuffer(client, message);
+  if (!Buffer.isBuffer(buffer)) return undefined;
+
+  let finalBuffer = buffer;
+  let finalMime = mimeType;
+
+  // Convert TGS to WebM
+  if (isTgsSticker || isTgsFormat(buffer)) {
+    try {
+      const depCheck = await checkTgsDependencies();
+      if (!depCheck.ok) console.error(`[yvlu] ${depCheck.message}`);
+      else {
+        console.log(`[yvlu] 检测到 TGS 贴纸，开始转换为 WebM...`);
+        finalBuffer = await convertTgsToWebm(buffer);
+        finalMime = "video/webm";
+        console.log(`[yvlu] TGS -> WebM 转换成功，大小: ${finalBuffer.length}`);
+      }
+    } catch (convertError) {
+      console.error(`[yvlu] TGS 转换失败:`, convertError);
+    }
+  } else if (isGifOrMp4 || isMp4Format(buffer)) {
+    try {
+      console.log(`[yvlu] 检测到 GIF/MP4，开始转换为 WebM...`);
+      finalBuffer = await convertMp4ToWebm(buffer);
+      finalMime = "video/webm";
+      console.log(`[yvlu] MP4 -> WebM 转换成功，大小: ${finalBuffer.length}`);
+    } catch (convertError) {
+      console.error(`[yvlu] MP4 转换失败:`, convertError);
+    }
+  }
+
+  const mime = finalMime || (mediaTypeForQuote === "sticker" ? "image/webp" : "image/jpeg");
+  console.log(`媒体下载: mimeType=${mimeType}, isTgs=${isTgsSticker}, isGif=${isGifOrMp4}, size=${finalBuffer.length}`);
+  return { buffer: finalBuffer, mime };
+}
+
+async function getPeerEntity(client: any, peer: any): Promise<any | undefined> {
+  if (!client || !peer) return undefined;
+  const key = JSON.stringify(peer, (_, v) => typeof v === "bigint" ? v.toString() : v);
+  try {
+    return await withTimeout(client.getEntity(peer), QUOTE_RPC_TIMEOUT_MS, "getPeerEntity.getEntity");
+  } catch (_) {
+    try {
+      return await withTimeout(client.getInputEntity(peer), QUOTE_RPC_TIMEOUT_MS, "getPeerEntity.getInputEntity");
+    } catch (_) {
+      return undefined;
+    }
+  }
+}
+
+async function senderEntity(msg: any): Promise<any | undefined> {
+  const peer = (msg as any).senderId ?? (msg as any).fromId;
+  const key = peer ? `sender:${stableEntityKey(peer)}` : undefined;
+  try {
+    const sender = await withTimeout((msg as any).getSender?.(), QUOTE_RPC_TIMEOUT_MS, "senderEntity.getSender");
+    if (sender) {
+      if (key) { /* cache if needed */ }
+      return sender;
+    }
+  } catch (_) {}
+  const entity = await getPeerEntity((msg as any).client, peer);
+  return entity;
+}
+
+function emojiStatusIdFromEntity(entity: any): string | undefined {
+  const status = entity?.emojiStatus ?? entity?.emoji_status;
+  if (!status) return undefined;
+  if (typeof status !== "object") {
+    const id = status?.value ?? status;
+    return id ? String(id) : undefined;
+  }
+  const documentId = status.documentId ?? status.document_id ?? status.customEmojiId ?? status.custom_emoji_id ?? status.id;
+  if (!documentId) return undefined;
+  return String(documentId);
+}
 
 const hashCode = (s: any) => {
   const l = s.length;
@@ -697,24 +972,53 @@ class YvluPlugin extends Plugin {
             previousUserIdentifier = currentUserIdentifier;
 
             let photo: { url: string } | undefined = undefined;
+            let emojiStatusPayload: { custom_emoji_id: string; customEmojiBuffer: Buffer } | undefined;
             if (shouldShowAvatar) {
               try {
-                const buffer = await client.downloadProfilePhoto(
-                  sender as any,
-                  {
-                    isBig: false,
-                  },
-                );
+                const buffer = await downloadEntityAvatar(client, sender);
                 if (Buffer.isBuffer(buffer) && buffer.length > 0) {
                   const base64 = buffer.toString("base64");
                   photo = {
-                    url: `data:image/jpeg;base64,${base64}`,
+                    url: `data:image/png;base64,${base64}`,
                   };
                 } else {
                   console.warn("下载的头像数据无效或用户无头像");
                 }
               } catch (e) {
                 console.warn("下载用户头像失败", e);
+              }
+
+              // Download custom emoji for status emoji if present
+              if (emojiStatus) {
+                try {
+                  const emojiId = String(emojiStatus);
+                  if (!customEmojiCache.has(emojiId)) {
+                    // Fetch custom emoji document
+                    const docs = await withTimeout(
+                      client.invoke(
+                        new Api.messages.GetCustomEmojiDocuments({
+                          documentId: [BigInt(emojiId)],
+                        })
+                      ),
+                      QUOTE_RPC_TIMEOUT_MS,
+                      "GetCustomEmojiDocuments"
+                    );
+                    const doc = docs?.[0];
+                    if (doc) {
+                      const buffer = await downloadCustomEmoji(client, doc);
+                      if (buffer) customEmojiCache.set(emojiId, buffer);
+                    }
+                  }
+                  const emojiBuffer = customEmojiCache.get(emojiId);
+                  if (emojiBuffer) {
+                    emojiStatusPayload = {
+                      custom_emoji_id: emojiId,
+                      customEmojiBuffer: emojiBuffer,
+                    };
+                  }
+                } catch (e) {
+                  console.warn("下载状态表情失败", e);
+                }
               }
             }
 
@@ -815,103 +1119,15 @@ class YvluPlugin extends Plugin {
             }
 
             let media: { url: string } | undefined = undefined;
-            try {
-              if (message.media) {
-                let mediaTypeForQuote: string | undefined = undefined;
-
-                // 判断是否为贴纸
-                const isSticker =
-                  message.media instanceof Api.MessageMediaDocument &&
-                  (message.media as Api.MessageMediaDocument).document &&
-                  (
-                    (message.media as Api.MessageMediaDocument).document as any
-                  ).attributes?.some(
-                    (a: any) => a instanceof Api.DocumentAttributeSticker,
-                  );
-
-                if (isSticker) {
-                  mediaTypeForQuote = "sticker";
-                } else {
-                  mediaTypeForQuote = "photo";
-                }
-
-                const mimeType = (message.media as any).document?.mimeType;
-
-                // 检测是否为 TGS 动态贴纸
-                const isTgsSticker =
-                  isSticker && mimeType === "application/x-tgsticker";
-
-                // 检测是否为 GIF/MP4 (Telegram 的 GIF 实际是 mp4)
-                const isGifOrMp4 =
-                  mimeType === "video/mp4" || mimeType === "image/gif";
-
-                // 检测是否为动态内容（需要下载原文件，不用缩略图）
-                const isAnimatedContent =
-                  (isSticker &&
-                    (mimeType === "video/webm" || // 视频贴纸
-                      mimeType === "image/webp" || // 可能是动态WebP
-                      isTgsSticker)) || // TGS 动态贴纸
-                  isGifOrMp4; // GIF/MP4
-
-                const buffer = await (message as any).downloadMedia({
-                  // 动态内容不使用缩略图，下载原始文件
-                  ...(isAnimatedContent ? {} : { thumb: 1 }),
-                });
-                if (Buffer.isBuffer(buffer)) {
-                  let finalBuffer = buffer;
-                  let finalMime = mimeType;
-
-                  // 如果是 TGS 格式，转换为 WebM
-                  if (isTgsSticker || isTgsFormat(buffer)) {
-                    try {
-                      const depCheck = await checkTgsDependencies();
-                      if (!depCheck.ok) {
-                        console.error(`[yvlu] ${depCheck.message}`);
-                      } else {
-                        console.log(
-                          `[yvlu] 检测到 TGS 贴纸，开始转换为 WebM...`,
-                        );
-                        finalBuffer = await convertTgsToWebm(buffer);
-                        finalMime = "video/webm";
-                        console.log(
-                          `[yvlu] TGS -> WebM 转换成功，大小: ${finalBuffer.length}`,
-                        );
-                      }
-                    } catch (convertError) {
-                      console.error(`[yvlu] TGS 转换失败:`, convertError);
-                    }
-                  }
-                  // 如果是 MP4/GIF，转换为 WebM
-                  else if (isGifOrMp4 || isMp4Format(buffer)) {
-                    try {
-                      console.log(`[yvlu] 检测到 GIF/MP4，开始转换为 WebM...`);
-                      finalBuffer = await convertMp4ToWebm(buffer);
-                      finalMime = "video/webm";
-                      console.log(
-                        `[yvlu] MP4 -> WebM 转换成功，大小: ${finalBuffer.length}`,
-                      );
-                    } catch (convertError) {
-                      console.error(`[yvlu] MP4 转换失败:`, convertError);
-                      // 转换失败时保持原格式
-                    }
-                  }
-
-                  // 使用实际的 mimeType
-                  const mime =
-                    finalMime ||
-                    (mediaTypeForQuote === "sticker"
-                      ? "image/webp"
-                      : "image/jpeg");
-                  const base64 = finalBuffer.toString("base64");
-                  media = { url: `data:${mime};base64,${base64}` };
-                  console.log(
-                    `媒体下载: mimeType=${mimeType}, isAnimated=${isAnimatedContent}, isTgs=${isTgsSticker}, isGif=${isGifOrMp4}, size=${finalBuffer.length}`,
-                  );
-                }
-              }
-            } catch (e) {
-              console.error("下载媒体失败", e);
-            }
+                        try {
+                          const mediaResult = await downloadAndProcessMedia(client, message);
+                          if (mediaResult) {
+                            const base64 = mediaResult.buffer.toString("base64");
+                            media = { url: `data:${mediaResult.mime};base64,${base64}` };
+                          }
+                        } catch (e) {
+                          console.error("下载媒体失败", e);
+                        }
 
             items.push({
               from: {
@@ -927,7 +1143,7 @@ class YvluPlugin extends Plugin {
                   photo && shouldShowAvatar ? username || undefined : undefined,
                 photo,
                 emoji_status: shouldShowAvatar
-                  ? emojiStatus || undefined
+                  ? (emojiStatusPayload || (emojiStatus ? { custom_emoji_id: String(emojiStatus) } : undefined))
                   : undefined,
               },
               text: message.message || "",
@@ -1311,7 +1527,7 @@ ${codeTag(this.configPath)}
       if (isPhoto) {
         try {
           // 下载图片
-          const buffer = await replied.downloadMedia();
+          const buffer = await downloadMediaBuffer(client, replied);
           if (!Buffer.isBuffer(buffer)) {
             await msg.edit({ text: "❌ 下载图片失败" });
             return;
@@ -1390,7 +1606,7 @@ ${codeTag(this.configPath)}
         }
       } else if (isPhoto) {
         // 下载图片
-        const buffer = await replied.downloadMedia();
+        const buffer = await downloadMediaBuffer(client, replied);
         if (!Buffer.isBuffer(buffer)) {
           await msg.edit({ text: "❌ 下载图片失败" });
           return;
