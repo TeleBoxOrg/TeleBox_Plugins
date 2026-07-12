@@ -7,7 +7,9 @@ import { CustomFile } from "teleproto/client/uploads.js";
 import { JSONFilePreset } from "lowdb/node";
 import * as fs from "fs";
 import * as path from "path";
-import { exec } from "child_process";
+import * as os from "os";
+import * as net from "net";
+import { execFile } from "child_process";
 import { promisify } from "util";
 import archiver from "archiver";
 import dayjs from "dayjs";
@@ -17,9 +19,52 @@ import crypto from "crypto";
 // @ts-ignore
 import { Client as SSH2Client } from 'ssh2';
 
-const execAsync = promisify(exec);
+const execFileAsync = promisify(execFile);
 const prefixes = getPrefixes();
 const mainPrefix = prefixes[0];
+
+async function runWithInput(command: string, args: string[], input: string): Promise<void> {
+  await new Promise<void>((resolve, reject) => {
+    const child = execFile(command, args);
+    child.once("error", reject);
+    child.once("close", (code) => {
+      if (code === 0) resolve();
+      else reject(new Error(`${command} exited with code ${code ?? "unknown"}`));
+    });
+    child.stdin?.end(input);
+  });
+}
+
+async function saveIptablesRules(): Promise<void> {
+  try {
+    const { stdout } = await execFileAsync("iptables-save", []);
+    fs.mkdirSync("/etc/iptables", { recursive: true });
+    fs.writeFileSync("/etc/iptables/rules.v4", stdout, "utf8");
+    return;
+  } catch (error) {
+    try {
+      await execFileAsync("service", ["iptables", "save"]);
+      return;
+    } catch {
+      throw error;
+    }
+  }
+}
+
+async function isSshServiceActive(): Promise<boolean> {
+  for (const serviceName of ["sshd", "ssh"]) {
+    try {
+      await execFileAsync("systemctl", ["is-active", "--quiet", serviceName]);
+      return true;
+    } catch { }
+  }
+  try {
+    await execFileAsync("pgrep", ["sshd"]);
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 // HTML转义函数
 const htmlEscape = (text: string): string => 
@@ -27,14 +72,6 @@ const htmlEscape = (text: string): string =>
     '&': '&amp;', '<': '&lt;', '>': '&gt;', 
     '"': '&quot;', "'": '&#x27;' 
   }[m] || m));
-
-// Shell参数转义函数 - 防止命令注入
-const shellEscape = (arg: string): string => {
-  // 移除危险字符，防止命令注入
-  return arg.replace(/[`$!\\]/g, '\\$&')
-            .replace(/['"]/g, '\\$&')
-            .replace(/[\r\n]/g, '');
-};
 
 // 验证路径安全性
 function validatePath(pathStr: string): boolean {
@@ -58,67 +95,51 @@ const validatePort = (port: string): number | null => {
 
 // 检查端口是否被占用
 async function checkPortInUse(port: number): Promise<{ inUse: boolean; processInfo?: string }> {
+  const parseListeners = async (
+    command: string,
+    args: string[],
+  ): Promise<{ inUse: boolean; processInfo?: string }> => {
+    const { stdout } = await execFileAsync(command, args);
+    const portPattern = new RegExp(`:${port}(?:\\s|$)`);
+    const lines = stdout.split("\n").filter((line) => portPattern.test(line));
+    if (lines.length === 0) return { inUse: false };
+
+    const processInfos = await Promise.all(lines.map(async (line) => {
+      const parts = line.trim().split(/\s+/);
+      const protocol = parts[0] || "tcp";
+      const address = parts.find((part) => portPattern.test(part)) || `:${port}`;
+      const pid = line.match(/pid=(\d+)/)?.[1] || line.match(/\s(\d+)\/\S+/)?.[1];
+      let processName = "未知进程";
+      if (pid) {
+        try {
+          const { stdout: nameOutput } = await execFileAsync("ps", ["-p", pid, "-o", "comm="]);
+          processName = nameOutput.trim() || processName;
+        } catch { }
+      }
+      return `${protocol} ${address} (${processName})`;
+    }));
+    return { inUse: true, processInfo: processInfos.join(", ") };
+  };
+
   try {
-    // 使用netstat检查端口占用情况
-    const { stdout } = await execAsync(`netstat -tlnp 2>/dev/null | grep ":${port} "`);
-    if (stdout.trim()) {
-      // 解析进程信息
-      const lines = stdout.trim().split('\n');
-      const processInfos: string[] = [];
-      
-      for (const line of lines) {
-        const parts = line.trim().split(/\s+/);
-        if (parts.length >= 7) {
-          const protocol = parts[0];
-          const address = parts[3];
-          const processInfo = parts[6];
-          
-          let processName = '未知进程';
-          if (processInfo && processInfo !== '-') {
-            const pid = processInfo.split('/')[0];
-            if (pid && pid !== '-') {
-              try {
-                const { stdout: nameOutput } = await execAsync(`ps -p ${pid} -o comm= 2>/dev/null || echo "未知"`);
-                processName = nameOutput.trim() || '未知进程';
-              } catch {
-                processName = '未知进程';
-              }
-            }
-          }
-          
-          processInfos.push(`${protocol} ${address} (${processName})`);
-        }
-      }
-      
-      return {
-        inUse: true,
-        processInfo: processInfos.join(', ')
-      };
-    }
-    
-    return { inUse: false };
-  } catch (error) {
-    // 如果netstat失败，尝试使用ss命令
+    return await parseListeners("netstat", ["-tlnp"]);
+  } catch {
     try {
-      const { stdout } = await execAsync(`ss -tlnp 2>/dev/null | grep ":${port} "`);
-      if (stdout.trim()) {
-        return {
-          inUse: true,
-          processInfo: '端口被占用 (详细信息获取失败)'
-        };
-      }
-      return { inUse: false };
+      return await parseListeners("ss", ["-tlnp"]);
     } catch {
-      // 如果两个命令都失败，尝试简单的端口连接测试
-      try {
-        await execAsync(`timeout 2 bash -c "</dev/tcp/localhost/${port}" 2>/dev/null`);
-        return {
-          inUse: true,
-          processInfo: '端口被占用 (无法获取进程信息)'
+      return await new Promise((resolve) => {
+        const socket = net.createConnection({ host: "127.0.0.1", port });
+        const finish = (inUse: boolean) => {
+          socket.destroy();
+          resolve({
+            inUse,
+            ...(inUse ? { processInfo: "端口被占用 (无法获取进程信息)" } : {}),
+          });
         };
-      } catch {
-        return { inUse: false };
-      }
+        socket.setTimeout(2000, () => finish(false));
+        socket.once("connect", () => finish(true));
+        socket.once("error", () => finish(false));
+      });
     }
   }
 };
@@ -211,21 +232,19 @@ class ConfigManager {
 // 帮助文本
 // SSH服务重启通用函数
 const restartSSHService = async (): Promise<{ success: boolean; command?: string }> => {
-  const commands = [
-    "systemctl restart sshd",
-    "systemctl restart ssh",
-    "service sshd restart",
-    "service ssh restart",
-    "/etc/init.d/ssh restart"
+  const commands: Array<{ file: string; args: string[]; label: string }> = [
+    { file: "systemctl", args: ["restart", "sshd"], label: "systemctl restart sshd" },
+    { file: "systemctl", args: ["restart", "ssh"], label: "systemctl restart ssh" },
+    { file: "service", args: ["sshd", "restart"], label: "service sshd restart" },
+    { file: "service", args: ["ssh", "restart"], label: "service ssh restart" },
+    { file: "/etc/init.d/ssh", args: ["restart"], label: "/etc/init.d/ssh restart" },
   ];
-  
-  for (const cmd of commands) {
+
+  for (const command of commands) {
     try {
-      await execAsync(cmd);
-      return { success: true, command: cmd };
-    } catch {
-      continue;
-    }
+      await execFileAsync(command.file, command.args);
+      return { success: true, command: command.label };
+    } catch { }
   }
   return { success: false };
 };
@@ -237,24 +256,34 @@ const modifySSHConfig = async (
   backup: boolean = true
 ): Promise<string> => {
   const timestamp = dayjs().format("YYYYMMDD_HHmmss");
-  
+  const configPath = "/etc/ssh/sshd_config";
+
   if (backup) {
-    await execAsync(`cp /etc/ssh/sshd_config /etc/ssh/sshd_config.backup.${timestamp}`);
+    fs.copyFileSync(configPath, `${configPath}.backup.${timestamp}`);
   }
-  
-  // 使用安全的配置修改方式
-  const escapedKey = shellEscape(key);
-  const escapedValue = shellEscape(value);
-  
-  // 修改或添加配置
-  await execAsync(`sed -i 's/^#*${escapedKey} .*/${escapedKey} ${escapedValue}/' /etc/ssh/sshd_config`);
-  
-  // 确保没有重复配置
-  await execAsync(`grep -q '^${escapedKey} ${escapedValue}$' /etc/ssh/sshd_config || echo '${escapedKey} ${escapedValue}' >> /etc/ssh/sshd_config`);
-  
-  // 验证配置文件语法
-  await execAsync(`sshd -t`);
-  
+
+  const configLine = `${key} ${value}`;
+  const keyPattern = new RegExp(`^\\s*#?\\s*${key}\\s+.*$`, "i");
+  const original = fs.readFileSync(configPath, "utf8");
+  const lines = original.split(/\r?\n/);
+  let replaced = false;
+  const updated = lines.map((line) => {
+    if (!replaced && keyPattern.test(line)) {
+      replaced = true;
+      return configLine;
+    }
+    return line;
+  });
+  if (!replaced) updated.push(configLine);
+  const nextContent = `${updated.join("\n").replace(/\n+$/, "")}\n`;
+  fs.writeFileSync(configPath, nextContent, "utf8");
+
+  try {
+    await execFileAsync("sshd", ["-t"]);
+  } catch (error) {
+    fs.writeFileSync(configPath, original, "utf8");
+    throw error;
+  }
   return timestamp;
 };
 
@@ -459,10 +488,9 @@ class SSHPlugin extends Plugin {
         throw new Error("密钥名称包含非法字符");
       }
       const keyPath = path.join(workDir, keyName);
-      const escapedPath = shellEscape(keyPath);
-      const escapedComment = shellEscape(`generated_${timestamp}`);
-      
-      await execAsync(`ssh-keygen -t rsa -b 4096 -f ${escapedPath} -N "" -C ${escapedComment}`);
+      await execFileAsync("ssh-keygen", [
+        "-t", "rsa", "-b", "4096", "-f", keyPath, "-N", "", "-C", `generated_${timestamp}`,
+      ]);
 
       // 读取密钥文件
       const privateKey = fs.readFileSync(keyPath, "utf-8");
@@ -479,19 +507,20 @@ class SSHPlugin extends Plugin {
       try {
         // 首先检查 puttygen 是否可用
         try {
-          await execAsync('puttygen --version');
+          await execFileAsync("puttygen", ["--version"]);
         } catch {
           // puttygen 不可用，尝试安装 putty-tools
           console.log("[ssh] puttygen 未找到，正在安装 putty-tools...");
           try {
-            await execAsync('apt-get update && apt-get install -y putty-tools');
+            await execFileAsync("apt-get", ["update"]);
+            await execFileAsync("apt-get", ["install", "-y", "putty-tools"]);
           } catch {
             throw new Error("无法安装 putty-tools");
           }
         }
         
         // 转换为PPK格式
-        await execAsync(`puttygen ${escapedPath} -o ${escapedPath}.ppk`);
+        await execFileAsync("puttygen", [keyPath, "-o", `${keyPath}.ppk`]);
         ppkKey = fs.readFileSync(`${keyPath}.ppk`, "utf-8");
         console.log("[ssh] PPK格式密钥生成成功");
       } catch (error: any) {
@@ -499,8 +528,11 @@ class SSHPlugin extends Plugin {
       }
 
       // 获取服务器信息
-      const hostname = (await execAsync("hostname")).stdout.trim();
-      const ipAddress = (await execAsync("curl -s ifconfig.me || echo '未知'")).stdout.trim();
+      const hostname = os.hostname();
+      let ipAddress = "未知";
+      try {
+        ipAddress = (await execFileAsync("curl", ["-fsS", "ifconfig.me"])).stdout.trim() || "未知";
+      } catch { }
       const sshPort = await ConfigManager.get(CONFIG_KEYS.SSH_PORT, "22");
 
       // 创建信息文件
@@ -522,26 +554,30 @@ class SSHPlugin extends Plugin {
                           fs.readFileSync("/root/.ssh/authorized_keys", "utf-8").trim() === "";
       
       // 更新authorized_keys - 改进的方式并设置正确权限
-      await execAsync(`mkdir -p /root/.ssh`);
+      fs.mkdirSync("/root/.ssh", { recursive: true, mode: 0o700 });
       
       if (isFirstTime) {
         await msg.edit({ text: "🔄 首次生成密钥，正在设置SSH环境...", parseMode: "html" });
         
         // 首次设置，确保所有权限正确
-        await execAsync(`chmod 700 /root/.ssh`);
+        fs.chmodSync("/root/.ssh", 0o700);
         
         // 创建authorized_keys文件并设置权限
         fs.writeFileSync("/root/.ssh/authorized_keys", publicKey + "\n");
-        await execAsync(`chmod 600 /root/.ssh/authorized_keys`);
+        fs.chmodSync("/root/.ssh/authorized_keys", 0o600);
         
         // 设置SSH配置目录的所有者
-        await execAsync(`chown -R root:root /root/.ssh`);
+        fs.chownSync("/root/.ssh", 0, 0);
+        fs.chownSync("/root/.ssh/authorized_keys", 0, 0);
         
       } else if (mode === "replace") {
         // 替换模式：备份旧密钥后替换
         const backupTimestamp = dayjs().format("YYYYMMDD_HHmmss");
         try {
-          await execAsync(`cp /root/.ssh/authorized_keys /root/.ssh/authorized_keys.backup.${backupTimestamp} 2>/dev/null || true`);
+          fs.copyFileSync(
+            "/root/.ssh/authorized_keys",
+            `/root/.ssh/authorized_keys.backup.${backupTimestamp}`,
+          );
         } catch {}
         
         await msg.edit({ text: "🔄 正在替换密钥...", parseMode: "html" });
@@ -566,8 +602,8 @@ class SSHPlugin extends Plugin {
       }
       
       // 确保权限始终正确
-      await execAsync(`chmod 700 /root/.ssh`);
-      await execAsync(`chmod 600 /root/.ssh/authorized_keys`);
+      fs.chmodSync("/root/.ssh", 0o700);
+      fs.chmodSync("/root/.ssh/authorized_keys", 0o600);
       
       // 如果是首次生成，还需要确保SSH服务配置
       if (isFirstTime) {
@@ -652,9 +688,7 @@ class SSHPlugin extends Plugin {
       const authorizedKeysPath = "/root/.ssh/authorized_keys";
       
       // 检查文件是否存在
-      try {
-        await execAsync(`test -f ${authorizedKeysPath}`);
-      } catch {
+      if (!fs.existsSync(authorizedKeysPath)) {
         await msg.edit({
           text: "❌ <b>未找到授权密钥文件</b>\n\n文件路径: <code>/root/.ssh/authorized_keys</code>\n状态: 不存在",
           parseMode: "html"
@@ -663,8 +697,8 @@ class SSHPlugin extends Plugin {
       }
 
       // 读取并解析密钥
-      const { stdout } = await execAsync(`cat ${authorizedKeysPath}`);
-      const lines = stdout.trim().split('\n').filter(line => line.trim() && !line.startsWith('#'));
+      const lines = fs.readFileSync(authorizedKeysPath, "utf8")
+        .trim().split("\n").filter((line) => line.trim() && !line.startsWith("#"));
       
       if (lines.length === 0) {
         await msg.edit({
@@ -760,15 +794,16 @@ class SSHPlugin extends Plugin {
       // 备份现有密钥
       const timestamp = dayjs().format("YYYYMMDD_HHmmss");
       try {
-        await execAsync(`cp ${authorizedKeysPath} ${authorizedKeysPath}.backup.${timestamp}`);
+        fs.copyFileSync(authorizedKeysPath, `${authorizedKeysPath}.backup.${timestamp}`);
       } catch {
         // 文件不存在时忽略备份错误
       }
-      
+
       // 清空密钥文件
-      await execAsync(`mkdir -p /root/.ssh && chmod 700 /root/.ssh`);
-      await execAsync(`> ${authorizedKeysPath}`);
-      await execAsync(`chmod 600 ${authorizedKeysPath}`);
+      fs.mkdirSync("/root/.ssh", { recursive: true, mode: 0o700 });
+      fs.chmodSync("/root/.ssh", 0o700);
+      fs.writeFileSync(authorizedKeysPath, "", { mode: 0o600 });
+      fs.chmodSync(authorizedKeysPath, 0o600);
 
       await msg.edit({
         text: `✅ <b>授权密钥已清空</b>\n\n🗂️ 备份文件: <code>${authorizedKeysPath}.backup.${timestamp}</code>\n\n⚠️ <b>警告:</b> 所有SSH密钥登录已失效，请确保有其他方式访问服务器`,
@@ -788,9 +823,7 @@ class SSHPlugin extends Plugin {
       const authorizedKeysPath = "/root/.ssh/authorized_keys";
       
       // 检查文件是否存在
-      try {
-        await execAsync(`test -f ${authorizedKeysPath}`);
-      } catch {
+      if (!fs.existsSync(authorizedKeysPath)) {
         await msg.edit({
           text: "❌ <b>未找到授权密钥文件</b>\n\n文件路径: <code>/root/.ssh/authorized_keys</code>\n状态: 不存在",
           parseMode: "html"
@@ -799,8 +832,7 @@ class SSHPlugin extends Plugin {
       }
 
       // 读取密钥内容
-      const { stdout } = await execAsync(`cat ${authorizedKeysPath}`);
-      const keysContent = stdout.trim();
+      const keysContent = fs.readFileSync(authorizedKeysPath, "utf8").trim();
       
       if (!keysContent) {
         await msg.edit({
@@ -813,7 +845,7 @@ class SSHPlugin extends Plugin {
       const lines = keysContent.split('\n').filter(line => line.trim() && !line.startsWith('#'));
       
       // 获取服务器信息
-      const hostname = (await execAsync("hostname")).stdout.trim();
+      const hostname = os.hostname();
       const timestamp = dayjs().format("YYYYMMDD_HHmmss");
       
       // 创建导出文件
@@ -923,9 +955,7 @@ ${keysContent}`;
     await msg.edit({ text: "🔄 正在修改root密码...", parseMode: "html" });
 
     try {
-      // 使用转义的密码防止命令注入
-      const escapedPassword = shellEscape(newPassword);
-      await execAsync(`echo "root:${escapedPassword}" | chpasswd`);
+      await runWithInput("chpasswd", [], `root:${newPassword}\n`);
 
       // 不显示明文密码
       await msg.edit({
@@ -976,18 +1006,14 @@ ${keysContent}`;
       
       // 自动开放新端口的防火墙
       try {
-        await execAsync(`iptables -I INPUT -p tcp --dport ${port} -j ACCEPT`);
-        await execAsync(`iptables -I INPUT -p udp --dport ${port} -j ACCEPT`);
-        
+        await execFileAsync("iptables", ["-I", "INPUT", "-p", "tcp", "--dport", String(port), "-j", "ACCEPT"]);
+        await execFileAsync("iptables", ["-I", "INPUT", "-p", "udp", "--dport", String(port), "-j", "ACCEPT"]);
+
         // 尝试保存iptables规则
         try {
-          await execAsync(`iptables-save > /etc/iptables/rules.v4`);
+          await saveIptablesRules();
         } catch {
-          try {
-            await execAsync(`service iptables save`);
-          } catch {
-            console.log("[ssh] 无法持久化iptables规则");
-          }
+          console.log("[ssh] 无法持久化iptables规则");
         }
       } catch (firewallError: any) {
         console.warn("[ssh] 防火墙端口开放失败:", firewallError.message);
@@ -1149,8 +1175,12 @@ ${keysContent}`;
       if (disable) {
         // 完全禁用root登录前检查是否有其他用户
         try {
-          const { stdout: users } = await execAsync(`getent passwd | awk -F: '$3 >= 1000 && $3 != 65534 { print $1 }' | head -5`);
-          const userList = users.trim().split('\n').filter(u => u.trim());
+          const { stdout: users } = await execFileAsync("getent", ["passwd"]);
+          const userList = users.trim().split("\n")
+            .map((line) => line.split(":"))
+            .filter((fields) => Number(fields[2]) >= 1000 && Number(fields[2]) !== 65534)
+            .slice(0, 5)
+            .map((fields) => fields[0]);
           
           if (userList.length === 0) {
             await msg.edit({
@@ -1225,11 +1255,10 @@ ${keysContent}`;
 
     try {
       // 1. 解锁root账户
-      await execAsync(`sudo passwd -u root`);
+      await execFileAsync("passwd", ["-u", "root"]);
       
       // 2. 设置root密码
-      const escapedPassword = shellEscape(password);
-      await execAsync(`echo 'root:${escapedPassword}' | sudo chpasswd`);
+      await runWithInput("chpasswd", [], `root:${password}\n`);
       
       // 3. 确保SSH允许root登录
       const currentConfig = await modifySSHConfig("PermitRootLogin", "yes");
@@ -1268,18 +1297,7 @@ ${keysContent}`;
       }
 
       // 验证SSH服务状态
-      let sshStatus = "未知";
-      try {
-        await execAsync("systemctl is-active --quiet sshd || systemctl is-active --quiet ssh");
-        sshStatus = "✅ 运行中";
-      } catch {
-        try {
-          await execAsync("pgrep sshd");
-          sshStatus = "✅ 运行中";
-        } catch {
-          sshStatus = "❌ 未运行";
-        }
-      }
+      const sshStatus = await isSshServiceActive() ? "✅ 运行中" : "❌ 未运行";
 
       await msg.edit({
         text: `✅ <b>SSH服务重启成功</b>\n\n重启命令: <code>${htmlEscape(restartResult.command || "未知")}</code>\n服务状态: ${sshStatus}\n\n💡 建议重启后验证SSH连接`,
@@ -1306,19 +1324,14 @@ ${keysContent}`;
 
     try {
       // 使用iptables开放端口
-      await execAsync(`iptables -I INPUT -p tcp --dport ${port} -j ACCEPT`);
-      await execAsync(`iptables -I INPUT -p udp --dport ${port} -j ACCEPT`);
-      
+      await execFileAsync("iptables", ["-I", "INPUT", "-p", "tcp", "--dport", String(port), "-j", "ACCEPT"]);
+      await execFileAsync("iptables", ["-I", "INPUT", "-p", "udp", "--dport", String(port), "-j", "ACCEPT"]);
+
       // 尝试保存iptables规则
       try {
-        await execAsync(`iptables-save > /etc/iptables/rules.v4`);
+        await saveIptablesRules();
       } catch {
-        // 某些系统可能没有这个目录
-        try {
-          await execAsync(`service iptables save`);
-        } catch {
-          console.log("[sshkey] 无法持久化iptables规则");
-        }
+        console.log("[sshkey] 无法持久化iptables规则");
       }
 
       await msg.edit({
@@ -1346,22 +1359,18 @@ ${keysContent}`;
 
     try {
       // 使用iptables关闭端口
-      await execAsync(`iptables -D INPUT -p tcp --dport ${port} -j ACCEPT 2>/dev/null || true`);
-      await execAsync(`iptables -D INPUT -p udp --dport ${port} -j ACCEPT 2>/dev/null || true`);
-      
-      // 添加拒绝规则
-      await execAsync(`iptables -A INPUT -p tcp --dport ${port} -j DROP`);
-      await execAsync(`iptables -A INPUT -p udp --dport ${port} -j DROP`);
-      
+      for (const protocol of ["tcp", "udp"]) {
+        try {
+          await execFileAsync("iptables", ["-D", "INPUT", "-p", protocol, "--dport", String(port), "-j", "ACCEPT"]);
+        } catch { }
+        await execFileAsync("iptables", ["-A", "INPUT", "-p", protocol, "--dport", String(port), "-j", "DROP"]);
+      }
+
       // 尝试保存iptables规则
       try {
-        await execAsync(`iptables-save > /etc/iptables/rules.v4`);
+        await saveIptablesRules();
       } catch {
-        try {
-          await execAsync(`service iptables save`);
-        } catch {
-          console.log("[sshkey] 无法持久化iptables规则");
-        }
+        console.log("[sshkey] 无法持久化iptables规则");
       }
 
       await msg.edit({
@@ -1427,18 +1436,7 @@ ${keysContent}`;
       const pubkeyAuth = await ConfigManager.get(CONFIG_KEYS.PUBKEY_AUTH);
 
       // 获取当前SSH服务状态
-      let sshStatus = "未知";
-      try {
-        await execAsync("systemctl is-active --quiet sshd || systemctl is-active --quiet ssh");
-        sshStatus = "✅ 运行中";
-      } catch {
-        try {
-          await execAsync("pgrep sshd");
-          sshStatus = "✅ 运行中";
-        } catch {
-          sshStatus = "❌ 未运行";
-        }
-      }
+      const sshStatus = await isSshServiceActive() ? "✅ 运行中" : "❌ 未运行";
 
       // 从sshd_config读取实际配置
       let actualPasswordAuth = "未知";
@@ -1447,7 +1445,7 @@ ${keysContent}`;
       let actualPort = "未知";
       
       try {
-        const configContent = (await execAsync("cat /etc/ssh/sshd_config")).stdout;
+        const configContent = fs.readFileSync("/etc/ssh/sshd_config", "utf8");
         
         // 检查密码认证
         const passwordAuthMatch = configContent.match(/^\s*PasswordAuthentication\s+(yes|no)/mi);
@@ -1492,8 +1490,10 @@ ${keysContent}`;
       // 检查authorized_keys文件
       let keyCount = 0;
       try {
-        const keysContent = (await execAsync("wc -l /root/.ssh/authorized_keys 2>/dev/null || echo '0'")).stdout;
-        keyCount = parseInt(keysContent.trim()) || 0;
+        const authorizedKeysPath = "/root/.ssh/authorized_keys";
+        keyCount = fs.existsSync(authorizedKeysPath)
+          ? fs.readFileSync(authorizedKeysPath, "utf8").split("\n").filter((line) => line.trim()).length
+          : 0;
       } catch {
         keyCount = 0;
       }
@@ -1501,8 +1501,8 @@ ${keysContent}`;
       // 获取防火墙规则数量
       let iptablesInfo = "";
       try {
-        const result = await execAsync("iptables -L INPUT -n | wc -l");
-        const ruleCount = parseInt(result.stdout.trim()) - 2; // 减去标题行
+        const result = await execFileAsync("iptables", ["-L", "INPUT", "-n"]);
+        const ruleCount = Math.max(0, result.stdout.trim().split("\n").length - 2);
         iptablesInfo = `\n防火墙规则: ${ruleCount > 0 ? ruleCount + " 条" : "无限制"}`;
       } catch {
         iptablesInfo = "";
@@ -1512,8 +1512,11 @@ ${keysContent}`;
       // 获取系统信息
       let systemInfo = "";
       try {
-        const hostname = (await execAsync("hostname")).stdout.trim();
-        const uptime = (await execAsync("uptime -p 2>/dev/null || echo '未知'")).stdout.trim();
+        const hostname = os.hostname();
+        let uptime = "未知";
+        try {
+          uptime = (await execFileAsync("uptime", ["-p"])).stdout.trim() || "未知";
+        } catch { }
         systemInfo = `\n\n<b>系统信息：</b>\n主机名: <code>${htmlEscape(hostname)}</code>\n运行时间: ${htmlEscape(uptime)}`;
       } catch {
         systemInfo = "";
