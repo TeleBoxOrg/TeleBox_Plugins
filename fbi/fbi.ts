@@ -208,7 +208,7 @@ class FbiPlugin extends Plugin {
         let username: string | undefined;
         let title: string | undefined;
         try {
-          const entity = await cl.getEntity(d.id);
+          const entity = await cl.getEntity(d.id) as any;
           username = entity.username;
           title = entity.title;
         } catch { /* best-effort */ }
@@ -231,7 +231,7 @@ class FbiPlugin extends Plugin {
 
   /* ====== router ====== */
 
-  private async onCmd(msg: Api.Message) {
+  private async onCmd(msg: Api.Message): Promise<void> {
     const parts = msg.text?.trim().split(/\s+/) || [];
     const sub = parts[1]?.toLowerCase();
     const args = parts.slice(2);
@@ -244,7 +244,7 @@ class FbiPlugin extends Plugin {
         case "obs":   return this.doObs(msg, args);
         case "ssv":   return this.doSsv(msg);
         case "cache": return this.doCache(msg, args);
-        default:      return msg.edit({ text: HELP, parseMode: "html" });
+        default:      { await msg.edit({ text: HELP, parseMode: "html" }); return; }
       }
     } catch (e: any) {
       await msg.edit({ text: `❌ ${htmlEsc(e.message || "未知错误")}`, parseMode: "html" });
@@ -262,7 +262,7 @@ class FbiPlugin extends Plugin {
     if (args.length) {
       const raw = args[0];
       try {
-        const e = await cl.getEntity(raw);
+        const e = await cl.getEntity(raw) as any;
         targetId = String(e.id);
         const plain = htmlEsc([e.firstName, e.lastName].filter(Boolean).join(' ') || e.title || targetId);
         name = e.username ? `<a href="https://t.me/${e.username}">${plain}</a>` : plain;
@@ -275,7 +275,7 @@ class FbiPlugin extends Plugin {
       if (r?.senderId) {
         targetId = String(r.senderId);
         try {
-          const u = await cl.getEntity(r.senderId as any);
+          const u = await cl.getEntity(r.senderId as any) as any;
           const plain = htmlEsc([u.firstName, u.lastName].filter(Boolean).join(' ') || targetId);
           name = u.username ? `<a href="https://t.me/${u.username}">${plain}</a>` : plain;
         } catch {
@@ -362,7 +362,7 @@ class FbiPlugin extends Plugin {
         const cl = await getGlobalClient();
         if (cl) {
           try {
-            const entity = await cl.getEntity(msg.chatId);
+            const entity = await cl.getEntity(msg.chatId) as any;
             if (entity.username && (entity.className === 'Channel' || entity.className === 'Chat')) {
               chat = { username: entity.username, title: entity.title, msgs: [] };
               this.chatCache.set(peer, chat);
@@ -393,7 +393,7 @@ class FbiPlugin extends Plugin {
     // check group is public (has username) before consuming the sv entry
     const cl = await getGlobalClient();
     if (!cl) return;
-    const chatEntity = await cl.getEntity(msg.peerId);
+    const chatEntity = await cl.getEntity(msg.peerId) as any;
     if (!chatEntity.username) return; // private group — skip silently, keep sv alive
 
     this.sv.delete(sid);
@@ -483,7 +483,7 @@ class FbiPlugin extends Plugin {
         if (c.username?.toLowerCase() === gn) { scopePeer = p; break; }
       if (!scopePeer) {
         try {
-          const e = await cl.getEntity(gn as any);
+          const e = await cl.getEntity(gn as any) as any;
           if (e.username?.toLowerCase() === gn) scopePeer = String(e.id);
         } catch {}
         if (!scopePeer) {
@@ -507,7 +507,7 @@ class FbiPlugin extends Plugin {
     }
 
     // check group is public
-    const chatEntity = await cl.getEntity(scopePeer as any);
+    const chatEntity = await cl.getEntity(scopePeer as any) as any;
     if (!chatEntity.username) {
       await msg.edit({ text: "❌ 仅支持公开群组的定点监视", parseMode: "html" });
       return;
@@ -543,8 +543,7 @@ class FbiPlugin extends Plugin {
               peer: entry.triggerPeer,
               id: entry.triggerMsgId,
               message: `🤦‍♀ 蹲守过程中没有发现嫌疑人 ${entry.targetName} 的行踪。`,
-              parseMode: "html" as any,
-            }),
+            } as any),
           );
         } catch { /* trigger may be deleted — fine */ }
       }
