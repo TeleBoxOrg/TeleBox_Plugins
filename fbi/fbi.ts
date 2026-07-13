@@ -37,6 +37,17 @@ const htmlEsc = (s: string) =>
 
 const peelChatId = (id: any) => String(typeof id === "bigint" ? id.toString() : id).replace(/^-100/, "");
 
+/** getEntity 返回的 Entity 联合类型上并非所有变体都有 username/title 等字段 */
+type EntityFields = {
+  id?: unknown;
+  username?: string;
+  title?: string;
+  firstName?: string;
+  lastName?: string;
+  className?: string;
+};
+const entityFields = (e: unknown): EntityFields => e as EntityFields;
+
 /** random delay between min and max ms */
 function rndDelay(min: number, max: number): Promise<void> {
   const ms = Math.floor(Math.random() * (max - min + 1)) + min;
@@ -225,7 +236,7 @@ class FbiPlugin extends Plugin {
         let username: string | undefined;
         let title: string | undefined;
         try {
-          const entity = await cl.getEntity(d.id);
+          const entity = entityFields(await cl.getEntity(d.id));
           username = entity.username;
           title = entity.title;
         } catch { /* best-effort */ }
@@ -284,7 +295,7 @@ class FbiPlugin extends Plugin {
     if (args.length) {
       const raw = args[0];
       try {
-        const e = await cl.getEntity(raw);
+        const e = entityFields(await cl.getEntity(raw));
         targetId = String(e.id);
         const plain = htmlEsc([e.firstName, e.lastName].filter(Boolean).join(' ') || e.title || targetId);
         name = e.username ? `<a href="https://t.me/${e.username}">${plain}</a>` : plain;
@@ -297,7 +308,7 @@ class FbiPlugin extends Plugin {
       if (r?.senderId) {
         targetId = String(r.senderId);
         try {
-          const u = await cl.getEntity(r.senderId);
+          const u = entityFields(await cl.getEntity(r.senderId));
           const plain = htmlEsc([u.firstName, u.lastName].filter(Boolean).join(' ') || targetId);
           name = u.username ? `<a href="https://t.me/${u.username}">${plain}</a>` : plain;
         } catch {
@@ -384,7 +395,7 @@ class FbiPlugin extends Plugin {
         const cl = await getGlobalClient();
         if (cl) {
           try {
-            const entity = await cl.getEntity(msg.chatId);
+            const entity = entityFields(await cl.getEntity(msg.chatId));
             if (entity.username && (entity.className === 'Channel' || entity.className === 'Chat')) {
               chat = { username: entity.username, title: entity.title, msgs: [] };
               this.chatCache.set(peer, chat);
@@ -415,7 +426,7 @@ class FbiPlugin extends Plugin {
     // check group is public (has username) before consuming the sv entry
     const cl = await getGlobalClient();
     if (!cl) return;
-    const chatEntity = await cl.getEntity(msg.peerId);
+    const chatEntity = entityFields(await cl.getEntity(msg.peerId));
     if (!chatEntity.username) return; // private group — skip silently, keep sv alive
 
     this.sv.delete(sid);
@@ -505,7 +516,7 @@ class FbiPlugin extends Plugin {
         if (c.username?.toLowerCase() === gn) { scopePeer = p; break; }
       if (!scopePeer) {
         try {
-          const e = await cl.getEntity(gn);
+          const e = entityFields(await cl.getEntity(gn));
           if (e.username?.toLowerCase() === gn) scopePeer = String(e.id);
         } catch {}
         if (!scopePeer) {
@@ -529,7 +540,7 @@ class FbiPlugin extends Plugin {
     }
 
     // check group is public
-    const chatEntity = await cl.getEntity(scopePeer);
+    const chatEntity = entityFields(await cl.getEntity(scopePeer));
     if (!chatEntity.username) {
       await msg.edit({ text: "❌ 仅支持公开群组的定点监视", parseMode: "html" });
       return;
