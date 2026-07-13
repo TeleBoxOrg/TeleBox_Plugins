@@ -18,7 +18,7 @@ import { htmlEscape } from "@utils/htmlEscape";
 // 常量配置
 const CONFIG = {
   TROLL_IMAGE_URL:
-    "https://raw.githubusercontent.com/TeleBoxDev/TeleBox/main/telebox.png",
+    "https://raw.githubusercontent.com/TeleBoxOrg/TeleBox/main/telebox.png",
   TROLL_IMAGE_PATH: "./assets/dme/dme_troll_image.png",
   BATCH_SIZE: 50,
   MIN_BATCH_SIZE: 5, // 最小批次大小
