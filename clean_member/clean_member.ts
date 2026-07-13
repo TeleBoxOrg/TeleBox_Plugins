@@ -573,6 +573,7 @@ const clean_member = async (msg: Api.Message) => {
   const mode = (args[0] || "").toLowerCase();
   if (!mode) {
     await msg.edit({
+      text: getHelpText(),
       parseMode: "html"
     });
     return;
@@ -651,6 +652,7 @@ const clean_member = async (msg: Api.Message) => {
     day = 0;
   } else {
     await msg.edit({
+      text: `❌ <b>未知模式</b>\n\n支持模式: 1-5\n\n${getHelpText()}`,
       parseMode: "html",
     });
     return;

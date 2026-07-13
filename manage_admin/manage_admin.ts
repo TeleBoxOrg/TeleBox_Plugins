@@ -470,6 +470,7 @@ class ManageAdminPlugin extends Plugin {
         return;
       }
       await msg.edit({
+        text: help_text,
         parseMode: "html",
       });
     },

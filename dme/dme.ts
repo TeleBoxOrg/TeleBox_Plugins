@@ -1300,6 +1300,7 @@ const dme = async (msg: Api.Message) => {
     
     if (isNaN(userRequestedCount) || userRequestedCount <= 0) {
       await msg.edit({
+        text: `❌ <b>参数错误:</b> 删除数量必须为正整数\n\n💡 使用 <code>${mainPrefix}dme [数量]</code> 或 <code>${mainPrefix}dme -f [数量]</code>`,
         parseMode: "html"
       });
       return;

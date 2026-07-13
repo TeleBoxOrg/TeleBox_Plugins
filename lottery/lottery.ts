@@ -1077,6 +1077,7 @@ const lottery = async (msg: Api.Message) => {
     // 无参数时显示错误提示，不自动显示帮助
     if (!sub) {
       await msg.edit({
+        text: `❌ <b>请指定子命令</b>\n\n💡 使用 <code>${mainPrefix}lottery help</code> 查看完整帮助`,
         parseMode: "html"
       });
       return;
@@ -1729,6 +1730,7 @@ const lottery = async (msg: Api.Message) => {
     }
 
     await msg.edit({
+      text: `❌ <b>未知子命令:</b> <code>${htmlEscape(sub)}</code>\n\n💡 使用 <code>${mainPrefix}lottery help</code> 查看完整帮助`,
       parseMode: "html"
     });
 

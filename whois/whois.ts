@@ -222,6 +222,7 @@ class WhoisPlugin extends Plugin {
       // 无参数时显示错误提示
       if (!domain) {
         await msg.edit({
+          text: `❌ <b>请指定域名</b>\n\n💡 用法: <code>${mainPrefix}whois &lt;域名&gt;</code>\n或回复包含域名的消息后使用 <code>${mainPrefix}whois</code>`,
           parseMode: "html"
         });
         return;
