@@ -3,14 +3,7 @@ import { Api, TelegramClient } from "teleproto";
 import { getGlobalClient } from "@utils/runtimeManager";
 import { safeGetReplyMessage } from "@utils/safeGetMessages";
 
-const htmlEscape = (text: string): string =>
-  text.replace(/[&<>"']/g, (m) => ({
-    "&": "&amp;",
-    "<": "&lt;",
-    ">": "&gt;",
-    '"': "&quot;",
-    "'": "&#x27;",
-  }[m] || m));
+import { htmlEscape } from "@utils/htmlEscape";
 
 const dc = async (msg: Api.Message) => {
   const args = msg.message.slice(1).split(" ").slice(1);

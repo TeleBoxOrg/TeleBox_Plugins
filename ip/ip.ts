@@ -3,15 +3,7 @@ import { Api } from "teleproto";
 import axios from "axios";
 import { safeGetReplyMessage } from "@utils/safeGetMessages";
 
-function htmlEscape(text: string): string {
-  if (typeof text !== 'string') return '';
-  return text
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#39;");
-}
+import { htmlEscape } from "@utils/htmlEscape";
 
 async function getIpInfo(query: string): Promise<any> {
   if (!query || query.trim() === "") {

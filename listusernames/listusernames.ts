@@ -3,16 +3,12 @@ import { Api } from "teleproto";
 import { getGlobalClient } from "@utils/runtimeManager";
 import { getPrefixes } from "@utils/pluginManager";
 
+import { htmlEscape } from "@utils/htmlEscape";
+
 const prefixes = getPrefixes();
 const mainPrefix = prefixes[0];
 
 // HTML转义函数（必需）
-const htmlEscape = (text: string): string => 
-  text.replace(/[&<>"']/g, m => ({ 
-    '&': '&amp;', '<': '&lt;', '>': '&gt;', 
-    '"': '&quot;', "'": '&#x27;' 
-  }[m] || m));
-
 const codeTag = (text: string | number): string => `<code>${htmlEscape(String(text))}</code>`;
 
 const help_text = `📋 <b>listusernames - 列出公开群组/频道</b>

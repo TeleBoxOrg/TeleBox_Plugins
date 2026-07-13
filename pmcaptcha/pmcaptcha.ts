@@ -14,15 +14,9 @@ import bigInt from "big-integer";
 import { safeGetMessages } from "@utils/safeGetMessages";
 
 import { safeGetMe } from "@utils/authGuards";
-const PLUGIN_VERSION = "5.0.6";
+import { htmlEscape } from "@utils/htmlEscape";
 
-function htmlEscape(value: any): string {
-  return String(value ?? "")
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;");
-}
+const PLUGIN_VERSION = "5.0.6";
 
 function codeTag(value: any): string {
   return `<code>${htmlEscape(value)}</code>`;

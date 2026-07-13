@@ -4,13 +4,9 @@ import { getPrefixes } from "@utils/pluginManager";
 import { Api } from "teleproto";
 import { safeGetReplyMessage } from "@utils/safeGetMessages";
 
-// HTML转义工具
-const htmlEscape = (text: string): string => 
-  text.replace(/[&<>"']/g, m => ({ 
-    '&': '&amp;', '<': '&lt;', '>': '&gt;', 
-    '"': '&quot;', "'": '&#x27;' 
-  }[m] || m));
+import { htmlEscape } from "@utils/htmlEscape";
 
+// HTML转义工具
 // 获取命令前缀
 const prefixes = getPrefixes();
 const mainPrefix = prefixes[0];
@@ -91,8 +87,6 @@ class EncodePlugin extends Plugin {
       });
     }
   };
-
-
 
   // 统一的编码处理逻辑
   private async processEncoding(

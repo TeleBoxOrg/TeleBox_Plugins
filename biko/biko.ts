@@ -3,6 +3,8 @@ import { getPrefixes } from "@utils/pluginManager";
 import { getGlobalClient } from "@utils/runtimeManager";
 import { Api } from "teleproto";
 
+import { htmlEscape } from "@utils/htmlEscape";
+
 const prefixes = getPrefixes();
 const mainPrefix = prefixes[0];
 
@@ -62,15 +64,6 @@ const helpText = `📦 <b>Biko - 批量获取整理发送指定对话中指定�
 <pre>${mainPrefix}acron cmd 0 0 2 * * * me 尾行
 ${mainPrefix}biko @group @user 20 me</pre>
 `;
-
-function htmlEscape(text: string): string {
-  return text
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#x27;");
-}
 
 function extractErrorMessage(error: unknown): string {
   if (error instanceof Error && error.message) return error.message;
@@ -503,7 +496,6 @@ function splitDigest(header: string, lines: string[]): string[] {
 }
 
 class BikoPlugin extends Plugin {
-
 
   description: string = helpText;
 

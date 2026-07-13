@@ -8,14 +8,7 @@ import * as path from "path";
 import { createDirectoryInTemp } from "@utils/pathHelpers";
 import * as cheerio from "cheerio";
 
-function htmlEscape(text: string): string {
-    return text
-        .replace(/&/g, "&amp;")
-        .replace(/</g, "&lt;")
-        .replace(/>/g, "&gt;")
-        .replace(/"/g, "&quot;")
-        .replace(/'/g, "&#x27;");
-}
+import { htmlEscape } from "@utils/htmlEscape";
 
 const BGP_COMMON_HEADERS = {
     "User-Agent":

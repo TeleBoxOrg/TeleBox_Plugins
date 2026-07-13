@@ -3,19 +3,12 @@ import { getGlobalClient, tryGetCurrentGenerationContext } from "@utils/runtimeM
 import { getPrefixes } from "@utils/pluginManager";
 import { Api } from "teleproto";
 
+import { htmlEscape } from "@utils/htmlEscape";
+
 const prefixes = getPrefixes();
 const mainPrefix = prefixes[0];
 
 // HTML转义函数
-function htmlEscape(text: string): string {
-  return text
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#39;');
-}
-
 
 function timeoutAfter(ms: number, message: string, label: string): Promise<never> {
   const lifecycle = tryGetCurrentGenerationContext();
@@ -153,7 +146,6 @@ class CopyStickerSetPlugin extends Plugin {
         text: "🔍 正在获取贴纸包信息..."
       });
 
-
       let stickerSet: Api.messages.StickerSet;
       try {
         const result = await client.invoke(
@@ -201,11 +193,9 @@ class CopyStickerSetPlugin extends Plugin {
         text: `📦 找到贴纸包：${htmlEscape(originalSet.title)}\n🎯 包含 ${stickers.length} 个贴纸\n\n⏳ 开始复制贴纸包...`
       });
 
-
       const timestamp = Date.now();
       const newShortName = `copied_${stickerSetName}_${timestamp}`;
       const finalTitle = newSetTitle || `${originalSet.title} (复制)`;
-
 
       // 限制贴纸数量以避免超时
       const safeDefault = 100;
@@ -275,7 +265,6 @@ class CopyStickerSetPlugin extends Plugin {
       await msg.edit({
         text: `📦 贴纸包：${htmlEscape(originalSet.title)}\n🎯 已处理 ${stickerInputs.length} 个贴纸\n\n🚀 正在创建新贴纸包...`
       });
-
 
       // 创建新贴纸包（添加超时处理）
       try {

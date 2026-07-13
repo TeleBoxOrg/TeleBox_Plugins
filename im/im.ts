@@ -16,6 +16,8 @@ import { JSONFilePreset } from "lowdb/node";
 import * as path from "path";
 import * as crypto from "crypto";
 
+import { htmlEscape } from "@utils/htmlEscape";
+
 // ==================== 类型定义 ====================
 type Action = "delete" | "ban";
 
@@ -69,16 +71,6 @@ const HELP_TEXT = `<b>🖼️ 图片监控插件 (image_monitor)</b>
 • 回复图片/媒体/贴纸使用 <code>.im [delete|ban]</code> - 快速添加（图片MD5/文件MD5/贴纸ID），未指定时使用默认操作`;
 
 // ==================== 工具函数 ====================
-const htmlEscape = (text: string): string =>
-  text.replace(/[&<>'"/]/g, (m) => ({
-    "&": "&amp;",
-    "<": "&lt;",
-    ">": "&gt;",
-    '"': "&quot;",
-    "'": "&#x27;",
-    "/": "&#x2F;",
-  }[m] || m));
-
 async function getPeerId(client: TelegramClient, msg: Api.Message, chatIdStr?: string): Promise<string | null> {
     try {
         if (!chatIdStr) {
@@ -312,8 +304,6 @@ class ImageMonitorPlugin extends Plugin {
     const args = msg.text?.split(" ").slice(1) || [];
     const subCommand = args[0]?.toLowerCase();
     const config = await ConfigManager.getConfig();
-
-
 
     try {
       switch (subCommand) {

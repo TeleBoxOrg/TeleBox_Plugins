@@ -6,6 +6,8 @@ import { createDirectoryInAssets } from "@utils/pathHelpers";
 import * as path from "path";
 import { safeGetReplyMessage } from "@utils/safeGetMessages";
 
+import { htmlEscape } from "@utils/htmlEscape";
+
 const prefixes = getPrefixes();
 const mainPrefix = prefixes[0];
 
@@ -100,12 +102,6 @@ class AffPlugin extends Plugin {
   }
 
   // HTML转义函数（必需）
-  private htmlEscape(text: string): string {
-    return text.replace(/[&<>"']/g, m => ({ 
-      '&': '&amp;', '<': '&lt;', '>': '&gt;', 
-      '"': '&quot;', "'": '&#x27;' 
-    }[m] || m));
-  }
 
   // 主命令处理
   private async handleAffCommand(msg: Api.Message): Promise<void> {
@@ -226,7 +222,7 @@ class AffPlugin extends Plugin {
       // 截取前30个字符作为预览
       let preview = aff.text.replace(/\n/g, " ").substring(0, 30);
       if (aff.text.length > 30) preview += "...";
-      preview = this.htmlEscape(preview);
+      preview = htmlEscape(preview);
       
       listText += `<b>${idx + 1}.</b> ${preview}\n`;
     });
@@ -312,7 +308,7 @@ class AffPlugin extends Plugin {
   private async handleError(msg: Api.Message, error: any): Promise<void> {
     console.error(`[${this.PLUGIN_NAME}] Error:`, error);
     
-    const errorMsg = this.htmlEscape(error?.message || String(error) || "未知错误");
+    const errorMsg = htmlEscape(error?.message || String(error) || "未知错误");
     
     await msg.edit({
       text: `❌ <b>操作失败：</b>${errorMsg}`,

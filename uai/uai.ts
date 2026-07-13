@@ -14,6 +14,8 @@ import { getGlobalClient } from "@utils/runtimeManager";
 import { TelegramFormatter } from "@utils/telegramFormatter";
 import { safeGetMessages } from "@utils/safeGetMessages";
 
+import { htmlEscape } from "@utils/htmlEscape";
+
 const prefixes = getPrefixes();
 const mainPrefix = prefixes[0];
 
@@ -57,15 +59,6 @@ const DEFAULT_CONFIG: UAIConfig = {
 };
 
 // ========== 工具函数 ==========
-function htmlEscape(t: string): string {
-    return t
-        .replace(/&/g, "&amp;")
-        .replace(/</g, "&lt;")
-        .replace(/>/g, "&gt;")
-        .replace(/"/g, "&quot;")
-        .replace(/'/g, "&#39;");
-}
-
 // 应用折叠功能
 const applyWrap = (s: string, collapse?: boolean): string => {
     if (!collapse) return s;
@@ -327,7 +320,6 @@ const getHelpText = () => `⚙️ <b>UAI - 用户消息AI分析</b>
 class UAIPlugin extends Plugin {
     cleanup(): void {
   }
-
 
     name = "uai";
     description = () => getHelpText();

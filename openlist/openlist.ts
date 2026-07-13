@@ -13,6 +13,8 @@ import { exec, execFile } from "child_process";
 import { promisify } from "util";
 import { safeGetReplyMessage } from "@utils/safeGetMessages";
 
+import { htmlEscape } from "@utils/htmlEscape";
+
 const prefixes = getPrefixes();
 const mainPrefix = prefixes[0];
 const pluginName = "openlist";
@@ -21,15 +23,6 @@ const commandName = `${mainPrefix}${pluginName}`;
 const execAsync = promisify(exec);
 const execFileAsync = promisify(execFile);
 const GH_BASE_DOWNLOAD = "https://github.com/OpenListTeam/OpenList/releases/latest/download";
-
-const htmlEscape = (text: unknown): string =>
-  String(text ?? "").replace(/[&<>"']/g, (m) => ({
-    "&": "&amp;",
-    "<": "&lt;",
-    ">": "&gt;",
-    '"': "&quot;",
-    "'": "&#x27;",
-  }[m] || m));
 
 const codeTag = (text: unknown): string => `<code>${htmlEscape(text)}</code>`;
 const preTag = (text: unknown): string => `<pre>${htmlEscape(text)}</pre>`;
@@ -526,7 +519,6 @@ class OpenListPlugin extends Plugin {
     const dbPath = path.join(createDirectoryInAssets("openlist"), "credentials.json");
     return await JSONFilePreset(dbPath, { username: "", password: "", defaultPath: "" });
   }
-
 
   private async handleSetPort(msg: Api.Message, port?: string) {
     try {

@@ -11,13 +11,9 @@ import { promises as fs } from "fs";
 import { JSONFilePreset } from "lowdb/node";
 import axios from "axios";
 
-// HTML转义（每个插件必须实现）
-const htmlEscape = (text: string): string => 
-  text.replace(/[&<>"']/g, m => ({ 
-    '&': '&amp;', '<': '&lt;', '>': '&gt;', 
-    '"': '&quot;', "'": '&#x27;' 
-  }[m] || m));
+import { htmlEscape } from "@utils/htmlEscape";
 
+// HTML转义（每个插件必须实现）
 // 获取命令前缀
 const prefixes = getPrefixes();
 const mainPrefix = prefixes[0];

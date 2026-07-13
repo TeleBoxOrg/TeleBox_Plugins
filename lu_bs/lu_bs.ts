@@ -7,16 +7,12 @@ import { JSONFilePreset } from "lowdb/node";
 import { createDirectoryInAssets } from "@utils/pathHelpers";
 import * as path from "path";
 
+import { htmlEscape } from "@utils/htmlEscape";
+
 const prefixes = getPrefixes();
 const mainPrefix = prefixes[0];
 
 // HTML转义函数
-const htmlEscape = (text: string): string => 
-  text.replace(/[&<>"']/g, m => ({ 
-    '&': '&amp;', '<': '&lt;', '>': '&gt;', 
-    '"': '&quot;', "'": '&#x27;' 
-  }[m] || m));
-
 // 帮助文本
 const HELP_TEXT = `🕒 <b>鲁小迅整点报时</b>
 

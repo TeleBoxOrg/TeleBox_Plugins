@@ -6,6 +6,8 @@ import path from "path";
 import { createDirectoryInAssets } from "@utils/pathHelpers";
 import { safeGetReplyMessage } from "@utils/safeGetMessages";
 
+import { htmlEscape } from "@utils/htmlEscape";
+
 const CONFIG_KEYS = {
   API_KEY: "aitc_api_key",
   API_URL: "aitc_api_url",
@@ -145,19 +147,6 @@ class ConfigManager {
     this.set(CONFIG_KEYS.PROMPT_MAP, JSON.stringify(map));
   }
 }
-
-const htmlEscape = (text: string): string =>
-  text.replace(
-    /[&<>"']/g,
-    (char) =>
-      ({
-        "&": "&amp;",
-        "<": "&lt;",
-        ">": "&gt;",
-        '"': "&quot;",
-        "'": "&#x27;",
-      })[char] || char,
-  );
 
 const decodeHtmlEntities = (text: string): string =>
   text

@@ -20,6 +20,8 @@ import { getPrefixes } from "@utils/pluginManager";
 import { JSONFilePreset } from "lowdb/node";
 import * as fs from "fs";
 
+import { htmlEscape } from "@utils/htmlEscape";
+
 async function formatEntity(
   target: any,
   mention?: boolean,
@@ -72,21 +74,6 @@ async function formatEntity(
 }
 
 // HTML 转义（规范要求）
-const htmlEscape = (text: string): string =>
-  String(text || "").replace(
-    /[&<>"']/g,
-    (m) =>
-      ((
-        {
-          "&": "&amp;",
-          "<": "&lt;",
-          ">": "&gt;",
-          '"': "&quot;",
-          "'": "&#x27;",
-        } as any
-      )[m] || m)
-  );
-
 // 获取命令前缀
 const prefixes = getPrefixes();
 const mainPrefix = prefixes[0];

@@ -19,6 +19,8 @@ import { getPrefixes } from "@utils/pluginManager";
 import { Api } from "teleproto";
 import { CustomFile } from "teleproto/client/uploads";
 
+import { htmlEscape } from "@utils/htmlEscape";
+
 // ==================== 工具函数与常量 ====================
 /** 获取命令前缀 */
 const mainPrefix = (getPrefixes()[0] || ".");
@@ -27,15 +29,6 @@ const mainPrefix = (getPrefixes()[0] || ".");
 const MAX_MESSAGE_LENGTH = 4096;
 
 /** HTML 转义函数（安全处理用户输入）*/
-const htmlEscape = (text: string): string =>
-  text.replace(/[&<>"']/g, (m) => ({
-    "&": "&amp;",
-    "<": "&lt;",
-    ">": "&gt;",
-    '"': "&quot;",
-    "'": "&#x27;",
-  }[m] || m));
-
 /** 分割 HTML 文本为多个分段（避免超过长度限制）*/
 function chunkHtml(text: string, limit = MAX_MESSAGE_LENGTH): string[] {
   if (text.length <= limit) return [text];

@@ -7,15 +7,10 @@ import { createDirectoryInAssets } from "@utils/pathHelpers";
 import * as path from "path";
 
 import { safeGetMe } from "@utils/authGuards";
+import { htmlEscape } from "@utils/htmlEscape";
+
 const prefixes = getPrefixes();
 const mainPrefix = prefixes[0];
-
-
-const htmlEscape = (text: string): string => 
-  text.replace(/[&<>"']/g, m => ({ 
-    '&': '&amp;', '<': '&lt;', '>': '&gt;', 
-    '"': '&quot;', "'": '&#x27;' 
-  }[m] || m));
 
 class TeletypePlugin extends Plugin {
 

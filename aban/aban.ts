@@ -12,6 +12,8 @@ import { safeGetReplyMessage } from "@utils/safeGetMessages";
 
 import { safeGetMe } from "@utils/authGuards";
 import { npm_install } from "@utils/npm_install";
+import { htmlEscape } from "@utils/htmlEscape";
+
 const prefixes = getPrefixes();
 const mainPrefix = prefixes[0];
 
@@ -48,7 +50,6 @@ function getFloodWaitSeconds(error: unknown): number | null {
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
-
 // ==================== 配置常量 ====================
 const CONFIG = {
   BATCH_SIZE: 50, // 增加批次大小
@@ -74,12 +75,6 @@ const HELP_TEXT = `<b>封禁管理</b>
 回复消息或@用户名`;
 
 // ==================== 工具函数 ====================
-const htmlEscape = (text: string): string =>
-  text.replace(/[&<>"']/g, m => ({
-    '&': '&amp;', '<': '&lt;', '>': '&gt;',
-    '"': '&quot;', "'": '&#x27;'
-  }[m] || m));
-
 // 解析时间字符串
 function parseTimeString(timeStr?: string): number {
   if (!timeStr) return 0; // 无参数返回0（永久）

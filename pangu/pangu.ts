@@ -8,9 +8,10 @@ import { JSONFilePreset } from "lowdb/node";
 import * as path from "path";
 import _ from "lodash";
 
+import { htmlEscape } from "@utils/htmlEscape";
+
 const prefixes = getPrefixes();
 const mainPrefix = prefixes[0];
-
 
 // ==========================================
 // 🛠️ 内置 Pangu 核心逻辑 (无需外部依赖)
@@ -140,14 +141,7 @@ class PanguSpacer {
 }
 // ==========================================
 
-
 // HTML 转义函数
-const htmlEscape = (text: string): string => 
-  text.replace(/[&<>"']/g, m => ({ 
-    '&': '&amp;', '<': '&lt;', '>': '&gt;', 
-    '"': '&quot;', "'": '&#x27;' 
-  }[m] || m));
-
 // 帮助文档
 const help_text = `⚙️ <b>pangu - 为消息添加「盘古之白」</b>
 

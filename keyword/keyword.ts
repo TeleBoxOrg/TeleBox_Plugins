@@ -5,6 +5,8 @@ import { TelegramClient } from "teleproto";
 import { createDirectoryInAssets } from "@utils/pathHelpers";
 import path from "path";
 import Database from "better-sqlite3";
+import { htmlEscape } from "@utils/htmlEscape";
+
 import {
   dealCommandPluginWithMessage,
   getCommandFromMessage,
@@ -332,15 +334,6 @@ if (db) {
   `);
 }
 
-function htmlEscape(text: string): string {
-  return text
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#x27;");
-}
-
 function codeTag(text: string | number): string {
   return `<code>${htmlEscape(String(text))}</code>`;
 }
@@ -596,7 +589,6 @@ const keyword = async (msg: Api.Message) => {
 <code>keyword alias</code> - 查看当前群组继承设置
 <code>keyword alias 123456</code> - 设置继承其他群组的关键词
 <code>keyword alias rm</code> - 删除继承设置
-
 
 <b>📝 添加关键词任务格式：</b>
 <code>keyword 关键词内容

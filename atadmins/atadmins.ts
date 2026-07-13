@@ -3,17 +3,13 @@ import { Plugin } from "@utils/pluginBase";
 import { Api } from "teleproto";
 import { getGlobalClient } from "@utils/runtimeManager";
 
+import { htmlEscape } from "@utils/htmlEscape";
+
 // 获取命令前缀
 const prefixes = getPrefixes();
 const mainPrefix = prefixes[0];
 
 // HTML转义工具
-const htmlEscape = (text: string): string => 
-  text.replace(/[&<>"']/g, m => ({ 
-    '&': '&amp;', '<': '&lt;', '>': '&gt;', 
-    '"': '&quot;', "'": '&#x27;' 
-  }[m] || m));
-
 // 帮助文档
 const help_text = `👮 <b>一键 AT 管理员</b>
 
@@ -49,7 +45,6 @@ function scheduleTimer(fn: () => void, ms: number): ReturnType<typeof setTimeout
   pendingTimers.add(t);
   return t;
 }
-
 
 class AtAdminsPlugin extends Plugin {
 

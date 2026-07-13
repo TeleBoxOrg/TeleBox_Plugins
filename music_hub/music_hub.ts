@@ -9,6 +9,8 @@ import { JSONFilePreset } from "lowdb/node";
 import * as fs from "fs";
 import * as path from "path";
 
+import { htmlEscape } from "@utils/htmlEscape";
+
 const prefixes = getPrefixes();
 const mainPrefix = prefixes[0];
 
@@ -147,16 +149,6 @@ const DEFAULT_CONFIG: MusicHubConfig = {
   maxResults: 30,
   maxUploadBytes: 100 * 1024 * 1024,
 };
-
-function htmlEscape(text: unknown): string {
-  return String(text ?? "").replace(/[&<>"']/g, (m) => ({
-    "&": "&amp;",
-    "<": "&lt;",
-    ">": "&gt;",
-    '"': "&quot;",
-    "'": "&#x27;",
-  }[m] || m));
-}
 
 function codeTag(text: unknown): string {
   return `<code>${htmlEscape(text)}</code>`;

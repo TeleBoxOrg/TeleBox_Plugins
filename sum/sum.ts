@@ -10,6 +10,8 @@ import { getGlobalClient } from "@utils/runtimeManager";
 import axios from "axios";
 import { safeGetMessages } from "@utils/safeGetMessages";
 
+import { htmlEscape } from "@utils/htmlEscape";
+
 const prefixes = getPrefixes();
 const mainPrefix = prefixes[0];
 
@@ -17,14 +19,6 @@ const filePath = path.join(
   createDirectoryInAssets("sum"),
   "summary_config.json"
 );
-
-function htmlEscape(value: any): string {
-  return String(value ?? "")
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;");
-}
 
 function codeTag(value: any): string {
   return `<code>${htmlEscape(value)}</code>`;
@@ -1536,8 +1530,6 @@ class SummaryPlugin extends Plugin {
           });
           return;
         }
-
-
 
         if (sub === "config") {
           const action = args[0];

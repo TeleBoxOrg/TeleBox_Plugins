@@ -21,6 +21,8 @@ import * as https from "https";
 import * as http from "http";
 import { JSONFilePreset } from "lowdb/node";
 
+import { htmlEscape } from "@utils/htmlEscape";
+
 const execFileAsync = promisify(execFile);
 
 async function lifecycleDelay(ms: number, label: string): Promise<void> {
@@ -77,19 +79,6 @@ function runTrackedProcess(command: string, args: string[], label: string): Prom
   });
 }
 
-// HTML转义函数
-const htmlEscape = (text: string): string =>
-  text.replace(
-    /[&<>"']/g,
-    (m) =>
-      ({
-        "&": "&amp;",
-        "<": "&lt;",
-        ">": "&gt;",
-        '"': "&quot;",
-        "'": "&#x27;",
-      }[m] || m)
-  );
 
 // 消息长度限制
 const MAX_MESSAGE_LENGTH = 4096;

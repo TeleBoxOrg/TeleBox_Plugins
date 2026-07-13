@@ -8,11 +8,7 @@ import * as path from "path";
 import * as fs from "fs";
 import axios from "axios";
 
-const htmlEscape = (text: string): string => 
-  text.replace(/[&<>"']/g, m => ({ 
-    '&': '&amp;', '<': '&lt;', '>': '&gt;', 
-    '"': '&quot;', "'": '&#x27;' 
-  }[m] || m));
+import { htmlEscape } from "@utils/htmlEscape";
 
 async function getAllDialogs(client: any): Promise<any[]> {
   const dialogMap = new Map<string, any>();

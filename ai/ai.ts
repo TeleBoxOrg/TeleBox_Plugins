@@ -20,6 +20,8 @@ import https from "https";
 import { promisify } from "util";
 import { safeGetReplyMessage } from "@utils/safeGetMessages";
 
+import { htmlEscape } from "@utils/htmlEscape";
+
 interface ProviderConfig {
   tag: string;
   url: string;
@@ -492,9 +494,6 @@ const getMessageText = (m?: Api.Message | null): string => {
   const text = (m as any).message ?? (m as any).text ?? "";
   return typeof text === "string" ? text : "";
 };
-
-const htmlEscape = (text: string): string =>
-  text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 
 const buildUserContent = (
   text: string,

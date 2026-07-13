@@ -9,9 +9,10 @@ import { CustomFile } from "teleproto/client/uploads.js";
 import { createDirectoryInAssets } from "@utils/pathHelpers";
 import { safeGetReplyMessage } from "@utils/safeGetMessages";
 
+import { htmlEscape } from "@utils/htmlEscape";
+
 const prefixes = getPrefixes();
 const mainPrefix = prefixes[0];
-
 
 interface BananaConfig {
   apiKey: string;
@@ -38,19 +39,6 @@ const help_text =
 const dataDir = createDirectoryInAssets("banana");
 const configPath = path.join(dataDir, "config.json");
 let dbPromise: Promise<Low<BananaConfig>> | null = null;
-
-const htmlEscape = (input: string): string =>
-  input.replace(
-    /[&<>"']/g,
-    (ch) =>
-      ({
-        "&": "&amp;",
-        "<": "&lt;",
-        ">": "&gt;",
-        '"': "&quot;",
-        "'": "&#x27;",
-      })[ch] || ch,
-  );
 
 const formatBytes = (bytes: number): string => {
   if (bytes >= 1024 * 1024) {

@@ -11,18 +11,13 @@ import relativeTime from "dayjs/plugin/relativeTime";
 import { safeGetMessages } from "@utils/safeGetMessages";
 import "dayjs/locale/zh-cn";
 
+import { htmlEscape } from "@utils/htmlEscape";
+
 // 配置 dayjs
 dayjs.extend(relativeTime);
 dayjs.locale('zh-cn');
 
-
 // 必需工具函数
-const htmlEscape = (text: string): string => 
-  text.replace(/[&<>"']/g, m => ({ 
-    '&': '&amp;', '<': '&lt;', '>': '&gt;', 
-    '"': '&quot;', "'": '&#x27;' 
-  }[m] || m));
-
 // 解析 namebeta.com 的 SSE 流式响应，返回各事件对象
 function parseSSEResponse(raw: string): Array<{type: string; data: any}> {
   const events: Array<{type: string; data: any}> = [];

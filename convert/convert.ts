@@ -11,18 +11,14 @@ import Database from "better-sqlite3";
 import { Converter } from "opencc-js";
 import { safeGetReplyMessage } from "@utils/safeGetMessages";
 
+import { htmlEscape } from "@utils/htmlEscape";
+
 const execFileAsync = promisify(execFile);
 
 // --- Basic Setup ---
 const prefixes = getPrefixes();
 const mainPrefix = prefixes[0] || ".";
 const toSimplified = Converter({ from: "tw", to: "cn" });
-
-const htmlEscape = (text: string): string =>
-  text.replace(/[&<>"']/g, (m) => ({
-    "&": "&amp;", "<": "&lt;", ">": "&gt;",
-    '"': "&quot;", "'": "&#x27;",
-  }[m] || m));
 
 // --- Gemini AI Configuration & Client ---
 const dbDir = path.join(process.cwd(), "assets", "convert");
@@ -170,7 +166,6 @@ async function searchAndDownloadCover(query: string, savePath: string): Promise<
     return false;
 }
 
-
 // --- Main Converter Class ---
 class VideoConverter {
   public readonly tempDir: string;
@@ -221,7 +216,6 @@ class VideoConverter {
         return false;
     }
   }
-
 
   async getVideoDuration(filePath: string): Promise<number> {
     try {

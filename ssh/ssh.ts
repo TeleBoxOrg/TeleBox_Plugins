@@ -19,6 +19,8 @@ import crypto from "crypto";
 // @ts-ignore
 import { Client as SSH2Client } from 'ssh2';
 
+import { htmlEscape } from "@utils/htmlEscape";
+
 const execFileAsync = promisify(execFile);
 const prefixes = getPrefixes();
 const mainPrefix = prefixes[0];
@@ -67,12 +69,6 @@ async function isSshServiceActive(): Promise<boolean> {
 }
 
 // HTML转义函数
-const htmlEscape = (text: string): string => 
-  text.replace(/[&<>"']/g, m => ({ 
-    '&': '&amp;', '<': '&lt;', '>': '&gt;', 
-    '"': '&quot;', "'": '&#x27;' 
-  }[m] || m));
-
 // 验证路径安全性
 function validatePath(pathStr: string): boolean {
   if (!pathStr || typeof pathStr !== "string") return false;
@@ -1282,8 +1278,6 @@ ${keysContent}`;
     }
   }
 
-
-
   // 重启SSH服务
   private async restartSSH(msg: Api.Message): Promise<void> {
     await msg.edit({ text: "🔄 正在重启SSH服务...", parseMode: "html" });
@@ -1507,7 +1501,6 @@ ${keysContent}`;
       } catch {
         iptablesInfo = "";
       }
-
 
       // 获取系统信息
       let systemInfo = "";

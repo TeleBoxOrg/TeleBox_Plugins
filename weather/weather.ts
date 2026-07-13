@@ -3,17 +3,13 @@ import { getGlobalClient } from "@utils/runtimeManager";
 import { getPrefixes } from "@utils/pluginManager";
 import { Api } from "teleproto";
 
+import { htmlEscape } from "@utils/htmlEscape";
+
 // 获取命令前缀
 const prefixes = getPrefixes();
 const mainPrefix = prefixes[0];
 
 // HTML转义工具
-const htmlEscape = (text: string): string => 
-  text.replace(/[&<>"']/g, m => ({ 
-    '&': '&amp;', '<': '&lt;', '>': '&gt;', 
-    '"': '&quot;', "'": '&#x27;' 
-  }[m] || m));
-
 // Open-Meteo API 响应接口
 interface OpenMeteoResponse {
   latitude: number;

@@ -4,17 +4,12 @@ import { Api, TelegramClient } from "teleproto";
 import { getGlobalClient } from "@utils/runtimeManager";
 
 import { safeGetMe } from "@utils/authGuards";
+import { htmlEscape } from "@utils/htmlEscape";
+
 const prefixes = getPrefixes();
 const mainPrefix = prefixes[0];
 
-
 // HTML转义工具（每个插件必须实现）
-const htmlEscape = (text: string): string => 
-  text.replace(/[&<>"']/g, m => ({ 
-    '&': '&amp;', '<': '&lt;', '>': '&gt;', 
-    '"': '&quot;', "'": '&#x27;' 
-  }[m] || m));
-
 // 帮助文档常量
 const help_text = `<b>⚠️ 一键跑路</b>
 
@@ -37,7 +32,6 @@ function scheduleTimer(fn: () => void, ms: number): ReturnType<typeof setTimeout
   pendingTimers.add(t);
   return t;
 }
-
 
 class PaoluPlugin extends Plugin {
 

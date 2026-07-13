@@ -7,16 +7,9 @@ import * as path from "path";
 import { createDirectoryInAssets } from "@utils/pathHelpers";
 import axios from "axios";
 
-// HTML转义函数
-const htmlEscape = (text: string): string =>
-  text.replace(/[&<>"']/g, (m) => ({
-    '&': '&amp;',
-    '<': '&lt;',
-    '>': '&gt;',
-    '"': '&quot;',
-    "'": '&#x27;'
-  }[m] || m));
+import { htmlEscape } from "@utils/htmlEscape";
 
+// HTML转义函数
 // Telegram 长消息处理
 const MAX_MESSAGE_LENGTH = 4096;
 function splitMessage(text: string): string[] {

@@ -6,20 +6,9 @@ import { Api } from "teleproto";
 import { NewMessage } from "teleproto/events";
 import { safeGetMessages } from "@utils/safeGetMessages";
 
-// HTML转义函数 (虽然这次用实体不需要了，但保留作为工具函数无妨)
-const htmlEscape = (text: string): string =>
-  text.replace(
-    /[&<>"']/g,
-    (m) =>
-      ({
-        "&": "&amp;",
-        "<": "&lt;",
-        ">": "&gt;",
-        '"': "&quot;",
-        "'": "&#x27;",
-      }[m] || m),
-  );
+import { htmlEscape } from "@utils/htmlEscape";
 
+// HTML转义函数 (虽然这次用实体不需要了，但保留作为工具函数无妨)
 // 获取命令前缀
 const prefixes = getPrefixes();
 const mainPrefix = prefixes[0];
@@ -29,7 +18,6 @@ const help_text = `🎲 <b>随机色色视频获取</b>
 
 <b>命令：</b>
 • <code>${mainPrefix}kkp</code> - 从SeSe3000Bot获取随机视频并转发
-
 
 <b>说明：</b>
 该插件会自动与SeSe3000Bot交互获取随机视频内容`;

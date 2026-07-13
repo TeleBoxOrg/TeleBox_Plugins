@@ -6,14 +6,7 @@ import { getGlobalClient } from "@utils/runtimeManager";
 import { CustomFile } from "teleproto/client/uploads.js";
 import { safeGetReplyMessage } from "@utils/safeGetMessages";
 
-const htmlEscape = (text: string): string =>
-  text.replace(/[&<>"']/g, (m) => ({
-    "&": "&amp;",
-    "<": "&lt;",
-    ">": "&gt;",
-    '"': "&quot;",
-    "'": "&#x27;",
-  }[m] || m));
+import { htmlEscape } from "@utils/htmlEscape";
 
 const timeout = 60000;
 const prefixes = getPrefixes();

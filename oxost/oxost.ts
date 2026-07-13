@@ -8,13 +8,9 @@ import { getGlobalClient, tryGetCurrentGenerationContext } from "@utils/runtimeM
 import { Buffer } from "buffer";
 import { safeGetReplyMessage } from "@utils/safeGetMessages";
 
-// HTML转义
-const htmlEscape = (text: string): string =>
-  text.replace(/[&<>"]|'/g, m => ({
-    '&': '&amp;', '<': '&lt;', '>': '&gt;',
-    '"': '&quot;', "'": '&#x27;'
-  }[m] || m));
+import { htmlEscape } from "@utils/htmlEscape";
 
+// HTML转义
 // 消息分割与发送
 const MAX_MESSAGE_LENGTH = 4096;
 function splitMessage(text: string): string[] {

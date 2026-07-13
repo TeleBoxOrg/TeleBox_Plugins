@@ -5,15 +5,11 @@ import { getGlobalClient } from "@utils/runtimeManager";
 import { safeGetReplyMessage } from "@utils/safeGetMessages";
 
 import { safeGetMe } from "@utils/authGuards";
+import { htmlEscape } from "@utils/htmlEscape";
+
 // HTML转义函数
 const prefixes = getPrefixes();
 const mainPrefix = prefixes[0];
-
-const htmlEscape = (text: string): string => 
-  text.replace(/[&<>"']/g, m => ({ 
-    '&': '&amp;', '<': '&lt;', '>': '&gt;', 
-    '"': '&quot;', "'": '&#x27;' 
-  }[m] || m));
 
 const parseTimeString = (timeStr: string): number => {
   const match = timeStr.match(/^(\d+)([smhd])?$/i);
@@ -43,7 +39,6 @@ function scheduleTimer(fn: () => void, ms: number): ReturnType<typeof setTimeout
   pendingTimers.add(t);
   return t;
 }
-
 
 class PortballPlugin extends Plugin {
 

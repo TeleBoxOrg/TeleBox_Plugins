@@ -8,6 +8,8 @@ import axios from "axios";
 import * as crypto from "crypto";
 import sharp from "sharp";
 import { safeGetReplyMessage } from "@utils/safeGetMessages";
+import { htmlEscape } from "@utils/htmlEscape";
+
 import {
   createDirectoryInAssets,
   createDirectoryInTemp,
@@ -337,14 +339,6 @@ function decrypt(text: string): string {
 }
 
 // Fixed htmlEscape function
-function htmlEscape(text: any): string {
-  // Ensure text is a string type
-  if (typeof text !== 'string') {
-    return text ? String(text) : "";
-  }
-  return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-}
-
 async function unitConvert(bytes: number, isBytes: boolean = false): Promise<string> {
   const power = 1000;
   let value = bytes;

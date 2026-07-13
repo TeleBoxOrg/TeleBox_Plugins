@@ -3,6 +3,7 @@ import { Plugin } from "@utils/pluginBase";
 import { getGlobalClient } from "@utils/runtimeManager";
 import axios, { AxiosError } from "axios";
 
+import { htmlEscape } from "@utils/htmlEscape";
 
 interface CoinGeckoResponse {
   [coinId: string]: {
@@ -221,12 +222,6 @@ const CRYPTO_CURRENCIES: Record<string, { symbol: string, name: string, aliases?
 };
 
 // HTML转义工具
-const htmlEscape = (text: string): string => 
-  text.replace(/[&<>"']/g, m => ({ 
-    '&': '&amp;', '<': '&lt;', '>': '&gt;', 
-    '"': '&quot;', "'": '&#x27;' 
-  }[m] || m));
-
 const codeTag = (text: string): string => `<code>${htmlEscape(text)}</code>`;
 
 const help_text = `🚀 <b>智能汇率查询助手</b>
@@ -555,7 +550,6 @@ class RatePlugin extends Plugin {
     return result;
   }
 
-
   private formatPrice(value: number): string {
     if (value >= 1) {
       return value.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -614,7 +608,6 @@ class RatePlugin extends Plugin {
       `${codeTag(`1 ${cryptoSymbol} = ${this.formatPrice(price)} ${fiatSymbol}`)}\n\n` +
       `⏰ <b>数据更新:</b> ${lastUpdated.toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' })}`;
   }
-
 
   private async handleRate(msg: Api.Message): Promise<void> {
     const text = msg.text?.trim() || "";
@@ -715,7 +708,6 @@ class RatePlugin extends Plugin {
         });
         return;
       }
-
 
       // 智能构建响应消息
       const symbol1 = currency1.symbol.toUpperCase();

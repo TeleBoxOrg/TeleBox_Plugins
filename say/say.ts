@@ -17,6 +17,8 @@ import { createDirectoryInAssets, createDirectoryInTemp } from "@utils/pathHelpe
 import { getGlobalClient } from "@utils/runtimeManager";
 import { safeGetMessages } from "@utils/safeGetMessages";
 
+import { htmlEscape } from "@utils/htmlEscape";
+
 const prefixes = getPrefixes();
 const mainPrefix = prefixes[0];
 
@@ -67,14 +69,6 @@ function cleanTextForTTS(text: string): string {
     cleanedText = cleanedText.replace(/([，。？！、,?!.])\1+/g, "$1");
     cleanedText = cleanedText.replace(/\[([^\]]+)\]\([^\)]+\)/g, "$1");
     return cleanedText.trim();
-}
-
-function htmlEscape(text: unknown): string {
-    return String(text ?? "")
-        .replace(/&/g, "&amp;")
-        .replace(/</g, "&lt;")
-        .replace(/>/g, "&gt;")
-        .replace(/"/g, "&quot;");
 }
 
 function codeTag(text: unknown): string {

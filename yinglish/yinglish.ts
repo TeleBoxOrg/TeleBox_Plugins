@@ -4,17 +4,12 @@ import { getGlobalClient } from "@utils/runtimeManager";
 import { Api } from "teleproto";
 import { safeGetMessages } from "@utils/safeGetMessages";
 
+import { htmlEscape } from "@utils/htmlEscape";
+
 const prefixes = getPrefixes();
 const mainPrefix = prefixes[0];
 
-
 // HTML转义工具
-const htmlEscape = (text: string): string => 
-  text.replace(/[&<>"']/g, m => ({ 
-    '&': '&amp;', '<': '&lt;', '>': '&gt;', 
-    '"': '&quot;', "'": '&#x27;' 
-  }[m] || m));
-
 class YinglishPlugin extends Plugin {
 
   description: string = `💋 <b>淫语翻译</b><br/><br/>

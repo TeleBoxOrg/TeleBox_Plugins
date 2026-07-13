@@ -10,13 +10,9 @@ import { JSONFilePreset } from "lowdb/node";
 import { sleep } from "teleproto/Helpers";
 import { safeGetMessages } from "@utils/safeGetMessages";
 
-// 必需工具函数
-const htmlEscape = (text: string): string => 
-  text.replace(/[&<>"']/g, m => ({ 
-    '&': '&amp;', '<': '&lt;', '>': '&gt;', 
-    '"': '&quot;', "'": '&#x27;' 
-  }[m] || m));
+import { htmlEscape } from "@utils/htmlEscape";
 
+// 必需工具函数
 // 获取命令前缀
 const prefixes = getPrefixes();
 const mainPrefix = prefixes[0];

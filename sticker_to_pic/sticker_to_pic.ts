@@ -8,17 +8,13 @@ import { execSync, execFileSync } from "child_process";
 import * as os from "os";
 import { safeGetMessages } from "@utils/safeGetMessages";
 
+import { htmlEscape } from "@utils/htmlEscape";
+
 // 获取命令前缀
 const prefixes = getPrefixes();
 const mainPrefix = prefixes[0];
 
 // HTML转义工具
-const htmlEscape = (text: string): string => 
-  text.replace(/[&<>"']/g, m => ({ 
-    '&': '&amp;', '<': '&lt;', '>': '&gt;', 
-    '"': '&quot;', "'": '&#x27;' 
-  }[m] || m));
-
 // 自动安装ImageMagick（静默安装，无需用户干预）
 const ensureImageMagick = async (showProgress: boolean = false, msg?: Api.Message): Promise<boolean> => {
   try {
@@ -424,7 +420,6 @@ class StickerToPicPlugin extends Plugin {
             parseMode: "html"
           });
         }
-
 
         try {
           let convertArgs: string[];

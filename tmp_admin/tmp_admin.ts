@@ -11,6 +11,8 @@ import path from "path";
 import { Api } from "teleproto";
 import { sleep } from "teleproto/Helpers";
 
+import { htmlEscape } from "@utils/htmlEscape";
+
 const prefixes = getPrefixes();
 const mainPrefix = prefixes[0];
 
@@ -99,15 +101,6 @@ type CommandResponse = {
   text: string;
   parseMode?: "html";
 };
-
-function htmlEscape(text: string): string {
-  return text
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#x27;");
-}
 
 function codeTag(text: string | number): string {
   return `<code>${htmlEscape(String(text))}</code>`;

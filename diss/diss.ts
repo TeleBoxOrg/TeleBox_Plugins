@@ -3,6 +3,8 @@ import { getPrefixes } from "@utils/pluginManager";
 import { Api } from "teleproto";
 import axios from "axios";
 
+import { htmlEscape } from "@utils/htmlEscape";
+
 const prefixes = getPrefixes();
 const mainPrefix = prefixes[0];
 
@@ -42,7 +44,7 @@ class DissPlugin extends Plugin {
             if (dissText && dissText.length > 0) {
               // 成功获取到语录，发送结果
               await msg.edit({ 
-                text: `${this.htmlEscape(dissText)}`,
+                text: `${htmlEscape(dissText)}`,
                 parseMode: "html"
               });
               return;
@@ -69,7 +71,7 @@ class DissPlugin extends Plugin {
       // 处理意外错误
       console.error('[diss] 插件执行错误:', error);
       await msg.edit({ 
-        text: `❌ 发生意外错误: ${this.htmlEscape(error.message || "未知错误")}`,
+        text: `❌ 发生意外错误: ${htmlEscape(error.message || "未知错误")}`,
         parseMode: "html"
       });
     }
@@ -78,12 +80,6 @@ class DissPlugin extends Plugin {
   /**
    * HTML转义函数（必需）
    */
-  private htmlEscape(text: string): string {
-    return text.replace(/[&<>"']/g, m => ({ 
-      '&': '&amp;', '<': '&lt;', '>': '&gt;', 
-      '"': '&quot;', "'": '&#x27;' 
-    }[m] || m));
-  }
 }
 
 export default new DissPlugin();

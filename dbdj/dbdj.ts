@@ -5,6 +5,8 @@ import { getGlobalClient } from "@utils/runtimeManager";
 import { getPrefixes } from "@utils/pluginManager";
 import { safeGetMessages } from "@utils/safeGetMessages";
 
+import { htmlEscape } from "@utils/htmlEscape";
+
 const prefixes = getPrefixes();
 const mainPrefix = prefixes[0];
 
@@ -76,15 +78,6 @@ async function formatEntity(
     display: displayParts.join(" ").trim(),
   };
 }
-function htmlEscape(text: string): string {
-  return String(text)
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#x27;");
-}
-
 class DbdjPlugin extends Plugin {
   description: string = `点兵点将\n<code>${mainPrefix}dbdj 消息数 人数 文案</code> - 从最近的消息中随机抽取指定人数的用户`;
   cmdHandlers: Record<

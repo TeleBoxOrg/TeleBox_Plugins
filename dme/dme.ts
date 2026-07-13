@@ -13,6 +13,8 @@ import { CustomFile } from "teleproto/client/uploads";
 import * as fs from "fs";
 import * as path from "path";
 
+import { htmlEscape } from "@utils/htmlEscape";
+
 // 常量配置
 const CONFIG = {
   TROLL_IMAGE_URL:
@@ -40,15 +42,6 @@ const CONFIG = {
 } as const;
 
 // 工具函数
-const htmlEscape = (text: string): string =>
-  text.replace(
-    /[&<>"']/g,
-    (m) =>
-      ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#x27;" }[
-        m
-      ] || m)
-  );
-
 // 获取命令前缀
 const prefixes = ["."];
 const mainPrefix = prefixes[0];
@@ -1223,7 +1216,6 @@ async function searchEditAndDeleteMyMessages(
 
 // 已移除频道直接删除功能，避免误删别人消息
 // 所有情况下都使用普通模式，只删除自己的消息
-
 
 // 定义帮助文本常量
 const help_text = `🗑️ <b>智能防撤回删除插件</b>

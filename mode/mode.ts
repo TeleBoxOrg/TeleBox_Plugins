@@ -15,6 +15,8 @@ import {
 import { JSONFilePreset } from "lowdb/node";
 import * as path from "path";
 
+import { htmlEscape } from "@utils/htmlEscape";
+
 /* ===================== prefix ===================== */
 
 const prefixes = getPrefixes();
@@ -22,12 +24,6 @@ const mainPrefix = prefixes[0];
 
 const pluginName = "mode";
 const commandName = `${mainPrefix}${pluginName}`;
-
-const htmlEscape = (text: string): string =>
-  String(text).replace(/[&<>"']/g, (m) => ({
-    "&": "&amp;", "<": "&lt;", ">": "&gt;",
-    '"': "&quot;", "'": "&#x27;",
-  }[m] || m));
 
 /* ===================== Help Menu ===================== */
 

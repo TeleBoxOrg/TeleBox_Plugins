@@ -8,6 +8,8 @@ import * as fs from "fs";
 import * as path from "path";
 import { safeGetReplyMessage } from "@utils/safeGetMessages";
 
+import { htmlEscape } from "@utils/htmlEscape";
+
 const prefixes = getPrefixes();
 const mainPrefix = prefixes[0];
 
@@ -29,21 +31,6 @@ const configFiles = {
 let configCache: { [key: string]: string[] } = {};
 let lastUpdateCheck = 0;
 const UPDATE_INTERVAL = 5 * 60 * 1000; // 5分钟检查一次
-
-const htmlEscape = (text: string): string =>
-  (text || "").replace(
-    /[&<>"']/g,
-    (m) =>
-      ((
-        {
-          "&": "&amp;",
-          "<": "&lt;",
-          ">": "&gt;",
-          '"': "&quot;",
-          "'": "&#x27;",
-        } as any
-      )[m] || m)
-  );
 
 const filterInput = (s: string): string =>
   (s || "")

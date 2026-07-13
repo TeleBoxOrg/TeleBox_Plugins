@@ -3,13 +3,9 @@ import { getGlobalClient } from "@utils/runtimeManager";
 import { getPrefixes } from "@utils/pluginManager";
 import { Api } from "teleproto";
 
-// HTML转义函数
-const htmlEscape = (text: string): string => 
-  text.replace(/[&<>"']/g, m => ({ 
-    '&': '&amp;', '<': '&lt;', '>': '&gt;', 
-    '"': '&quot;', "'": '&#x27;' 
-  }[m] || m));
+import { htmlEscape } from "@utils/htmlEscape";
 
+// HTML转义函数
 // 获取命令前缀
 const prefixes = getPrefixes();
 const mainPrefix = prefixes[0];

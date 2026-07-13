@@ -8,15 +8,12 @@ import * as path from "path";
 import bigInt, { BigInteger } from "big-integer";
 import { safeGetReplyMessage } from "@utils/safeGetMessages";
 
+import { htmlEscape } from "@utils/htmlEscape";
+
 const prefixes = getPrefixes();
 const mainPrefix = prefixes[0];
 
 // Helper to escape HTML special characters.
-const htmlEscape = (text: string): string =>
-  text.replace(/[&<>"']/g, (m) => ({
-    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#x27;'
-  }[m] || m));
-
 // A whitelist of standard emojis that are valid for reactions.
 const AVAILABLE_REACTIONS = "👍👎❤️🔥🥰👏😁🤔🤯😱🤬😢🎉🤩🤮💩🙏👌🕊🤡🥱🥴😍🐳❤️‍🔥🌚🌭💯🤣⚡️🍌🏆💔🤨😐🍓🍾💋🖕😈😎😇😤🏻‍💻";
 
@@ -136,7 +133,6 @@ class TracePlugin extends Plugin {
     const dbPath = path.join(createDirectoryInAssets("trace"), "db.json");
     this.db = await JSONFilePreset<TraceDB>(dbPath, defaultState);
   }
-
 
   private scheduleDelete(msg: Api.Message, seconds: number): void {
     let timer: ReturnType<typeof setTimeout>;

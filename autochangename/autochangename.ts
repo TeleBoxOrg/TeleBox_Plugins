@@ -9,13 +9,12 @@ import { JSONFilePreset } from "lowdb/node";
 import { cronManager } from "@utils/cronManager";
 import * as path from "path";
 
+import { htmlEscape } from "@utils/htmlEscape";
+
 const prefixes = getPrefixes();
 const mainPrefix = prefixes[0];
 
 // === 配置与工具函数 ===
-const htmlEscape = (text: string): string => 
-  text.replace(/[&<>"']/g, m => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#x27;'}[m] || m));
-
 // 帮助文本定义（必需）
 const help_text = `🤖 <b>自动昵称更新插件 v3</b>
 

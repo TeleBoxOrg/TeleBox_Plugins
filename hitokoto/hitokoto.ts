@@ -3,9 +3,10 @@ import { getPrefixes } from "@utils/pluginManager";
 import { Api } from "teleproto";
 import axios from "axios";
 
+import { htmlEscape } from "@utils/htmlEscape";
+
 const prefixes = getPrefixes();
 const mainPrefix = prefixes[0];
-
 
 // 类型定义
 interface HitokotoResponse {
@@ -55,12 +56,6 @@ const help_text = `⚙️ <b>Hitokoto 插件</b>
 • 可同时传多个类型，如 <code>${mainPrefix}hitokoto a c h</code>`;
 
 // HTML转义函数（符合开发规范）
-const htmlEscape = (text: string): string => 
-  text.replace(/[&<>"']/g, m => ({ 
-    '&': '&amp;', '<': '&lt;', '>': '&gt;', 
-    '"': '&quot;', "'": '&#x27;' 
-  }[m] || m));
-
 class HitokotoPlugin extends Plugin {
 
   // 插件描述（符合开发规范）

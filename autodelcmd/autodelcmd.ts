@@ -9,13 +9,9 @@ import fs from "fs/promises";
 import path from "path";
 import { safeGetMessages } from "@utils/safeGetMessages";
 
-// HTML转义工具（每个插件必须实现）
-const htmlEscape = (text: string): string => 
-  text.replace(/[&<>"']/g, m => ({ 
-    '&': '&amp;', '<': '&lt;', '>': '&gt;', 
-    '"': '&quot;', "'": '&#x27;' 
-  }[m] || m));
+import { htmlEscape } from "@utils/htmlEscape";
 
+// HTML转义工具（每个插件必须实现）
 const CONFIG_FILE_PATH = path.join(
   createDirectoryInAssets("autodelcmd"),
   "config.json"

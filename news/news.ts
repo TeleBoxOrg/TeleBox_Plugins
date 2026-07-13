@@ -4,17 +4,13 @@ import { Api } from "teleproto";
 import { getGlobalClient } from "@utils/runtimeManager";
 import axios from "axios";
 
+import { htmlEscape } from "@utils/htmlEscape";
+
 // 获取命令前缀
 const prefixes = getPrefixes();
 const mainPrefix = prefixes[0];
 
 // HTML转义工具
-const htmlEscape = (text: string): string => 
-  text.replace(/[&<>"']/g, m => ({ 
-    '&': '&amp;', '<': '&lt;', '>': '&gt;', 
-    '"': '&quot;', "'": '&#x27;' 
-  }[m] || m));
-
 // 详细帮助文档（help子命令时显示）
 const help_text = `🗞️ <b>每日新闻插件</b>
 
@@ -27,7 +23,6 @@ const help_text = `🗞️ <b>每日新闻插件</b>
 
 <b>🔧 使用方法:</b>
 • <code>${mainPrefix}news</code> - 获取完整的每日资讯
-
 
 <b>💡 示例:</b>
 • <code>${mainPrefix}news</code> - 获取今日完整资讯包

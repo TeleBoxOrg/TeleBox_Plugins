@@ -4,6 +4,8 @@ import { getGlobalClient } from "@utils/runtimeManager";
 import { Api } from "teleproto";
 import { safeGetMessages } from "@utils/safeGetMessages";
 
+import { htmlEscape } from "@utils/htmlEscape";
+
 const prefixes = getPrefixes();
 const mainPrefix = prefixes[0];
 
@@ -23,15 +25,6 @@ https://docs.telethon.dev/en/stable/concepts/entities.html
 `;
 
 // HTML转义函数
-function htmlEscape(text: string): string {
-  return text
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#x27;");
-}
-
 function codeTag(text: string | number): string {
   return `<code>${htmlEscape(String(text))}</code>`;
 }

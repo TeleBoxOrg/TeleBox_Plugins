@@ -10,6 +10,8 @@ import axios from "axios";
 import { exec } from "child_process";
 import { promisify } from "util";
 
+import { htmlEscape } from "@utils/htmlEscape";
+
 const execAsync = promisify(exec);
 
 // 获取命令前缀
@@ -36,12 +38,6 @@ class SystemExecutor {
  }
 
 // HTML转义（每个插件必须实现）
-const htmlEscape = (text: string): string =>
-  String(text).replace(/[&<>"']/g, m => ({ 
-    '&': '&amp;', '<': '&lt;', '>': '&gt;', 
-    '"': '&quot;', "'": '&#x27;' 
-  }[m] || m));
-
 // 常量配置
 const DEFAULT_PORT = 40000;
 const WARP_CONFIG_FILE = "/etc/wireguard/warp-account.conf";
@@ -98,7 +94,6 @@ class AccountManager {
     }
   }
 }
-
 
 // wireproxy 管理
 class WireproxyManager {
@@ -374,7 +369,6 @@ WantedBy=multi-user.target`;
         throw new Error(restartResult.error);
       }
 
-
       return "✅ WireProxy 已重启，IP 已更换";
     } catch (e: any) {
       return `❌ 重启失败: ${htmlEscape(e?.message || e)}`;
@@ -470,7 +464,6 @@ WantedBy=multi-user.target`;
 
 // 帮助文本
 const helpText = `⚡ <b>WARP 管理面板</b>
-
 
 <b>主要方案 (二选一)</b>
   <b>1. WireProxy (Socks5 代理)</b>

@@ -7,14 +7,10 @@ import * as fs from "fs";
 import * as path from "path";
 import { promisify } from "util";
 
+import { htmlEscape } from "@utils/htmlEscape";
+
 const sleep = promisify(setTimeout);
 const CACHE_DIR = createDirectoryInAssets("clean_member_cache");
-
-const htmlEscape = (text: string): string => 
-  text.replace(/[&<>"']/g, m => ({ 
-    '&': '&amp;', '<': '&lt;', '>': '&gt;', 
-    '"': '&quot;', "'": '&#x27;' 
-  }[m] || m));
 
 const prefixes = getPrefixes();
 const mainPrefix = prefixes[0];

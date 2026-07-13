@@ -18,6 +18,8 @@ import { sleep } from "teleproto/Helpers";
 import dayjs from "dayjs";
 import { safeGetReplyMessage } from "@utils/safeGetMessages";
 
+import { htmlEscape } from "@utils/htmlEscape";
+
 const prefixes = getPrefixes();
 const mainPrefix = prefixes[0];
 
@@ -29,14 +31,6 @@ const filePath = path.join(
   createDirectoryInAssets(`${pluginName}`),
   `${pluginName}_config.json`
 );
-
-function htmlEscape(value: any): string {
-  return String(value ?? "")
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;");
-}
 
 function codeTag(value: any): string {
   return `<code>${htmlEscape(value)}</code>`;

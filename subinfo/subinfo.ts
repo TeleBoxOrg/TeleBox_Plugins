@@ -8,9 +8,10 @@ import * as cheerio from "cheerio";
 import dayjs from "dayjs";
 import { safeGetReplyMessage } from "@utils/safeGetMessages";
 
+import { htmlEscape } from "@utils/htmlEscape";
+
 const prefixes = getPrefixes();
 const mainPrefix = prefixes[0];
-
 
 // --- 静态配置 ---
 
@@ -70,13 +71,6 @@ const REGION_RULES: Array<[string, string[]]> = [
 // --- 工具函数 ---
 
 // HTML实体转义
-function htmlEscape(text: string): string {
-  return text.replace(/[&<>"']/g, m => ({
-    '&': '&amp;', '<': '&lt;', '>': '&gt;',
-    '"': '&quot;', "'": '&#x27;'
-  }[m] || m));
-}
-
 const isHttpUrl = (text: string): boolean => /^https?:\/\//i.test(text);
 const formatRawUrl = (url: string, isTxtOutput: boolean): string => isTxtOutput ? url : htmlEscape(url);
 
@@ -660,7 +654,6 @@ class SubinfoPlugin extends Plugin {
     }
     if (cleanParts.length > 0) sourceText += ' ' + cleanParts.join(' ');
     sourceText = sourceText.trim();
-
 
     if (!sourceText) {
        await msg.edit({

@@ -2,16 +2,9 @@ import { Plugin } from "@utils/pluginBase";
 import { getPrefixes } from "@utils/pluginManager";
 import { Api } from "teleproto";
 
-const mainPrefix = getPrefixes()[0];
-const htmlEscape = (text: string): string =>
-  text.replace(/[&<>"']/g, (m) => ({
-    "&": "&amp;",
-    "<": "&lt;",
-    ">": "&gt;",
-    '"': "&quot;",
-    "'": "&#x27;",
-  }[m] || m));
+import { htmlEscape } from "@utils/htmlEscape";
 
+const mainPrefix = getPrefixes()[0];
 const help_text = `💳 <b>BIN 查询</b>
 
 <b>用法：</b>

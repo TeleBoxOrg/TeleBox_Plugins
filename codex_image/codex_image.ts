@@ -9,6 +9,8 @@ import { Api } from "teleproto";
 import { CustomFile } from "teleproto/client/uploads.js";
 import { safeGetReplyMessage } from "@utils/safeGetMessages";
 
+import { htmlEscape } from "@utils/htmlEscape";
+
 const prefixes = getPrefixes();
 const mainPrefix = prefixes[0];
 const CODEX_URL = "https://chatgpt.com/backend-api/codex/responses";
@@ -34,19 +36,6 @@ type StatusUpdater = (text: string) => Promise<void>;
 
 const sleep = (ms: number): Promise<void> =>
   new Promise((resolve) => setTimeout(resolve, ms));
-
-const htmlEscape = (input: string): string =>
-  input.replace(
-    /[&<>"']/g,
-    (ch) =>
-      ({
-        "&": "&amp;",
-        "<": "&lt;",
-        ">": "&gt;",
-        '"': "&quot;",
-        "'": "&#x27;",
-      })[ch] || ch,
-  );
 
 const expandableBlock = (input: string): string =>
   `<blockquote expandable>${htmlEscape(input)}</blockquote>`;
@@ -486,7 +475,6 @@ async function handleCximg(msg: Api.Message): Promise<void> {
 }
 
 class CodexImagePlugin extends Plugin {
-
 
   description: string =
     `通过codex调用gpt-image-2\n\n` +

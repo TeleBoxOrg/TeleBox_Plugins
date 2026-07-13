@@ -6,16 +6,12 @@ import { getGlobalClient } from "@utils/runtimeManager";
 import { getPrefixes } from "@utils/pluginManager";
 import { banUser, getBannedUsers, unbanUser } from "@utils/banUtils";
 
+import { htmlEscape } from "@utils/htmlEscape";
+
 const prefixes = getPrefixes();
 const mainPrefix = prefixes[0];
 
 // HTML 转义函数（必需）
-const htmlEscape = (text: string): string => 
-  text.replace(/[&<>"']/g, m => ({ 
-    '&': '&amp;', '<': '&lt;', '>': '&gt;', 
-    '"': '&quot;', "'": '&#x27;' 
-  }[m] || m));
-
 // 延迟函数
 const sleep = (ms: number): Promise<void> => 
   new Promise(resolve => setTimeout(resolve, ms));

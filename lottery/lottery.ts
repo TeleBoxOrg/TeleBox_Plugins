@@ -9,6 +9,8 @@ import { TelegramClient } from "teleproto";
 import { getPrefixes } from "@utils/pluginManager";
 import bigInt from "big-integer";
 
+import { htmlEscape } from "@utils/htmlEscape";
+
 // Track pending setTimeout handles for safe cleanup on reload
 const pendingTimers = new Set<ReturnType<typeof setTimeout>>();
 
@@ -17,15 +19,6 @@ const prefixes = getPrefixes();
 const mainPrefix = prefixes[0];
 
 // HTML escape function
-function htmlEscape(text: string): string {
-  return text
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#x27;");
-}
-
 function codeTag(text: string | number): string {
   return `<code>${htmlEscape(String(text))}</code>`;
 }
@@ -144,7 +137,6 @@ if (db) {
     );
   `);
 }
-
 
 // Prize warehouse management functions
 function createPrizeWarehouse(name: string): boolean {
@@ -423,7 +415,6 @@ function getLotteryWinners(lotteryId: number): any[] {
   `);
   return stmt.all(lotteryId);
 }
-
 
 // User validation functions
 async function validateUserConditions(client: TelegramClient, user: any, lottery: any, chatId: string): Promise<{ valid: boolean; reason?: string }> {
@@ -810,7 +801,6 @@ async function performLotteryDraw(client: TelegramClient, lottery: any): Promise
   }
 }
 
-
 // Enhanced message listener for lottery participation
 async function handleEnhancedLotteryJoin(msg: any): Promise<void> {
   if (!msg.message || !msg.senderId || !msg.client) return;
@@ -931,7 +921,6 @@ async function handleEnhancedLotteryJoin(msg: any): Promise<void> {
     await performLotteryDraw(msg.client, activeLottery);
   }
 }
-
 
 // Help text with dynamic prefix
 const help_text = `🎰 <b>智能抽奖插件 - 完整功能指南</b>

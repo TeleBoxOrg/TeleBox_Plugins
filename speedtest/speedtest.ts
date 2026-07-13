@@ -19,6 +19,8 @@ import axios from "axios";
 import sharp from "sharp";
 import { getPrefixes } from "@utils/pluginManager";
 
+import { htmlEscape } from "@utils/htmlEscape";
+
 const prefixes = getPrefixes();
 const mainPrefix = prefixes[0];
 
@@ -45,16 +47,6 @@ const help_txt = `<b>使用方法:</b>
 在任何测试命令中添加 <code>--system</code> 或 <code>-s</code> 标志使用系统已安装的speedtest
 例: <code>${commandName} --system</code> 或 <code>${commandName} -s 12345</code>`;
 // HTML escape function
-function htmlEscape(text: unknown): string {
-  const textStr = typeof text === "string" ? text : String(text ?? "");
-  return textStr
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/\'/g, "&#x27;");
-}
-
 
 const execAsync = promisify(exec);
 const ASSETS_DIR = createDirectoryInAssets("speedtest");

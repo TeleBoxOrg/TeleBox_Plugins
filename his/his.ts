@@ -11,17 +11,13 @@ import { getPrefixes } from "@utils/pluginManager";
 import { Api } from "teleproto";
 import { safeGetReplyMessage } from "@utils/safeGetMessages";
 
+import { htmlEscape } from "@utils/htmlEscape";
+
 // 获取命令前缀
 const prefixes = getPrefixes();
 const mainPrefix = prefixes[0];
 
 // HTML转义函数（必需）
-const htmlEscape = (text: string): string => 
-  text.replace(/[&<>"']/g, m => ({ 
-    '&': '&amp;', '<': '&lt;', '>': '&gt;', 
-    '"': '&quot;', "'": '&#x27;' 
-  }[m] || m));
-
 // 帮助文本定义（必需）
 const help_text = `📜 <b>消息历史查询</b>
 
@@ -41,7 +37,6 @@ const help_text = `📜 <b>消息历史查询</b>
 • 仅限群组使用
 • 默认查询30条消息
 • 目标可以是用户名、用户ID或频道ID`;
-
 
 // 媒体类型映射
 const MEDIA_TYPES: Record<string, string> = {
@@ -189,7 +184,6 @@ class HisPlugin extends Plugin {
       }
     }
   };
-
 
   // 查询历史消息
   private async queryHistory(msg: Api.Message, targetEntity: any, num: number, client: any): Promise<void> {

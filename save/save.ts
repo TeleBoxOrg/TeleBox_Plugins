@@ -9,15 +9,10 @@ import * as fs from "fs/promises";
 import { statSync, existsSync } from "fs";
 import { CustomFile } from 'teleproto/client/uploads';
 
+import { htmlEscape } from "@utils/htmlEscape";
+
 const prefixes = getPrefixes();
 const mainPrefix = prefixes[0];
-
-
-const htmlEscape = (text: string): string => 
-  text.replace(/[&<>"']/g, m => ({ 
-    '&': '&amp;', '<': '&lt;', '>': '&gt;', 
-    '"': '&quot;', "'": '&#x27;' 
-  }[m] || m));
 
 interface UserConfig {
   target: string;

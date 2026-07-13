@@ -4,13 +4,10 @@ import { getGlobalClient } from "@utils/runtimeManager";
 import { getPrefixes } from "@utils/pluginManager";
 import axios from "axios";
 
+import { htmlEscape } from "@utils/htmlEscape";
+
 const prefixes = getPrefixes();
 const mainPrefix = prefixes[0];
-
-const htmlEscape = (text: string): string => {
-  if (typeof text !== "string") return "";
-  return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
-};
 
 const help_text = `⚙️ <b>Epic 限免游戏</b>
 

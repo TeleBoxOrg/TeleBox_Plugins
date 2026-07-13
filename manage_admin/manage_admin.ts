@@ -7,6 +7,8 @@ import { sleep } from "teleproto/Helpers";
 import { getGlobalClient } from "@utils/runtimeManager";
 import { safeGetReplyMessage } from "@utils/safeGetMessages";
 
+import { htmlEscape } from "@utils/htmlEscape";
+
 const prefixes = getPrefixes();
 const mainPrefix = prefixes[0];
 
@@ -19,15 +21,6 @@ const help_text = `
 使用 <code>${commandName} rm/remove</code> 回复一条消息, <code>${commandName} rm/remove 用户ID/用户名</code> 将用户移除管理员
 <code>${commandName} ls/list</code> 查看当前对话所有管理员
 `;
-
-function htmlEscape(text: string): string {
-  return text
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#x27;");
-}
 
 function codeTag(text: string | number): string {
   return `<code>${htmlEscape(String(text))}</code>`;

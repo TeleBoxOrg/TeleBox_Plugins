@@ -5,12 +5,9 @@ import { getPrefixes } from "@utils/pluginManager";
 import axios from "axios";
 import { safeGetReplyMessage } from "@utils/safeGetMessages";
 
-// HTML转义函数
-const htmlEscape = (text: string): string =>
-  text.replace(/[&<>"']/g, (m) => ({
-    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#x27;'
-  }[m] || m));
+import { htmlEscape } from "@utils/htmlEscape";
 
+// HTML转义函数
 const prefixes = getPrefixes();
 const mainPrefix = prefixes[0];
 const pluginName = "soutu";

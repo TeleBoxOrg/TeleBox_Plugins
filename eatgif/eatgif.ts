@@ -16,6 +16,8 @@ import { execFile } from "child_process";
 import { promisify } from "util";
 import { safeGetReplyMessage } from "@utils/safeGetMessages";
 
+import { htmlEscape } from "@utils/htmlEscape";
+
 const execFileAsync = promisify(execFile);
 
 // 由于gif可能很多帧，最好缓存在本地，而不是每次都远程拿不同的帧数
@@ -76,21 +78,6 @@ const help_text = `🧩 <b>头像动图表情</b>
 <code>${commandName} [list|ls|clear|名称]</code>
 • <b>空/ list</b>：查看表情列表
 • <b>生成</b>：回复目标并输入名称`;
-
-const htmlEscape = (text: string): string =>
-  String(text || "").replace(
-    /[&<>"']/g,
-    (m) =>
-      ((
-        {
-          "&": "&amp;",
-          "<": "&lt;",
-          ">": "&gt;",
-          '"': "&quot;",
-          "'": "&#x27;",
-        } as any
-      )[m] || m)
-  );
 
 async function ensureConfig(): Promise<void> {
   if (!config) await loadGifListConfig(baseConfigURL);

@@ -8,13 +8,9 @@ import { createDirectoryInAssets } from "@utils/pathHelpers";
 import * as path from "path";
 import * as fs from "fs";
 
-// HTML转义函数（必需）
-const htmlEscape = (text: string): string => 
-  text.replace(/[&<>"']/g, m => ({ 
-    '&': '&amp;', '<': '&lt;', '>': '&gt;', 
-    '"': '&quot;', "'": '&#x27;' 
-  }[m] || m));
+import { htmlEscape } from "@utils/htmlEscape";
 
+// HTML转义函数（必需）
 // 任务接口
 interface SendTaskData {
   task_id: number;

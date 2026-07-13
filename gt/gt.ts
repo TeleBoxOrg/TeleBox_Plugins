@@ -2,14 +2,7 @@ import { Plugin } from "@utils/pluginBase";
 import { Api, TelegramClient } from "teleproto";
 import { safeGetReplyMessage } from "@utils/safeGetMessages";
 
-const htmlEscape = (text: string): string =>
-  text.replace(/[&<>"']/g, (m) => ({
-    "&": "&amp;",
-    "<": "&lt;",
-    ">": "&gt;",
-    '"': "&quot;",
-    "'": "&#x27;",
-  }[m] || m));
+import { htmlEscape } from "@utils/htmlEscape";
 
 const gt = async (msg: Api.Message) => {
   let translate: any;

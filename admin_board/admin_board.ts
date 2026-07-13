@@ -7,6 +7,8 @@ import { Api } from "teleproto";
 import path from "path";
 import { safeGetMessages } from "@utils/safeGetMessages";
 
+import { htmlEscape } from "@utils/htmlEscape";
+
 const prefixes = getPrefixes();
 const mainPrefix = prefixes[0];
 const commandName = `${mainPrefix}admin_board`;
@@ -116,20 +118,6 @@ let dbPromise:
 let avgCacheDbPromise:
   | Promise<Awaited<ReturnType<typeof JSONFilePreset<AvgCacheDB>>>>
   | undefined;
-
-function htmlEscape(text: string): string {
-  return text.replace(
-    /[&<>"']/g,
-    (m) =>
-      ({
-        "&": "&amp;",
-        "<": "&lt;",
-        ">": "&gt;",
-        '"': "&quot;",
-        "'": "&#x27;",
-      })[m] || m,
-  );
-}
 
 function getTextAfterTokens(text: string, count: number): string {
   if (count <= 0) return text.trim();
@@ -1463,7 +1451,6 @@ async function handleTrimAction(
 }
 
 class AdminBoardPlugin extends Plugin {
-
 
   description: string = helpText;
 

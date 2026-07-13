@@ -5,16 +5,9 @@ import { getPrefixes } from "@utils/pluginManager";
 import { sleep } from "teleproto/Helpers";
 import { safeGetMessages } from "@utils/safeGetMessages";
 
-// 参考 plugins/music_bot.ts 的结构与实现方式
+import { htmlEscape } from "@utils/htmlEscape";
 
-const htmlEscape = (text: string): string =>
-  text.replace(/[&<>"']/g, (m) => ({
-    "&": "&amp;",
-    "<": "&lt;",
-    ">": "&gt;",
-    '"': "&quot;",
-    "'": "&#x27;",
-  }[m] || m));
+// 参考 plugins/music_bot.ts 的结构与实现方式
 
 const prefixes = getPrefixes();
 

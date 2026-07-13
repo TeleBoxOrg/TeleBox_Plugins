@@ -10,18 +10,11 @@ import { tmpdir } from "os";
 import { CustomFile } from "teleproto/client/uploads";
 import { safeGetReplyMessage } from "@utils/safeGetMessages";
 
+import { htmlEscape } from "@utils/htmlEscape";
+
 const execFileAsync = promisify(execFile);
 
 // HTML转义函数
-function htmlEscape(text: string): string {
-  return text
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#x27;");
-}
-
 // 检查并安装依赖
 async function ensureDependencies(): Promise<void> {
   const missingDeps: string[] = [];

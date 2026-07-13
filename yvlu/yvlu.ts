@@ -31,6 +31,8 @@ import { execFile } from "child_process";
 import { promisify } from "util";
 import * as os from "os";
 
+import { htmlEscape } from "@utils/htmlEscape";
+
 const execFileAsync = promisify(execFile);
 
 const timeout = 60000; // 超时
@@ -546,15 +548,6 @@ function getWebPDimensions(imageBuffer: any): {
   }
 }
 
-const htmlEscape = (text: string): string =>
-  text.replace(/[&<>"']/g, (m) => ({
-    "&": "&amp;",
-    "<": "&lt;",
-    ">": "&gt;",
-    '"': "&quot;",
-    "'": "&#x27;",
-  }[m] || m));
-
 const codeTag = (text: string): string => `<code>${htmlEscape(text)}</code>`;
 
 const getPeerNumericId = (peer?: Api.TypePeer): number | undefined => {
@@ -626,7 +619,6 @@ const help_text = `
 
 - 包含回复
 使用 <code>${commandName} r [消息数]</code> 回复一条消息(支持选择部分引用回复) ⚠️ 不得超过 5 条
-
 
 - 保存贴纸/图片到贴纸包
 使用 <code>${commandName} s</code> 回复一张贴纸或图片,将其保存到配置的贴纸包中
@@ -1303,7 +1295,6 @@ ${
 
 <b>配置文件路径:</b>
 ${codeTag(this.configPath)}
-
 
 <b>可用配置命令:</b>
 <code>${commandName} config sticker 贴纸包名称</code> - 设置贴纸包名称

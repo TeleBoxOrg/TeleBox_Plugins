@@ -5,16 +5,9 @@ import * as dgram from "dgram";
 import { execFile } from "child_process";
 import { promisify } from "util";
 
-const execFileAsync = promisify(execFile);
+import { htmlEscape } from "@utils/htmlEscape";
 
-const htmlEscape = (text: string): string =>
-  text.replace(/[&<>"']/g, (m) => ({
-    "&": "&amp;",
-    "<": "&lt;",
-    ">": "&gt;",
-    '"': "&quot;",
-    "'": "&#x27;",
-  }[m] || m));
+const execFileAsync = promisify(execFile);
 
 const prefixes = getPrefixes();
 const mainPrefix = prefixes[0];

@@ -6,13 +6,9 @@ import { sleep } from "teleproto/Helpers";
 import { NewMessage } from "teleproto/events";
 import { safeGetMessages } from "@utils/safeGetMessages";
 
-// HTML转义函数
-const htmlEscape = (text: string): string => 
-  text.replace(/[&<>"']/g, m => ({ 
-    '&': '&amp;', '<': '&lt;', '>': '&gt;', 
-    '"': '&quot;', "'": '&#x27;' 
-  }[m] || m));
+import { htmlEscape } from "@utils/htmlEscape";
 
+// HTML转义函数
 // 获取命令前缀
 const prefixes = getPrefixes();
 const mainPrefix = prefixes[0];

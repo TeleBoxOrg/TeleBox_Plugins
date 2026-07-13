@@ -2,6 +2,8 @@ import { Plugin } from "@utils/pluginBase";
 import { getPrefixes } from "@utils/pluginManager";
 import { Api } from "teleproto";
 
+import { htmlEscape } from "@utils/htmlEscape";
+
 const prefixes = getPrefixes();
 const mainPrefix = prefixes[0];
 const MAX_EXPR_LENGTH = 120;
@@ -234,7 +236,7 @@ class CalcPlugin extends Plugin {
         result = SafeMathParser.calculate(expression);
       } catch (error: any) {
         await msg.edit({
-          text: `🚫 <b>计算失败</b><br/><br/>表达式: <code>${this.htmlEscape(expression)}</code><br/>错误: ${this.htmlEscape(error?.message ?? "未知错误")}`,
+          text: `🚫 <b>计算失败</b><br/><br/>表达式: <code>${htmlEscape(expression)}</code><br/>错误: ${htmlEscape(error?.message ?? "未知错误")}`,
           parseMode: "html",
         });
         return;
@@ -242,7 +244,7 @@ class CalcPlugin extends Plugin {
 
       if (!Number.isFinite(result)) {
         await msg.edit({
-          text: `🚫 <b>计算结果无效</b><br/><br/>表达式: <code>${this.htmlEscape(expression)}</code>`,
+          text: `🚫 <b>计算结果无效</b><br/><br/>表达式: <code>${htmlEscape(expression)}</code>`,
           parseMode: "html",
         });
         return;
@@ -251,25 +253,16 @@ class CalcPlugin extends Plugin {
       const formatted = this.formatResult(result);
 
       await msg.edit({
-        text: `🧮 <b>计算结果</b><br/><br/><code>${this.htmlEscape(expression)}</code><br/>= <b>${formatted}</b>`,
+        text: `🧮 <b>计算结果</b><br/><br/><code>${htmlEscape(expression)}</code><br/>= <b>${formatted}</b>`,
         parseMode: "html",
         linkPreview: false,
       });
     } catch (error: any) {
       await msg.edit({
-        text: `❌ <b>插件错误</b><br/><br/>${this.htmlEscape(error?.message ?? "未知错误")}`,
+        text: `❌ <b>插件错误</b><br/><br/>${htmlEscape(error?.message ?? "未知错误")}`,
         parseMode: "html",
       });
     }
-  }
-
-  private htmlEscape(text: string): string {
-    return text
-      .replace(/&/g, "&amp;")
-      .replace(/</g, "&lt;")
-      .replace(/>/g, "&gt;")
-      .replace(/"/g, "&quot;")
-      .replace(/'/g, "&#x27;");
   }
 
   private formatResult(value: number): string {

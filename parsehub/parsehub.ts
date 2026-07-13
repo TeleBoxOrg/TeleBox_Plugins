@@ -8,6 +8,8 @@ import * as path from "path";
 import * as fs from "fs";
 import { safeGetMessages, safeGetReplyMessage } from "@utils/safeGetMessages";
 
+import { htmlEscape } from "@utils/htmlEscape";
+
 const BOT_USERNAME = "ParseHubot";
 const POLL_INTERVAL_MS = 2000;
 const MAX_WAIT_MS = 3 * 60 * 1000;
@@ -49,19 +51,6 @@ Instagram视频|图文
 <code>${commandName} https://twitter.com/user/status/123</code>
 <code>${commandName} https://www.instagram.com/p/xxxx/</code>
 `.trim();
-
-const htmlEscape = (text: string): string =>
-  text.replace(
-    /[&<>"']/g,
-    (ch) =>
-      ({
-        "&": "&amp;",
-        "<": "&lt;",
-        ">": "&gt;",
-        '"': "&quot;",
-        "'": "&#x27;",
-      })[ch] || ch,
-  );
 
 let hasStartedBot = false;
 let firstRunPreStartLastId = 0;

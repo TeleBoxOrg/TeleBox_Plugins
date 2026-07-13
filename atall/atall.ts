@@ -3,13 +3,9 @@ import { Api } from "teleproto";
 import { getGlobalClient } from "@utils/runtimeManager";
 import { getPrefixes } from "@utils/pluginManager";
 
-// HTML转义函数
-const htmlEscape = (text: string): string => 
-  text.replace(/[&<>"']/g, m => ({ 
-    '&': '&amp;', '<': '&lt;', '>': '&gt;', 
-    '"': '&quot;', "'": '&#x27;' 
-  }[m] || m));
+import { htmlEscape } from "@utils/htmlEscape";
 
+// HTML转义函数
 // 消息分割函数（限制调整为4000字符）
 const splitMessagesByMention = (mentions: string[], maxLength = 4000): string[] => {
   const messages: string[] = [];

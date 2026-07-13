@@ -4,6 +4,8 @@ import { Api } from "teleproto";
 import { sleep } from "teleproto/Helpers";
 import { randomInt } from "crypto";
 
+import { htmlEscape } from "@utils/htmlEscape";
+
 const prefixes = getPrefixes();
 const mainPrefix = prefixes[0];
 
@@ -54,15 +56,6 @@ const JIACI_MAP: Record<string, string> = {
   阳阴胜: "阳阴胜：劳碌又劳心，劳心终有成。清风来借力，欢笑见前程。先凶后吉。",
   阴阳阴: "阴阳阴：秋叶无颜色，凋零一夜风。晨鸡醒午梦，心事总成空。梦难成真。",
 };
-
-function htmlEscape(text: string): string {
-  return text
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#x27;");
-}
 
 function pickRandomToss(): TossResult {
   const index = randomInt(TOSS_OPTIONS.length);

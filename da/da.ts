@@ -9,17 +9,13 @@ import { Low } from "lowdb";
 import { JSONFile } from "lowdb/node";
 
 import { safeGetMe } from "@utils/authGuards";
+import { htmlEscape } from "@utils/htmlEscape";
+
 // 获取命令前缀
 const prefixes = getPrefixes();
 const mainPrefix = prefixes[0];
 
 // HTML转义工具（每个插件必须实现）
-const htmlEscape = (text: string): string => 
-  text.replace(/[&<>"']/g, m => ({ 
-    '&': '&amp;', '<': '&lt;', '>': '&gt;', 
-    '"': '&quot;', "'": '&#x27;' 
-  }[m] || m));
-
 // 帮助文档常量
 const help_text = `<b>批量删除</b>
 

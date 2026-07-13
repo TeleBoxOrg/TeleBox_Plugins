@@ -8,6 +8,8 @@ import { Api } from 'teleproto';
 import { promisify } from 'util';
 import { safeGetReplyMessage } from "@utils/safeGetMessages";
 
+import { htmlEscape } from "@utils/htmlEscape";
+
 const prefixes = getPrefixes();
 const mainPrefix = prefixes[0];
 
@@ -92,7 +94,7 @@ class REVPlugin extends Plugin {
 				});
 			} catch (error: any) {
 				await msg.edit({
-					text: `❌ 处理失败: ${this.htmlEscape(error.message)}`,
+					text: `❌ 处理失败: ${htmlEscape(error.message)}`,
 					parseMode: 'html',
 				});
 			}
@@ -578,15 +580,6 @@ class REVPlugin extends Plugin {
 			console.warn('删除消息失败', error);
 			return false;
 		}
-	}
-
-	private htmlEscape(text: string): string {
-		return text
-			.replace(/&/g, '&amp;')
-			.replace(/</g, '&lt;')
-			.replace(/>/g, '&gt;')
-			.replace(/"/g, '&quot;')
-			.replace(/'/g, '&#39;');
 	}
 }
 

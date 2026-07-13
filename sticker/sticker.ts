@@ -9,6 +9,8 @@ import * as path from "path";
 import { safeGetMessages, safeGetReplyMessage } from "@utils/safeGetMessages";
 
 import { safeGetMe } from "@utils/authGuards";
+import { htmlEscape } from "@utils/htmlEscape";
+
 // 配置键定义
 const CONFIG_KEYS = {
   DEFAULT_PACK: "sticker_default_pack",
@@ -84,14 +86,7 @@ class ConfigManager {
   }
 }
 
-
 // HTML转义（每个插件必须实现）
-const htmlEscape = (text: string): string => 
-  text.replace(/[&<>"']/g, m => ({ 
-    '&': '&amp;', '<': '&lt;', '>': '&gt;', 
-    '"': '&quot;', "'": '&#x27;' 
-  }[m] || m));
-
 // 获取命令前缀
 const prefixes = getPrefixes();
 const mainPrefix = prefixes[0] || ".";

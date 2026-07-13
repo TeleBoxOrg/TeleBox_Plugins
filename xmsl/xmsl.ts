@@ -11,6 +11,8 @@ import { execFile } from 'child_process';
 import { safeGetReplyMessage } from '@utils/safeGetMessages';
 import { promisify } from 'util';
 
+import { htmlEscape } from "@utils/htmlEscape";
+
 const execFileAsync = promisify(execFile);
 const XMSL_TEMP_DIR = createDirectoryInTemp('xmsl');
 
@@ -260,15 +262,6 @@ class XMSLPlugin extends Plugin {
 		}
 	}
 
-	private htmlEscape(text: string): string {
-		return text
-			.replace(/&/g, '&amp;')
-			.replace(/</g, '&lt;')
-			.replace(/>/g, '&gt;')
-			.replace(/"/g, '&quot;')
-			.replace(/'/g, '&#39;');
-	}
-
 	private removeThinkTags(text: string): string {
 		if (text.includes('<think>') && text.includes('</think>')) {
 			const match = text.match(/<\/think>\s*([\s\S]*?)$/);
@@ -463,7 +456,7 @@ class XMSLPlugin extends Plugin {
 			}
 		} catch (error: any) {
 			await msg.edit({
-				text: `❌ 处理失败: ${this.htmlEscape(error.message)}`,
+				text: `❌ 处理失败: ${htmlEscape(error.message)}`,
 				parseMode: 'html',
 			});
 		}
@@ -516,12 +509,12 @@ class XMSLPlugin extends Plugin {
 
 			await this.saveConfig();
 			await msg.edit({
-				text: `✅ ${key} 已设置为: <code>${this.htmlEscape(value)}</code>`,
+				text: `✅ ${key} 已设置为: <code>${htmlEscape(value)}</code>`,
 				parseMode: 'html',
 			});
 		} catch (error: any) {
 			await msg.edit({
-				text: `❌ 设置失败: ${this.htmlEscape(error.message)}`,
+				text: `❌ 设置失败: ${htmlEscape(error.message)}`,
 				parseMode: 'html',
 			});
 		}
@@ -533,7 +526,7 @@ class XMSLPlugin extends Plugin {
 
 ${modeEmoji} 模式: ${this.config.apiMode}
 🔑 密钥: ${this.config.apiKey ? '✅ 已设置' : '❌ 未设置'}
-📍 地址: ${this.htmlEscape(this.config.baseUrl.replace(/\/$/, ''))}
+📍 地址: ${htmlEscape(this.config.baseUrl.replace(/\/$/, ''))}
 🤖 模型: ${this.config.model}
 
 使用  查看帮助`;
@@ -546,8 +539,8 @@ ${modeEmoji} 模式: ${this.config.apiMode}
 
 mode: ${this.config.apiMode}
 key: ${this.config.apiKey ? '✅ 已设置' : '❌ 未设置'}
-url: <code>${this.htmlEscape(this.config.baseUrl.replace(/\/$/, ''))}</code>
-model: <code>${this.htmlEscape(this.config.model)}</code>
+url: <code>${htmlEscape(this.config.baseUrl.replace(/\/$/, ''))}</code>
+model: <code>${htmlEscape(this.config.model)}</code>
 
 使用 <code>${mainPrefix}xm set [key] [value]</code> 修改配置`;
 
@@ -613,7 +606,7 @@ model: <code>${this.htmlEscape(this.config.model)}</code>
 
 			if (error.response?.status === 400) {
 				const apiError = error.response?.data?.error?.message || '请求格式错误';
-				errorMsg = `❌ API 请求错误: ${this.htmlEscape(apiError)}`;
+				errorMsg = `❌ API 请求错误: ${htmlEscape(apiError)}`;
 			} else if (error.response?.status === 401) {
 				errorMsg = '❌ API 密钥无效';
 			} else if (error.response?.status === 429) {
@@ -621,7 +614,7 @@ model: <code>${this.htmlEscape(this.config.model)}</code>
 			} else if (error.code === 'ECONNREFUSED') {
 				errorMsg = '❌ 无法连接到 API 服务器';
 			} else if (error.message) {
-				errorMsg = `❌ ${this.htmlEscape(error.message)}`;
+				errorMsg = `❌ ${htmlEscape(error.message)}`;
 			}
 
 			await msg.edit({

@@ -8,6 +8,8 @@ import * as path from "path";
 import * as yaml from "js-yaml";
 import { createDirectoryInAssets, createDirectoryInTemp } from "@utils/pathHelpers";
 
+import { htmlEscape } from "@utils/htmlEscape";
+
 interface NeZhaConfig {
   url: string;
   secret: string;
@@ -112,16 +114,6 @@ function saveConfig(config: NeZhaConfig): void {
   } catch (e) {
     console.error("Failed to save nezha config:", e);
   }
-}
-
-function htmlEscape(text: string): string {
-  if (typeof text !== "string") return "";
-  return text
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#39;");
 }
 
 function formatBytes(bytes: number): string {

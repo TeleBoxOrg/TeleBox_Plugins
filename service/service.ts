@@ -3,6 +3,8 @@ import { Api } from "teleproto";
 import { execFile } from "child_process";
 import { promisify } from "util";
 
+import { htmlEscape } from "@utils/htmlEscape";
+
 const execFileAsync = promisify(execFile);
 
 /**
@@ -147,19 +149,6 @@ function formatChineseTime(timeStr: string): string {
 }
 
 // HTML转义函数
-const htmlEscape = (text: string): string =>
-  text.replace(
-    /[&<>"']/g,
-    (m) =>
-      ({
-        "&": "&amp;",
-        "<": "&lt;",
-        ">": "&gt;",
-        '"': "&quot;",
-        "'": "&#x27;",
-      }[m] || m)
-  );
-
 // 将系统状态信息翻译成中文
 function translateToChinese(text: string): string {
   // 逐行处理
