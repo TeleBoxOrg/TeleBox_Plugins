@@ -88,7 +88,7 @@ class GeminiConfigManager {
 
 class GeminiClient {
     private apiKey: string;
-    constructor(apiKey: string) {
+        constructor(apiKey: string) {
         this.apiKey = apiKey;
     }
 
