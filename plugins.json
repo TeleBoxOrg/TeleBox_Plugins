@@ -371,10 +371,6 @@
     "url": "https://github.com/TeleBoxOrg/TeleBox_Plugins/blob/main/rev/rev.ts?raw=true",
     "desc": "反转你的消息"
   },
-  "save": {
-    "url": "https://github.com/TiaraBasori/TeleBox_Plugins/blob/main/save/save.ts?raw=true",
-    "desc": "本地保存插件"
-  },
   "say": {
     "url": "https://github.com/TeleBoxDev/TeleBox_Plugins/blob/main/say/say.ts?raw=true",
     "desc": "自动语音合成 (MiMo / 火山豆包 / Fish)，每会话独立开关"
