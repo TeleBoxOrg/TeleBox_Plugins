@@ -89,7 +89,7 @@ class REVPlugin extends Plugin {
 
 				// 无有效内容时的提示
 				await msg.edit({
-					text: '❌ 请提供文本内容或回复一条支持的消息\n\n<b>支持的格式：</b>\n• 文本消息（逐行反转）\n• 图片（JPG/PNG/BMP/WebP）\n• 动图（GIF/.gif.mp4）\n• 贴纸（WebM）\n\n<b>使用方法：</b>\n<code>${mainPrefix}rev [文本]</code> 或回复消息使用 <code>${mainPrefix}rev [参数]</code>',
+					text: `❌ 请提供文本内容或回复一条支持的消息\n\n<b>支持的格式：</b>\n• 文本消息（逐行反转）\n• 图片（JPG/PNG/BMP/WebP）\n• 动图（GIF/.gif.mp4）\n• 贴纸（WebM）\n\n<b>使用方法：</b>\n<code>${mainPrefix}rev [文本]</code> 或回复消息使用 <code>${mainPrefix}rev [参数]</code>`,
 					parseMode: 'html',
 				});
 			} catch (error: any) {

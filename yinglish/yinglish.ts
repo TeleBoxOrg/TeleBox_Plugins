@@ -70,7 +70,7 @@ class YinglishPlugin extends Plugin {
         }
         else {
           await msg.edit({
-            text: '❌ <b>参数不足</b>\n\n💡 请提供要转换的文本或回复一条消息\n\n<b>用法:</b>\n• <code>${mainPrefix}yinglish 你好世界</code> - 转换指定文本\n• <code>${mainPrefix}yinglish</code> (回复消息) - 转换回复消息的内容',
+            text: `❌ <b>参数不足</b>\n\n💡 请提供要转换的文本或回复一条消息\n\n<b>用法:</b>\n• <code>${mainPrefix}yinglish 你好世界</code> - 转换指定文本\n• <code>${mainPrefix}yinglish</code> (回复消息) - 转换回复消息的内容`,
             parseMode: "html"
           });
           return;
