@@ -7,7 +7,6 @@ import * as path from "path";
 import axios from "axios";
 import { JSONFilePreset } from "lowdb/node";
 import { createDirectoryInAssets } from "@utils/pathHelpers";
-import { sanitizeMediaFileName } from "./sanitizeFileName";
 
 import { exec, execFile } from "child_process";
 import { promisify } from "util";
@@ -26,6 +25,24 @@ const GH_BASE_DOWNLOAD = "https://github.com/OpenListTeam/OpenList/releases/late
 
 const codeTag = (text: unknown): string => `<code>${htmlEscape(text)}</code>`;
 const preTag = (text: unknown): string => `<pre>${htmlEscape(text)}</pre>`;
+
+/**
+ * 将 Telegram 提供的文件名压缩为一个安全路径段。
+ * 先统一 Windows/Unix 分隔符再取 basename，并拒绝特殊点目录。
+ */
+function sanitizeMediaFileName(input: unknown): string {
+  const normalized = String(input ?? "")
+    .replace(/\\/g, "/")
+    .replace(/[\u0000-\u001f\u007f]/g, "");
+  const base = path.posix.basename(normalized).trim().replace(/[. ]+$/g, "");
+  const extension = path.posix.extname(base).slice(0, 32);
+  const stem = path.posix.basename(base, extension).trim();
+  if (!stem || stem === "." || stem === "..") {
+    return `file_${Date.now()}${extension}`;
+  }
+  const maxStemLength = Math.max(1, 255 - extension.length);
+  return `${stem.slice(0, maxStemLength)}${extension}`;
+}
 
 const helpText = `⚙️ <b>OpenList 管理插件</b>
 
