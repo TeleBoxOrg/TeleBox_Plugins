@@ -787,53 +787,62 @@ class NameManager {
     const cleanLastName = settings.original_last_name;
     const currentTime = this.formatTime(settings.timezone);
     
+    const orderList = (settings.display_order || "")
+      .split(",")
+      .map((s) => s.trim().toLowerCase())
+      .filter(Boolean);
+    const inOrder = (c: string) => orderList.includes(c);
+    // When order is set, membership in order enables the component; otherwise use toggles.
+    const useOrder = orderList.length > 0;
+    const wantTime = useOrder ? inOrder("time") : settings.show_time !== false;
+    const wantEmoji = useOrder ? inOrder("emoji") : !!settings.show_clock_emoji;
+    const wantTimezone = useOrder ? inOrder("timezone") : !!settings.show_timezone;
+    const wantWeather = useOrder
+      ? inOrder("weather")
+      : !!(settings.weather_enabled && settings.weather_location);
+    const wantText =
+      (useOrder && inOrder("text")) ||
+      settings.mode === "text" ||
+      settings.mode === "both";
+
     const components: { [key: string]: string } = {
       name: cleanFirstName,
-      time: currentTime,
-      text: '',
-      emoji: settings.show_clock_emoji ? this.getClockEmoji(settings.timezone) : '',
-      timezone: settings.show_timezone ? this.getTimezoneDisplay(settings.timezone, settings.timezone_format) : '',
-      weather: ''
+      time: wantTime ? currentTime : "",
+      text: "",
+      emoji: wantEmoji ? this.getClockEmoji(settings.timezone) : "",
+      timezone: wantTimezone
+        ? this.getTimezoneDisplay(settings.timezone, settings.timezone_format)
+        : "",
+      weather: "",
     };
 
-    if (settings.mode === "text" || settings.mode === "both") {
+    if (wantText) {
       const texts = await DataManager.getRandomTexts();
       if (texts.length > 0) {
         components.text = texts[settings.text_index % texts.length];
       }
     }
 
-    if (settings.weather_enabled && settings.weather_location) {
+    if (wantWeather && settings.weather_location) {
       components.weather = await this.getWeatherCompact(settings);
     }
 
-    const enabledComponents = this.getEnabledComponents(settings);
-    
+    // Explicit display_order is the source of truth for BOTH membership and order.
+    // Previously we forced "name" first and filtered by show_* toggles, so
+    // `acn order time,name` saved successfully but nickname stayed name-first.
     let displayOrder: string[];
-    if (settings.display_order) {
-      displayOrder = settings.display_order.split(',').map(s => s.trim());
-      
-      if (settings.show_timezone && !displayOrder.includes('timezone')) {
-        const timeIndex = displayOrder.indexOf('time');
-        if (timeIndex !== -1) displayOrder.splice(timeIndex + 1, 0, 'timezone');
-        else displayOrder.push('timezone');
-      }
-      
-      if (settings.show_clock_emoji && !displayOrder.includes('emoji')) {
-        displayOrder.push('emoji');
-      }
-
-      if (settings.weather_enabled && settings.weather_location && !displayOrder.includes('weather')) {
-        const timezoneIndex = displayOrder.indexOf('timezone');
-        const timeIndex = displayOrder.indexOf('time');
-        if (timezoneIndex !== -1) displayOrder.splice(timezoneIndex + 1, 0, 'weather');
-        else if (timeIndex !== -1) displayOrder.splice(timeIndex + 1, 0, 'weather');
-        else displayOrder.push('weather');
-      }
-      
-      displayOrder = ["name", ...displayOrder.filter(comp => enabledComponents.includes(comp))];
+    if (settings.display_order && settings.display_order.trim()) {
+      const seen = new Set<string>();
+      displayOrder = settings.display_order
+        .split(",")
+        .map((s) => s.trim().toLowerCase())
+        .filter((c) => {
+          if (!c || seen.has(c)) return false;
+          seen.add(c);
+          return true;
+        });
     } else {
-      displayOrder = ["name", ...enabledComponents];
+      displayOrder = ["name", ...this.getEnabledComponents(settings)];
     }
 
     const finalParts = displayOrder
@@ -1454,24 +1463,53 @@ America/New_York
     }
   }
 
-  private async handleDisplayOrder(msg: Api.Message, userId: number, args: string[]): Promise<void> {
+  private async handleDisplayOrder(msg: Api, userId: number, args: string[]): Promise<void> {
     const settings = await requireSettings(userId, msg);
     if (!settings) return;
 
     if (args.length === 0) {
-      return void await msg.edit({ text: `📋 <b>当前显示顺序</b>\n<code>${settings.display_order || "默认"}</code>\n使用 <code>${mainPrefix}acn order name,time,text...</code> 调整`, parseMode: "html" });
+      return void await msg.edit({ text: `📋 <b>当前显示顺序</b>\n<code>${settings.display_order || "默认"}</code>\n使用 <code>${mainPrefix}acn order time,name,weather...</code> 调整`, parseMode: "html" });
     }
 
-    const newOrder = args.join("").toLowerCase();
+    // Accept "time,name" / "time, name" / "time name" (comma or space separated)
     const valid = ["name", "text", "time", "weather", "emoji", "timezone"];
-    const invalid = newOrder.split(",").map(s => s.trim()).filter(c => !valid.includes(c));
-    
-    if (invalid.length > 0) return void await msg.edit({ text: `❌ 无效组件: <code>${invalid.join(", ")}</code>`, parseMode: "html" });
+    const parts = args
+      .join(" ")
+      .toLowerCase()
+      .split(/[,\s]+/)
+      .map((s) => s.trim())
+      .filter(Boolean);
+    const invalid = parts.filter((c) => !valid.includes(c));
+    if (invalid.length > 0) {
+      return void await msg.edit({
+        text: `❌ 无效组件: <code>${invalid.join(", ")}</code>\n可用: ${valid.join(", ")}`,
+        parseMode: "html",
+      });
+    }
+    if (parts.length === 0) {
+      return void await msg.edit({ text: "❌ 顺序不能为空", parseMode: "html" });
+    }
+
+    // de-dupe preserve order
+    const seen = new Set<string>();
+    const ordered = parts.filter((c) => (seen.has(c) ? false : (seen.add(c), true)));
+    const newOrder = ordered.join(",");
 
     settings.display_order = newOrder;
+    // Keep toggle flags in sync so status UI and legacy paths match order
+    settings.show_time = ordered.includes("time");
+    settings.show_clock_emoji = ordered.includes("emoji");
+    settings.show_timezone = ordered.includes("timezone");
+    if (ordered.includes("weather")) {
+      settings.weather_enabled = true;
+    }
+
     if (await DataManager.saveUserSettings(settings)) {
       if (settings.is_enabled) await nameManager.updateUserProfile(userId, true);
-      await msg.edit({ text: `✅ <b>显示顺序已更新为:</b>\n<code>${newOrder}</code>`, parseMode: "html" });
+      await msg.edit({
+        text: `✅ <b>显示顺序已更新为:</b>\n<code>${newOrder}</code>\n\n预览将按此顺序拼接（空值组件自动跳过）`,
+        parseMode: "html",
+      });
     } else {
       await msg.edit({ text: "❌ 设置保存失败", parseMode: "html" });
     }
