@@ -97,11 +97,12 @@ jobs:
         EOF
         
         node update-readme.js
+        rm -f update-readme.js
         
     - name: Check for changes
       id: verify-changed-files
       run: |
-        if [ -n "$(git diff --name-only)" ]; then
+        if [ -n "$(git diff --name-only -- README.md)" ]; then
           echo "changed=true" >> $GITHUB_OUTPUT
         else
           echo "changed=false" >> $GITHUB_OUTPUT
