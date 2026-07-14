@@ -34,7 +34,7 @@ const TG_STICKER_MAX_FRAMES = 100;
 const TG_STICKER_MAX_BYTES = 512 * 1024;
 const WEBM_CRF_STEPS = [38, 44, 50, 56];
 
-const QUOTE_PLUGIN_VERSION = "1.10";
+const QUOTE_PLUGIN_VERSION = "1.11";
 const QUOTE_BASE_URL = "https://raw.githubusercontent.com/TeleBoxOrg/TeleBox-Plugins/main/quote";
 const QUOTE_ASSETS_BASE_URL = "https://raw.githubusercontent.com/LyoSU/quote-api/master/assets";
 const QUOTE_VENDOR_DIR = path.join(quotePluginDir(), "quote", "vendor");
@@ -770,42 +770,74 @@ async function prepareQuoteMedia(msg: Api.Message, args: QuoteArgs): Promise<{
   mediaType?: string;
   mediaMaxSize?: number;
   mediaCrop?: boolean;
+  mediaDuration?: number;
   voice?: { waveform: number[]; duration?: number };
-  document?: { title?: string; size?: number; name?: string };
-  audio?: { title?: string; performer?: string; duration?: number };
+  /** quote-api attachments.js: file_name / file_size */
+  document?: { file_name: string; file_size?: number };
+  /** quote-api attachments.js: title / performer / duration / thumb */
+  audio?: { title?: string; performer?: string; duration?: number; thumb?: any };
 }> {
   const kind = getMediaKind(msg);
   const waveform = kind === "voice" ? voiceWaveform(msg) : undefined;
   const voiceAttr = audioAttribute(msg);
   const duration = Number(voiceAttr?.duration ?? voiceAttr?.voiceDuration ?? 0) || undefined;
+  const videoAttr = getDocumentAttributes(msg).find((a: any) =>
+    (a.className || a.constructor?.name || "").includes("Video")
+  );
+  const mediaDuration =
+    kind === "video" || kind === "animation" || kind === "round"
+      ? Number(videoAttr?.duration ?? 0) || undefined
+      : kind === "voice" || kind === "audio"
+        ? duration
+        : undefined;
 
-  // Glass redesign: voice/document/audio render as in-bubble rows (attachments.js),
-  // not as a waveform canvas. Photos/stickers/animations still use mediaCanvas.
-  const wantsVisual = args.media || args.img || kind === "photo" || kind === "sticker" || kind === "animation";
+  // Glass: voice/document/audio → in-bubble rows; photo/sticker/video/gif → mediaCanvas + badges
+  const wantsVisual =
+    args.media ||
+    args.img ||
+    kind === "photo" ||
+    kind === "sticker" ||
+    kind === "animation" ||
+    kind === "video" ||
+    kind === "round";
   const mediaBuffer = await downloadMessageMedia(msg, !!wantsVisual);
   const mediaCanvas = await mediaBufferToCanvas(mediaBuffer, kind);
   const isSticker = kind === "sticker";
 
-  let document: { title?: string; size?: number; name?: string } | undefined;
-  let audio: { title?: string; performer?: string; duration?: number } | undefined;
+  let document: { file_name: string; file_size?: number } | undefined;
+  let audio: { title?: string; performer?: string; duration?: number; thumb?: any } | undefined;
   if (kind === "document") {
     const doc = (msg as any).document ?? (msg as any).media?.document;
-    const attrs = Array.isArray(doc?.attributes) ? doc.attributes : [];
-    const fn = attrs.find((a: any) => (a.className || "").includes("Filename") || a.fileName || a.file_name);
-    const name = fn?.fileName || fn?.file_name || "file";
-    document = { title: name, name, size: Number(doc?.size ?? 0) || undefined };
+    const attrs = Array.isArray(doc?.attributes) ? doc.attributes : getDocumentAttributes(msg);
+    const fn = attrs.find(
+      (a: any) =>
+        (a.className || a.constructor?.name || "").includes("Filename") ||
+        a.fileName ||
+        a.file_name,
+    );
+    const name = String(fn?.fileName || fn?.file_name || "file");
+    document = {
+      file_name: name,
+      file_size: Number(doc?.size ?? 0) || undefined,
+    };
   } else if (kind === "audio") {
-    const title = voiceAttr?.title || voiceAttr?.fileName || "Audio";
+    const title = voiceAttr?.title || voiceAttr?.fileName || voiceAttr?.file_name || "Audio";
     const performer = voiceAttr?.performer || voiceAttr?.artist;
     audio = { title, performer, duration };
   }
 
+  // Normalize mediaType for vendor badges (video play / GIF chip)
+  let mediaType = mediaCanvas ? (kind || "photo") : kind;
+  if (mediaType === "animation") mediaType = "gif";
+  if (mediaType === "round") mediaType = "video";
+
   return {
     mediaBuffer,
     mediaCanvas,
-    mediaType: mediaCanvas ? (kind || "photo") : kind,
+    mediaType,
     mediaMaxSize: isSticker ? 220 * (args.scale || 2) : undefined,
     mediaCrop: isSticker ? false : args.crop,
+    mediaDuration,
     voice: waveform ? { waveform, duration } : undefined,
     document,
     audio,
@@ -1409,6 +1441,7 @@ async function toQuoteMessage(msg: Api.Message, args: QuoteArgs): Promise<any> {
     mediaType: media.mediaType,
     mediaMaxSize: media.mediaMaxSize,
     mediaCrop: media.mediaCrop,
+    mediaDuration: media.mediaDuration,
     voice: media.voice,
     document: media.document,
     audio: media.audio,
@@ -1479,7 +1512,7 @@ async function editProgress(msg: Api.Message, text: string): Promise<void> {
 }
 
 export class QuotePlugin {
-  description = "引用贴纸生成 (本地版)";
+  description = "引用贴纸生成（本地 glass 渲染：语音/文件/音频行、视频角标、stories/image 输出）";
   cmdHandlers = {
     q: async (msg: Api.Message) => this.handleQuote(msg, "q"),
     quote: async (msg: Api.Message) => this.handleQuote(msg, "quote"),
@@ -1511,10 +1544,13 @@ export class QuotePlugin {
 
         const hasAnimated = false;
         const tGenerate = Date.now();
+        // quote-api output types: quote (sticker frame) | image (wallpaper) | stories (720×1280)
+        const outType = args.stories ? "stories" : args.png ? "image" : "quote";
+        const outFormat = args.png || args.stories ? "png" : "webp";
         const result = await (await getQuoteGen()).generateQuote({
           messages: quoteMessages,
-          type: "quote",
-          format: "webp",
+          type: outType,
+          format: outFormat,
           scale: args.scale,
           backgroundColor: args.backgroundColor,
           emojiBrand: args.emojiBrand,
@@ -1532,6 +1568,10 @@ export class QuotePlugin {
           forceDocument: false,
           replyTo: replyTargetId,
         };
+        // wallpaper / stories → send as image; quote sticker stays default
+        if (outType === "image" || outType === "stories") {
+          sendOptions.forceDocument = false;
+        }
         if (result.ext === "webm") {
           const width = result.width || 512;
           const height = result.height || 512;
