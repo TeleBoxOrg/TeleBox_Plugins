@@ -11,28 +11,6 @@ const avatarCache = new LRU({
   maxAge: 1000 * 60 * 5
 })
 
-function hashString (input) {
-  const str = String(input || '')
-  let hash = 0
-  for (let i = 0; i < str.length; i++) {
-    hash = ((hash << 5) - hash) + str.charCodeAt(i)
-    hash |= 0
-  }
-  return Math.abs(hash)
-}
-
-function getNameSeed (user, nameLetters) {
-  const parts = [
-    user.first_name,
-    user.last_name,
-    user.name,
-    user.title,
-    user.username,
-    nameLetters
-  ].filter(Boolean)
-  return parts.join(' ').trim() || '?'
-}
-
 function avatarImageLetters (letters, color) {
   const size = 500
   const canvas = createCanvas(size, size)
@@ -72,10 +50,9 @@ async function downloadAvatarImage (user, telegram) {
     else nameLetters = runes(nameWord[0])[0]
   }
 
-  const nameSeed = getNameSeed(user, nameLetters)
-  const cacheKey = user.id != null ? `${user.id}:${nameSeed}` : `noId:${user.username || nameSeed}`
+  const cacheKey = user.id != null ? user.id : `noId:${user.username || nameLetters}`
   const avatarImageCached = avatarCache.get(cacheKey)
-  const nameIndex = hashString(nameSeed) % AVATAR_COLORS.length
+  const nameIndex = user.id != null ? Math.abs(user.id) % 7 : 0
   const avatarColor = AVATAR_COLORS[nameIndex]
 
   if (avatarImageCached) {
@@ -149,7 +126,7 @@ async function downloadAvatarImage (user, telegram) {
   // Final fallback — initials avatar
   if (!avatarImage) {
     try {
-      avatarImage = avatarImageLetters(nameLetters || runes(getNameSeed(user, nameLetters))[0] || '?', avatarColor)
+      avatarImage = avatarImageLetters(nameLetters, avatarColor)
       avatarCache.set(cacheKey, avatarImage)
     } catch (error) {
       console.warn('Failed to create letters avatar:', error.message)

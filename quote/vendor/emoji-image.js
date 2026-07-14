@@ -2,7 +2,7 @@ const path = require('path')
 const fs = require('fs')
 const emojiDb = require('./emoji-db')
 
-const emojiJFilesDir = path.join(process.cwd(), 'assets', 'quote', 'emoji')
+const emojiJFilesDir = '../assets/emoji/'
 
 const emojiJsonByBrand = {
   apple: 'emoji-apple-image.json',
@@ -21,7 +21,7 @@ function loadBrand (brand) {
   const jsonFile = emojiJsonByBrand[brand]
   if (!jsonFile) return {}
 
-  const filePath = path.join(emojiJFilesDir, jsonFile)
+  const filePath = path.resolve(__dirname, emojiJFilesDir + jsonFile)
 
   try {
     if (fs.existsSync(filePath)) {

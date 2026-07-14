@@ -34,7 +34,7 @@ const TG_STICKER_MAX_FRAMES = 100;
 const TG_STICKER_MAX_BYTES = 512 * 1024;
 const WEBM_CRF_STEPS = [38, 44, 50, 56];
 
-const QUOTE_PLUGIN_VERSION = "1.09";
+const QUOTE_PLUGIN_VERSION = "1.10";
 const QUOTE_BASE_URL = "https://raw.githubusercontent.com/TeleBoxOrg/TeleBox-Plugins/main/quote";
 const QUOTE_ASSETS_BASE_URL = "https://raw.githubusercontent.com/LyoSU/quote-api/master/assets";
 const QUOTE_VENDOR_DIR = path.join(quotePluginDir(), "quote", "vendor");
@@ -50,19 +50,23 @@ const QUOTE_DEP_FILES = [
   "vendor/image-load-url.js",
   "vendor/index.js",
   "vendor/promise-concurrent.js",
+  "vendor/quote-generate/attachments.js",
   "vendor/quote-generate/avatar.js",
   "vendor/quote-generate/canvas-utils.js",
   "vendor/quote-generate/color.js",
   "vendor/quote-generate/composer.js",
   "vendor/quote-generate/constants.js",
   "vendor/quote-generate/index.js",
+  "vendor/quote-generate/layout-box.js",
   "vendor/quote-generate/media.js",
   "vendor/quote-generate/text-layout.js",
   "vendor/quote-generate/text-prepare.js",
   "vendor/quote-generate/text-render.js",
   "vendor/quote-generate/text-renderer.js",
-  "vendor/quote-generate/waveform.js",
   "vendor/user-name.js",
+  "assets/icons/insert_drive_file.svg",
+  "assets/icons/music_note.svg",
+  "assets/icons/play_arrow.svg",
 ];
 const QUOTE_ASSET_FILES = [
   "pattern_02.png",
@@ -760,20 +764,51 @@ async function mediaBufferToCanvas(buffer: Buffer | undefined, kind: string | un
   }
 }
 
-async function prepareQuoteMedia(msg: Api.Message, args: QuoteArgs): Promise<{ mediaBuffer?: Buffer; mediaCanvas?: any; mediaType?: string; mediaMaxSize?: number; mediaCrop?: boolean; voice?: { waveform: number[] } }> {
+async function prepareQuoteMedia(msg: Api.Message, args: QuoteArgs): Promise<{
+  mediaBuffer?: Buffer;
+  mediaCanvas?: any;
+  mediaType?: string;
+  mediaMaxSize?: number;
+  mediaCrop?: boolean;
+  voice?: { waveform: number[]; duration?: number };
+  document?: { title?: string; size?: number; name?: string };
+  audio?: { title?: string; performer?: string; duration?: number };
+}> {
   const kind = getMediaKind(msg);
   const waveform = kind === "voice" ? voiceWaveform(msg) : undefined;
-  const enabled = args.media || args.img || kind === "photo" || kind === "sticker" || kind === "animation" || kind === "document";
-  const mediaBuffer = await downloadMessageMedia(msg, enabled);
+  const voiceAttr = audioAttribute(msg);
+  const duration = Number(voiceAttr?.duration ?? voiceAttr?.voiceDuration ?? 0) || undefined;
+
+  // Glass redesign: voice/document/audio render as in-bubble rows (attachments.js),
+  // not as a waveform canvas. Photos/stickers/animations still use mediaCanvas.
+  const wantsVisual = args.media || args.img || kind === "photo" || kind === "sticker" || kind === "animation";
+  const mediaBuffer = await downloadMessageMedia(msg, !!wantsVisual);
   const mediaCanvas = await mediaBufferToCanvas(mediaBuffer, kind);
   const isSticker = kind === "sticker";
+
+  let document: { title?: string; size?: number; name?: string } | undefined;
+  let audio: { title?: string; performer?: string; duration?: number } | undefined;
+  if (kind === "document") {
+    const doc = (msg as any).document ?? (msg as any).media?.document;
+    const attrs = Array.isArray(doc?.attributes) ? doc.attributes : [];
+    const fn = attrs.find((a: any) => (a.className || "").includes("Filename") || a.fileName || a.file_name);
+    const name = fn?.fileName || fn?.file_name || "file";
+    document = { title: name, name, size: Number(doc?.size ?? 0) || undefined };
+  } else if (kind === "audio") {
+    const title = voiceAttr?.title || voiceAttr?.fileName || "Audio";
+    const performer = voiceAttr?.performer || voiceAttr?.artist;
+    audio = { title, performer, duration };
+  }
+
   return {
     mediaBuffer,
     mediaCanvas,
     mediaType: mediaCanvas ? (kind || "photo") : kind,
     mediaMaxSize: isSticker ? 220 * (args.scale || 2) : undefined,
     mediaCrop: isSticker ? false : args.crop,
-    voice: waveform ? { waveform } : undefined,
+    voice: waveform ? { waveform, duration } : undefined,
+    document,
+    audio,
   };
 }
 
@@ -1374,6 +1409,9 @@ async function toQuoteMessage(msg: Api.Message, args: QuoteArgs): Promise<any> {
     mediaType: media.mediaType,
     mediaMaxSize: media.mediaMaxSize,
     mediaCrop: media.mediaCrop,
+    voice: media.voice,
+    document: media.document,
+    audio: media.audio,
     emoji_status: args.hidden || fwd?.anonymous ? undefined : emojiStatusPayload(effectiveEntity, emojiBuffer),
     date: messageDate(msg),
     via_bot: (msg as any).viaBotId ?? (msg as any).via_bot_id,

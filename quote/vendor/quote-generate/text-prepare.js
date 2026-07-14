@@ -36,6 +36,36 @@ function getMeasureCtx () {
 // Module-level emoji image cache — persists across calls
 const emojiImageCache = new Map()
 
+// Vertical metrics of the base font at a given size — a constant of the
+// font, so glyph shapes never affect line geometry (no "breathing" bubbles).
+// The box is the union of three deterministic extents:
+//   • the font em box (emHeightAscent/Descent),
+//   • the ink of fixed probe strings with extreme diacritics/descenders
+//     (some fonts draw stacked accents outside their em box),
+//   • the emoji draw box: images sit at [baseline − 0.85·fs, baseline + 0.30·fs]
+//     (see text-render.js: y = baseline − fs + 0.15·fs, size = 1.15·fs).
+const PROBE_TALL = 'ẤÅЇĎ'
+const PROBE_DEEP = 'jqyḑộ'
+const fontMetricsCache = new Map()
+
+function fontMetrics (fontSize) {
+  let m = fontMetricsCache.get(fontSize)
+  if (m) return m
+  const ctx = getMeasureCtx()
+  ctx.font = `${fontSize}px NotoSans`
+  const em = ctx.measureText('Mg')
+  const tall = ctx.measureText(PROBE_TALL)
+  const deep = ctx.measureText(PROBE_DEEP)
+  const emAscent = Number.isFinite(em.emHeightAscent) ? em.emHeightAscent : fontSize * 1.05
+  const emDescent = Number.isFinite(em.emHeightDescent) ? em.emHeightDescent : fontSize * 0.3
+  m = {
+    ascent: Math.ceil(Math.max(emAscent, tall.actualBoundingBoxAscent || 0, fontSize * 0.85)),
+    descent: Math.ceil(Math.max(emDescent, deep.actualBoundingBoxDescent || 0, fontSize * 0.3))
+  }
+  fontMetricsCache.set(fontSize, m)
+  return m
+}
+
 // Resolve the font string for a set of styles
 function resolveFont (styles, fontSize) {
   let fontType = ''
@@ -68,15 +98,7 @@ function buildStyledChars (text, entities) {
           : entity.type
 
       if (entity.type === 'custom_emoji') {
-        if (!styledChars[entity.offset]) {
-          console.warn('custom emoji entity offset out of range', { offset: entity.offset, length: entity.length, textLength: text.length, id: entity.custom_emoji_id, text })
-          continue
-        }
         styledChars[entity.offset].customEmojiId = entity.custom_emoji_id
-        styledChars[entity.offset].customEmojiLength = entity.length
-        for (let i = entity.offset + 1; i < entity.offset + entity.length; i++) {
-          if (styledChars[i]) styledChars[i].skipCustomEmoji = true
-        }
       }
 
       for (let i = entity.offset; i < entity.offset + entity.length; i++) {
@@ -94,16 +116,12 @@ function mapEmojis (text, styledChars) {
   for (let eIdx = 0; eIdx < emojis.length; eIdx++) {
     const emoji = emojis[eIdx]
     for (let i = emoji.offset; i < emoji.offset + emoji.length; i++) {
-      if (!styledChars[i]) continue
-      styledChars[i].emoji = { index: eIdx, code: emoji.found, length: emoji.length }
-      if (i > emoji.offset) styledChars[i].skipEmoji = true
+      if (styledChars[i]) {
+        styledChars[i].emoji = { index: eIdx, code: emoji.found }
+      }
     }
   }
   return emojis
-}
-
-function normalizeEmojiCode (code) {
-  return String(code || '').split('-').filter(part => part !== 'fe0f').join('-')
 }
 
 // Load emoji images (with module-level cache + in-flight dedup)
@@ -130,25 +148,22 @@ async function loadEmojiImages (emojis, emojiBrand) {
       }))
     } else if (!localMap.has(emoji.found)) {
       const p = (async () => {
-        const normalizedCode = normalizeEmojiCode(emoji.found)
-        const base = emojiImageJson[emoji.found] || emojiImageJson[normalizedCode]
-        const fallback = fallbackJson[emoji.found] || fallbackJson[normalizedCode]
+        const base = emojiImageJson[emoji.found]
         let image = null
 
         if (base) {
           try {
             image = await loadImage(Buffer.from(base, 'base64'))
           } catch (e) {
-            try { if (fallback) image = await loadImage(Buffer.from(fallback, 'base64')) } catch (e2) { /* skip */ }
+            try { image = await loadImage(Buffer.from(fallbackJson[emoji.found], 'base64')) } catch (e2) { /* skip */ }
           }
-        } else if (fallback) {
-          try { image = await loadImage(Buffer.from(fallback, 'base64')) } catch (e) { /* skip */ }
+        } else {
+          try { image = await loadImage(Buffer.from(fallbackJson[emoji.found], 'base64')) } catch (e) { /* skip */ }
         }
 
         if (image) {
           emojiImageCache.set(cacheKey, image)
           localMap.set(emoji.found, image)
-          localMap.set(normalizeEmojiCode(emoji.found), image)
         }
         return image
       })()
@@ -164,24 +179,7 @@ async function loadEmojiImages (emojis, emojiBrand) {
 // Load custom emoji stickers via Telegram API
 async function loadCustomEmojis (customEmojiIds, telegram) {
   const result = {}
-  if (customEmojiIds.length === 0) return result
-
-  if (telegram && typeof telegram === 'object' && !telegram.callApi) {
-    for (const id of customEmojiIds) {
-      const data = telegram[id]
-      if (!data) continue
-      try {
-        const buffer = Buffer.isBuffer(data) ? data : Buffer.from(data)
-        const png = await sharp(buffer).ensureAlpha().png({ force: true }).toBuffer()
-        result[id] = await loadImage(png).catch(() => null)
-      } catch (e) {
-        result[id] = await loadImage(data).catch(() => null)
-      }
-    }
-    return result
-  }
-
-  if (!telegram) return result
+  if (customEmojiIds.length === 0 || !telegram) return result
 
   const stickers = await telegram.callApi('getCustomEmojiStickers', {
     custom_emoji_ids: customEmojiIds
@@ -195,7 +193,7 @@ async function loadCustomEmojis (customEmojiIds, telegram) {
     if (!fileLink) return
     const data = await loadImageFromUrl(fileLink).catch(() => null)
     if (!data) return
-    const png = await sharp(data).ensureAlpha().png({ force: true }).toBuffer()
+    const png = await sharp(data).png({ lossless: true, force: true }).toBuffer()
     result[sticker.custom_emoji_id] = await loadImage(png).catch(() => null)
   })
 
@@ -224,20 +222,11 @@ function tokenize (text, styledChars, fontSize, emojiMap, customEmojiMap) {
       // Break chars always split unconditionally (even at segment start)
       const isBreak = cur.char.match(BREAK_REGEX)
 
-      if (cur.skipCustomEmoji || cur.skipEmoji) {
-        if (i > subStart) {
-          pushSegment(segments, styledChars, subStart, i, fontSize, emojiSize, emojiMap, customEmojiMap)
-        }
-        subStart = i + 1
-        continue
-      }
-
-      const needsSplit = isBreak || cur.customEmojiId || (prev && (
+      const needsSplit = isBreak || (prev && (
         // Emoji boundary
         (cur.emoji && !prev.emoji) ||
         (!cur.emoji && prev.emoji) ||
         (cur.emoji && prev.emoji && cur.emoji.index !== prev.emoji.index) ||
-        (cur.customEmojiId !== prev.customEmojiId) ||
         // Style change
         (cur.styles.toString() !== prev.styles.toString())
       ))
@@ -263,10 +252,7 @@ function tokenize (text, styledChars, fontSize, emojiMap, customEmojiMap) {
 function pushSegment (segments, styledChars, start, end, fontSize, emojiSize, emojiMap, customEmojiMap) {
   const first = styledChars[start]
   let text = ''
-  for (let i = start; i < end; i++) {
-    if (!styledChars[i].skipCustomEmoji && !styledChars[i].skipEmoji) text += styledChars[i].char
-  }
-  if (!text && first.customEmojiId) text = first.char
+  for (let i = start; i < end; i++) text += styledChars[i].char
 
   // Determine segment kind
   let kind = 'text'
@@ -276,14 +262,15 @@ function pushSegment (segments, styledChars, start, end, fontSize, emojiSize, em
 
   // Resolve emoji image
   let emojiImage = null
-  const emojiCode = first.emoji ? normalizeEmojiCode(first.emoji.code) : null
+  const emojiCode = first.emoji ? first.emoji.code : null
   const customEmojiId = first.customEmojiId || null
 
-  if (customEmojiId && customEmojiMap[customEmojiId]) {
-    emojiImage = customEmojiMap[customEmojiId]
-    kind = 'emoji'
-  } else if (first.emoji) {
-    emojiImage = emojiMap.get(first.emoji.code) || emojiMap.get(emojiCode) || null
+  if (first.emoji) {
+    if (customEmojiId && customEmojiMap[customEmojiId]) {
+      emojiImage = customEmojiMap[customEmojiId]
+    } else {
+      emojiImage = emojiMap.get(first.emoji.code) || null
+    }
     kind = 'emoji'
   }
 
@@ -498,7 +485,8 @@ async function prepareText (text, entities, fontSize, emojiBrand, telegram) {
       segments: [],
       fontSize,
       lineHeight: fontSize * 1.2,
-      emojiSize: fontSize * EMOJI_SCALE
+      emojiSize: fontSize * EMOJI_SCALE,
+      ...fontMetrics(fontSize)
     }
   }
 
@@ -541,8 +529,9 @@ async function prepareText (text, entities, fontSize, emojiBrand, telegram) {
     fontSize,
     lineHeight: fontSize * 1.2,
     emojiSize: fontSize * EMOJI_SCALE,
+    ...fontMetrics(fontSize),
     computeGraphemeWidths
   }
 }
 
-module.exports = { prepareText, graphemeSegmenter, getMeasureCtx }
+module.exports = { prepareText, graphemeSegmenter, getMeasureCtx, fontMetrics }

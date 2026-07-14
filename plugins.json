@@ -357,7 +357,7 @@
   },
   "quote": {
     "url": "https://github.com/TeleBoxOrg/TeleBox-Plugins/blob/main/quote/quote.ts?raw=true",
-    "desc": "引用贴纸生成 (本地版)"
+    "desc": "引用贴纸生成 (本地版)；支持 glass 气泡、语音/文件/音频行内附件渲染。"
   },
   "rate": {
     "url": "https://github.com/TeleBoxOrg/TeleBox-Plugins/blob/main/rate/rate.ts?raw=true",
