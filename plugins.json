@@ -41,7 +41,7 @@
   },
   "autochangename": {
     "url": "https://github.com/TeleBoxOrg/TeleBox-Plugins/blob/main/autochangename/autochangename.ts?raw=true",
-    "desc": "自动定时修改用户名插"
+    "desc": "自动定时修改用户名"
   },
   "autodel": {
     "url": "https://github.com/TeleBoxOrg/TeleBox-Plugins/blob/main/autodel/autodel.ts?raw=true",
