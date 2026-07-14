@@ -137,14 +137,30 @@ class FbiPlugin extends Plugin {
       await this.configDb.write();
     }
     for (const [k, v] of Object.entries(this.configDb.data.surveillance)) this.sv.set(k, v as SvEntry);
-    // load cache from separate file
+    // load cache from separate file — tolerate corrupt/truncated JSON
     const cp = path.join(createDirectoryInAssets("fbi"), "cache.json");
     this.cachePath = cp;
-    this.cacheDb = await JSONFilePreset<FbiCache>(cp, { cache: {} });
-    if (this.cacheDb.data.cache) {
-      for (const [k, v] of Object.entries(this.cacheDb.data.cache))
-        this.chatCache.set(k, v as CachedChat);
-      console.log(`[fbi] cache loaded: ${this.chatCache.size} groups`);
+    try {
+      this.cacheDb = await JSONFilePreset<FbiCache>(cp, { cache: {} });
+      if (this.cacheDb.data.cache) {
+        for (const [k, v] of Object.entries(this.cacheDb.data.cache))
+          this.chatCache.set(k, v as CachedChat);
+        console.log(`[fbi] cache loaded: ${this.chatCache.size} groups`);
+      }
+    } catch (e: unknown) {
+      console.error("[fbi] initDB cache load failed, resetting cache.json", e);
+      try {
+        const fs = await import("fs");
+        if (fs.existsSync(cp)) {
+          fs.renameSync(cp, `${cp}.corrupt.${Date.now()}`);
+        }
+      } catch (_renameErr: unknown) {
+        /* ignore rename failure; overwrite below */
+      }
+      this.chatCache.clear();
+      this.cacheDb = await JSONFilePreset<FbiCache>(cp, { cache: {} });
+      await this.cacheDb.write();
+      console.warn("[fbi] cache reset to empty after corruption recovery");
     }
 
     this.cacheReady = true;
