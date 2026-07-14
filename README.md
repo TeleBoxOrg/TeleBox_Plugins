@@ -4,9 +4,14 @@
 TeleBox-Plugins 是 [TeleBox](https://github.com/TeleBoxOrg/TeleBox) 项目的官方插件仓库，提供丰富的功能扩展。
 
 ## 安装方式
+
+在已运行的 TeleBox 中执行：
+
 ```bash
-tpm i <插件名>
+.tpm i <插件名>
 ```
+
+也支持别名：`.tpm install <插件名>`、批量 `.tpm i a b c`、一键 `.tpm i all`。
 
 ## 可用插件列表
 - `aban` - 高级封禁管理  
@@ -19,7 +24,7 @@ tpm i <插件名>
 - `atadmins` - 一键艾特全部管理员  
 - `atall` - 一键艾特全部成员  
 - `audio_to_voice` - 音乐转音频  
-- `autochangename` - 自动定时修改用户名插  
+- `autochangename` - 自动定时修改用户名  
 - `autodel` - 定时删除消息  
 - `autodelcmd` - 自动删除命令消息  
 - `autorepeat` - 智能自动复读机  
@@ -144,7 +149,7 @@ tpm i <插件名>
 
 ## 贡献指南
 
-欢迎提交新或改进现有。请确保：
+欢迎提交新插件或改进现有插件。请确保：
 1. 遵循 TypeScript 编码规范
 2. 包含完整的功能说明
 3. 添加适当的错误处理
@@ -156,4 +161,4 @@ tpm i <插件名>
 
 ## 许可证
 
-本项目采用开源许可证，具体请查看各的许可证声明。
+本项目采用开源许可证，具体请查看各插件的许可证声明。
