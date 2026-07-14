@@ -18,10 +18,10 @@ jobs:
       contents: read
     
     steps:
-    - name: Checkout TeleBox_Plugins repository
+    - name: Checkout TeleBox-Plugins repository
       uses: actions/checkout@v4
       with:
-        path: TeleBox_Plugins
+        path: TeleBox-Plugins
         fetch-depth: 0
         
     - name: Checkout TeleBox repository
@@ -58,7 +58,7 @@ jobs:
         GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
       run: |
         echo "🧪 测试 Gemini API 连接..."
-        node TeleBox_Plugins/scripts/test-gemini.js
+        node TeleBox-Plugins/scripts/test-gemini.js
       continue-on-error: true
         
     - name: Generate commit summary and send to Telegram
@@ -73,4 +73,4 @@ jobs:
         echo "环境变量传递状态："
         echo "  - GEMINI_API_KEY 是否存在: $([ -n "$GEMINI_API_KEY" ] && echo '是' || echo '否')"
         echo "  - GEMINI_API_KEY 长度: $(echo -n "$GEMINI_API_KEY" | wc -c)"
-        node TeleBox_Plugins/scripts/commit-summary.js
+        node TeleBox-Plugins/scripts/commit-summary.js

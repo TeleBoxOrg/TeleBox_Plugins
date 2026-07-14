@@ -35,7 +35,7 @@ const TG_STICKER_MAX_BYTES = 512 * 1024;
 const WEBM_CRF_STEPS = [38, 44, 50, 56];
 
 const QUOTE_PLUGIN_VERSION = "1.09";
-const QUOTE_BASE_URL = "https://raw.githubusercontent.com/TeleBoxOrg/TeleBox_Plugins/main/quote";
+const QUOTE_BASE_URL = "https://raw.githubusercontent.com/TeleBoxOrg/TeleBox-Plugins/main/quote";
 const QUOTE_ASSETS_BASE_URL = "https://raw.githubusercontent.com/LyoSU/quote-api/master/assets";
 const QUOTE_VENDOR_DIR = path.join(quotePluginDir(), "quote", "vendor");
 const QUOTE_ASSETS_DIR = path.join(process.cwd(), "assets", "quote");

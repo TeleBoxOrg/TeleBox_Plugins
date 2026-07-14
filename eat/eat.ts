@@ -53,7 +53,7 @@ let config: EatConfig = {};
 let resourceBaseUrl = "";
 
 let baseConfigURL =
-  "https://raw.githubusercontent.com/TeleBoxOrg/TeleBox_Plugins/refs/heads/main/eat/config.json";
+  "https://raw.githubusercontent.com/TeleBoxOrg/TeleBox-Plugins/refs/heads/main/eat/config.json";
 
 function resolveResourceUrl(path: string): string {
   if (path.startsWith("http://") || path.startsWith("https://")) {

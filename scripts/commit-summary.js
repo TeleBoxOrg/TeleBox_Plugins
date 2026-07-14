@@ -156,8 +156,8 @@ function extractPluginNames(changedFiles, repoName) {
   const plugins = new Set();
   
   changedFiles.forEach(filePath => {
-    // 处理 TeleBox_Plugins 仓库的插件文件
-    if (repoName === 'TeleBox_Plugins') {
+    // 处理 TeleBox-Plugins 仓库的插件文件
+    if (repoName === 'TeleBox-Plugins') {
       // 插件目录直接包含插件名
       const pluginMatch = filePath.match(/^([a-zA-Z_]+)\//);
       if (pluginMatch) {
@@ -379,10 +379,10 @@ function sendToTelegram(text) {
 async function main() {
   // 获取两个仓库的提交
   const teleboxCommits = CHECKOUT_SUCCESS ? getCommitsForDate('TeleBox', 'TeleBox', TARGET_DATE) : [];
-  const pluginsCommits = getCommitsForDate('TeleBox_Plugins', 'TeleBox_Plugins', TARGET_DATE);
+  const pluginsCommits = getCommitsForDate('TeleBox-Plugins', 'TeleBox-Plugins', TARGET_DATE);
   
   if (!CHECKOUT_SUCCESS) {
-    console.warn('⚠️ TeleBox 仓库访问失败，仅统计 TeleBox_Plugins 提交');
+    console.warn('⚠️ TeleBox 仓库访问失败，仅统计 TeleBox-Plugins 提交');
   }
   
   const dedupedTeleboxCommits = deduplicateCommits(teleboxCommits);
@@ -397,7 +397,7 @@ async function main() {
   // 按仓库分组提交
   const commitsByRepo = {
     'TeleBox': dedupedTeleboxCommits,
-    'TeleBox_Plugins': dedupedPluginsCommits
+    'TeleBox-Plugins': dedupedPluginsCommits
   };
   
   // 尝试使用 Gemini AI 生成智能摘要
@@ -412,7 +412,7 @@ async function main() {
   message += `📊 今日提交统计\n`;
   message += `• 总提交数: ${allCommits.length}\n`;
   message += `• TeleBox: ${dedupedTeleboxCommits.length} 次提交\n`;
-  message += `• TeleBox_Plugins: ${dedupedPluginsCommits.length} 次提交\n\n`;
+  message += `• TeleBox-Plugins: ${dedupedPluginsCommits.length} 次提交\n\n`;
   
   // 如果有 Gemini 摘要，使用 AI 生成的内容
   if (geminiSummary) {

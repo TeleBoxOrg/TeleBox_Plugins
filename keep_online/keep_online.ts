@@ -17,7 +17,7 @@ const commandName = `${mainPrefix}${pluginName}`;
 const file = path.join(createDirectoryInTemp("keep_online"), "keep_online.txt");
 const help_text = `
 每隔 55 秒, 脚本将尝试保活并把时间戳写入 TeleBox 工作目录下的 <code>temp/keep_online/keep_online.txt</code>. 请自行使用外部定时任务(如宿主机的 crontab) 来定时读取 TeleBox 工作目录下的 <code>temp/keep_online/keep_online.txt</code>(如果是宿主机, 需要使用你映射的宿主机的路径) 中的时间戳, 以此来判断离线是否超过一定的时间(如两分钟), 以此判断是否需要重启服务.
-可参考脚本 <code>https://github.com/TeleBoxOrg/TeleBox_Plugins/blob/main/keep_online/keep_online.sh?raw=true</code>
+可参考脚本 <code>https://github.com/TeleBoxOrg/TeleBox-Plugins/blob/main/keep_online/keep_online.sh?raw=true</code>
 `;
 
 class KeepOnlinePlugin extends Plugin {
