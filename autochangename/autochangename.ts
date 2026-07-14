@@ -1463,7 +1463,7 @@ America/New_York
     }
   }
 
-  private async handleDisplayOrder(msg: Api, userId: number, args: string[]): Promise<void> {
+  private async handleDisplayOrder(msg: Api.Message, userId: number, args: string[]): Promise<void> {
     const settings = await requireSettings(userId, msg);
     if (!settings) return;
 
