@@ -247,10 +247,6 @@
     "url": "https://github.com/TeleBoxOrg/TeleBox-Plugins/blob/main/keyword/keyword.ts?raw=true",
     "desc": "关键词自动回复"
   },
-  "kitt": {
-    "url": "https://github.com/TeleBoxOrg/TeleBox-Plugins/blob/main/kitt/kitt.ts?raw=true",
-    "desc": "高级触发器: 匹配 -> 执行, 高度自定义, 逻辑自由"
-  },
   "kkp": {
     "url": "https://github.com/TeleBoxOrg/TeleBox-Plugins/blob/main/kkp/kkp.ts?raw=true",
     "desc": "获取NSFW视频"
