@@ -1,7 +1,7 @@
 import { Plugin } from "@utils/pluginBase";
 import { getGlobalClient, tryGetCurrentGenerationContext } from "@utils/runtimeManager";
 import { getPrefixes } from "@utils/pluginManager";
-import { createDirectoryInAssets } from "@utils/pathHelpers";
+import { resolvePluginAssetFile } from "@utils/pathHelpers";
 import { Api, TelegramClient } from "teleproto";
 import { sleep } from "teleproto/Helpers";
 import { JSONFilePreset } from "lowdb/node";
@@ -32,10 +32,12 @@ class ConfigManager {
 
     try {
       // 使用插件专用目录
-      this.configPath = path.join(
-        createDirectoryInAssets("nsticker"),
-        "config.json"
-      );
+      this.configPath = resolvePluginAssetFile({
+        plugin: "sticker",
+        fileName: "config.json",
+        legacyDirs: ["sticker"],
+        legacyFiles: [{ dir: "sticker", fileName: "config.json" }],
+      });
 
       // 以扁平结构初始化
       this.db = await JSONFilePreset<Record<string, any>>(
@@ -44,7 +46,7 @@ class ConfigManager {
       );
       this.initialized = true;
     } catch (error) {
-      console.error("[nsticker] 初始化配置失败:", error);
+      console.error("[sticker] 初始化配置失败:", error);
     }
   }
 
@@ -66,7 +68,7 @@ class ConfigManager {
       await this.db.write();
       return true;
     } catch (error) {
-      console.error(`[nsticker] 设置配置失败 ${key}:`, error);
+      console.error(`[sticker] 设置配置失败 ${key}:`, error);
       return false;
     }
   }
@@ -80,7 +82,7 @@ class ConfigManager {
       await this.db.write();
       return true;
     } catch (error) {
-      console.error(`[nsticker] 删除配置失败 ${key}:`, error);
+      console.error(`[sticker] 删除配置失败 ${key}:`, error);
       return false;
     }
   }
@@ -255,7 +257,7 @@ class StickerPlugin extends Plugin {
       }
 
     } catch (error: any) {
-      console.error("[nsticker] 插件执行失败:", error);
+      console.error("[sticker] 插件执行失败:", error);
       
       // 处理特定错误类型
       if (error.message?.includes("FLOOD_WAIT")) {

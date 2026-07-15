@@ -1,7 +1,7 @@
 import { Plugin } from "@utils/pluginBase";
 import { getGlobalClient } from "@utils/runtimeManager";
 import { getPrefixes } from "@utils/pluginManager";
-import { createDirectoryInTemp, createDirectoryInAssets } from "@utils/pathHelpers";
+import { createDirectoryInTemp, resolvePluginAssetFile } from "@utils/pathHelpers";
 import { Api } from "teleproto";
 import { CustomFile } from "teleproto/client/uploads.js";
 import { JSONFilePreset } from "lowdb/node";
@@ -188,10 +188,12 @@ class ConfigManager {
     this.initLock = true;
     
     try {
-      this.configPath = path.join(
-        createDirectoryInAssets("sshkey"),
-        "sshkey_config.json"
-      );
+      this.configPath = resolvePluginAssetFile({
+        plugin: "ssh",
+        fileName: "ssh_config.json",
+        legacyDirs: ["sshkey"],
+        legacyFiles: [{ dir: "sshkey", fileName: "sshkey_config.json" }],
+      });
       this.db = await JSONFilePreset<Record<string, any>>(
         this.configPath,
         { ...DEFAULT_CONFIG }

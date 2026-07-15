@@ -6,7 +6,7 @@ import axios from "axios";
 import { execFile } from "child_process";
 import { promisify } from "util";
 import path from "path";
-import { createDirectoryInAssets } from "@utils/pathHelpers";
+import { createDirectoryInAssets, resolvePluginAssetFile } from "@utils/pathHelpers";
 import { safeGetReplyMessage } from "@utils/safeGetMessages";
 
 const prefixes = getPrefixes();
@@ -28,8 +28,13 @@ interface AllUserData {
   covers?: Record<string, string>;
 }
 
-const dataFilePath = path.join(createDirectoryInAssets("tts-plugin"), DATA_FILE_NAME);
-const cacheDir = createDirectoryInAssets("tts-plugin/cache");
+const dataFilePath = resolvePluginAssetFile({
+  plugin: "t",
+  fileName: DATA_FILE_NAME,
+  legacyDirs: ["tts-plugin"],
+  legacyFiles: [{ dir: "tts-plugin", fileName: DATA_FILE_NAME }],
+});
+const cacheDir = createDirectoryInAssets("t/cache", ["tts-plugin/cache"]);
 
 /** 读取 + 同步角色（把代码里的新角色并入到 json，不覆盖已有同名条目） */
 async function loadUserData(): Promise<AllUserData> {

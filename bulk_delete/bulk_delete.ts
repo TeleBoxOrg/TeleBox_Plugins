@@ -1,7 +1,7 @@
 import { Api } from "teleproto";
 import { Plugin } from "@utils/pluginBase";
 import { getPrefixes } from "@utils/pluginManager";
-import { createDirectoryInAssets } from "@utils/pathHelpers";
+import { resolvePluginAssetFile } from "@utils/pathHelpers";
 import { JSONFilePreset } from "lowdb/node";
 import path from "path";
 import { safeGetMessages } from "@utils/safeGetMessages";
@@ -12,7 +12,12 @@ const mainPrefix = prefixes[0];
 
 
 // 数据库文件路径
-const filePath = path.join(createDirectoryInAssets("bd"), "bd_config.json");
+const filePath = resolvePluginAssetFile({
+  plugin: "bulk_delete",
+  fileName: "bulk_delete_config.json",
+  legacyDirs: ["bd"],
+  legacyFiles: [{ dir: "bd", fileName: "bd_config.json" }],
+});
 
 // 数据库类型定义
 interface BdDB {

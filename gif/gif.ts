@@ -57,12 +57,12 @@ class GifConverter {
 
   constructor(client: any) {
     this.client = client;
-    this.tempDir = path.join(process.cwd(), "temp", "gif_converter");
+    this.tempDir = path.join(process.cwd(), "temp", "gif");
   }
 
   public async initialize() {
     // 创建临时目录
-    await createDirectoryInAssets("gif_converter");
+    await createDirectoryInAssets("gif", ["gif_converter"]);
     if (!fs.existsSync(this.tempDir)) {
       fs.mkdirSync(this.tempDir, { recursive: true });
     }

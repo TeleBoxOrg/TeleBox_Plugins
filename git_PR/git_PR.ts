@@ -4,7 +4,7 @@ import { Api } from "teleproto";
 import { getPrefixes } from "@utils/pluginManager";
 import { JSONFilePreset } from "lowdb/node";
 import * as path from "path";
-import { createDirectoryInAssets } from "@utils/pathHelpers";
+import { resolvePluginAssetFile } from "@utils/pathHelpers";
 import axios from "axios";
 
 import { htmlEscape } from "@utils/htmlEscape";
@@ -77,10 +77,15 @@ class ConfigManager {
   private static async init(): Promise<void> {
     if (this.initialized) return;
     try {
-      const configPath = path.join(
-        createDirectoryInAssets("git_manager"),
-        "config.json"
-      );
+      const configPath = resolvePluginAssetFile({
+        plugin: "git_PR",
+        fileName: "config.json",
+        legacyDirs: ["git_manager", "git"],
+        legacyFiles: [
+          { dir: "git_manager", fileName: "config.json" },
+          { dir: "git", fileName: "config.json" },
+        ],
+      });
       this.db = await JSONFilePreset<Record<string, any>>(
         configPath,
         { ...DEFAULT_CONFIG }

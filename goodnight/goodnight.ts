@@ -2,7 +2,7 @@ import { Plugin } from "@utils/pluginBase";
 import { getPrefixes } from "@utils/pluginManager";
 import { Api } from "teleproto";
 import { JSONFilePreset } from "lowdb/node";
-import { createDirectoryInAssets } from "@utils/pathHelpers";
+import { resolvePluginAssetFile } from "@utils/pathHelpers";
 import * as path from "path";
 import dayjs from "dayjs";
 const prefixes = getPrefixes();
@@ -57,9 +57,13 @@ class GreetingPlugin extends Plugin {
 
     // 初始化数据库
     private async initDB() {
-        // 数据存储在 assets/greeting/data.json
-        const dbDir = createDirectoryInAssets("greeting");
-        const dbPath = path.join(dbDir, "data.json");
+        // 规范路径 assets/goodnight/data.json（历史 greeting/ 自动迁移）
+        const dbPath = resolvePluginAssetFile({
+          plugin: "goodnight",
+          fileName: "data.json",
+          legacyDirs: ["greeting"],
+          legacyFiles: [{ dir: "greeting", fileName: "data.json" }],
+        });
         
         // 设置默认值
         this.db = await JSONFilePreset<DBData>(dbPath, { groups: {} });

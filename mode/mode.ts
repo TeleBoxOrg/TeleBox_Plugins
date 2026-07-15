@@ -10,7 +10,7 @@ import { getPrefixes } from "@utils/pluginManager";
 import { Plugin } from "@utils/pluginBase";
 import { Api } from "teleproto";
 import {
-  createDirectoryInAssets,
+  resolvePluginAssetFile,
 } from "@utils/pathHelpers";
 import { JSONFilePreset } from "lowdb/node";
 import * as path from "path";
@@ -125,8 +125,12 @@ class MessageModePlugin extends Plugin {
   /* ===================== 初始化数据库 ===================== */
 
   private async initDB() {
-    const dir = createDirectoryInAssets("messageMode");
-    const dbPath = path.join(dir, "config.json");
+    const dbPath = resolvePluginAssetFile({
+      plugin: "mode",
+      fileName: "config.json",
+      legacyDirs: ["messageMode"],
+      legacyFiles: [{ dir: "messageMode", fileName: "config.json" }],
+    });
 
     this.db = await JSONFilePreset(dbPath, {
       chats: {},        // per-chat 模式
