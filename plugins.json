@@ -357,7 +357,7 @@
   },
   "quote": {
     "url": "https://github.com/TeleBoxOrg/TeleBox-Plugins/blob/main/quote/quote.ts?raw=true",
-    "desc": "引用贴纸生成（本地 glass：语音/文件/音频行、视频角标、stories/image）"
+    "desc": "引用贴纸生成（本地 glass：语音/文件/音频行、视频角标、stories/image；.q help）"
   },
   "rate": {
     "url": "https://github.com/TeleBoxOrg/TeleBox-Plugins/blob/main/rate/rate.ts?raw=true",

@@ -34,7 +34,7 @@ const TG_STICKER_MAX_FRAMES = 100;
 const TG_STICKER_MAX_BYTES = 512 * 1024;
 const WEBM_CRF_STEPS = [38, 44, 50, 56];
 
-const QUOTE_PLUGIN_VERSION = "1.11";
+const QUOTE_PLUGIN_VERSION = "1.12";
 const QUOTE_BASE_URL = "https://raw.githubusercontent.com/TeleBoxOrg/TeleBox-Plugins/main/quote";
 const QUOTE_ASSETS_BASE_URL = "https://raw.githubusercontent.com/LyoSU/quote-api/master/assets";
 const QUOTE_VENDOR_DIR = path.join(quotePluginDir(), "quote", "vendor");
@@ -274,6 +274,32 @@ function getCommandArgsText(msg: Api.Message, command: string): string {
   return rest.slice(first.length).trimStart();
 }
 
+const QUOTE_EMOJI_BRANDS = new Set(["apple", "google", "twitter", "joypixels", "blob"]);
+
+function isColorToken(arg: string): boolean {
+  if (!arg) return false;
+  const lower = arg.toLowerCase();
+  if (lower === "random") return true;
+  // #rgb / #rrggbb / gradient #aaa/#bbb / //semi
+  if (/^#([0-9a-f]{3}|[0-9a-f]{6})(\/#([0-9a-f]{3}|[0-9a-f]{6}))?$/i.test(arg)) return true;
+  if (/^\/\/#?([0-9a-f]{3}|[0-9a-f]{6})$/i.test(arg)) return true;
+  // bare hex without #
+  if (/^([0-9a-f]{3}|[0-9a-f]{6})(\/([0-9a-f]{3}|[0-9a-f]{6}))?$/i.test(arg)) return true;
+  return false;
+}
+
+function normalizeColorToken(arg: string): string {
+  const lower = arg.toLowerCase();
+  if (lower === "random") return generateRandomColor();
+  if (arg.startsWith("//")) return arg;
+  if (arg.startsWith("#")) return arg;
+  // bare hex → add #
+  if (/^[0-9a-f]{3,6}(\/[0-9a-f]{3,6})?$/i.test(arg)) {
+    return arg.split("/").map((p) => (p.startsWith("#") ? p : `#${p}`)).join("/");
+  }
+  return arg;
+}
+
 function parseArgs(text: string): QuoteArgs {
   const args = text.trim().split(/\s+/).filter(Boolean);
   const out: QuoteArgs = {
@@ -292,20 +318,149 @@ function parseArgs(text: string): QuoteArgs {
     emojiSuffix: QUOTE_EMOJIS,
   };
 
-  for (const arg of args) {
-    if (arg === "r" || arg === "reply") {
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+    const lower = arg.toLowerCase();
+
+    if (lower === "r" || lower === "reply") {
       out.reply = true;
+      continue;
+    }
+    if (lower === "png" || lower === "image" || lower === "img") {
+      out.png = true;
+      out.img = true;
+      continue;
+    }
+    if (lower === "stories" || lower === "story") {
+      out.stories = true;
+      continue;
+    }
+    if (lower === "webp" || lower === "quote") {
+      // explicit default sticker mode
+      out.png = false;
+      out.stories = false;
+      continue;
+    }
+    if (lower === "hidden" || lower === "hide" || lower === "anonymous") {
+      out.hidden = true;
+      continue;
+    }
+    if (lower === "media" || lower === "m") {
+      out.media = true;
+      continue;
+    }
+    if (lower === "crop") {
+      out.crop = true;
+      continue;
+    }
+    if (lower === "rate" || lower === "rating") {
+      out.rate = true;
+      continue;
+    }
+
+    // scale=2 / scale:2 / s=2
+    const scaleEq = lower.match(/^(?:scale|s)[=:](\d+(?:\.\d+)?)$/);
+    if (scaleEq) {
+      const s = Number(scaleEq[1]);
+      if (Number.isFinite(s) && s > 0) out.scale = Math.min(20, Math.max(1, s));
+      continue;
+    }
+    if (lower === "scale" || lower === "s") {
+      const next = args[i + 1];
+      const s = next ? Number(next) : NaN;
+      if (Number.isFinite(s) && s > 0) {
+        out.scale = Math.min(20, Math.max(1, s));
+        i++;
+      }
+      continue;
+    }
+
+    // bg=#xxx / color=#xxx / background=#xxx
+    const colorEq = lower.match(/^(?:bg|color|background)[=:](.+)$/i);
+    if (colorEq) {
+      out.backgroundColor = normalizeColorToken(colorEq[1]);
+      out.color = out.backgroundColor;
+      continue;
+    }
+    if (lower === "bg" || lower === "color" || lower === "background") {
+      const next = args[i + 1];
+      if (next && isColorToken(next)) {
+        out.backgroundColor = normalizeColorToken(next);
+        out.color = out.backgroundColor;
+        i++;
+      }
+      continue;
+    }
+    if (isColorToken(arg)) {
+      out.backgroundColor = normalizeColorToken(arg);
+      out.color = out.backgroundColor;
+      continue;
+    }
+
+    // emoji brand
+    if (QUOTE_EMOJI_BRANDS.has(lower)) {
+      out.emojiBrand = lower;
+      continue;
+    }
+    const brandEq = lower.match(/^(?:emoji|brand)[=:]([a-z]+)$/);
+    if (brandEq && QUOTE_EMOJI_BRANDS.has(brandEq[1])) {
+      out.emojiBrand = brandEq[1];
       continue;
     }
 
     const n = Number.parseInt(arg, 10);
     if (!Number.isNaN(n) && /^[-+]?\d+$/.test(arg)) {
       out.count = Math.max(-MAX_QUOTE_MESSAGES, Math.min(MAX_QUOTE_MESSAGES, n));
+      continue;
     }
   }
 
   out.emojiSuffix = `${QUOTE_EMOJIS}${EMOJI_SUFFIXES[Math.floor(Math.random() * EMOJI_SUFFIXES.length)]}💜`;
   return out;
+}
+
+function wantsQuoteHelp(argsText: string): boolean {
+  const t = argsText.trim().toLowerCase();
+  if (!t) return false;
+  return /^(help|\?|h|帮助)$/i.test(t) || /(?:^|\s)(help|\?|帮助)(?:\s|$)/i.test(t);
+}
+
+function buildQuoteHelpText(): string {
+  const prefixes = getPrefixes();
+  const mainPrefix = prefixes[0] || ".";
+  const cmd = `${mainPrefix}q`;
+  const cmdFull = `${mainPrefix}quote`;
+  return `
+<b>📝 引用贴纸 quote</b>
+本地 glass 渲染：语音/文件/音频行、视频/GIF 角标、转发标签、管理员头衔
+
+- 基础用法
+使用 <code>${cmd}</code> 或 <code>${cmdFull}</code> 回复一条消息生成语录贴纸
+使用 <code>${cmd} [消息数]</code> 连续引用多条（最多 ${MAX_QUOTE_MESSAGES}）
+使用 <code>${cmd} r</code> / <code>${cmd} reply</code> 在气泡内显示被回复内容
+
+- 输出格式（默认 webp 贴纸）
+使用 <code>${cmd} webp</code> - 静态 WebP 贴纸（默认）
+使用 <code>${cmd} image</code> / <code>${cmd} png</code> - 背景大图 (PNG)
+使用 <code>${cmd} stories</code> - 故事模式 (720×1280 PNG)
+
+- 显示选项
+使用 <code>${cmd} hidden</code> - 隐藏头像与昵称
+使用 <code>${cmd} media</code> - 强制附带媒体预览
+使用 <code>${cmd} crop</code> - 媒体按比例裁剪
+
+- 样式
+使用 <code>${cmd} #1b1429</code> 或 <code>${cmd} #111/#222</code> - 背景色 / 渐变
+使用 <code>${cmd} bg random</code> - 随机背景色
+使用 <code>${cmd} scale 2</code> - 缩放 1–20（默认 2）
+使用 <code>${cmd} apple</code> / <code>google</code> / <code>twitter</code> / <code>joypixels</code> / <code>blob</code> - Emoji 风格
+
+- 组合示例
+<code>${cmd} r 3</code>
+<code>${cmd} stories #231d2b/#372e44</code>
+<code>${cmd} image r hidden scale 3</code>
+<code>${cmd} help</code> - 显示本帮助
+`.trim();
 }
 
 function asBigInt(value: any): bigint | undefined {
@@ -1500,19 +1655,40 @@ async function quoteStickerReplyTargetId(commandMsg: Api.Message, quoteMessages:
   return quoteMessages[0]?.id ?? (commandMsg as any).id;
 }
 
-async function editProgress(msg: Api.Message, text: string): Promise<void> {
+async function editProgress(msg: Api.Message, text: string, parseMode?: "html" | "md"): Promise<void> {
   try {
-    if (typeof (msg as any).edit === "function") await withTimeout((msg as any).edit({ text }), QUOTE_RPC_TIMEOUT_MS, "editProgress.edit");
-    else await withTimeout((msg as any).client?.editMessage?.((msg as any).chatId ?? (msg as any).peerId, { message: msg.id, text }), QUOTE_RPC_TIMEOUT_MS, "editProgress.editMessage");
+    if (typeof (msg as any).edit === "function") {
+      await withTimeout(
+        (msg as any).edit(parseMode ? { text, parseMode } : { text }),
+        QUOTE_RPC_TIMEOUT_MS,
+        "editProgress.edit",
+      );
+    } else {
+      await withTimeout(
+        (msg as any).client?.editMessage?.((msg as any).chatId ?? (msg as any).peerId, {
+          message: msg.id,
+          text,
+          ...(parseMode ? { parseMode } : {}),
+        }),
+        QUOTE_RPC_TIMEOUT_MS,
+        "editProgress.editMessage",
+      );
+    }
   } catch (_) {
     // Progress text is best-effort. If editing stalls (e.g. connection drop) or
     // fails, fall back to a reply but never let it block / hang the command.
-    try { await withTimeout(msg.reply({ message: text } as any), QUOTE_RPC_TIMEOUT_MS, "editProgress.reply"); } catch (_) {}
+    try {
+      await withTimeout(
+        msg.reply(parseMode ? ({ message: text, parseMode } as any) : ({ message: text } as any)),
+        QUOTE_RPC_TIMEOUT_MS,
+        "editProgress.reply",
+      );
+    } catch (_) {}
   }
 }
 
 export class QuotePlugin {
-  description = "引用贴纸生成（本地 glass 渲染：语音/文件/音频行、视频角标、stories/image 输出）";
+  description = "引用贴纸生成（本地 glass：语音/文件/音频行、视频角标、stories/image；.q help）";
   cmdHandlers = {
     q: async (msg: Api.Message) => this.handleQuote(msg, "q"),
     quote: async (msg: Api.Message) => this.handleQuote(msg, "quote"),
@@ -1521,6 +1697,10 @@ export class QuotePlugin {
   private async handleQuote(msg: Api.Message, command: "q" | "quote") {
       const rawText = ((msg as any).message || (msg as any).text || "") as string;
       const argsText = getCommandArgsText(msg, command);
+      if (wantsQuoteHelp(argsText)) {
+        await editProgress(msg, buildQuoteHelpText(), "html");
+        return;
+      }
       const args = parseArgs(argsText);
       const quoteStartedAt = Date.now();
       console.warn("quote command triggered", { command, text: rawText, argsText, out: (msg as any).out, replyTo: !!(msg as any).replyTo, backgroundColor: args.backgroundColor });
