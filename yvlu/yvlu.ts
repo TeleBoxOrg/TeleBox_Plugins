@@ -613,25 +613,37 @@ const pluginName = "yvlu";
 
 const commandName = `${mainPrefix}${pluginName}`;
 
-const help_text = `
-- 不包含回复
-使用 <code>${commandName} [消息数]</code> 回复一条消息(支持选择部分引用回复) ⚠️ 不得超过 5 条
-
-- 包含回复
-使用 <code>${commandName} r [消息数]</code> 回复一条消息(支持选择部分引用回复) ⚠️ 不得超过 5 条
-
-- 输出格式（默认 webp 贴纸）
-使用 <code>${commandName} webp</code> - 静态 WebP 贴纸
-使用 <code>${commandName} image</code> - 背景大图 (PNG)
-使用 <code>${commandName} stories</code> - 故事模式 (720×1280 PNG)
-
-- 保存贴纸/图片到贴纸包
-使用 <code>${commandName} s</code> 回复一张贴纸或图片,将其保存到配置的贴纸包中
-
-- 配置管理
-使用 <code>${commandName} config</code> 查看当前配置
-使用 <code>${commandName} config sticker 贴纸包名称</code> 设置贴纸包名称
-`;
+// 完整 helptext 单段进 description；标题外露，板块正文用可折叠 blockquote
+// （.help yvlu 整段显示在「功能描述」，不拆成短描述 + 空洞「使用方法」）
+const help_text = [
+  `- 不包含回复`,
+  `<blockquote expandable>`,
+  `使用 <code>${commandName} [消息数]</code> 回复一条消息(支持选择部分引用回复) ⚠️ 不得超过 5 条`,
+  `</blockquote>`,
+  ``,
+  `- 包含回复`,
+  `<blockquote expandable>`,
+  `使用 <code>${commandName} r [消息数]</code> 回复一条消息(支持选择部分引用回复) ⚠️ 不得超过 5 条`,
+  `</blockquote>`,
+  ``,
+  `- 输出格式（默认 webp 贴纸）`,
+  `<blockquote expandable>`,
+  `使用 <code>${commandName} webp</code> - 静态 WebP 贴纸`,
+  `使用 <code>${commandName} image</code> - 背景大图 (PNG)`,
+  `使用 <code>${commandName} stories</code> - 故事模式 (720×1280 PNG)`,
+  `</blockquote>`,
+  ``,
+  `- 保存贴纸/图片到贴纸包`,
+  `<blockquote expandable>`,
+  `使用 <code>${commandName} s</code> 回复一张贴纸或图片,将其保存到配置的贴纸包中`,
+  `</blockquote>`,
+  ``,
+  `- 配置管理`,
+  `<blockquote expandable>`,
+  `使用 <code>${commandName} config</code> 查看当前配置`,
+  `使用 <code>${commandName} config sticker 贴纸包名称</code> 设置贴纸包名称`,
+  `</blockquote>`,
+].join("\n");
 
 // 转换Telegram消息实体为quote-api格式
 function convertEntities(entities: Api.TypeMessageEntity[]): any[] {
