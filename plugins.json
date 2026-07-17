@@ -161,7 +161,7 @@
   },
   "duckduckgo": {
     "url": "https://github.com/TeleBoxOrg/TeleBox-Plugins/blob/main/duckduckgo/duckduckgo.ts?raw=true",
-    "desc": "DuckDuckGo 搜索（TLS 伪装 + Firecrawl 回退）"
+    "desc": "DuckDuckGo 搜索"
   },
   "eat": {
     "url": "https://github.com/TeleBoxOrg/TeleBox-Plugins/blob/main/eat/eat.ts?raw=true",
