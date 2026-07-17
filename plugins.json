@@ -477,7 +477,7 @@
   },
   "yvlu": {
     "url": "https://github.com/TeleBoxOrg/TeleBox-Plugins/blob/main/yvlu/yvlu.ts?raw=true",
-    "desc": "为被回复用户生成语录"
+    "desc": "语录贴纸：语音/文件/音频行、转发标签、管理员头衔、视频/GIF 角标；支持 webp/image/stories 输出"
   },
   "zhijiao": {
     "url": "https://github.com/TeleBoxOrg/TeleBox-Plugins/blob/main/zhijiao/zhijiao.ts?raw=true",
