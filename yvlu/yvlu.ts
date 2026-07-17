@@ -620,6 +620,11 @@ const help_text = `
 - 包含回复
 使用 <code>${commandName} r [消息数]</code> 回复一条消息(支持选择部分引用回复) ⚠️ 不得超过 5 条
 
+- 输出格式（默认 webp 贴纸）
+使用 <code>${commandName} webp</code> - 静态 WebP 贴纸
+使用 <code>${commandName} image</code> - 背景大图 (PNG)
+使用 <code>${commandName} stories</code> - 故事模式 (720×1280 PNG)
+
 - 保存贴纸/图片到贴纸包
 使用 <code>${commandName} s</code> 回复一张贴纸或图片,将其保存到配置的贴纸包中
 
@@ -694,6 +699,82 @@ function convertEntities(entities: Api.TypeMessageEntity[]): any[] {
   });
 }
 
+// ======== quote-api 高级字段辅助函数 ========
+
+function getDocumentAttributes(msg: Api.Message): any[] {
+  const doc = (msg as any).document ?? (msg as any).media?.document;
+  return doc?.attributes || [];
+}
+
+function audioAttribute(msg: Api.Message): any | undefined {
+  return getDocumentAttributes(msg).find((a: any) => (a.className || a.constructor?.name || "").includes("Audio"));
+}
+
+function voiceWaveform(msg: Api.Message): number[] | undefined {
+  const attr = audioAttribute(msg);
+  const raw = attr?.waveform;
+  if (!raw) return undefined;
+  let arr: number[];
+  if (Array.isArray(raw)) arr = raw.map((x: any) => Number(x) || 0);
+  else if (Buffer.isBuffer(raw) || raw instanceof Uint8Array) arr = Array.from(raw as Uint8Array).map((x) => Number(x) || 0);
+  else return undefined;
+  if (!arr.length) return undefined;
+  return arr.map((x) => Math.max(0, Math.min(31, x)));
+}
+
+function getMediaKind(msg: Api.Message): string | undefined {
+  const media: any = (msg as any).media;
+  if (!media) return undefined;
+  const cls = media.className || media.constructor?.name || "";
+  const attrs = getDocumentAttributes(msg);
+  if (attrs.some((a: any) => (a.className || "").includes("Sticker"))) return "sticker";
+  if (attrs.some((a: any) => (a.className || "").includes("Animated")) || cls.includes("Dice")) return "animation";
+  if (attrs.some((a: any) => (a.className || "").includes("Audio") && a.voice)) return "voice";
+  if (attrs.some((a: any) => (a.className || "").includes("Audio"))) return "audio";
+  if (attrs.some((a: any) => (a.className || "").includes("Video") && a.roundMessage)) return "round";
+  if (attrs.some((a: any) => (a.className || "").includes("Video"))) return "video";
+  if (cls.includes("Photo")) return "photo";
+  if (cls.includes("Geo")) return "location";
+  if (cls.includes("Venue")) return "venue";
+  if (cls.includes("Contact")) return "contact";
+  if (cls.includes("Poll")) return "poll";
+  if (cls.includes("Document")) return "document";
+  return "media";
+}
+
+async function forwardedSource(msg: Api.Message): Promise<{ peer?: any; entity?: any; name?: string; anonymous: boolean } | undefined> {
+  const fwd: any = (msg as any).fwdFrom || (msg as any).fwd_from;
+  if (!fwd) return undefined;
+  const client: any = (msg as any).client;
+  const headerName = fwd.fromName || fwd.savedFromName || fwd.postAuthor || "";
+  // Try fromId peer resolution
+  const peer = fwd.fromId || fwd.savedFromId || fwd.savedFromPeer;
+  if (peer) {
+    try {
+      const entity = await withTimeout(client.getEntity(peer), QUOTE_RPC_TIMEOUT_MS, "forwardedSource.getEntity");
+      const name = (entity as any)?.firstName || (entity as any)?.title || (entity as any)?.name || headerName || "Forwarded";
+      return { peer, entity, name, anonymous: false };
+    } catch (_) {}
+  }
+  if (headerName) return { name: headerName, anonymous: true };
+  return { anonymous: true };
+}
+
+async function senderRankInChat(msg: Api.Message, entity: any): Promise<string | undefined> {
+  if (!entity?.accessHash) return undefined;
+  try {
+    const client: any = (msg as any).client ?? await getGlobalClient().catch(() => null);
+    if (!client) return undefined;
+    const chatPeer = (msg as any).peerId ?? (msg as any).chatId ?? (msg as any).inputChat;
+    const inputUser = new Api.InputUser({ userId: entity.id, accessHash: entity.accessHash });
+    const result = await withTimeout(
+      client.invoke(new Api.channels.GetParticipant({ channel: chatPeer, participant: inputUser })),
+      QUOTE_RPC_TIMEOUT_MS, "senderRank.channels.getParticipant",
+    );
+    return (result as any)?.participant?.rank?.trim() || undefined;
+  } catch { return undefined; }
+}
+
 // 调用quote-api生成语录
 async function generateQuote(
   quoteData: any,
@@ -742,11 +823,10 @@ async function generateQuote(
     // console.log("解码后图片数据长度:", imageBuffer.length);
 
     // 推断返回图片格式：
-    // - 当 type === 'quote' 且 format === 'webp' 时，后端会生成 webp 贴纸（但 JSON 下没有 ext 字段）
-    // - 当 type === 'image' 时，后端最终输出的是 png（带背景的图片）
-    // const outExt = quoteData?.type === "quote" ? "webp" : "png";
-    // return { buffer: imageBuffer, ext: outExt };
-    return { buffer: response.data, ext: "webp" };
+    // - 当 type === 'quote' 且 format === 'webp' 时，后端会生成 webp 贴纸
+    // - 当 type === 'image' 或 type === 'stories' 时，后端输出的是 png
+    const outExt = quoteData?.type === "quote" && quoteData?.format !== "png" ? "webp" : "png";
+    return { buffer: response.data, ext: outExt };
   } catch (error) {
     if (axios.isAxiosError(error)) {
       console.error(`quote-api请求失败:`, {
@@ -835,6 +915,7 @@ class YvluPlugin extends Plugin {
       let r = false;
       let valid = false;
       let saveToSet = false;
+      let outputFormat: string | undefined = undefined; // webp / image / stories
 
       // 处理配置命令
       if (args[1] === "config") {
@@ -847,10 +928,19 @@ class YvluPlugin extends Plugin {
         valid = true;
       } else if (args[1] === "r") {
         r = true;
-        count = parseInt(args[2]) || 1;
+        if (["webp", "image", "png", "stories"].includes(args[2])) {
+          outputFormat = args[2] === "png" ? "image" : args[2];
+          count = parseInt(args[3]) || 1;
+        } else {
+          count = parseInt(args[2]) || 1;
+        }
         valid = true;
       } else if (args[1] === "s") {
         saveToSet = true;
+        valid = true;
+      } else if (["webp", "image", "png", "stories"].includes(args[1])) {
+        outputFormat = args[1] === "png" ? "image" : args[1];
+        count = parseInt(args[2]) || 1;
         valid = true;
       }
 
@@ -1121,7 +1211,8 @@ class YvluPlugin extends Plugin {
                           console.error("下载媒体失败", e);
                         }
 
-            items.push({
+            // 构建高级消息对象（quote-api 全字段）
+            const msgItem: any = {
               from: {
                 id: userId
                   ? parseInt(userId)
@@ -1141,9 +1232,58 @@ class YvluPlugin extends Plugin {
               text: message.message || "",
               entities: entities,
               avatar: shouldShowAvatar,
-              media,
               ...(replyBlock ? { replyMessage: replyBlock } : {}),
-            });
+            };
+
+            // === quote-api glass 字段：voice / document / audio / forward / senderTag / mediaType / mediaDuration ===
+
+            // 媒体
+            if (media) msgItem.media = media;
+
+            // 转发行标签
+            if ((message as any).fwdFrom) {
+              const fwdInfo = await forwardedSource(message).catch(() => undefined);
+              if (fwdInfo?.name) {
+                msgItem.forward = { label: fwdInfo.name };
+              }
+            }
+
+            // 管理员标签
+            if (sender && sender.accessHash) {
+              const tag = await senderRankInChat(message, sender).catch(() => undefined);
+              if (tag) msgItem.senderTag = tag;
+            }
+
+            // 媒体类型高级字段
+            const mediaObj = (message as any).media;
+            if (mediaObj) {
+              const kind = getMediaKind(message);
+              if (kind === "voice") {
+                const waveform = voiceWaveform(message);
+                const attr = audioAttribute(message);
+                const duration = Number(attr?.duration ?? attr?.voiceDuration ?? 0) || undefined;
+                if (waveform) msgItem.voice = { waveform, ...(duration !== undefined ? { duration } : {}) };
+              } else if (kind === "document") {
+                const doc = (message as any).document ?? (message as any).media?.document;
+                const fn = doc?.attributes?.find((a: any) => a.className?.includes?.("Filename") || a.constructor?.name?.includes?.("Filename"));
+                const name = String(fn?.fileName || fn?.file_name || "file");
+                msgItem.document = { file_name: name };
+              } else if (kind === "audio") {
+                const attr = audioAttribute(message);
+                const title = attr?.title || attr?.fileName || attr?.file_name || "Audio";
+                const performer = attr?.performer || attr?.artist;
+                const duration = Number(attr?.duration ?? 0) || undefined;
+                msgItem.audio = { title, ...(performer ? { performer } : {}), ...(duration !== undefined ? { duration } : {}) };
+              } else if (kind === "video" || kind === "animation" || kind === "round") {
+                // 如果有 mediaCanvas（预先下载的媒体），标记 type/duration
+                const attr = getDocumentAttributes(message).find((a: any) => a.className?.includes?.("Video") || a.constructor?.name?.includes?.("Video"));
+                const mediaDuration = Number(attr?.duration ?? 0) || undefined;
+                msgItem.mediaType = kind === "animation" ? "gif" : kind === "round" ? "video" : kind;
+                if (mediaDuration) msgItem.mediaDuration = mediaDuration;
+              }
+            }
+
+            items.push(msgItem);
           }
 
           const quoteData = {
@@ -1156,6 +1296,19 @@ class YvluPlugin extends Plugin {
             emojiBrand: "apple",
             messages: items,
           };
+          // 支持动态输出格式（通过参数控制）
+          if (outputFormat === "stories") {
+            quoteData.type = "stories";
+            quoteData.format = "png";
+            quoteData.width = 360;
+            quoteData.height = 640;
+          } else if (outputFormat === "image") {
+            quoteData.type = "image";
+            quoteData.format = "png";
+          } else if (outputFormat === "webp") {
+            quoteData.type = "quote";
+            quoteData.format = "webp";
+          }
           // 生成语录贴纸（webp）
           const quoteResult = await generateQuote(quoteData);
           const imageBuffer = quoteResult.buffer;
