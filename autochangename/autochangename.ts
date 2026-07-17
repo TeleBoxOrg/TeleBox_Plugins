@@ -28,9 +28,9 @@ const help_text = `🤖 <b>自动昵称更新插件 v3</b>
 
 <b>🔧 基础操作：</b>
 <blockquote expandable>• <code>${mainPrefix}acn save</code>
-  保存您当前的昵称为"原始昵称"。这是所有动态更新的基础
+  保存/更新「原始昵称」基准（只改姓名，其它配置保留）
   保存后，插件会以此为基准，在每次更新时加上时间、文案等内容
-  ⚠️ 建议在"干净"昵称下执行（不含时间等动态内容）
+  ⚠️ 建议在"干净"昵称下执行；已有 weather/style/order 等设置不会被清空
 • <code>${mainPrefix}acn on</code> / <code>off</code>
   开启或关闭自动昵称更新功能
   开启后每分钟自动更新一次，关闭后昵称保持当前状态不变
@@ -497,25 +497,41 @@ class NameManager {
     const profile = await this.getCurrentProfile();
     if (!profile) return false;
 
+    // 只更新「原始昵称」基准；绝不能整表重置，否则 acn save 会丢掉 weather/style/order 等配置
+    const existing = await DataManager.getUserSettings(userId);
+    const cleanedFirst = this.cleanTimeFromName(profile.firstName);
+    const cleanedLast = this.cleanTimeFromName(profile.lastName) || null;
+
+    if (existing) {
+      const settings: UserSettings = {
+        ...existing,
+        user_id: userId,
+        original_first_name: cleanedFirst,
+        original_last_name: cleanedLast,
+        // 重新锚定原始昵称时不强制关自动更新；是否启用由用户 on/off 决定
+      };
+      return await DataManager.saveUserSettings(settings);
+    }
+
     const settings: UserSettings = {
       user_id: userId,
       timezone: "Asia/Shanghai",
-      original_first_name: this.cleanTimeFromName(profile.firstName),
-      original_last_name: this.cleanTimeFromName(profile.lastName) || null,
+      original_first_name: cleanedFirst,
+      original_last_name: cleanedLast,
       is_enabled: false,
       mode: "time",
       last_update: null,
       text_index: 0,
-      show_clock_emoji: false,  // 默认关闭时钟emoji
-      show_time: true,          // 默认开启时间显示
-      show_timezone: false,     // 默认关闭时区显示  
-      timezone_format: "GMT",  // 默认时区格式
-      display_order: "name,time", // 默认只显示姓名和时间
+      show_clock_emoji: false,
+      show_time: true,
+      show_timezone: false,
+      timezone_format: "GMT",
+      display_order: "name,time",
       weather_enabled: false,
       weather_location: "",
       weather_compact: "",
       weather_cache_ts: 0,
-      text_style: "normal"
+      text_style: "normal",
     };
 
     return await DataManager.saveUserSettings(settings);
@@ -1115,7 +1131,7 @@ class AutoChangeNamePlugin extends Plugin {
         });
       } else if (settings) {
         await msg.edit({
-          text: `✅ <b>昵称已重新保存</b>\n\n<b>姓名:</b> <code>${htmlEscape(settings.original_first_name || "")}</code>\n<b>姓氏:</b> <code>${htmlEscape(settings.original_last_name || "(空)")}</code>`,
+          text: `✅ <b>原始昵称已更新</b>（其它配置保留）\n\n<b>姓名:</b> <code>${htmlEscape(settings.original_first_name || "")}</code>\n<b>姓氏:</b> <code>${htmlEscape(settings.original_last_name || "(空)")}</code>\n\n天气/样式/顺序/开关等设置不会被 save 清空。`,
           parseMode: "html"
         });
       }
