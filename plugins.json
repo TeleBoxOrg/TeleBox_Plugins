@@ -159,6 +159,10 @@
     "url": "https://github.com/TeleBoxOrg/TeleBox-Plugins/blob/main/dme/dme.ts?raw=true",
     "desc": "删除指定数量的自己发送的消息"
   },
+  "duckduckgo": {
+    "url": "https://github.com/TeleBoxOrg/TeleBox-Plugins/blob/main/duckduckgo/duckduckgo.ts?raw=true",
+    "desc": "DuckDuckGo 搜索（TLS 伪装 + Firecrawl 回退）"
+  },
   "eat": {
     "url": "https://github.com/TeleBoxOrg/TeleBox-Plugins/blob/main/eat/eat.ts?raw=true",
     "desc": "生成带头像表情包"
