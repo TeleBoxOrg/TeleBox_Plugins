@@ -425,6 +425,11 @@ function wantsQuoteHelp(argsText: string): boolean {
   return /^(help|\?|h|帮助)$/i.test(t) || /(?:^|\s)(help|\?|帮助)(?:\s|$)/i.test(t);
 }
 
+function foldSection(title: string, body: string): string {
+  // 标签与正文之间禁止换行：<blockquote expandable>内容</blockquote>
+  return `${title}\n<blockquote expandable>${body}</blockquote>`;
+}
+
 function buildQuoteHelpText(): string {
   const prefixes = getPrefixes();
   const mainPrefix = prefixes[0] || ".";
@@ -435,42 +440,52 @@ function buildQuoteHelpText(): string {
   return [
     `本地 glass 渲染：语音/文件/音频行、视频/GIF 角标、转发标签、管理员头衔`,
     ``,
-    `- 基础用法`,
-    `<blockquote expandable>`,
-    `使用 <code>${cmd}</code> 或 <code>${cmdFull}</code> 回复一条消息生成语录贴纸`,
-    `使用 <code>${cmd} [消息数]</code> 连续引用多条（最多 ${MAX_QUOTE_MESSAGES}）`,
-    `使用 <code>${cmd} r</code> / <code>${cmd} reply</code> 在气泡内显示被回复内容`,
-    `</blockquote>`,
+    foldSection(
+      `- 基础用法`,
+      [
+        `使用 <code>${cmd}</code> 或 <code>${cmdFull}</code> 回复一条消息生成语录贴纸`,
+        `使用 <code>${cmd} [消息数]</code> 连续引用多条（最多 ${MAX_QUOTE_MESSAGES}）`,
+        `使用 <code>${cmd} r</code> / <code>${cmd} reply</code> 在气泡内显示被回复内容`,
+      ].join("\n"),
+    ),
     ``,
-    `- 输出格式（默认 webp 贴纸）`,
-    `<blockquote expandable>`,
-    `使用 <code>${cmd} webp</code> - 静态 WebP 贴纸（默认）`,
-    `使用 <code>${cmd} image</code> / <code>${cmd} png</code> - 背景大图 (PNG)`,
-    `使用 <code>${cmd} stories</code> - 故事模式 (720×1280 PNG)`,
-    `</blockquote>`,
+    foldSection(
+      `- 输出格式（默认 webp 贴纸）`,
+      [
+        `使用 <code>${cmd} webp</code> - 静态 WebP 贴纸（默认）`,
+        `使用 <code>${cmd} image</code> / <code>${cmd} png</code> - 背景大图 (PNG)`,
+        `使用 <code>${cmd} stories</code> - 故事模式 (720×1280 PNG)`,
+      ].join("\n"),
+    ),
     ``,
-    `- 显示选项`,
-    `<blockquote expandable>`,
-    `使用 <code>${cmd} hidden</code> - 隐藏头像与昵称`,
-    `使用 <code>${cmd} media</code> - 强制附带媒体预览`,
-    `使用 <code>${cmd} crop</code> - 媒体按比例裁剪`,
-    `</blockquote>`,
+    foldSection(
+      `- 显示选项`,
+      [
+        `使用 <code>${cmd} hidden</code> - 隐藏头像与昵称`,
+        `使用 <code>${cmd} media</code> - 强制附带媒体预览`,
+        `使用 <code>${cmd} crop</code> - 媒体按比例裁剪`,
+      ].join("\n"),
+    ),
     ``,
-    `- 样式`,
-    `<blockquote expandable>`,
-    `使用 <code>${cmd} #1b1429</code> 或 <code>${cmd} #111/#222</code> - 背景色 / 渐变`,
-    `使用 <code>${cmd} bg random</code> - 随机背景色`,
-    `使用 <code>${cmd} scale 2</code> - 缩放 1–20（默认 2）`,
-    `使用 <code>${cmd} apple</code> / <code>google</code> / <code>twitter</code> / <code>joypixels</code> / <code>blob</code> - Emoji 风格`,
-    `</blockquote>`,
+    foldSection(
+      `- 样式`,
+      [
+        `使用 <code>${cmd} #1b1429</code> 或 <code>${cmd} #111/#222</code> - 背景色 / 渐变`,
+        `使用 <code>${cmd} bg random</code> - 随机背景色`,
+        `使用 <code>${cmd} scale 2</code> - 缩放 1–20（默认 2）`,
+        `使用 <code>${cmd} apple</code> / <code>google</code> / <code>twitter</code> / <code>joypixels</code> / <code>blob</code> - Emoji 风格`,
+      ].join("\n"),
+    ),
     ``,
-    `- 组合示例`,
-    `<blockquote expandable>`,
-    `<code>${cmd} r 3</code>`,
-    `<code>${cmd} stories #231d2b/#372e44</code>`,
-    `<code>${cmd} image r hidden scale 3</code>`,
-    `<code>${cmd} help</code> - 显示本帮助`,
-    `</blockquote>`,
+    foldSection(
+      `- 组合示例`,
+      [
+        `<code>${cmd} r 3</code>`,
+        `<code>${cmd} stories #231d2b/#372e44</code>`,
+        `<code>${cmd} image r hidden scale 3</code>`,
+        `<code>${cmd} help</code> - 显示本帮助`,
+      ].join("\n"),
+    ),
   ].join("\n");
 }
 
