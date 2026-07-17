@@ -786,24 +786,22 @@ class NameManager {
     const cleanFirstName = settings.original_first_name || "";
     const cleanLastName = settings.original_last_name;
     const currentTime = this.formatTime(settings.timezone);
-    
-    const orderList = (settings.display_order || "")
-      .split(",")
-      .map((s) => s.trim().toLowerCase())
-      .filter(Boolean);
-    const inOrder = (c: string) => orderList.includes(c);
-    // When order is set, membership in order enables the component; otherwise use toggles.
-    const useOrder = orderList.length > 0;
-    const wantTime = useOrder ? inOrder("time") : settings.show_time !== false;
-    const wantEmoji = useOrder ? inOrder("emoji") : !!settings.show_clock_emoji;
-    const wantTimezone = useOrder ? inOrder("timezone") : !!settings.show_timezone;
-    const wantWeather = useOrder
-      ? inOrder("weather")
-      : !!(settings.weather_enabled && settings.weather_location);
+
+    // 开关决定「是否显示」；display_order 只决定「顺序」。
+    // 旧逻辑把 display_order 当白名单，默认 "name,time" 会吞掉 weather/emoji/timezone 等开关。
+    const comps = settings.displayComponents;
+    const hasCompList = Array.isArray(comps) && comps.length > 0;
+    const inComp = (c: string) => !hasCompList || comps!.includes(c);
+
+    const wantTime =
+      settings.show_time !== false && inComp("time");
+    const wantEmoji = !!settings.show_clock_emoji;
+    const wantTimezone = !!settings.show_timezone;
+    const wantWeather = !!(settings.weather_enabled && settings.weather_location);
+    // text：mode text/both，或 displayComponents 含 text
     const wantText =
-      (useOrder && inOrder("text")) ||
-      settings.mode === "text" ||
-      settings.mode === "both";
+      (hasCompList && comps!.includes("text")) ||
+      (!hasCompList && (settings.mode === "text" || settings.mode === "both"));
 
     const components: { [key: string]: string } = {
       name: cleanFirstName,
@@ -827,9 +825,14 @@ class NameManager {
       components.weather = await this.getWeatherCompact(settings);
     }
 
-    // Explicit display_order is the source of truth for BOTH membership and order.
-    // Previously we forced "name" first and filtered by show_* toggles, so
-    // `acn order time,name` saved successfully but nickname stayed name-first.
+    // 已启用的组件集合（用于补齐 order 中缺失的项）
+    const enabled: string[] = ["name"];
+    if (wantText) enabled.push("text");
+    if (wantTime) enabled.push("time");
+    if (wantWeather) enabled.push("weather");
+    if (wantEmoji) enabled.push("emoji");
+    if (wantTimezone) enabled.push("timezone");
+
     let displayOrder: string[];
     if (settings.display_order && settings.display_order.trim()) {
       const seen = new Set<string>();
@@ -840,22 +843,33 @@ class NameManager {
           if (!c || seen.has(c)) return false;
           seen.add(c);
           return true;
-        });
+        })
+        // order 里有但开关关着的 → 跳过；开关开着但不在 order → 后面 append
+        .filter((c) => enabled.includes(c));
+      for (const c of enabled) {
+        if (!seen.has(c)) {
+          displayOrder.push(c);
+          seen.add(c);
+        }
+      }
     } else {
       displayOrder = ["name", ...this.getEnabledComponents(settings)];
+      // 去重保序
+      const seen = new Set<string>();
+      displayOrder = displayOrder.filter((c) => (seen.has(c) ? false : (seen.add(c), true)));
     }
 
     const finalParts = displayOrder
       .map((comp: string) => {
         const value = components[comp];
         if (!value || value.length === 0) return "";
-        return comp === 'name' ? value : this.applyTextStyle(value, settings.text_style || "normal");
+        return comp === "name" ? value : this.applyTextStyle(value, settings.text_style || "normal");
       })
       .filter((part: string) => part && part.length > 0);
-    
+
     return {
-      firstName: finalParts.join(' ') || cleanFirstName,
-      lastName: cleanLastName
+      firstName: finalParts.join(" ") || cleanFirstName,
+      lastName: cleanLastName,
     };
   }
 
@@ -1058,7 +1072,7 @@ class AutoChangeNamePlugin extends Plugin {
           case "off": case "disable": await this.handleToggle(msg, userId, false); break;
           case "mode": await this.handleMode(msg, userId); break;
           case "status": await this.handleStatus(msg); break;
-          case "text": await this.handleText(msg, args.slice(1)); break;
+          case "text": await this.handleText(msg, userId, args.slice(1)); break;
           case "tz": case "timezone": await this.handleTimezone(msg, userId, args.slice(1)); break;
           case "update": case "now": await this.handleUpdate(msg, userId); break;
           case "reset": await this.handleReset(msg, userId); break;
@@ -1068,6 +1082,7 @@ class AutoChangeNamePlugin extends Plugin {
           case "weather": await this.handleWeather(msg, userId, args.slice(1)); break;
           case "style": await this.handleTextStyle(msg, userId, args.slice(1)); break;
           case "time": await this.handleTimeToggle(msg, userId, args.slice(1)); break;
+          case "show": await this.handleShow(msg, userId, args.slice(1)); break;
           default:
             await msg.edit({
               text: `❌ <b>未知命令</b>\n\n未知的子命令: <code>${htmlEscape(sub)}</code>\n\n输入 <code>${mainPrefix}acn</code> 查看帮助。`,
@@ -1237,9 +1252,49 @@ class AutoChangeNamePlugin extends Plugin {
     });
   }
 
-  private async handleText(msg: Api.Message, args: string[]): Promise<void> {
-    const action = args[0] || "";
+  private async handleText(msg: Api.Message, userId: number, args: string[]): Promise<void> {
+    const action = (args[0] || "").toLowerCase();
     const texts = await DataManager.getRandomTexts();
+
+    // acn text on/off — 开关文案显示（此前误走文案库管理，无法切换）
+    if (action === "on" || action === "off") {
+      const settings = await requireSettings(userId, msg);
+      if (!settings) return;
+      if (action === "on") {
+        settings.mode = settings.show_time === false ? "text" : "both";
+        if (Array.isArray(settings.displayComponents) && !settings.displayComponents.includes("text")) {
+          settings.displayComponents = [...settings.displayComponents, "text"];
+        }
+      } else {
+        // off: 关掉文案，保留时间模式
+        settings.mode = "time";
+        if (Array.isArray(settings.displayComponents)) {
+          settings.displayComponents = settings.displayComponents.filter((c) => c !== "text");
+        }
+      }
+      // 若 display_order 存在且开启文案但不含 text，追加
+      if (action === "on" && settings.display_order && !settings.display_order.split(/[,\s]+/).map(s => s.trim()).includes("text")) {
+        settings.display_order = `${settings.display_order},text`;
+      }
+      if (action === "off" && settings.display_order) {
+        settings.display_order = settings.display_order
+          .split(",")
+          .map((s) => s.trim())
+          .filter((c) => c && c !== "text")
+          .join(",");
+      }
+      if (await DataManager.saveUserSettings(settings)) {
+        if (settings.is_enabled) await nameManager.updateUserProfile(userId, true);
+        if (action === "on") {
+          await msg.edit({ text: `✅ <b>随机文案已开启</b>\n模式: <code>${settings.mode}</code>`, parseMode: "html" });
+        } else {
+          await msg.edit({ text: `✅ <b>随机文案已关闭</b>`, parseMode: "html" });
+        }
+      } else {
+        await msg.edit({ text: "❌ 设置保存失败", parseMode: "html" });
+      }
+      return;
+    }
 
     if (action === "add") {
       // Extract text after "acn text add" - join remaining args
@@ -1282,7 +1337,7 @@ class AutoChangeNamePlugin extends Plugin {
     } else if (action === "clear") {
       if (await DataManager.saveRandomTexts([])) await msg.edit({ text: "✅ 所有文本已清空", parseMode: "html" });
     } else {
-      await msg.edit({ text: `❌ <b>命令格式错误</b>\n请使用 add, del, list, clear`, parseMode: "html" });
+      await msg.edit({ text: `❌ <b>命令格式错误</b>\n请使用 add, del, list, clear, on, off`, parseMode: "html" });
     }
   }
 
@@ -1398,6 +1453,24 @@ America/New_York
     const action = args[0]?.toLowerCase();
     if (action === "on" || action === "off") {
       (settings as any)[options.key] = action === "on";
+      // 同步 display_order：开则确保组件在顺序中，关则移出
+      const keyToComp: Record<string, string> = {
+        show_time: "time",
+        show_clock_emoji: "emoji",
+        show_timezone: "timezone",
+        weather_enabled: "weather",
+      };
+      const comp = keyToComp[String(options.key)];
+      if (comp && settings.display_order) {
+        const parts = settings.display_order.split(",").map((s) => s.trim()).filter(Boolean);
+        if (action === "on") {
+          if (!parts.includes(comp)) parts.push(comp);
+        } else {
+          const idx = parts.indexOf(comp);
+          if (idx >= 0) parts.splice(idx, 1);
+        }
+        settings.display_order = parts.join(",");
+      }
       if (await DataManager.saveUserSettings(settings)) {
         if (settings.is_enabled) await nameManager.updateUserProfile(userId, true);
         await msg.edit({ text: `<b>${options.settingName}已${action === "on" ? "开启" : "关闭"}</b>`, parseMode: "html" });
@@ -1453,6 +1526,17 @@ America/New_York
       settings.weather_enabled = true;
       settings.weather_compact = "";
       settings.weather_cache_ts = 0;
+    }
+    // 同步 display_order，避免默认 name,time 把天气挡掉
+    if (settings.display_order) {
+      const parts = settings.display_order.split(",").map((s) => s.trim()).filter(Boolean);
+      if (settings.weather_enabled) {
+        if (!parts.includes("weather")) parts.push("weather");
+      } else {
+        const i = parts.indexOf("weather");
+        if (i >= 0) parts.splice(i, 1);
+      }
+      settings.display_order = parts.join(",");
     }
 
     if (await DataManager.saveUserSettings(settings)) {
