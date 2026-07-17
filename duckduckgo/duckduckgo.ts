@@ -108,37 +108,46 @@ async function ensureRuntime(): Promise<{
       );
       return { ok: true as const, script };
     } catch {
-      try {
-        await execFileAsync(
-          "python3",
-          [
-            "-m",
-            "pip",
-            "install",
-            "--user",
-            "-q",
-            "curl_cffi",
-            "--break-system-packages",
-          ],
-          {
+      // 多策略安装 curl_cffi：pip3 → python3 -m pip → pip
+      const pipStrategies = [
+        { cmd: "pip3", args: ["install", "--user", "-q", "curl_cffi", "--break-system-packages"] },
+        { cmd: "pip3", args: ["install", "--user", "-q", "curl_cffi"] },
+        { cmd: "python3", args: ["-m", "pip", "install", "--user", "-q", "curl_cffi", "--break-system-packages"] },
+        { cmd: "python3", args: ["-m", "pip", "install", "--user", "-q", "curl_cffi"] },
+        { cmd: "pip", args: ["install", "--user", "-q", "curl_cffi", "--break-system-packages"] },
+      ];
+      let pipOk = false;
+      let lastPipError = "";
+      for (const strat of pipStrategies) {
+        try {
+          await execFileAsync(strat.cmd, strat.args, {
             timeout: 180_000,
             maxBuffer: 4 * 1024 * 1024,
             env: { ...process.env, PIP_DISABLE_PIP_VERSION_CHECK: "1" },
-          },
-        );
-        await execFileAsync(
-          "python3",
-          ["-c", "from curl_cffi import requests"],
-          { timeout: 10_000 },
-        );
-        return { ok: true as const, script };
-      } catch (e: unknown) {
-        return {
-          ok: false as const,
-          script,
-          note: `curl_cffi 安装失败: ${getErrorMessage(e).slice(0, 120)}`,
-        };
+          });
+          pipOk = true;
+          break;
+        } catch (e2: unknown) {
+          lastPipError = getErrorMessage(e2).slice(0, 120);
+        }
       }
+      if (pipOk) {
+        try {
+          await execFileAsync(
+            "python3",
+            ["-c", "from curl_cffi import requests"],
+            { timeout: 10_000 },
+          );
+          return { ok: true as const, script };
+        } catch {
+          return { ok: false as const, script, note: "curl_cffi 安装后验证失败" };
+        }
+      }
+      return {
+        ok: false as const,
+        script,
+        note: `curl_cffi 安装失败: ${lastPipError}`,
+      };
     }
   })();
 
