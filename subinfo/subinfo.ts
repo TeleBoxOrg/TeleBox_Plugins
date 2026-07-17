@@ -129,8 +129,42 @@ function estimateDepletionDate(remain: number, dailyUsage: number): string {
   return dayjs().add(days, 'day').format("YYYY-MM-DD");
 }
 
-// 尝试解析节点信息 (节点数, 类型, 地区分布)
-async function getNodeInfo(url: string): Promise<{ node_count: number | string, type_count: Record<string, number>, regions: Record<string, number> } | null> {
+// 尝试解析节点信息 (节点数, 类型, 地区分布, 节点名称列表)
+type NodeInfoResult = {
+  node_count: number | string;
+  type_count: Record<string, number>;
+  regions: Record<string, number>;
+  names: string[];
+};
+
+function extractNodeNameUrl(line: string): string {
+  // Extract readable node identifier from a subscription line
+  // Try fragment (#name) — used by ss:// trojan:// vless:// hy2:// tuic://
+  const hashIdx = line.lastIndexOf('#');
+  if (hashIdx > 0) {
+    const fragment = decodeURIComponent(line.slice(hashIdx + 1));
+    if (fragment) return fragment;
+  }
+  // Try vmess:// decode for "ps" (remarks) field
+  if (line.startsWith('vmess://')) {
+    try {
+      const b64 = line.slice(8);
+      const decoded = JSON.parse(Buffer.from(b64, 'base64').toString());
+      if (decoded.ps) return decoded.ps;
+      if (decoded.add && decoded.port) return `${decoded.add}:${decoded.port}`;
+    } catch { /* skip invalid vmess */ }
+  }
+  // Fallback: show host after @
+  const atIdx = line.indexOf('@');
+  if (atIdx > 0) {
+    const clean = line.slice(atIdx + 1).split(/[?#/]/)[0];
+    if (clean) return clean;
+  }
+  // Last resort: first 60 chars
+  return line.slice(0, 60).replace(/[&<>"']/g, '');
+}
+
+async function getNodeInfo(url: string): Promise<NodeInfoResult | null> {
   try {
     const res = await axios.get(url, { timeout: 10000, responseType: 'text' });
     
@@ -141,12 +175,15 @@ async function getNodeInfo(url: string): Promise<{ node_count: number | string, 
         const proxies = (config as any).proxies;
         const typeCount: Record<string, number> = {};
         const regions: Record<string, number> = {};
+        const names: string[] = [];
         let totalNodes = proxies.length;
         let identified = 0;
         for (const proxy of proxies) {
           const type = proxy.type?.toLowerCase();
           typeCount[type] = (typeCount[type] || 0) + 1;
-          const nameLow = proxy.name?.toLowerCase() || '';
+          const nameRaw = proxy.name || '';
+          names.push(nameRaw);
+          const nameLow = nameRaw.toLowerCase();
           for (const [region, keys] of REGION_RULES) {
             if (keys.some(k => nameLow.includes(k.toLowerCase()))) {
               regions[region] = (regions[region] || 0) + 1;
@@ -159,7 +196,8 @@ async function getNodeInfo(url: string): Promise<{ node_count: number | string, 
         return {
           node_count: totalNodes,
           type_count: Object.fromEntries(Object.entries(typeCount).filter(([, v]) => v > 0)),
-          regions: Object.fromEntries(Object.entries(regions).filter(([, v]) => v > 0))
+          regions: Object.fromEntries(Object.entries(regions).filter(([, v]) => v > 0)),
+          names,
         };
       }
     } catch { /* 忽略 YAML 解析错误 */ }
@@ -169,6 +207,7 @@ async function getNodeInfo(url: string): Promise<{ node_count: number | string, 
       const decoded = Buffer.from(res.data, 'base64').toString();
       const typeCount: Record<string, number> = {};
       const regions: Record<string, number> = {};
+      const names: string[] = [];
       let nodeCount = 0;
       let identified = 0;
       const protocols = ['vmess://', 'trojan://', 'ss://', 'ssr://', 'vless://', 'hy2://', 'hysteria://', 'hy://', 'tuic://', 'wireguard://', 'socks5://', 'http://', 'https://', 'shadowtls://', 'naive://'];
@@ -180,6 +219,7 @@ async function getNodeInfo(url: string): Promise<{ node_count: number | string, 
             let t = pattern.replace('://', '');
             typeCount[t] = (typeCount[t] || 0) + 1;
             nodeCount++;
+            names.push(extractNodeNameUrl(line));
             let lLow = line.toLowerCase();
             for (const [region, keys] of REGION_RULES) {
               if (keys.some(k => lLow.includes(k.toLowerCase()))) {
@@ -197,6 +237,7 @@ async function getNodeInfo(url: string): Promise<{ node_count: number | string, 
         node_count: nodeCount,
         type_count: Object.fromEntries(Object.entries(typeCount).filter(([, v]) => v > 0)),
         regions: Object.fromEntries(Object.entries(regions).filter(([, v]) => v > 0)),
+        names,
       };
     } catch { /* 忽略 Base64 解析错误 */ }
     return null;
@@ -377,7 +418,7 @@ class SubinfoPlugin extends Plugin {
     expireTs: number; 
     startTs: number; 
     websiteInfo: { website: string | null; websiteName: string | null };
-    nodeInfo: { node_count: string | number; type_count: Record<string, number>; regions: Record<string, number> } | null;
+    nodeInfo: NodeInfoResult | null;
     errorMessage: string | null;
   }> {
     const websiteInfo = await getWebsiteInfo(url);
@@ -390,7 +431,7 @@ class SubinfoPlugin extends Plugin {
         used: 0, upload: 0, download: 0, total: 0, remain: 0, percent: 0,
         expireTs: 0, startTs: 0,
         websiteInfo,
-        nodeInfo: null as { node_count: string | number; type_count: Record<string, number>; regions: Record<string, number> } | null,
+        nodeInfo: null as NodeInfoResult | null,
         errorMessage: null as string | null,
     };
 
@@ -597,6 +638,12 @@ class SubinfoPlugin extends Plugin {
           }
         }
         seg.push(blockquoteTag(nodeStats.trim()));
+
+        // 节点名称折叠列表
+        if (nodeInfo.names && nodeInfo.names.length > 0) {
+          const nameList = nodeInfo.names.map((n: string) => htmlEscape(n)).join('\n');
+          seg.push(blockquoteTag(`📋 节点列表 (${nodeInfo.names.length}个)\n${nameList}`));
+        }
       } else {
         seg.push(`(未能解析节点列表)`);
       }
@@ -730,6 +777,16 @@ class SubinfoPlugin extends Plugin {
             } else {
                 outputText += `${boldTag('到期时间')}：${codeTag('未知或永久')}`;
             }
+        }
+        
+        // 节点名称列表
+        if (result.nodeInfo && result.nodeInfo.names && result.nodeInfo.names.length > 0) {
+          const nodeNames = result.nodeInfo.names.map((n: string) => htmlEscape(n)).join('\n');
+          if (isTxtOutput) {
+            outputText += `\n\n📋 节点列表:\n${result.nodeInfo.names.join('\n')}`;
+          } else {
+            outputText += `\n\n<blockquote expandable>📋 节点列表 (${result.nodeInfo.names.length}个)\n${nodeNames}</blockquote>`;
+          }
         }
         
         finalOutput += outputText + separator;
