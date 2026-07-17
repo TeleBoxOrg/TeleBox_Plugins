@@ -157,9 +157,9 @@ class WhoisPlugin extends Plugin {
       
       // 明确请求帮助时才显示
       if (sub === "help" || sub === "h") {
-        await msg.edit({ 
-          text: help_text, 
-          parseMode: "html",
+        await msg.edit({
+        text: help_text,
+        parseMode: "html",
         linkPreview: false
       });
         return;
@@ -219,8 +219,8 @@ class WhoisPlugin extends Plugin {
       // 无参数时显示错误提示
       if (!domain) {
         await msg.edit({
-          text: `❌ <b>请指定域名</b>\n\n💡 用法: <code>${mainPrefix}whois &lt;域名&gt;</code>\n或回复包含域名的消息后使用 <code>${mainPrefix}whois</code>`,
-          parseMode: "html",
+        text: `❌ <b>请指定域名</b>\n\n💡 用法: <code>${mainPrefix}whois &lt;域名&gt;</code>\n或回复包含域名的消息后使用 <code>${mainPrefix}whois</code>`,
+        parseMode: "html",
         linkPreview: false
       });
         return;
@@ -230,8 +230,8 @@ class WhoisPlugin extends Plugin {
       const domainRegex = /^[a-zA-Z0-9][a-zA-Z0-9-]{0,61}[a-zA-Z0-9]?(?:\.[a-zA-Z]{2,})+$/;
       if (!domainRegex.test(domain)) {
         await msg.edit({
-          text: `❌ <b>域名格式无效</b>\n\n<b>输入的域名：</b> <code>${htmlEscape(domain)}</code>\n\n💡 请输入有效的域名，例如：\n• example.com\n• google.com\n• github.io`,
-          parseMode: "html",
+        text: `❌ <b>域名格式无效</b>\n\n<b>输入的域名：</b> <code>${htmlEscape(domain)}</code>\n\n💡 请输入有效的域名，例如：\n• example.com\n• google.com\n• github.io`,
+        parseMode: "html",
         linkPreview: false
       });
         return;
@@ -266,8 +266,8 @@ class WhoisPlugin extends Plugin {
         
         if (!whoisData) {
           await msg.edit({
-            text: `❌ <b>查询失败</b>\n\n<b>域名：</b> <code>${htmlEscape(domain)}</code>\n\n💡 可能的原因：\n• 域名不存在或未注册\n• 域名格式不正确\n• WHOIS 信息不可用\n\n📖 请检查域名拼写是否正确`,
-            parseMode: "html",
+        text: `❌ <b>查询失败</b>\n\n<b>域名：</b> <code>${htmlEscape(domain)}</code>\n\n💡 可能的原因：\n• 域名不存在或未注册\n• 域名格式不正确\n• WHOIS 信息不可用\n\n📖 请检查域名拼写是否正确`,
+        parseMode: "html",
         linkPreview: false
       });
           return;
@@ -320,8 +320,8 @@ class WhoisPlugin extends Plugin {
         
       } else {
         await msg.edit({
-          text: `❌ <b>API 服务器错误</b>\n\n<b>状态码：</b> ${apiResponse.status}\n\n💡 请稍后重试`,
-          parseMode: "html",
+        text: `❌ <b>API 服务器错误</b>\n\n<b>状态码：</b> ${apiResponse.status}\n\n💡 请稍后重试`,
+        parseMode: "html",
         linkPreview: false
       });
       }
@@ -454,8 +454,8 @@ class WhoisPlugin extends Plugin {
     }
     
     await msg.edit({
-      text: formattedOutput,
-      parseMode: "html",
+        text: formattedOutput,
+        parseMode: "html",
         linkPreview: false
       });
   }
@@ -480,8 +480,8 @@ class WhoisPlugin extends Plugin {
     }
     
     await msg.edit({
-      text: `🔍 <b>批量查询中...</b>\n\n<b>域名数量：</b> ${domains.length}`,
-      parseMode: "html",
+        text: `🔍 <b>批量查询中...</b>\n\n<b>域名数量：</b> ${domains.length}`,
+        parseMode: "html",
         linkPreview: false
       });
     
@@ -558,8 +558,8 @@ class WhoisPlugin extends Plugin {
     output += `\n\n💡 使用 <code>${mainPrefix}whois history</code> 查看详细信息`;
     
     await msg.edit({
-      text: output,
-      parseMode: "html",
+        text: output,
+        parseMode: "html",
         linkPreview: false
       });
   }
@@ -616,8 +616,8 @@ class WhoisPlugin extends Plugin {
     output += `💡 使用 <code>${mainPrefix}whois clear</code> 清除历史记录`;
     
     await msg.edit({
-      text: output,
-      parseMode: "html",
+        text: output,
+        parseMode: "html",
         linkPreview: false
       });
   }
@@ -650,8 +650,8 @@ class WhoisPlugin extends Plugin {
     await this.db.write();
     
     await msg.edit({
-      text: `🗑️ <b>清除完成</b>\n\n• 清除历史记录：${historyCount} 条\n• 清除缓存：${cacheCount} 个域名`,
-      parseMode: "html",
+        text: `🗑️ <b>清除完成</b>\n\n• 清除历史记录：${historyCount} 条\n• 清除缓存：${cacheCount} 个域名`,
+        parseMode: "html",
         linkPreview: false
       });
   }
