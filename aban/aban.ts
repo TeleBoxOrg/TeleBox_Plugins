@@ -157,15 +157,22 @@ type ResolvedTarget = {
 };
 
 class UserResolver {
+  private static isMetaFlag(arg: string): boolean {
+    const a = arg.trim().toLowerCase();
+    return a === "true" || a === "false" || a === "confirm";
+  }
+
   static async resolveTarget(
     client: TelegramClient,
     message: Api.Message,
     args: string[]
   ): Promise<ResolvedTarget> {
+    // true/false 是确认位，不是目标；`.sb true` 应回落到回复消息
+    const targetArgs = args.filter((a) => !this.isMetaFlag(a));
+
     // 从参数解析
-    if (args.length > 0) {
-      const target = args[0];
-      return await this.resolveFromString(client, message, target);
+    if (targetArgs.length > 0) {
+      return await this.resolveFromString(client, message, targetArgs[0]);
     }
     
     // 从回复消息解析
