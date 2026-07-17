@@ -677,11 +677,26 @@ class MusicHubPlugin extends Plugin {
   ): Promise<Api.Message | undefined> {
     if (targetMsg) {
       try {
-        const edited = await targetMsg.edit({ text, parseMode });
+        const edited = await targetMsg.edit({ text, parseMode, linkPreview: false });
         return edited || targetMsg;
       } catch (error) {
         if (isMessageNotModifiedError(error)) return targetMsg;
-        await this.deleteQuietly(targetMsg);
+        // Do not delete+resend on edit failure — flood the chat. Retry via client.editMessage.
+        try {
+          const client = sourceMsg.client || (await getGlobalClient());
+          if (client) {
+            const edited = await client.editMessage(sourceMsg.peerId, {
+              message: targetMsg.id,
+              text,
+              parseMode,
+              linkPreview: false,
+            });
+            return (edited as Api.Message) || targetMsg;
+          }
+        } catch (e2) {
+          if (isMessageNotModifiedError(e2)) return targetMsg;
+          console.warn("[music_hub] editMessage fallback failed:", e2);
+        }
       }
     }
 
