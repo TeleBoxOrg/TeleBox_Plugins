@@ -201,9 +201,25 @@ async function checkAdminPermissions(msg: Api.Message): Promise<boolean> {
   }
 }
 
-async function removeChatMember(client: TelegramClient, channelEntity: any, userId: number): Promise<void> {
+async function resolveParticipantEntity(client: TelegramClient, user: Api.User | number): Promise<any> {
+  // 已注销账号只能用完整 User 上的 accessHash；裸 id 会 getInputEntity 失败
+  if (typeof user === "number") {
+    return await client.getInputEntity(user);
+  }
   try {
-    const userEntity = await client.getInputEntity(userId);
+    return await client.getInputEntity(user);
+  } catch {
+    return new Api.InputPeerUser({
+      userId: user.id,
+      accessHash: user.accessHash ?? (0 as any),
+    });
+  }
+}
+
+async function removeChatMember(client: TelegramClient, channelEntity: any, user: Api.User | number): Promise<void> {
+  const userId = typeof user === "number" ? user : Number(user.id);
+  try {
+    const userEntity = await resolveParticipantEntity(client, user);
     console.log(`正在移出用户: ${userId}`);
     await client.invoke(new Api.channels.EditBanned({
       channel: channelEntity,
@@ -249,7 +265,7 @@ async function removeChatMember(client: TelegramClient, channelEntity: any, user
       const seconds = parseInt(error.errorMessage.match(/\d+/)?.[0] || "60");
       console.log(`遇到频率限制，等待 ${seconds} 秒后重试`);
       await sleep(seconds * 1000);
-      await removeChatMember(client, channelEntity, userId);
+      await removeChatMember(client, channelEntity, user);
     } else if (error.errorMessage && error.errorMessage.includes("USER_NOT_PARTICIPANT")) {
       console.log(`用户 ${userId} 已不在群组中`);
       return;
@@ -390,7 +406,8 @@ async function streamProcessMembers(options: StreamProcessOptions): Promise<Stre
               continue;
             }
           } else if (mode === "4") {
-            if (user.deleted) {
+            // 已注销账号：deleted 标志（部分环境字段名可能不同）
+            if (user.deleted || (user as any).isDeleted) {
               shouldProcess = true;
             }
           } else if (mode === "5") {
@@ -427,7 +444,7 @@ async function streamProcessMembers(options: StreamProcessOptions): Promise<Stre
                 break;
               }
               try {
-                await removeChatMember(client, chatEntity, uid);
+                await removeChatMember(client, chatEntity, user);
                 result.totalRemoved++;
                 if (result.totalRemoved % 5 === 0 && statusCallback) {
                   const limitInfo = maxRemove ? ` / 上限: ${maxRemove}` : '';

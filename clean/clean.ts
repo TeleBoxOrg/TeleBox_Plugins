@@ -252,6 +252,8 @@ class CleanPlugin extends Plugin {
   }
 
   // 群组已注销账号清理
+  // 根因修复：必须传完整 User（含 accessHash），不能只传裸 userId；
+  // banUser 失败返回 false 时不能算「已清理」。
   private async cleanDeletedMember(client: any, msg: Api.Message, cleanMembers: boolean = false): Promise<void> {
     const chat = await msg.getChat();
     if (!chat || !(chat instanceof Api.Chat || chat instanceof Api.Channel)) {
@@ -263,57 +265,90 @@ class CleanPlugin extends Plugin {
       ? "🔍 正在扫描并清理群组已注销账号..." 
       : "🔍 正在扫描群组已注销账号...");
 
-    const chatId = chat.id;
-    if (cleanMembers && !await this.checkBanPermission(client, chatId)) {
+    // 用完整 chat 实体，避免 EditBanned 拿不到 channel access_hash
+    const chatEntity = await client.getInputEntity(chat);
+    if (cleanMembers && !await this.checkBanPermission(client, chat)) {
       await this.sendError(msg, "没有封禁用户权限，无法执行清理");
       return;
     }
 
-    let deletedCount = 0;
-    const deletedUsers: Array<{id: string, username?: string}> = [];
+    let foundCount = 0;
+    let removedCount = 0;
+    let failedCount = 0;
+    const deletedUsers: Array<{id: string, username?: string, ok?: boolean, err?: string}> = [];
 
-    const participants = client.iterParticipants(chatId);
+    // 优先用完整 chat 实体迭代，保证 participant 上带 accessHash
+    const participants = client.iterParticipants(chat);
     for await (const participant of participants) {
       if (participant instanceof Api.User && participant.deleted) {
-        deletedCount++;
-        deletedUsers.push({ 
-          id: participant.id.toString(), 
-          username: participant.username || "未知" 
-        });
-        
+        foundCount++;
+        const entry: {id: string, username?: string, ok?: boolean, err?: string} = {
+          id: participant.id.toString(),
+          username: participant.username || "已注销账号",
+        };
+
         if (cleanMembers) {
           try {
-            await banUser(client, chatId, participant.id);
-            await sleep(100);
+            // 传完整 User，不要 participant.id（已注销账号 getInputEntity(id) 会失败）
+            const ok = await banUser(client, chatEntity, participant);
+            if (ok) {
+              removedCount++;
+              entry.ok = true;
+              // 踢出：封禁后再解封，避免永久 ban 列表堆积（与 kickUser 一致）
+              try {
+                await unbanUser(client, chatEntity, participant);
+              } catch {
+                /* 解封失败不影响已移出 */
+              }
+            } else {
+              failedCount++;
+              entry.ok = false;
+              entry.err = "封禁接口返回失败";
+            }
+            await sleep(150);
           } catch (error: any) {
             if (error.message?.includes("FLOOD_WAIT")) {
               await this.handleFloodWait(msg, error);
               return;
             }
+            failedCount++;
+            entry.ok = false;
+            entry.err = error?.errorMessage || error?.message || String(error);
           }
         }
+        deletedUsers.push(entry);
       }
     }
 
     let result = "";
-    if (deletedCount === 0) {
+    if (foundCount === 0) {
       result = "✅ <b>扫描完成</b>\n\n此群组中没有发现已注销账号。";
+    } else if (cleanMembers) {
+      result =
+        `✅ <b>清理完成</b>\n\n` +
+        `发现 <code>${foundCount}</code> 个已注销账号\n` +
+        `成功移出 <code>${removedCount}</code> 个` +
+        (failedCount ? ` · 失败 <code>${failedCount}</code> 个` : "") +
+        `:\n\n`;
+      deletedUsers.slice(0, 15).forEach(user => {
+        const mark = user.ok === false ? "❌" : "✅";
+        result += `• ${mark} <a href="tg://user?id=${user.id}">${user.id}</a>${user.err ? ` · ${user.err}` : ""}\n`;
+      });
+      if (foundCount > 15) {
+        result += `\n... 还有 ${foundCount - 15} 个未显示\n`;
+      }
+      if (failedCount) {
+        result += `\n💡 失败常见原因：无 ban 权限、目标是管理员、或实体缺少 access_hash`;
+      }
     } else {
-      result = cleanMembers 
-        ? `✅ <b>清理完成</b>\n\n已清理 <code>${deletedCount}</code> 个已注销账号:\n\n`
-        : `✅ <b>扫描完成</b>\n\n此群组的已注销账号数: <code>${deletedCount}</code>:\n\n`;
-      
+      result = `✅ <b>扫描完成</b>\n\n此群组的已注销账号数: <code>${foundCount}</code>:\n\n`;
       deletedUsers.slice(0, 15).forEach(user => {
         result += `• <a href="tg://user?id=${user.id}">${user.id}</a>\n`;
       });
-      
-      if (deletedCount > 15) {
-        result += `\n... 还有 ${deletedCount - 15} 个未显示\n`;
+      if (foundCount > 15) {
+        result += `\n... 还有 ${foundCount - 15} 个未显示\n`;
       }
-      
-      if (!cleanMembers) {
-        result += `\n💡 使用 <code>${mainPrefix}clean deleted member rm</code> 清理这些已注销账号`;
-      }
+      result += `\n💡 使用 <code>${mainPrefix}clean deleted member rm</code> 清理这些已注销账号`;
     }
 
     await this.editMessage(msg, result);
