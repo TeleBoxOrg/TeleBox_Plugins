@@ -2,6 +2,7 @@ import { Plugin } from "@utils/pluginBase";
 import { getPrefixes } from "@utils/pluginManager";
 import type { MessageContext } from "@mtcute/dispatcher";
 import { thtml as html } from "@mtcute/html-parser";
+import { FileLocation } from "@mtcute/core";
 import { getGlobalClient } from "@utils/runtimeManager";
 import { logger } from "@utils/logger";
 import { getErrorMessage } from "@utils/errorHelpers";
@@ -44,8 +45,8 @@ const FORMAT_LABELS: Record<ThemeFormat, string> = {
 const FORMAT_EXT: Record<ThemeFormat, string> = {
   attheme: ".attheme",
   "tdesktop-theme": ".tdesktop-theme",
-  "tgx-theme": ".json",
-  "ios-theme": ".json",
+  "tgx-theme": ".tgx-theme",
+  "ios-theme": ".tgios-theme",
 };
 
 // client-target aliases (user doesn't need to know source format)
@@ -109,6 +110,46 @@ function adjustBright(hex: string, pct: number): string {
 }
 
 function toRgb(hex: string): string { return hex.length === 9 ? "#" + hex.slice(3) : hex; }
+
+/** Normalize to #RRGGBB / #AARRGGBB for TGX (#-prefixed) */
+function toTgxColor(hex: string): string {
+  if (!hex || !hex.startsWith("#")) return "#000000";
+  const h = hex.slice(1);
+  if (h.length === 6) return `#${h.toUpperCase()}`;
+  if (h.length === 8) return `#${h.toUpperCase()}`; // already AARRGGBB or RRGGBBAA?
+  // our toHex uses #AARRGGBB when alpha < 255
+  if (h.length === 8) return `#${h.toUpperCase()}`;
+  return `#${h.toUpperCase()}`;
+}
+
+/** iOS theme colors: RRGGBB or AARRGGBB (no #), alpha first when present */
+function toIosColor(hex: string): string {
+  if (!hex) return "000000";
+  let h = hex.startsWith("#") ? hex.slice(1) : hex;
+  if (h.length === 6) return h.toLowerCase();
+  if (h.length === 8) {
+    // our internal format is AARRGGBB when alpha present
+    return h.toLowerCase();
+  }
+  if (h.length === 3) return `${h[0]}${h[0]}${h[1]}${h[1]}${h[2]}${h[2]}`.toLowerCase();
+  return "000000";
+}
+
+function isDarkHex(hex: string): boolean {
+  const rgb = toRgb(hex).slice(1);
+  if (rgb.length < 6) return true;
+  const r = parseInt(rgb.slice(0, 2), 16);
+  const g = parseInt(rgb.slice(2, 4), 16);
+  const b = parseInt(rgb.slice(4, 6), 16);
+  return (r * 299 + g * 587 + b * 114) / 1000 < 128;
+}
+
+function pickColor(colors: Record<string, string>, keys: string[], fallback: string): string {
+  for (const k of keys) {
+    if (colors[k]) return colors[k];
+  }
+  return fallback;
+}
 
 // ─── Mapping: Android ↔ Desktop ──────────────────────────────────────────────
 
@@ -488,199 +529,495 @@ function genAndroid(colors: Record<string, string>): string[] {
   return Object.entries(r).map(([k, v]) => `${k}=${v}`);
 }
 
-function genTgx(colors: Record<string, string>): string {
-  const m = (ak: string, fb: string) => colors[A2T_MAP[ak] || ak] || colors[ak] || fb;
-  const bg = m("windowBackgroundWhite", "#1c1b1f");
-  const t = m("windowBackgroundWhiteBlackText", "#e6e1e5");
-  const p = m("windowBackgroundWhiteBlueText", "#6750a4");
-  const st = m("windowBackgroundWhiteGrayText", "#938f96");
-  const mi = colors["bubbleIn_background"] || colors["msgInBg"] || colors["chat_inBubble"] || "#2b2930";
-  const mo = colors["bubbleOut_background"] || colors["msgOutBg"] || colors["chat_outBubble"] || p;
-  const tb = colors["headerBackground"] || colors["topBarBg"] || colors["actionBarDefault"] || bg;
-  return JSON.stringify({
-    // Chat list
-    chatListBackground: bg,
-    chatListAction: st,
-    chatListIcon: st,
-    headerBackground: tb,
-    headerTitle: t,
-    headerIcon: p,
-    headerTabActive: p,
-    // Controls
-    controlActive: p,
-    controlContent: "#ffffff",
-    textPlaceholder: st,
-    // Badge
-    badge: p,
-    badgeMuted: st,
-    badgeFailedText: "#f44336",
-    // Ticks
-    ticks: p,
-    ticksRead: p,
-    // Avatar
-    avatar_content: t,
-    avatarArchive: adjustBright(bg, 15),
-    // Circle buttons
-    circleButtonRegular: p,
-    circleButtonRegularIcon: "#ffffff",
-    circleButtonChat: bg,
-    circleButtonChatIcon: p,
-    circleButtonTheme: p,
-    circleButtonThemeIcon: "#ffffff",
-    circleButtonActive: adjustBright(p, -15),
-    circleButtonActiveIcon: "#ffffff",
-    // Keyboard
-    chatKeyboard: bg,
-    // Passcode
-    passcode: bg,
-    passcodeText: t,
-    passcodeIcon: p,
-    // Bubbles - Incoming
-    bubbleIn_background: mi,
-    bubbleIn_text: t,
-    bubbleIn_textLink: p,
-    bubbleIn_time: st,
-    bubbleIn_chatVerticalLine: p,
-    bubbleIn_messageAuthor: p,
-    bubbleIn_file: p,
-    bubbleIn_separator: st,
-    bubbleIn_waveformActive: p,
-    bubbleIn_waveformInactive: st,
-    // Bubbles - Outgoing
-    bubbleOut_background: mo,
-    bubbleOut_text: t,
-    bubbleOut_textLink: p,
-    bubbleOut_time: st,
-    bubbleOut_chatVerticalLine: p,
-    bubbleOut_messageAuthor: p,
-    bubbleOut_file: p,
-    bubbleOut_separator: st,
-    bubbleOut_waveformActive: p,
-    bubbleOut_waveformInactive: st,
-    bubbleOut_outline: p,
-    // Bubbles - Shared
-    bubble_messageSelection: p + "1a",
-    bubble_unreadText: p,
-    bubble_dateText: st,
-    bubble_buttonText: p,
-    bubble_mediaOverlayText: "#ffffff",
-    bubble_overlayText: "#ffffff",
-    // Service messages
-    chatServiceBackground: p + "3c",
-    // Separator
-    separator: adjustBright(bg, 15),
-    // Theme color
-    themeColor: p,
-    // Player
-    playerBackground: bg,
-    playerTitle: t,
-    playerProgress: p,
-    playerProgressBackground: st,
-    playerButtonActive: p,
-    // Calls
-    callsBg: bg,
-    callsName: t,
-    callsReceived: "#4caf50",
-    callsMissed: "#f44336",
-  }, null, 2);
+/** Real TGX format: `!` meta / `@` props / `#` colors (NOT JSON). */
+function genTgx(colors: Record<string, string>, name = "TeleBox Theme"): string {
+  const bg = pickColor(colors, ["windowBackgroundWhite", "filling", "background", "windowBg", "chatListBackground"], "#1C2733");
+  const t = pickColor(colors, ["windowBackgroundWhiteBlackText", "text", "windowFg"], "#E6E1E5");
+  const p = pickColor(colors, ["windowBackgroundWhiteBlueText", "textLink", "progress", "iconActive", "windowBackgroundWhiteBlueText4"], "#6750A4");
+  const st = pickColor(colors, ["windowBackgroundWhiteGrayText", "textLight", "icon", "windowSubTextFg"], "#7D8E98");
+  const mi = pickColor(colors, ["chat_inBubble", "bubbleIn_background", "msgInBg"], "#2B2930");
+  const mo = pickColor(colors, ["chat_outBubble", "bubbleOut_background", "msgOutBg"], p);
+  const tb = pickColor(colors, ["actionBarDefault", "headerBackground", "topBarBg"], bg);
+  const sep = pickColor(colors, ["divider", "separator"], adjustBright(bg, 15));
+  const dark = isDarkHex(bg) ? 1 : 0;
+  const c = (hex: string) => toTgxColor(hex);
+  // Group identical colors on one line (official TGX export style)
+  const colorGroups: Record<string, string[]> = {};
+  const add = (key: string, hex: string) => {
+    const v = c(hex);
+    if (!colorGroups[v]) colorGroups[v] = [];
+    colorGroups[v].push(key);
+  };
+  add("filling", bg);
+  add("background", bg);
+  add("overlayFilling", bg);
+  add("chatBackground", bg);
+  add("chatKeyboard", bg);
+  add("passcode", bg);
+  add("headerBackground", tb);
+  add("headerLightBackground", tb);
+  add("text", t);
+  add("background_text", t);
+  add("headerTitle", t);
+  add("icon", st);
+  add("textLight", st);
+  add("textPlaceholder", st);
+  add("background_icon", st);
+  add("bubbleIn_time", st);
+  add("separator", sep);
+  add("bubbleIn_background", mi);
+  add("bubbleOut_background", mo);
+  add("bubbleIn_text", t);
+  add("bubbleOut_text", t);
+  add("bubbleIn_textLink", p);
+  add("bubbleOut_textLink", p);
+  add("bubbleIn_messageAuthor", p);
+  add("bubbleOut_messageAuthor", p);
+  add("bubbleIn_chatVerticalLine", p);
+  add("bubbleOut_chatVerticalLine", p);
+  add("bubbleIn_waveformActive", p);
+  add("bubbleOut_waveformActive", p);
+  add("bubbleIn_waveformInactive", st);
+  add("bubbleOut_waveformInactive", st);
+  add("ticks", p);
+  add("ticksRead", p);
+  add("badge", p);
+  add("progress", p);
+  add("textLink", p);
+  add("iconActive", p);
+  add("controlActive", p);
+  add("circleButtonRegular", p);
+  add("circleButtonTheme", p);
+  add("circleButtonActive", adjustBright(p, -15));
+  add("circleButtonChat", bg);
+  add("circleButtonChatIcon", p);
+  add("unread", p);
+  add("playerProgress", p);
+  add("playerBackground", bg);
+  add("playerTitle", t);
+  add("attachPhoto", bg);
+  add("attachFile", bg);
+  add("attachContact", bg);
+  add("attachLocation", bg);
+  add("attachInlineBot", bg);
+
+  const lines: string[] = [
+    "!",
+    `id: ${Math.floor(Date.now() / 1000) % 100000}`,
+    `name: ${JSON.stringify(name)}`,
+    `time: ${Math.floor(Date.now() / 1000)}`,
+    "@",
+    `dark: ${dark}`,
+    `parentTheme: ${dark ? 1 : 0}`,
+    "shadowDepth: 1",
+    "wallpaperUsageId: 1",
+    "bubbleCorner: 18",
+    "bubbleCornerMerged: 6",
+    "bubbleDateCorner: 13",
+    "dateCorner: 13",
+    "bubbleOuterMargin: 8",
+    "#",
+  ];
+  for (const [hex, keys] of Object.entries(colorGroups)) {
+    lines.push(`${keys.join(", ")}: ${hex}`);
+  }
+  return lines.join("\n") + "\n";
 }
 
-function genIos(colors: Record<string, string>): string {
-  const m = (ak: string, fb: string) => colors[A2I_MAP[ak] || ak] || colors[ak] || fb;
-  const bg = m("windowBackgroundWhite", "#1c1b1f");
-  const t = m("windowBackgroundWhiteBlackText", "#e6e1e5");
-  const p = m("windowBackgroundWhiteBlueText", "#6750a4");
-  const st = m("windowBackgroundWhiteGrayText", "#938f96");
-  const mi = colors["chatIncomingBubble"] || colors["msgInBg"] || colors["chat_inBubble"] || "#2b2930";
-  const mo = colors["chatOutgoingBubble"] || colors["msgOutBg"] || colors["chat_outBubble"] || p;
-  const tb = colors["navigationBarBackground"] || colors["topBarBg"] || colors["actionBarDefault"] || bg;
-  return JSON.stringify({
-    // General
-    backgroundColor: bg,
-    primaryText: t,
-    secondaryText: st,
-    accentColor: p,
-    accentIcon: "#ffffff",
-    destructiveText: "#f44336",
-    separatorColor: adjustBright(bg, 15),
-    listRipple: p + "1a",
-    // Navigation Bar
-    navigationBarBackground: tb,
-    navigationBarTitle: t,
-    navigationBarSubtitle: st,
-    navigationBarIcons: p,
-    // Tab Bar
-    tabBarBackground: bg,
-    tabBarIcon: st,
-    tabBarActiveIcon: p,
-    tabBarActiveLine: p,
-    tabBarBadge: p,
-    tabBarBadgeText: "#ffffff",
-    // Chat List
-    chatListBackground: bg,
-    chatListName: t,
-    chatListMessage: st,
-    chatListDate: st,
-    chatListBadge: p,
-    chatListBadgeText: "#ffffff",
-    chatListBadgeMuted: st,
-    chatListSentIcon: p,
-    chatListReadIcon: p,
-    chatListDraft: "#f44336",
-    chatListVerified: p,
-    // Chat - Incoming
-    chatIncomingBubble: mi,
-    chatIncomingBubbleSelected: adjustBright(mi, 15),
-    chatIncomingText: t,
-    chatIncomingLink: p,
-    chatIncomingTime: st,
-    chatIncomingViews: st,
-    chatIncomingReplyLine: p,
-    chatIncomingReplyName: p,
-    chatIncomingReplyMessage: st,
-    // Chat - Outgoing
-    chatOutgoingBubble: mo,
-    chatOutgoingBubbleSelected: adjustBright(mo, 15),
-    chatOutgoingText: t,
-    chatOutgoingLink: p,
-    chatOutgoingTime: st,
-    chatOutgoingViews: st,
-    chatOutgoingReplyLine: p,
-    chatOutgoingReplyName: p,
-    chatOutgoingReplyMessage: st,
-    // Chat - Service
-    chatServiceBackground: p + "3c",
-    chatServiceText: "#ffffff",
-    chatServiceLink: "#ffffff",
-    chatStatus: p,
-    chatSelectionBackground: p + "1a",
-    chatJumpButtonBackground: bg,
-    chatJumpButtonIcon: p,
-    // Keyboard
-    keyboardBackground: bg,
-    keyboardText: t,
-    keyboardPlaceholder: st,
-    keyboardSendIcon: p,
-    keyboardIcon: st,
-    keyboardActiveIcon: p,
-    keyboardBadge: p,
-    keyboardBadgeText: "#ffffff",
-    // Avatar
-    avatarPlaceholderText: t,
-    // Controls
-    switchActive: p,
-    switchInactive: st,
-    // Player
-    playerBackground: bg,
-    playerIcon: t,
-    playerProgress: p,
-    playerProgressBackground: st,
-    // Calls
-    callGreenIcon: "#4caf50",
-    callRedIcon: "#f44336",
-    // Theme Color
-    themeColor: p,
-  }, null, 2);
+/** Real iOS .tgios-theme: nested camelCase `key: value` (NOT JSON). */
+function genIos(colors: Record<string, string>, name = "TeleBox Theme"): string {
+  const bg = pickColor(colors, ["windowBackgroundWhite", "backgroundColor", "windowBg", "list.plainBg"], "#1c1b1f");
+  const t = pickColor(colors, ["windowBackgroundWhiteBlackText", "primaryText", "windowFg", "list.primaryText"], "#e6e1e5");
+  const p = pickColor(colors, ["windowBackgroundWhiteBlueText", "accentColor", "list.accent", "windowBackgroundWhiteBlueText4"], "#6750a4");
+  const st = pickColor(colors, ["windowBackgroundWhiteGrayText", "secondaryText", "list.secondaryText"], "#938f96");
+  const mi = pickColor(colors, ["chat_inBubble", "chatIncomingBubble", "msgInBg"], "#2b2930");
+  const mo = pickColor(colors, ["chat_outBubble", "chatOutgoingBubble", "msgOutBg"], p);
+  const tb = pickColor(colors, ["actionBarDefault", "navigationBarBackground", "topBarBg", "root.navBar.background"], bg);
+  const sep = pickColor(colors, ["divider", "separatorColor", "list.blocksSeparator"], adjustBright(bg, 15));
+  const dark = isDarkHex(bg);
+  const ic = (hex: string) => toIosColor(hex);
+  const white = "ffffff";
+  const black = "000000";
+  const destructive = "ff3b30";
+  const outText = isDarkHex(mo) ? white : black;
+
+  // Minimal but valid nested structure accepted by Telegram iOS
+  const lines: string[] = [
+    `name: ${name}`,
+    `basedOn: ${dark ? "night" : "day"}`,
+    `dark: ${dark ? "true" : "false"}`,
+    "intro:",
+    `  statusBar: ${dark ? "white" : "black"}`,
+    `  startButton: ${ic(p)}`,
+    `  dot: ${ic(st)}`,
+    "passcode:",
+    "  bg:",
+    `    top: ${ic(tb)}`,
+    `    bottom: ${ic(bg)}`,
+    `  button: clear`,
+    "root:",
+    `  statusBar: ${dark ? "white" : "black"}`,
+    "  tabBar:",
+    `    background: ${ic(bg)}`,
+    `    separator: ${ic(sep)}`,
+    `    icon: ${ic(st)}`,
+    `    selectedIcon: ${ic(p)}`,
+    `    text: ${ic(st)}`,
+    `    selectedText: ${ic(p)}`,
+    `    badgeBackground: ${destructive}`,
+    `    badgeStroke: ${destructive}`,
+    `    badgeText: ${white}`,
+    "  navBar:",
+    `    button: ${ic(p)}`,
+    `    disabledButton: ${ic(st)}`,
+    `    primaryText: ${ic(t)}`,
+    `    secondaryText: ${ic(st)}`,
+    `    control: ${ic(st)}`,
+    `    accentText: ${ic(p)}`,
+    `    background: ${ic(tb)}`,
+    `    separator: ${ic(sep)}`,
+    `    badgeFill: ${destructive}`,
+    `    badgeStroke: ${destructive}`,
+    `    badgeText: ${white}`,
+    "  searchBar:",
+    `    background: ${ic(bg)}`,
+    `    accent: ${ic(p)}`,
+    `    inputFill: ${ic(adjustBright(bg, dark ? 10 : -8))}`,
+    `    inputText: ${ic(t)}`,
+    `    inputPlaceholderText: ${ic(st)}`,
+    `    inputIcon: ${ic(st)}`,
+    `    inputClearButton: ${ic(st)}`,
+    `    separator: ${ic(sep)}`,
+    `  keyboard: ${dark ? "dark" : "light"}`,
+    "list:",
+    `  blocksBg: ${ic(adjustBright(bg, dark ? -5 : -6))}`,
+    `  plainBg: ${ic(bg)}`,
+    `  primaryText: ${ic(t)}`,
+    `  secondaryText: ${ic(st)}`,
+    `  disabledText: ${ic(st)}`,
+    `  accent: ${ic(p)}`,
+    `  highlighted: ${ic(p)}`,
+    `  destructive: ${destructive}`,
+    `  placeholderText: ${ic(st)}`,
+    `  itemBlocksBg: ${ic(bg)}`,
+    `  itemHighlightedBg: ${ic(adjustBright(bg, dark ? 12 : -10))}`,
+    `  blocksSeparator: ${ic(sep)}`,
+    `  plainSeparator: ${ic(sep)}`,
+    `  disclosureArrow: ${ic(st)}`,
+    `  sectionHeaderText: ${ic(st)}`,
+    `  freeText: ${ic(st)}`,
+    `  freeTextError: ${destructive}`,
+    `  freeTextSuccess: 26972c`,
+    `  freeMonoIcon: ${ic(st)}`,
+    "  switch:",
+    `    frame: ${ic(sep)}`,
+    `    handle: ${white}`,
+    `    content: ${ic(p)}`,
+    `    positive: 00c900`,
+    `    negative: ${destructive}`,
+    "  disclosureActions:",
+    `    neutral1:`,
+    `      bg: ${ic(p)}`,
+    `      fg: ${white}`,
+    `    neutral2:`,
+    `      bg: f09a37`,
+    `      fg: ${white}`,
+    `    destructive:`,
+    `      bg: ${destructive}`,
+    `      fg: ${white}`,
+    `    constructive:`,
+    `      bg: 00c900`,
+    `      fg: ${white}`,
+    `    accent:`,
+    `      bg: ${ic(p)}`,
+    `      fg: ${white}`,
+    `    warning:`,
+    `      bg: ff9500`,
+    `      fg: ${white}`,
+    `    inactive:`,
+    `      bg: ${ic(st)}`,
+    `      fg: ${white}`,
+    "  check:",
+    `    bg: ${ic(p)}`,
+    `    stroke: ${ic(sep)}`,
+    `    fg: ${white}`,
+    `  controlSecondary: ${ic(sep)}`,
+    "  freeInputField:",
+    `    bg: ${ic(adjustBright(bg, dark ? 10 : -8))}`,
+    `    stroke: ${ic(sep)}`,
+    `    placeholder: ${ic(st)}`,
+    `    primary: ${ic(t)}`,
+    `    control: ${ic(st)}`,
+    `  mediaPlaceholder: ${ic(adjustBright(bg, dark ? 8 : -6))}`,
+    `  scrollIndicator: ${ic(st)}`,
+    `  pageIndicatorInactive: ${ic(sep)}`,
+    `  inputClearButton: ${ic(st)}`,
+    "chatList:",
+    `  bg: ${ic(bg)}`,
+    `  itemSeparator: ${ic(sep)}`,
+    `  itemBg: ${ic(bg)}`,
+    `  pinnedItemBg: ${ic(bg)}`,
+    `  itemHighlightedBg: ${ic(adjustBright(bg, dark ? 10 : -8))}`,
+    `  itemSelectedBg: ${ic(adjustBright(bg, dark ? 12 : -10))}`,
+    `  title: ${ic(t)}`,
+    `  secretTitle: 00b12c`,
+    `  dateText: ${ic(st)}`,
+    `  authorName: ${ic(t)}`,
+    `  messageText: ${ic(st)}`,
+    `  messageDraftText: ${destructive}`,
+    `  checkmark: ${ic(p)}`,
+    `  pendingIndicator: ${ic(st)}`,
+    `  failedFill: ${destructive}`,
+    `  failedFg: ${white}`,
+    `  muteIcon: ${ic(st)}`,
+    `  unreadBadgeActiveBg: ${ic(p)}`,
+    `  unreadBadgeActiveText: ${white}`,
+    `  unreadBadgeInactiveBg: ${ic(st)}`,
+    `  unreadBadgeInactiveText: ${white}`,
+    `  pinnedBadge: ${ic(st)}`,
+    `  pinnedSearchBar: ${ic(adjustBright(bg, dark ? 8 : -6))}`,
+    `  regularSearchBar: ${ic(adjustBright(bg, dark ? 8 : -6))}`,
+    `  sectionHeaderBg: ${ic(adjustBright(bg, dark ? -3 : -4))}`,
+    `  sectionHeaderText: ${ic(st)}`,
+    `  verifiedIconBg: ${ic(p)}`,
+    `  verifiedIconFg: ${white}`,
+    `  secretIcon: 00b12c`,
+    "  pinnedArchiveAvatar:",
+    "    background:",
+    `      top: ${ic(p)}`,
+    `      bottom: ${ic(adjustBright(p, -20))}`,
+    `    foreground: ${white}`,
+    "  unpinnedArchiveAvatar:",
+    "    background:",
+    `      top: ${ic(st)}`,
+    `      bottom: ${ic(adjustBright(st, -15))}`,
+    `    foreground: ${white}`,
+    `  onlineDot: 4cc91f`,
+    "chat:",
+    `  defaultWallpaper: ${ic(bg)}`,
+    "  message:",
+    "    incoming:",
+    "      bubble:",
+    "        withWp:",
+    `          bg: ${ic(mi)}`,
+    `          highlightedBg: ${ic(adjustBright(mi, 12))}`,
+    `          stroke: ${ic(mi)}`,
+    "        withoutWp:",
+    `          bg: ${ic(mi)}`,
+    `          highlightedBg: ${ic(adjustBright(mi, 12))}`,
+    `          stroke: ${ic(mi)}`,
+    `      primaryText: ${ic(t)}`,
+    `      secondaryText: ${ic(st)}`,
+    `      linkText: ${ic(p)}`,
+    `      linkHighlight: ${ic(p)}`,
+    `      scam: ${destructive}`,
+    `      textHighlight: ffe438`,
+    `      accentText: ${ic(p)}`,
+    `      accentControl: ${ic(p)}`,
+    `      mediaActiveControl: ${ic(p)}`,
+    `      mediaInactiveControl: ${ic(st)}`,
+    `      pendingActivity: ${ic(st)}`,
+    `      fileTitle: ${ic(p)}`,
+    `      fileDescription: ${ic(st)}`,
+    `      fileDuration: ${ic(st)}`,
+    `      mediaPlaceholder: ${ic(adjustBright(bg, dark ? 8 : -6))}`,
+    "      polls:",
+    `        radioButton: ${ic(sep)}`,
+    `        radioProgress: ${ic(p)}`,
+    `        highlight: ${ic(p)}`,
+    `        separator: ${ic(sep)}`,
+    `        bar: ${ic(p)}`,
+    "      actionButtonsBg:",
+    `        withWp: ${ic(p)}`,
+    `        withoutWp: ${ic(bg)}`,
+    "      actionButtonsStroke:",
+    `        withWp: clear`,
+    `        withoutWp: ${ic(p)}`,
+    "      actionButtonsText:",
+    `        withWp: ${white}`,
+    `        withoutWp: ${ic(p)}`,
+    `      textSelection: ${ic(p)}`,
+    `      textSelectionKnob: ${ic(p)}`,
+    "    outgoing:",
+    "      bubble:",
+    "        withWp:",
+    `          bg: ${ic(mo)}`,
+    `          highlightedBg: ${ic(adjustBright(mo, -15))}`,
+    `          stroke: ${ic(mo)}`,
+    "        withoutWp:",
+    `          bg: ${ic(mo)}`,
+    `          highlightedBg: ${ic(adjustBright(mo, -15))}`,
+    `          stroke: ${ic(mo)}`,
+    `      primaryText: ${outText}`,
+    `      secondaryText: ${outText}`,
+    `      linkText: ${outText}`,
+    `      linkHighlight: ${outText}`,
+    `      scam: ${destructive}`,
+    `      textHighlight: ffe438`,
+    `      accentText: ${outText}`,
+    `      accentControl: ${outText}`,
+    `      mediaActiveControl: ${outText}`,
+    `      mediaInactiveControl: ${outText}`,
+    `      pendingActivity: ${outText}`,
+    `      fileTitle: ${outText}`,
+    `      fileDescription: ${outText}`,
+    `      fileDuration: ${outText}`,
+    `      mediaPlaceholder: ${ic(adjustBright(mo, -10))}`,
+    "      polls:",
+    `        radioButton: ${outText}`,
+    `        radioProgress: ${outText}`,
+    `        highlight: ${outText}`,
+    `        separator: ${outText}`,
+    `        bar: ${outText}`,
+    "      actionButtonsBg:",
+    `        withWp: ${ic(p)}`,
+    `        withoutWp: ${ic(mo)}`,
+    "      actionButtonsStroke:",
+    `        withWp: clear`,
+    `        withoutWp: ${ic(mo)}`,
+    "      actionButtonsText:",
+    `        withWp: ${white}`,
+    `        withoutWp: ${outText}`,
+    `      textSelection: ${outText}`,
+    `      textSelectionKnob: ${outText}`,
+    "  serviceMessage:",
+    `    date: ${ic(st)}`,
+    `    service: ${ic(st)}`,
+    `    serviceLink: ${ic(p)}`,
+    `    unreadBarBg: ${ic(adjustBright(bg, dark ? 8 : -6))}`,
+    `    unreadBarText: ${ic(st)}`,
+    `    unreadBarStroke: ${ic(sep)}`,
+    `    mediaDate: ${white}`,
+    "  inputPanel:",
+    `    panelBg: ${ic(bg)}`,
+    `    panelBorder: ${ic(sep)}`,
+    `    panelControlAccent: ${ic(p)}`,
+    `    panelControl: ${ic(st)}`,
+    `    panelControlDisabled: ${ic(st)}`,
+    `    panelControlDestructive: ${destructive}`,
+    `    inputBg: ${ic(adjustBright(bg, dark ? 10 : -6))}`,
+    `    inputStroke: ${ic(sep)}`,
+    `    inputPlaceholder: ${ic(st)}`,
+    `    inputText: ${ic(t)}`,
+    `    inputControl: ${ic(st)}`,
+    `    actionControl: ${ic(p)}`,
+    `    mediaRecordDot: ${destructive}`,
+    "    mediaRecordControl:",
+    `      button: ${ic(p)}`,
+    `      micLevel: ${ic(p)}`,
+    `      bubbleBg: ${ic(mi)}`,
+    `      bubbleFg: ${ic(t)}`,
+    `      icon: ${white}`,
+    "  inputMediaPanel:",
+    `    panelSeparator: ${ic(sep)}`,
+    `    panelIcon: ${ic(st)}`,
+    `    panelHighlightedIconBg: ${ic(adjustBright(bg, dark ? 12 : -10))}`,
+    `    stickersBg: ${ic(bg)}`,
+    `    stickersSectionText: ${ic(st)}`,
+    `    stickersSearchBg: ${ic(adjustBright(bg, dark ? 8 : -6))}`,
+    `    stickersSearchPlaceholder: ${ic(st)}`,
+    `    stickersSearchPrimary: ${ic(t)}`,
+    `    stickersSearchControl: ${ic(st)}`,
+    `    gifsBg: ${ic(bg)}`,
+    "  inputButtonPanel:",
+    `    panelBg: ${ic(bg)}`,
+    `    panelSeparator: ${ic(sep)}`,
+    `    buttonBg: ${ic(adjustBright(bg, dark ? 10 : -6))}`,
+    `    buttonStroke: ${ic(sep)}`,
+    `    buttonHighlightedBg: ${ic(adjustBright(bg, dark ? 15 : -12))}`,
+    `    buttonHighlightedStroke: ${ic(sep)}`,
+    `    buttonText: ${ic(t)}`,
+    "  historyNav:",
+    `    bg: ${ic(bg)}`,
+    `    stroke: ${ic(sep)}`,
+    `    fg: ${ic(p)}`,
+    `    badgeBg: ${ic(p)}`,
+    `    badgeStroke: ${ic(p)}`,
+    `    badgeText: ${white}`,
+    "actionSheet:",
+    `  dim: ${black}`,
+    `  backgroundType: ${dark ? "dark" : "light"}`,
+    `  opaqueItemBg: ${ic(bg)}`,
+    `  opaqueItemHighlightedBg: ${ic(adjustBright(bg, dark ? 12 : -10))}`,
+    `  opaqueItemSeparator: ${ic(sep)}`,
+    `  standardActionText: ${ic(p)}`,
+    `  destructiveActionText: ${destructive}`,
+    `  disabledActionText: ${ic(st)}`,
+    `  primaryText: ${ic(t)}`,
+    `  secondaryText: ${ic(st)}`,
+    `  controlAccent: ${ic(p)}`,
+    `  inputBg: ${ic(adjustBright(bg, dark ? 10 : -6))}`,
+    `  inputHollowBg: ${ic(bg)}`,
+    `  inputBorder: ${ic(sep)}`,
+    `  inputPlaceholder: ${ic(st)}`,
+    `  inputText: ${ic(t)}`,
+    `  inputClearButton: ${ic(st)}`,
+    `  checkContent: ${white}`,
+    "contextMenu:",
+    `  dim: ${black}`,
+    `  background: ${ic(bg)}`,
+    `  itemBg: ${ic(bg)}`,
+    `  itemHighlightedBg: ${ic(adjustBright(bg, dark ? 12 : -10))}`,
+    `  separator: ${ic(sep)}`,
+    `  itemPrimaryText: ${ic(t)}`,
+    `  itemSecondaryText: ${ic(st)}`,
+    `  itemDestructiveText: ${destructive}`,
+    `  sectionHeaderText: ${ic(st)}`,
+    "notification:",
+    "  expanded:",
+    `    bg: ${ic(bg)}`,
+    `    primaryText: ${ic(t)}`,
+    `    secondaryText: ${ic(st)}`,
+    `    separator: ${ic(sep)}`,
+    `    accent: ${ic(p)}`,
+    `  regular: ${ic(bg)}`,
+  ];
+  return lines.join("\n") + "\n";
+}
+
+/** Build ThemeDoc colors from cloud themeSettings (accent-only themes). */
+function colorsFromThemeSettings(settings: any): Record<string, string> {
+  const colors: Record<string, string> = {};
+  if (!settings || typeof settings !== "object") return colors;
+  const accent = settings.accentColor != null
+    ? parseColor(String(settings.accentColor)) || (() => {
+        const n = Number(settings.accentColor) >>> 0;
+        return toHex((n >> 16) & 0xff, (n >> 8) & 0xff, n & 0xff);
+      })()
+    : null;
+  const outAccent = settings.outboxAccentColor != null
+    ? parseColor(String(settings.outboxAccentColor)) || (() => {
+        const n = Number(settings.outboxAccentColor) >>> 0;
+        return toHex((n >> 16) & 0xff, (n >> 8) & 0xff, n & 0xff);
+      })()
+    : accent;
+  const base = settings.baseTheme || "";
+  const dark = String(base).toLowerCase().includes("night") || String(base).toLowerCase().includes("dark");
+  const bg = dark ? "#0f0f0f" : "#ffffff";
+  const text = dark ? "#e6e1e5" : "#000000";
+  const sub = dark ? "#938f96" : "#8e8e93";
+  const p = accent || (dark ? "#6750a4" : "#2481cc");
+  const out = outAccent || p;
+  const assign = (keys: string[], hex: string) => { for (const k of keys) colors[k] = hex; };
+  assign(["windowBackgroundWhite", "windowBg", "filling", "background", "chatListBackground"], bg);
+  assign(["windowBackgroundWhiteBlackText", "windowFg", "text", "primaryText"], text);
+  assign(["windowBackgroundWhiteGrayText", "windowSubTextFg", "textLight", "secondaryText"], sub);
+  assign(["windowBackgroundWhiteBlueText", "windowBackgroundWhiteBlueText4", "textLink", "progress", "accentColor"], p);
+  assign(["actionBarDefault", "topBarBg", "headerBackground", "navigationBarBackground"], dark ? "#1a1a1a" : p);
+  assign(["chat_inBubble", "bubbleIn_background", "msgInBg", "chatIncomingBubble"], dark ? "#1e1e1e" : "#f1f1f4");
+  assign(["chat_outBubble", "bubbleOut_background", "msgOutBg", "chatOutgoingBubble"], out);
+  assign(["chats_unreadCounter", "badge", "unread"], p);
+  assign(["divider", "separator"], dark ? "#2a2a2a" : "#c8c7cc");
+  if (Array.isArray(settings.messageColors)) {
+    // messageColors are ARGB ints for outgoing bubble gradients — use first
+    const mc = settings.messageColors[0];
+    if (mc != null) {
+      const n = Number(mc) >>> 0;
+      const hex = toHex((n >> 16) & 0xff, (n >> 8) & 0xff, n & 0xff);
+      assign(["chat_outBubble", "bubbleOut_background", "msgOutBg", "chatOutgoingBubble"], hex);
+    }
+  }
+  return colors;
 }
 
 // ─── Parsers ─────────────────────────────────────────────────────────────────
@@ -732,44 +1069,132 @@ function parseDesktop(buf: Buffer): ThemeDoc | null {
 
 function parseTgx(buf: Buffer): ThemeDoc | null {
   try {
-    const colors: Record<string, string> = {};
-    for (const [k, v] of Object.entries(JSON.parse(buf.toString("utf-8")))) {
-      if (typeof v === "string" && v.startsWith("#")) colors[k] = v;
+    const text = buf.toString("utf-8");
+    // Real TGX: sections ! / @ / # — parse # color lines
+    if (text.trimStart().startsWith("!") || /^#\s*$/m.test(text) || text.includes("\nbubbleIn_background") || text.includes("filling:")) {
+      const colors: Record<string, string> = {};
+      let section = "";
+      for (const rawLine of text.split("\n")) {
+        const line = rawLine.trim();
+        if (!line || line.startsWith("//")) continue;
+        if (line === "!" || line === "@" || line === "#") { section = line; continue; }
+        if (section !== "#" && !line.includes("#")) {
+          // still try color-like values anywhere
+        }
+        const col = line.lastIndexOf(":");
+        if (col <= 0) continue;
+        const keysPart = line.slice(0, col).trim();
+        const val = line.slice(col + 1).trim();
+        if (!val.startsWith("#") && !/^[0-9a-fA-F]{6,8}$/.test(val)) continue;
+        const hex = val.startsWith("#") ? val : `#${val}`;
+        const pv = parseColor(hex) || (hex.startsWith("#") ? hex : null);
+        if (!pv) continue;
+        for (const k of keysPart.split(",")) {
+          const key = k.trim();
+          if (key) colors[key] = pv.startsWith("#") ? pv : `#${pv}`;
+        }
+      }
+      if (Object.keys(colors).length) return { format: "tgx-theme", colors };
     }
-    // If all keys are iOS-style, reclassify
+    // Legacy JSON fallback
+    const obj = JSON.parse(text);
+    const colors: Record<string, string> = {};
+    for (const [k, v] of Object.entries(obj)) {
+      if (typeof v === "string" && (v.startsWith("#") || /^[0-9a-fA-F]{6,8}$/.test(v))) {
+        colors[k] = v.startsWith("#") ? v : `#${v}`;
+      }
+    }
+    if (!Object.keys(colors).length) return null;
     const iosKeys = ["backgroundColor", "navigationBarBackground", "chatIncomingBubble", "keyboardBackground"];
     const hasIosKeys = iosKeys.some(k => colors[k] !== undefined);
-    const tgxKeys = ["bubbleIn_background", "bubbleOut_background", "chatListBackground", "headerBackground"];
+    const tgxKeys = ["bubbleIn_background", "bubbleOut_background", "chatListBackground", "headerBackground", "filling"];
     const hasTgxKeys = tgxKeys.some(k => colors[k] !== undefined);
-    if (hasIosKeys && !hasTgxKeys) {
-      return { format: "ios-theme", colors };
-    }
+    if (hasIosKeys && !hasTgxKeys) return { format: "ios-theme", colors };
     return { format: "tgx-theme", colors };
   } catch { return null; }
 }
 
 function parseIos(buf: Buffer): ThemeDoc | null {
   try {
-    const colors: Record<string, string> = {};
-    for (const [k, v] of Object.entries(JSON.parse(buf.toString("utf-8")))) {
-      if (typeof v === "string" && v.startsWith("#")) colors[k] = v;
+    const text = buf.toString("utf-8");
+    // Nested camelCase theme file
+    if (text.includes("basedOn:") || text.includes("navBar:") || text.includes("chatList:") || text.includes("primaryText:")) {
+      const colors: Record<string, string> = {};
+      const stack: string[] = [];
+      for (const rawLine of text.split("\n")) {
+        if (!rawLine.trim()) continue;
+        const indent = (rawLine.match(/^ */)?.[0].length || 0);
+        const level = Math.floor(indent / 2);
+        while (stack.length > level) stack.pop();
+        const line = rawLine.trim();
+        if (line.endsWith(":") && !line.includes(" ")) {
+          // section key only
+          stack[level] = line.slice(0, -1);
+          stack.length = level + 1;
+          continue;
+        }
+        const col = line.indexOf(":");
+        if (col <= 0) continue;
+        const key = line.slice(0, col).trim();
+        let val = line.slice(col + 1).trim();
+        if (!val || val === "true" || val === "false" || val === "clear" || val === "light" || val === "dark" || val === "black" || val === "white" || val === "day" || val === "night" || val === "nightTinted" || val === "classic") {
+          stack[level] = key;
+          stack.length = level + 1;
+          continue;
+        }
+        // color value: RRGGBB / AARRGGBB / #hex
+        if (val.startsWith("#")) val = val.slice(1);
+        if (!/^[0-9a-fA-F]{6,8}$/.test(val)) continue;
+        const path = [...stack.slice(0, level), key].filter(Boolean).join(".");
+        const hex = val.length === 8
+          ? `#${val}` // AARRGGBB
+          : `#${val}`;
+        colors[path] = hex.startsWith("#") ? (hex.length === 7 || hex.length === 9 ? hex : `#${val}`) : `#${val}`;
+        // also store leaf key for mapping convenience
+        if (!colors[key]) colors[key] = colors[path];
+      }
+      // Map common nested paths to flat keys used by converters
+      const mapIf = (from: string, to: string) => { if (colors[from] && !colors[to]) colors[to] = colors[from]; };
+      mapIf("list.plainBg", "windowBackgroundWhite");
+      mapIf("list.primaryText", "windowBackgroundWhiteBlackText");
+      mapIf("list.secondaryText", "windowBackgroundWhiteGrayText");
+      mapIf("list.accent", "windowBackgroundWhiteBlueText");
+      mapIf("root.navBar.background", "actionBarDefault");
+      mapIf("chat.message.incoming.bubble.withoutWp.bg", "chat_inBubble");
+      mapIf("chat.message.outgoing.bubble.withoutWp.bg", "chat_outBubble");
+      mapIf("chatList.bg", "chatListBackground");
+      if (Object.keys(colors).length) return { format: "ios-theme", colors };
     }
+    // Legacy JSON fallback
+    const obj = JSON.parse(text);
+    const colors: Record<string, string> = {};
+    for (const [k, v] of Object.entries(obj)) {
+      if (typeof v === "string" && (v.startsWith("#") || /^[0-9a-fA-F]{6,8}$/.test(v))) {
+        colors[k] = v.startsWith("#") ? v : `#${v}`;
+      }
+    }
+    if (!Object.keys(colors).length) return null;
     return { format: "ios-theme", colors };
   } catch { return null; }
 }
 
 function detectFmt(buf: Buffer): ThemeFormat | null {
   const t = buf.toString("utf-8").trim();
-  // Try JSON formats
+  // Real TGX text format
+  if (t.startsWith("!") || (t.includes("\n#\n") && (t.includes("filling") || t.includes("bubbleIn_background") || t.includes("parentTheme")))) {
+    return "tgx-theme";
+  }
+  // Real iOS nested theme
+  if ((t.includes("basedOn:") || t.startsWith("name:")) && (t.includes("navBar:") || t.includes("chatList:") || t.includes("primaryText:"))) {
+    return "ios-theme";
+  }
+  // JSON (legacy / accidental)
   if (t[0] === "{" || t[0] === "[") {
     try {
       const obj = JSON.parse(t);
       if (typeof obj === "object" && obj !== null) {
-        // Check for iOS-specific keys
         if (obj.backgroundColor || obj.navigationBarBackground || obj.chatIncomingBubble) return "ios-theme";
-        // Check for TGX-specific keys
-        if (obj.bubbleIn_background || obj.chatListBackground || obj.headerBackground) return "tgx-theme";
-        // Generic JSON with colors starting with #
+        if (obj.bubbleIn_background || obj.chatListBackground || obj.headerBackground || obj.filling) return "tgx-theme";
         for (const v of Object.values(obj)) {
           if (typeof v === "string" && v.startsWith("#")) return "tgx-theme";
         }
@@ -781,7 +1206,7 @@ function detectFmt(buf: Buffer): ThemeFormat | null {
   return null;
 }
 
-function renderDoc(doc: ThemeDoc, target: ThemeFormat): Buffer | null {
+function renderDoc(doc: ThemeDoc, target: ThemeFormat, name = "TeleBox Theme"): Buffer | null {
   try {
     const df = doc.format;
     if (df === "attheme" && target === "tdesktop-theme") {
@@ -798,10 +1223,14 @@ function renderDoc(doc: ThemeDoc, target: ThemeFormat): Buffer | null {
       }
       return Buffer.concat(parts);
     }
-    if (target === "tgx-theme") return Buffer.from(genTgx(doc.colors), "utf-8");
-    if (target === "ios-theme") return Buffer.from(genIos(doc.colors), "utf-8");
-    // remaining conversions (any format to desktop or cross-format)
+    if (target === "tgx-theme") return Buffer.from(genTgx(doc.colors, name), "utf-8");
+    if (target === "ios-theme") return Buffer.from(genIos(doc.colors, name), "utf-8");
     if (target === "tdesktop-theme") return Buffer.from(genDesktop(doc.colors), "utf-8");
+    if (target === "attheme" && df === "attheme") {
+      // re-render same format
+      const text = genAndroid(doc.colors).join("\n") + "\n";
+      return Buffer.from(text, "utf-8");
+    }
     return null;
   } catch { return null; }
 }
@@ -926,7 +1355,7 @@ class ThemePlugin extends Plugin {
       if (!buf || buf.length === 0) return;
       const format = detectFmt(buf);
       if (!format) {
-        await msg.edit({ text: html`❌ 无法识别格式，支持 .attheme / .tdesktop-theme / TGX JSON / iOS JSON<br/><br/>使用 <code>${mainPrefix}theme</code> 查看帮助` });
+        await msg.edit({ text: html`❌ 无法识别格式，支持 .attheme / .tdesktop-theme / .tgx-theme / .tgios-theme<br/><br/>使用 <code>${mainPrefix}theme</code> 查看帮助` });
         return;
       }
       const parser = format === "attheme" ? parseAttheme : format === "tdesktop-theme" ? parseDesktop : format === "tgx-theme" ? parseTgx : parseIos;
@@ -973,7 +1402,8 @@ ${converted.map((c, i) => {
           type: "document",
           file: c.result,
           fileName: `theme${FORMAT_EXT[c.target]}`,
-        }, {
+          fileMime: API_MIME[c.target],
+        } as any, {
           caption: html`
 ✅ <b>${FORMAT_LABELS[format]}</b> → <b>${FORMAT_LABELS[c.target]}</b>
 📊 ${cc} 个颜色变量${hasWp ? "<br/>🖼️ 壁纸已保留" : ""}
@@ -998,30 +1428,31 @@ ${converted.map((c, i) => {
   ): Promise<Buffer | null> {
     if (!doc || doc._ !== "document") return null;
     try {
-      // Prefer FileLocation-style object (same shape as mtcute Document)
-      const location = {
-        location: {
-          _: "inputDocumentFileLocation" as const,
-          id: doc.id,
-          accessHash: doc.accessHash,
-          fileReference: doc.fileReference || new Uint8Array(0),
-          thumbSize: "",
-        },
-        fileSize: Number(doc.size) || undefined,
-        dcId: doc.dcId,
+      const inputLoc = {
+        _: "inputDocumentFileLocation" as const,
+        id: doc.id,
+        accessHash: doc.accessHash,
+        fileReference: doc.fileReference || new Uint8Array(0),
+        thumbSize: "",
       };
+      const fileSize = doc.size != null ? Number(doc.size) : undefined;
+      // Prefer real FileLocation class so dcId is honored
       let raw: any;
       try {
-        raw = await client.downloadAsBuffer(location as any);
+        raw = await client.downloadAsBuffer(
+          new FileLocation(inputLoc, fileSize, doc.dcId) as any,
+        );
       } catch {
-        // fallback: plain inputDocumentFileLocation
-        raw = await client.downloadAsBuffer({
-          _: "inputDocumentFileLocation",
-          id: doc.id,
-          accessHash: doc.accessHash,
-          fileReference: doc.fileReference || new Uint8Array(0),
-          thumbSize: "",
-        } as any);
+        try {
+          raw = await client.downloadAsBuffer(inputLoc as any);
+        } catch {
+          // last resort: plain shape with dcId
+          raw = await client.downloadAsBuffer({
+            location: inputLoc,
+            fileSize,
+            dcId: doc.dcId,
+          } as any);
+        }
       }
       if (!raw) return null;
       return Buffer.from(raw as any);
@@ -1042,6 +1473,38 @@ ${converted.map((c, i) => {
     return detectFmt(buf);
   }
 
+  /** Collect themeSettings from theme / webPageAttributeTheme */
+  private collectThemeSettings(source: any): any | null {
+    if (!source) return null;
+    if (source._ === "themeSettings" || source.accentColor != null || source.baseTheme) return source;
+    if (Array.isArray(source.settings) && source.settings[0]) return source.settings[0];
+    if (source.settings && (source.settings._ === "themeSettings" || source.settings.accentColor != null)) {
+      return source.settings;
+    }
+    for (const attr of source.attributes || []) {
+      if (attr._ === "webPageAttributeTheme") {
+        if (attr.settings) return attr.settings;
+      }
+    }
+    return null;
+  }
+
+  /** If only settings exist, synthesize all client formats from accent colors */
+  private synthesizeFromSettings(
+    settings: any,
+    title: string,
+  ): Record<string, { format: ThemeFormat; buf: Buffer }> | null {
+    const colors = colorsFromThemeSettings(settings);
+    if (!Object.keys(colors).length) return null;
+    const doc: ThemeDoc = { format: "attheme", colors };
+    const fmtMap: Record<string, { format: ThemeFormat; buf: Buffer }> = {};
+    for (const format of ["attheme", "tdesktop-theme", "tgx-theme", "ios-theme"] as ThemeFormat[]) {
+      const buf = renderDoc(doc, format, title);
+      if (buf) fmtMap[format] = { format, buf };
+    }
+    return Object.keys(fmtMap).length ? fmtMap : null;
+  }
+
   // ── Handle t.me/addtheme/SLUG ────────────────────────────────────────
 
   private async handleAddThemeLink(msg: MessageContext, slug: string): Promise<void> {
@@ -1052,9 +1515,9 @@ ${converted.map((c, i) => {
       const fmtMap: Record<string, { format: ThemeFormat; buf: Buffer }> = {};
       let themeTitle = slug;
       const errors: string[] = [];
+      let settingsFallback: any = null;
 
       // ── Strategy 1: account.getTheme for each client format ──────────
-      // Official cloud themes expose per-format document via this RPC.
       const apiFormats = ["android", "tdesktop", "macos", "ios"] as const;
       for (const f of apiFormats) {
         try {
@@ -1065,6 +1528,7 @@ ${converted.map((c, i) => {
           } as any);
           if (raw?._ !== "theme") continue;
           if (raw.title) themeTitle = raw.title;
+          if (!settingsFallback) settingsFallback = this.collectThemeSettings(raw);
           if (raw.document?._ === "document") {
             const buf = await this.downloadTlDocument(client, raw.document);
             if (!buf) {
@@ -1087,7 +1551,6 @@ ${converted.map((c, i) => {
       }
 
       // ── Strategy 2: messages.getWebPage / getWebPagePreview ──────────
-      // Theme deep links return webPage with attributes[webPageAttributeTheme].documents[]
       await msg.edit({ text: html`⏳ 尝试从网页获取主题文件...` });
       const url = `https://t.me/addtheme/${slug}`;
       let webPage: any = null;
@@ -1098,7 +1561,6 @@ ${converted.map((c, i) => {
           url,
           hash: 0,
         } as any);
-        // messages.webPage { webpage, chats, users }
         if (wpResult?._ === "messages.webPage" && wpResult.webpage?._ === "webPage") {
           webPage = wpResult.webpage;
         } else if (wpResult?.webpage?._ === "webPage") {
@@ -1112,7 +1574,6 @@ ${converted.map((c, i) => {
 
       if (!webPage) {
         try {
-          // Prefer high-level helper — correctly unwraps messages.webPagePreview.media
           if (typeof (client as any).getWebPagePreview === "function") {
             const media: any = await (client as any).getWebPagePreview(url);
             if (media?.type === "webpage" && media.preview?.raw) {
@@ -1128,7 +1589,6 @@ ${converted.map((c, i) => {
 
       if (!webPage) {
         try {
-          // messages.webPagePreview { media: messageMediaWebPage | messageMediaEmpty, chats, users }
           const preview: any = await client.call({
             _: "messages.getWebPagePreview",
             message: url,
@@ -1142,46 +1602,20 @@ ${converted.map((c, i) => {
         }
       }
 
-      if (!webPage) {
-        await msg.edit({
-          text: html`
-❌ 无法获取主题 <code>${slug}</code>
-<br/><br/><i>调试: ${errors.slice(0, 3).join(" | ") || "无响应"}</i>
-          `,
-        });
-        return;
-      }
-
-      if (webPage.title) themeTitle = webPage.title;
+      if (webPage?.title) themeTitle = webPage.title;
+      if (!settingsFallback && webPage) settingsFallback = this.collectThemeSettings(webPage);
 
       // Collect documents from webPageAttributeTheme + top-level document
       const docs: any[] = [];
-      for (const attr of webPage.attributes || []) {
-        if (attr._ === "webPageAttributeTheme" && Array.isArray(attr.documents)) {
-          for (const d of attr.documents) {
-            if (d?._ === "document") docs.push(d);
+      if (webPage) {
+        for (const attr of webPage.attributes || []) {
+          if (attr._ === "webPageAttributeTheme" && Array.isArray(attr.documents)) {
+            for (const d of attr.documents) {
+              if (d?._ === "document") docs.push(d);
+            }
           }
         }
-      }
-      if (webPage.document?._ === "document") docs.push(webPage.document);
-
-      if (docs.length === 0) {
-        // Theme may only have settings (accent colors / wallpaper) without file docs
-        const hasSettings = (webPage.attributes || []).some(
-          (a: any) => a._ === "webPageAttributeTheme" && a.settings,
-        );
-        await msg.edit({
-          text: html`
-📄 <b>${themeTitle}</b>
-🔗 <code>t.me/addtheme/${slug}</code>
-${webPage.description ? `<br/>${webPage.description}` : ""}
-<br/><br/>${hasSettings
-  ? "<i>该主题仅含颜色设置（无独立主题文件），客户端可安装但无可下载文件</i>"
-  : "<i>网页预览中未找到主题文件</i>"}
-<br/><i>type=${webPage.type || "?"} attrs=${(webPage.attributes || []).map((a: any) => a._).join(",") || "none"}</i>
-          `,
-        });
-        return;
+        if (webPage.document?._ === "document") docs.push(webPage.document);
       }
 
       let idx = 0;
@@ -1198,22 +1632,46 @@ ${webPage.description ? `<br/>${webPage.description}` : ""}
           idx++;
           continue;
         }
-        // key by format to dedupe
         if (!fmtMap[format]) fmtMap[format] = { format, buf };
         idx++;
       }
 
-      if (Object.keys(fmtMap).length === 0) {
+      if (Object.keys(fmtMap).length > 0) {
+        await this.sendThemeResults(msg, themeTitle, slug, fmtMap);
+        return;
+      }
+
+      // ── Strategy 3: synthesize from themeSettings (cloud accent themes) ──
+      // Many installable themes only ship settings (no document). Clients still
+      // install them; we generate .attheme / .tdesktop-theme / .tgx-theme / .tgios-theme.
+      if (settingsFallback) {
+        const synth = this.synthesizeFromSettings(settingsFallback, themeTitle);
+        if (synth) {
+          await this.sendThemeResults(msg, themeTitle, slug, synth, true);
+          return;
+        }
+      }
+
+      if (!webPage) {
         await msg.edit({
           text: html`
-❌ 找到 ${docs.length} 个文件但均无法解析
-<br/><i>${errors.slice(0, 4).join(" | ")}</i>
+❌ 无法获取主题 <code>${slug}</code>
+<br/><br/><i>调试: ${errors.slice(0, 3).join(" | ") || "无响应"}</i>
           `,
         });
         return;
       }
 
-      await this.sendThemeResults(msg, themeTitle, slug, fmtMap);
+      await msg.edit({
+        text: html`
+📄 <b>${themeTitle}</b>
+🔗 <code>t.me/addtheme/${slug}</code>
+${webPage.description ? `<br/>${webPage.description}` : ""}
+<br/><br/><i>未找到可下载主题文件，且无法从颜色设置合成</i>
+<br/><i>type=${webPage.type || "?"} attrs=${(webPage.attributes || []).map((a: any) => a._).join(",") || "none"} docs=${docs.length}</i>
+<br/><i>${errors.slice(0, 3).join(" | ")}</i>
+        `,
+      });
     } catch (e: any) {
       logger.error("[theme] handleAddThemeLink:", e);
       await msg.edit({ text: html`❌ 获取失败: ${getErrorMessage(e)}` });
@@ -1226,15 +1684,14 @@ ${webPage.description ? `<br/>${webPage.description}` : ""}
     title: string,
     slug: string,
     fmtMap: Record<string, { format: ThemeFormat; buf: Buffer }>,
+    synthesized = false,
   ): Promise<void> {
     const client = await getGlobalClient();
-    // Deduplicate by detected format — prefer first source of each format
     const byFormat = new Map<ThemeFormat, Buffer>();
     for (const info of Object.values(fmtMap)) {
       if (!byFormat.has(info.format)) byFormat.set(info.format, info.buf);
     }
 
-    // Use the richest source (most color keys) as conversion base
     let bestDoc: ThemeDoc | null = null;
     let bestFmt: ThemeFormat | null = null;
     let bestCount = 0;
@@ -1250,7 +1707,47 @@ ${webPage.description ? `<br/>${webPage.description}` : ""}
       }
     }
 
+    // If originals failed parse but we have buffers that are already rendered, still send them
     if (!bestDoc || !bestFmt) {
+      // try treat first buffer as synthetic attheme colors via detect
+      for (const [fmt, buf] of byFormat) {
+        const det = detectFmt(buf);
+        if (!det) continue;
+        const parser = det === "attheme" ? parseAttheme : det === "tdesktop-theme" ? parseDesktop : det === "tgx-theme" ? parseTgx : parseIos;
+        const doc = parser(buf);
+        if (doc && Object.keys(doc.colors).length > bestCount) {
+          bestDoc = doc;
+          bestFmt = det;
+          bestCount = Object.keys(doc.colors).length;
+        }
+      }
+    }
+
+    if (!bestDoc || !bestFmt) {
+      // Last chance: send raw files as-is with correct extensions
+      const sentRaw: string[] = [];
+      for (const [fmt, buf] of byFormat) {
+        await client.sendMedia(msg.chat.id, {
+          type: "document",
+          file: buf,
+          fileName: `${slug || "theme"}${FORMAT_EXT[fmt]}`,
+          fileMime: API_MIME[fmt],
+        } as any, {
+          caption: html`✅ <b>${FORMAT_LABELS[fmt]}</b>（原始文件）`,
+          replyTo: msg.id,
+        });
+        sentRaw.push(FORMAT_LABELS[fmt]);
+      }
+      if (sentRaw.length) {
+        await msg.edit({
+          text: html`
+🎨 <b>${title}</b>
+🔗 <code>t.me/addtheme/${slug}</code>
+<br/>✅ 已输出: ${sentRaw.join(" · ")}
+          `,
+        });
+        return;
+      }
       await msg.edit({ text: html`❌ 主题文件解析失败（无颜色变量）` });
       return;
     }
@@ -1258,15 +1755,14 @@ ${webPage.description ? `<br/>${webPage.description}` : ""}
     const allTargets = (["attheme", "tdesktop-theme", "tgx-theme", "ios-theme"] as ThemeFormat[]);
     const sent: string[] = [];
 
-    // Prefer original file when available, else convert from best source
     for (const target of allTargets) {
       let out: Buffer | null = null;
       let fromLabel: string;
       if (byFormat.has(target)) {
         out = byFormat.get(target)!;
-        fromLabel = "原始";
+        fromLabel = synthesized ? "设置合成" : "原始";
       } else {
-        out = renderDoc(bestDoc, target);
+        out = renderDoc(bestDoc, target, title);
         fromLabel = FORMAT_LABELS[bestFmt];
       }
       if (!out) continue;
@@ -1274,8 +1770,9 @@ ${webPage.description ? `<br/>${webPage.description}` : ""}
         type: "document",
         file: out,
         fileName: `${slug || "theme"}${FORMAT_EXT[target]}`,
-      }, {
-        caption: html`✅ <b>${FORMAT_LABELS[target]}</b>${fromLabel !== "原始" ? ` ← ${fromLabel}` : "（原始）"} 📊 ${bestCount} 色`,
+        fileMime: API_MIME[target],
+      } as any, {
+        caption: html`✅ <b>${FORMAT_LABELS[target]}</b>${fromLabel !== "原始" && fromLabel !== "设置合成" ? ` ← ${fromLabel}` : fromLabel === "设置合成" ? "（从云端颜色设置生成）" : "（原始）"} 📊 ${bestCount} 色`,
         replyTo: msg.id,
       });
       sent.push(FORMAT_LABELS[target]);
@@ -1285,8 +1782,9 @@ ${webPage.description ? `<br/>${webPage.description}` : ""}
       text: html`
 🎨 <b>${title}</b>
 🔗 <code>t.me/addtheme/${slug}</code>
-📊 源格式: ${FORMAT_LABELS[bestFmt]}（${bestCount} 色）
+📊 源: ${synthesized ? "云端颜色设置" : `${FORMAT_LABELS[bestFmt]}（${bestCount} 色）`}
 <br/>✅ 已输出: ${sent.join(" · ") || "无"}
+<br/><i>TGX/iOS 请点文件安装（.tgx-theme / .tgios-theme）</i>
       `,
     });
   }
@@ -1374,8 +1872,11 @@ ${webPage.description ? `<br/>${webPage.description}` : ""}
       const hasWp = doc.wallpaper && doc.wallpaper.length > 10;
       await msg.delete();
       await client.sendMedia(msg.chat.id, {
-        type: "document", file: out, fileName: `theme${FORMAT_EXT[target]}`,
-      }, {
+        type: "document",
+        file: out,
+        fileName: `theme${FORMAT_EXT[target]}`,
+        fileMime: API_MIME[target],
+      } as any, {
         caption: html`
 ✅ <b>转换完成</b> ${TARGET_CLIENT_LABELS[target]}
 📊 ${cc} 个颜色变量${hasWp ? "<br/>🖼️ 壁纸已保留" : ""}
