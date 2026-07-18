@@ -285,6 +285,18 @@ async function getPeerEntity(client: any, peer: any): Promise<any | undefined> {
   }
 }
 
+async function ensureFullEntity(client: any, entity: any): Promise<any> {
+  if (!entity || !client) return entity;
+  // If entity has an id but no emojiStatus at all, it may be incomplete
+  if (entity.id && entity.emojiStatus === undefined && entity.emoji_status === undefined) {
+    try {
+      const full = await withTimeout(client.getEntity(entity), QUOTE_RPC_TIMEOUT_MS, "ensureFullEntity");
+      return full || entity;
+    } catch { return entity; }
+  }
+  return entity;
+}
+
 async function senderEntity(msg: any): Promise<any | undefined> {
   const peer = (msg as any).senderId ?? (msg as any).fromId;
   const key = peer ? `sender:${stableEntityKey(peer)}` : undefined;
@@ -977,7 +989,7 @@ class YvluPlugin extends Plugin {
           const client = await getGlobalClient();
 
           const messages = await safeGetMessages(msg.client, replied.peerId, {
-            offsetId: replied!.id - 1,
+            offsetId: replied!.id,
             limit: count,
             reverse: true,
           });
@@ -1043,6 +1055,9 @@ class YvluPlugin extends Plugin {
               await msg.edit({ text: "无法获取消息发送者信息" });
               return;
             }
+
+            // Ensure we have a full entity (forwarding senders may be incomplete)
+            sender = await ensureFullEntity(client, sender);
 
             // 准备用户数据
             const userId = (sender as any).id?.toString();

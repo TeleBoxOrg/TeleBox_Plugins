@@ -562,7 +562,8 @@ async function forwardedSource(msg: Api.Message): Promise<{ peer?: any; entity?:
   const headerName = fwdHeaderName(fwd);
 
   if (peer) {
-    const entity = await getPeerEntity(client, peer);
+    const rawEntity = await getPeerEntity(client, peer);
+    const entity = await ensureFullEntity(client, rawEntity);
     return { peer, entity, name: displayName(entity) || headerName || "Forwarded", anonymous: !entity && !!headerName };
   }
 
@@ -585,15 +586,20 @@ async function getPeerEntity(client: any, peer: any): Promise<any | undefined> {
     entityCache.set(key, entity);
     return entity;
   } catch (_) {
-    try {
-      const entity = await withTimeout(client.getInputEntity(peer), QUOTE_RPC_TIMEOUT_MS, "getPeerEntity.getInputEntity");
-      entityCache.set(key, entity);
-      return entity;
-    } catch (_) {
-      entityCache.set(key, undefined);
-      return undefined;
-    }
+    entityCache.set(key, undefined);
+    return undefined;
   }
+}
+
+async function ensureFullEntity(client: any, entity: any): Promise<any> {
+  if (!entity || !client) return entity;
+  if (entity.id && entity.emojiStatus === undefined && entity.emoji_status === undefined) {
+    try {
+      const full = await withTimeout(client.getEntity(entity), QUOTE_RPC_TIMEOUT_MS, "ensureFullEntity");
+      return full || entity;
+    } catch { return entity; }
+  }
+  return entity;
 }
 
 async function senderEntity(msg: Api.Message): Promise<any | undefined> {
