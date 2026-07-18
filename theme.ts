@@ -1467,11 +1467,10 @@ function genTgx(
     if (!colorGroups[v].includes(key)) colorGroups[v].push(key);
   }
 
-  // Also add any remaining mapped colors from source
+  // Also add any remaining mapped colors from source — no filter so no colors lost
   for (const [key, val] of Object.entries(cx)) {
     const v = c(toRgb(val));
     if (colorGroups[v] && colorGroups[v].includes(key)) continue;
-    if (key.startsWith("chat.") || key.startsWith("list.") || key.startsWith("root.")) continue;
     if (!colorGroups[v]) colorGroups[v] = [key];
     else if (!colorGroups[v].includes(key)) colorGroups[v].push(key);
   }
@@ -1870,24 +1869,45 @@ function genIos(
     `    accent: ${ic(p)}`,
     `  regular: ${ic(bg)}`,
   ];
-  return lines.join("\n") + "\n";
+  // Spillover: remaining cx keys not yet in output — zero loss
+  const iosLines = lines;
+  const usedPaths = new Set<string>();
+  for (const l of iosLines) {
+    const trimmed = l.trim();
+    const col = trimmed.indexOf(":");
+    if (col > 0) {
+      const key = trimmed.slice(0, col).trim();
+      if (key) usedPaths.add(key);
+    }
+  }
+  for (const [k, v] of Object.entries(cx)) {
+    const hex = toIosColor(v);
+    // Skip internal markers, nested paths already covered by the structured output
+    if (k.startsWith("__") || k.includes(".") || usedPaths.has(k)) continue;
+    if (!hex || usedPaths.has(k)) continue;
+    iosLines.push(`  ${k}: ${hex}`);
+    usedPaths.add(k);
+  }
+  return iosLines.join("\n") + "\n";
 }
 
 /** Build ThemeDoc colors from cloud themeSettings (accent-only themes). */
 function colorsFromThemeSettings(settings: any): Record<string, string> {
   const colors: Record<string, string> = {};
   if (!settings || typeof settings !== "object") return colors;
+
+  // MTProto delivers color as signed int32 — handle both positive and negative
+  const parseColorInt = (val: any): string | null => {
+    if (val == null) return null;
+    const n = Number(val) >>> 0; // forced unsigned
+    if (isNaN(n) || n === 0) return null;
+    return toHex((n >> 16) & 0xff, (n >> 8) & 0xff, n & 0xff);
+  };
   const accent = settings.accentColor != null
-    ? parseColor(String(settings.accentColor)) || (() => {
-        const n = Number(settings.accentColor) >>> 0;
-        return toHex((n >> 16) & 0xff, (n >> 8) & 0xff, n & 0xff);
-      })()
+    ? parseColor(String(settings.accentColor)) || parseColorInt(settings.accentColor)
     : null;
   const outAccent = settings.outboxAccentColor != null
-    ? parseColor(String(settings.outboxAccentColor)) || (() => {
-        const n = Number(settings.outboxAccentColor) >>> 0;
-        return toHex((n >> 16) & 0xff, (n >> 8) & 0xff, n & 0xff);
-      })()
+    ? parseColor(String(settings.outboxAccentColor)) || parseColorInt(settings.outboxAccentColor)
     : accent;
   const base = settings.baseTheme || "";
   const dark = String(base).toLowerCase().includes("night") || String(base).toLowerCase().includes("dark");
@@ -2302,23 +2322,34 @@ function renderDoc(doc: ThemeDoc, target: ThemeFormat, name = "TeleBox Theme"): 
     const options = { blur: doc.wallpaperBlur ?? 0, motion: doc.wallpaperMotion ?? true };
     const withWp: ThemeDoc = { ...doc, wallpaper: wp, wallpaperTiled: tiled, wallpaperSlug: slug, wallpaperBlur: doc.wallpaperBlur, wallpaperMotion: doc.wallpaperMotion };
 
+    let buf: Buffer | null = null;
     if (target === "attheme") {
-      // Always re-render colors + re-attach wallpaper so conversions keep chat background
       const text = genAndroid(withWp.colors).join("\n") + "\n";
-      return attachAtthemeWallpaper(text, wp);
+      buf = attachAtthemeWallpaper(text, wp);
+    } else if (target === "tdesktop-theme") {
+      buf = buildDesktopTheme(genDesktop(withWp.colors), wp, tiled);
+    } else if (target === "tgx-theme") {
+      buf = Buffer.from(genTgx(withWp.colors, name, doc.wallpaperSlug || null), "utf-8");
+    } else if (target === "ios-theme") {
+      buf = Buffer.from(genIos(withWp.colors, name, doc.wallpaperSlug || null, options), "utf-8");
     }
-    if (target === "tdesktop-theme") {
-      return buildDesktopTheme(genDesktop(withWp.colors), wp, tiled);
+    if (!buf) return null;
+
+    // Roundtrip validation: the output must parse back to a non-empty colors map
+    // If it fails, fall back to the raw text (still better than null)
+    try {
+      const parser = target === "attheme" ? parseAttheme
+        : target === "tdesktop-theme" ? parseDesktop
+        : target === "tgx-theme" ? parseTgx
+        : parseIos;
+      const back = parser(buf);
+      if (!back || Object.keys(back.colors).length === 0) {
+        logger.warn(`[theme] renderDoc roundtrip empty for ${target}, using original`);
+      }
+    } catch {
+      logger.warn(`[theme] renderDoc roundtrip failed for ${target}, using original`);
     }
-    if (target === "tgx-theme") {
-      // TGX can embed wallpaper slug in ! section (cloud wallpaper reference)
-      return Buffer.from(genTgx(withWp.colors, name, doc.wallpaperSlug || null), "utf-8");
-    }
-    if (target === "ios-theme") {
-      // iOS packages wallpaper as cloud slug in defaultWallpaper, not binary
-      return Buffer.from(genIos(withWp.colors, name, doc.wallpaperSlug || null, { blur: doc.wallpaperBlur, motion: doc.wallpaperMotion }), "utf-8");
-    }
-    return null;
+    return buf;
   } catch { return null; }
 }
 
@@ -2544,75 +2575,78 @@ ${converted.map((c) => {
   // mtcute downloadAsBuffer needs inputDocumentFileLocation (NOT inputDocument)
   // and Long ids must be passed as-is — Number() destroys 64-bit precision.
   // Fallback: upload.getFile (handles some dc cases better for small theme files).
+  private readonly wallpaperSlugCache = new Map<string, string>();
+
   private async downloadTlDocument(
     client: Awaited<ReturnType<typeof getGlobalClient>>,
     doc: any,
+    retries = 2,
   ): Promise<Buffer | null> {
     if (!doc || doc._ !== "document") return null;
-    try {
-      const inputLoc = {
-        _: "inputDocumentFileLocation" as const,
-        id: doc.id,
-        accessHash: doc.accessHash,
-        fileReference: doc.fileReference || new Uint8Array(0),
-        thumbSize: "",
-      };
-      const fileSize = doc.size != null ? Number(doc.size) : undefined;
-
-      // 1) FileLocation with positional (location, fileSize, dcId)
+    for (let attempt = 0; attempt <= retries; attempt++) {
       try {
-        const raw = await client.downloadAsBuffer(
-          new FileLocation(inputLoc, fileSize, doc.dcId) as any,
-        );
-        if (raw && (raw as any).length) return Buffer.from(raw as any);
-      } catch (e) {
-        logger.warn("[theme] download FileLocation failed:", getErrorMessage(e));
-      }
+        const inputLoc = {
+          _: "inputDocumentFileLocation" as const,
+          id: doc.id,
+          accessHash: doc.accessHash,
+          fileReference: doc.fileReference || new Uint8Array(0),
+          thumbSize: "",
+        };
+        const fileSize = doc.size != null ? Number(doc.size) : undefined;
 
-      // 2) raw inputDocumentFileLocation
-      try {
-        const raw = await client.downloadAsBuffer(inputLoc as any);
-        if (raw && (raw as any).length) return Buffer.from(raw as any);
-      } catch { /* */ }
-
-      // 3) upload.getFile direct (works when downloadAsBuffer returns empty / FILE_MIGRATE)
-      try {
-        const parts: Buffer[] = [];
-        let offset = 0;
-        const limit = 512 * 1024;
-        // size may be Long
-        const total = fileSize && fileSize > 0 ? fileSize : Infinity;
-        while (offset < total) {
-          const r: any = await client.call({
-            _: "upload.getFile",
-            precise: true,
-            cdnSupported: true,
-            location: inputLoc,
-            offset,
-            limit,
-          } as any);
-          if (r?._ === "upload.file" && r.bytes) {
-            const chunk = Buffer.from(r.bytes);
-            parts.push(chunk);
-            offset += chunk.length;
-            if (chunk.length < limit) break;
-          } else if (r?._ === "upload.fileCdnRedirect") {
-            logger.warn("[theme] CDN redirect not handled for theme download");
-            break;
-          } else {
-            break;
-          }
+        // 1) FileLocation with positional (location, fileSize, dcId)
+        try {
+          const raw = await client.downloadAsBuffer(
+            new FileLocation(inputLoc, fileSize, doc.dcId) as any,
+          );
+          if (raw && (raw as any).length) return Buffer.from(raw as any);
+        } catch (e) {
+          if (attempt === retries) logger.warn(`[theme] download FileLocation failed:`, getErrorMessage(e));
         }
-        if (parts.length) return Buffer.concat(parts);
-      } catch (e) {
-        logger.warn("[theme] upload.getFile failed:", getErrorMessage(e));
-      }
 
-      return null;
-    } catch (e) {
-      logger.warn("[theme] downloadTlDocument failed:", getErrorMessage(e));
-      return null;
+        // 2) raw inputDocumentFileLocation
+        try {
+          const raw = await client.downloadAsBuffer(inputLoc as any);
+          if (raw && (raw as any).length) return Buffer.from(raw as any);
+        } catch { /* */ }
+
+        // 3) upload.getFile direct (works when downloadAsBuffer returns empty / FILE_MIGRATE)
+        try {
+          const parts: Buffer[] = [];
+          let offset = 0;
+          const limit = 512 * 1024;
+          const total = fileSize && fileSize > 0 ? fileSize : Infinity;
+          while (offset < total) {
+            const r: any = await client.call({
+              _: "upload.getFile",
+              precise: true,
+              cdnSupported: true,
+              location: inputLoc,
+              offset,
+              limit,
+            } as any);
+            if (r?._ === "upload.file" && r.bytes) {
+              const chunk = Buffer.from(r.bytes);
+              parts.push(chunk);
+              offset += chunk.length;
+              if (chunk.length < limit) break;
+            } else if (r?._ === "upload.fileCdnRedirect") {
+              logger.warn("[theme] CDN redirect not handled");
+              break;
+            } else {
+              break;
+            }
+          }
+          if (parts.length) return Buffer.concat(parts);
+        } catch (e) {
+          if (attempt === retries) logger.warn(`[theme] upload.getFile failed:`, getErrorMessage(e));
+        }
+        logger.warn(`[theme] downloadTlDocument attempt ${attempt} failed, retries left: ${retries - attempt}`);
+      } catch (e) {
+        logger.warn(`[theme] downloadTlDocument attempt ${attempt} failed:`, getErrorMessage(e));
+      }
     }
+    return null;
   }
 
   /** Resolve iOS cloud wallpaper slug → image bytes via account.getWallPaper */
@@ -2690,8 +2724,15 @@ ${converted.map((c) => {
   ): Promise<ThemeDoc> {
     if (normalizeWallpaper(doc.wallpaper || null)) return doc;
     if (doc.wallpaperSlug) {
+      const cached = this.wallpaperSlugCache.get(doc.wallpaperSlug);
+      if (cached) {
+        return { ...doc, wallpaper: Buffer.from(cached, "base64") };
+      }
       const img = await this.downloadWallpaperBySlug(client, doc.wallpaperSlug);
-      if (img) return { ...doc, wallpaper: img };
+      if (img) {
+        this.wallpaperSlugCache.set(doc.wallpaperSlug, img.toString("base64"));
+        return { ...doc, wallpaper: img };
+      }
     }
     return doc;
   }
@@ -2704,8 +2745,16 @@ ${converted.map((c) => {
     if (doc.wallpaperSlug) return doc;
     const wp = normalizeWallpaper(doc.wallpaper || null);
     if (!wp) return doc;
+    // Check reverse cache by hash of bytes
+    const wpHash = wp.length + ":" + wp[0] + ":" + wp[Math.min(wp.length - 1, 1024)];
+    for (const [slug, b64] of this.wallpaperSlugCache) {
+      if (Buffer.from(b64, "base64").equals(wp)) return { ...doc, wallpaperSlug: slug };
+    }
     const slug = await this.uploadWallpaperForIos(client, wp);
-    if (slug) return { ...doc, wallpaperSlug: slug };
+    if (slug) {
+      this.wallpaperSlugCache.set(slug, wp.toString("base64"));
+      return { ...doc, wallpaperSlug: slug };
+    }
     return doc;
   }
 
