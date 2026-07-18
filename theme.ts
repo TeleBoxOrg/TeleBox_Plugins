@@ -344,6 +344,132 @@ function pickColor(colors: Record<string, string>, keys: string[], fallback: str
   return fallback;
 }
 
+/** Normalize color key aliases so lookups work across Android/Desktop/TGX/iOS names */
+function expandColorAliases(colors: Record<string, string>): Record<string, string> {
+  const out: Record<string, string> = { ...colors };
+  const put = (k: string, v: string) => { if (v && !out[k]) out[k] = v; };
+
+  // Cross-map every known pair both directions
+  for (const [a, d] of Object.entries(A2D_MAP)) {
+    if (out[a]) put(d, out[a]);
+    if (out[d]) put(a, out[d]);
+  }
+  for (const [a, t] of Object.entries(A2T_MAP)) {
+    if (out[a]) put(t, out[a]);
+    if (out[t]) put(a, out[t]);
+  }
+  for (const [a, i] of Object.entries(A2I_MAP)) {
+    if (out[a]) put(i, out[a]);
+    if (out[i]) put(a, out[i]);
+  }
+
+  // Common semantic aliases (fill gaps for generators)
+  const aliases: Array<[string, string[]]> = [
+    ["windowBackgroundWhite", ["windowBg", "filling", "background", "list.plainBg", "backgroundColor", "chatListBackground"]],
+    ["windowBackgroundWhiteBlackText", ["windowFg", "text", "primaryText", "list.primaryText"]],
+    ["windowBackgroundWhiteGrayText", ["windowSubTextFg", "textLight", "secondaryText", "list.secondaryText", "icon"]],
+    ["windowBackgroundWhiteBlueText", ["primaryColor", "textLink", "accentColor", "list.accent", "progress", "iconActive"]],
+    ["windowBackgroundWhiteBlueText4", ["primaryColor", "textLink", "accentColor", "activeButtonFg"]],
+    ["actionBarDefault", ["topBarBg", "headerBackground", "root.navBar.background", "navigationBarBackground"]],
+    ["actionBarDefaultTitle", ["headerTitle", "navigationBarTitle", "windowFg"]],
+    ["actionBarDefaultIcon", ["headerIcon", "menuIconFg", "navigationBarIcons"]],
+    ["chat_inBubble", ["msgInBg", "bubbleIn_background", "chatIncomingBubble", "chat.message.incoming.bubble.withoutWp.bg"]],
+    ["chat_outBubble", ["msgOutBg", "bubbleOut_background", "chatOutgoingBubble", "chat.message.outgoing.bubble.withoutWp.bg"]],
+    ["chat_messageTextIn", ["bubbleIn_text", "chatIncomingText", "historyTextInFg"]],
+    ["chat_messageTextOut", ["bubbleOut_text", "chatOutgoingText", "historyTextOutFg"]],
+    ["chat_messageLinkIn", ["bubbleIn_textLink", "chatIncomingLink", "historyLinkInFg", "textLink"]],
+    ["chat_messageLinkOut", ["bubbleOut_textLink", "chatOutgoingLink", "historyLinkOutFg", "textLink"]],
+    ["chat_inTimeText", ["bubbleIn_time", "chatIncomingTime", "msgInDateFg"]],
+    ["chat_outTimeText", ["bubbleOut_time", "chatOutgoingTime", "msgOutDateFg"]],
+    ["chat_inReplyLine", ["bubbleIn_chatVerticalLine", "chatIncomingReplyLine", "msgInReplyBarFg"]],
+    ["chat_outReplyLine", ["bubbleOut_chatVerticalLine", "chatOutgoingReplyLine", "msgOutReplyBarFg"]],
+    ["chat_inReplyNameText", ["bubbleIn_messageAuthor", "chatIncomingReplyName", "msgInReplyNameFg"]],
+    ["chat_outReplyNameText", ["bubbleOut_messageAuthor", "chatOutgoingReplyName", "msgOutReplyNameFg"]],
+    ["chats_name", ["dialogsNameFg", "headerTitle", "chatListName", "chatList.title"]],
+    ["chats_message", ["dialogsTextFg", "textLight", "chatListMessage", "chatList.messageText"]],
+    ["chats_date", ["dialogsDateFg", "chatListDate", "chatList.dateText"]],
+    ["chats_unreadCounter", ["dialogsUnreadBg", "badge", "chatListBadge", "chatList.unreadBadgeActiveBg"]],
+    ["chats_unreadCounterMuted", ["dialogsUnreadBgMuted", "badgeMuted", "chatListBadgeMuted"]],
+    ["chats_unreadCounterText", ["dialogsUnreadFg", "badge", "chatListBadgeText"]],
+    ["chats_sentCheck", ["dialogsSentIconFg", "ticks", "chatListSentIcon"]],
+    ["chats_sentCheckRead", ["dialogsSentIconFg", "ticksRead", "chatListReadIcon"]],
+    ["chats_draft", ["dialogsDraftFg", "chatListDraft", "chatList.messageDraftText"]],
+    ["divider", ["separator", "windowShadowFg", "separatorColor", "list.blocksSeparator"]],
+    ["listSelectorSDK21", ["windowBgRipple", "listRipple"]],
+    ["switchTrack", ["controlInactive", "switchInactive"]],
+    ["switchTrackChecked", ["controlActive", "switchActive"]],
+    ["chat_messagePanelBackground", ["chatKeyboard", "keyboardBackground"]],
+    ["chat_messagePanelSend", ["historySendIconFg", "chatSendButton", "keyboardSendIcon", "controlActive"]],
+    ["chat_messagePanelHint", ["placeholderFg", "textPlaceholder", "keyboardPlaceholder"]],
+    ["chat_serviceBackground", ["bubble_date", "chatServiceBackground"]],
+    ["chat_serviceText", ["unreadText", "chatServiceText"]],
+    ["profile_tabSelectedText", ["headerTabActive", "tabBarActiveIcon", "controlActive"]],
+    ["profile_tabSelectedLine", ["headerTabActive", "tabBarActiveLine", "activeLineFg"]],
+    ["text_RedRegular", ["attentionButtonFg", "destructiveText", "destructive"]],
+    ["player_progress", ["playerProgress", "controlActive"]],
+    ["player_progressBackground", ["playerProgressBackground", "waveformInactive"]],
+    ["inappPlayerBackground", ["playerBackground", "playerBg"]],
+    ["avatar_text", ["avatar_content", "avatarPlaceholderText"]],
+  ];
+  for (const [canonical, alts] of aliases) {
+    if (out[canonical]) {
+      for (const a of alts) put(a, out[canonical]);
+    } else {
+      for (const a of alts) {
+        if (out[a]) { put(canonical, out[a]); break; }
+      }
+      if (out[canonical]) {
+        for (const a of alts) put(a, out[canonical]);
+      }
+    }
+  }
+  return out;
+}
+
+/**
+ * Pass through ALL source color keys when converting, remapping known names
+ * so we don't drop palette entries that generators don't explicitly list.
+ */
+function remapAllColors(
+  colors: Record<string, string>,
+  direction: "to-android" | "to-desktop" | "to-tgx" | "to-ios",
+): Record<string, string> {
+  const src = expandColorAliases(colors);
+  const out: Record<string, string> = { ...src };
+
+  const applyMap = (map: Record<string, string>, reverse: boolean) => {
+    for (const [from, to] of Object.entries(map)) {
+      if (reverse) {
+        if (src[to] && !out[from]) out[from] = src[to];
+        if (src[from] && !out[to]) out[to] = src[from];
+      } else {
+        if (src[from] && !out[to]) out[to] = src[from];
+        if (src[to] && !out[from]) out[from] = src[to];
+      }
+    }
+  };
+
+  if (direction === "to-android") {
+    applyMap(A2D_MAP, true);
+    applyMap(A2T_MAP, true);
+    applyMap(A2I_MAP, true);
+  } else if (direction === "to-desktop") {
+    applyMap(A2D_MAP, false);
+    applyMap(A2T_MAP, true);
+    applyMap(A2I_MAP, true);
+  } else if (direction === "to-tgx") {
+    applyMap(A2T_MAP, false);
+    applyMap(A2D_MAP, true);
+    applyMap(A2I_MAP, true);
+  } else if (direction === "to-ios") {
+    applyMap(A2I_MAP, false);
+    applyMap(A2D_MAP, true);
+    applyMap(A2T_MAP, true);
+  }
+
+  return expandColorAliases(out);
+}
+
 // ─── Mapping: Android ↔ Desktop ──────────────────────────────────────────────
 
 const A2D_MAP: Record<string, string> = {
@@ -351,88 +477,312 @@ const A2D_MAP: Record<string, string> = {
   windowBackgroundWhiteBlackText: "windowFg",
   windowBackgroundWhiteGrayText: "windowSubTextFg",
   windowBackgroundWhiteGrayText2: "windowSubTextFg",
+  windowBackgroundWhiteGrayText3: "windowSubTextFg",
+  windowBackgroundWhiteHintText: "placeholderFg",
+  windowBackgroundWhiteValueText: "windowBoldFg",
+  windowBackgroundWhiteLinkText: "windowActiveTextFg",
+  windowBackgroundWhiteBlueText: "windowActiveTextFg",
+  windowBackgroundWhiteBlueText2: "windowActiveTextFg",
+  windowBackgroundWhiteBlueText3: "windowActiveTextFg",
   windowBackgroundWhiteBlueText4: "activeButtonFg",
+  windowBackgroundWhiteBlueText5: "windowActiveTextFg",
+  windowBackgroundWhiteBlueText6: "windowActiveTextFg",
+  windowBackgroundWhiteBlueText7: "windowActiveTextFg",
+  windowBackgroundWhiteBlueButton: "activeButtonBg",
+  windowBackgroundWhiteBlueIcon: "windowActiveTextFg",
+  windowBackgroundWhiteGreenText: "onlineFg",
+  windowBackgroundWhiteGreenText2: "onlineFg",
+  windowBackgroundWhiteInputField: "inputBorderFg",
+  windowBackgroundWhiteInputFieldActivated: "activeLineFg",
   actionBarDefault: "topBarBg",
   actionBarDefaultIcon: "menuIconFg",
-  actionBarDefaultTitle: "windowFg",
+  actionBarDefaultTitle: "windowBoldFg",
   actionBarDefaultSubtitle: "windowSubTextFg",
+  actionBarDefaultSearch: "windowFg",
   actionBarDefaultSearchPlaceholder: "placeholderFg",
+  actionBarDefaultSelector: "windowBgRipple",
+  actionBarActionModeDefault: "topBarBg",
+  actionBarActionModeDefaultIcon: "menuIconFg",
   chats_menuBackground: "dialogsBg",
   chats_name: "dialogsNameFg",
+  chats_nameMessage: "dialogsTextFgService",
   chats_message: "dialogsTextFg",
+  chats_message_threeLines: "dialogsTextFg",
   chats_date: "dialogsDateFg",
+  chats_pinnedIcon: "dialogsPinnedIconFg",
+  chats_pinnedOverlay: "dialogsPinnedBg",
+  chats_tabletSelectedOverlay: "dialogsBgOver",
   chats_unreadCounter: "dialogsUnreadBg",
   chats_unreadCounterMuted: "dialogsUnreadBgMuted",
   chats_unreadCounterText: "dialogsUnreadFg",
-  chats_sentCheck: "dialogsSentIconFg",
-  chats_sentCheckRead: "dialogsSentIconFg",
-  chats_draft: "dialogsDraftFg",
+  chats_verifiedBackground: "dialogsVerifiedIconBg",
+  chats_verifiedCheck: "dialogsVerifiedIconFg",
+  chats_muteIcon: "dialogsUnreadBgMuted",
+  chats_mentionIcon: "dialogsUnreadBg",
   chats_menuItemIcon: "menuIconFg",
   chats_menuItemText: "menuIconFg",
+  chats_menuName: "windowBoldFg",
+  chats_menuPhone: "windowSubTextFg",
+  chats_menuPhoneCats: "windowSubTextFg",
+  chats_menuTopShadow: "windowShadowFg",
+  chats_menuTopBackgroundCats: "dialogsBg",
   chats_actionBackground: "activeButtonBg",
-  chats_actionIcon: "windowFg",
-  avatar_text: "windowFg",
-  chat_messagePanelBackground: "windowBg",
-  chat_messagePanelHint: "placeholderFg",
-  chat_messagePanelText: "windowFg",
+  chats_actionPressedBackground: "activeButtonBgOver",
+  chats_actionIcon: "windowFgActive",
+  chats_sentCheck: "dialogsSentIconFg",
+  chats_sentCheckRead: "dialogsSentIconFg",
+  chats_sentClock: "dialogsSentIconFg",
+  chats_sentError: "dialogsDraftFg",
+  chats_sentErrorIcon: "dialogsDraftFg",
+  chats_draft: "dialogsDraftFg",
+  chats_onlineCircle: "onlineFg",
+  chats_secretIcon: "dialogsSentIconFg",
+  chats_secretName: "dialogsNameFg",
+  avatar_text: "historyPeerUserpicFg",
+  avatar_backgroundActionBarBlue: "topBarBg",
+  avatar_actionBarSelectorBlue: "windowBgRipple",
+  avatar_actionBarIconBlue: "menuIconFg",
+  avatar_subtitleInProfileBlue: "windowSubTextFg",
+  chat_messagePanelBackground: "historyComposeAreaBg",
+  chat_messagePanelHint: "historyComposeAreaFgService",
+  chat_messagePanelText: "historyComposeAreaFg",
   chat_messagePanelSend: "historySendIconFg",
+  chat_messagePanelIcons: "historyComposeIconFg",
+  chat_messagePanelVoiceBackground: "historyComposeIconFg",
+  chat_messagePanelVoicePressed: "historyComposeIconFgOver",
+  chat_messagePanelCancelInlineBot: "historyComposeIconFg",
+  chat_recordedVoicePlayPause: "historyComposeIconFg",
+  chat_recordedVoicePlayPausePressed: "historyComposeIconFgOver",
+  chat_recordedVoiceDot: "historyComposeIconFg",
+  chat_recordedVoiceBackground: "historyComposeAreaBg",
+  chat_recordedVoiceProgress: "historySendIconFg",
+  chat_recordedVoiceProgressInner: "historyComposeAreaFgService",
+  chat_recordTime: "historyComposeAreaFgService",
+  chat_recordVoiceCancel: "historyComposeIconFg",
   chat_inBubble: "msgInBg",
   chat_inBubbleSelected: "msgInBgSelected",
   chat_inBubbleShadow: "msgInShadow",
   chat_outBubble: "msgOutBg",
   chat_outBubbleSelected: "msgOutBgSelected",
   chat_outBubbleShadow: "msgOutShadow",
-  chat_messageTextIn: "windowFg",
-  chat_messageTextOut: "windowFg",
-  chat_messageLinkIn: "windowFg",
-  chat_messageLinkOut: "windowFg",
-  chat_inReplyNameText: "windowFg",
-  chat_outReplyNameText: "windowFg",
-  chat_inReplyMessageText: "windowSubTextFg",
-  chat_outReplyMessageText: "windowSubTextFg",
-  chat_inReplyLine: "msgInShadow",
-  chat_outReplyLine: "msgOutShadow",
-  chat_inTimeText: "windowSubTextFg",
-  chat_outTimeText: "windowSubTextFg",
-  chat_inViews: "windowSubTextFg",
-  chat_outViews: "windowSubTextFg",
-  chat_selectedBackground: "windowBgRipple",
-  chat_status: "windowFg",
-  chat_goDownButton: "windowBg",
-  chat_goDownButtonIcon: "windowFg",
-  chat_inInstant: "activeButtonFg",
-  chat_outInstant: "activeButtonFg",
-  chat_inAudioSeekbar: "windowSubTextFg",
-  chat_inAudioSeekbarFill: "activeButtonFg",
-  chat_outAudioSeekbar: "windowSubTextFg",
-  chat_outAudioSeekbarFill: "activeButtonFg",
-  chat_inVoiceSeekbar: "windowSubTextFg",
-  chat_inVoiceSeekbarFill: "activeButtonFg",
-  chat_outVoiceSeekbar: "windowSubTextFg",
-  chat_outVoiceSeekbarFill: "activeButtonFg",
-  chat_emojiPanelBackground: "windowBg",
-  chat_emojiPanelIcon: "windowSubTextFg",
-  chat_emojiPanelIconSelected: "activeButtonFg",
-  chat_emojiPanelBadgeBackground: "activeButtonBg",
-  chat_emojiPanelBadgeText: "windowFg",
+  chat_outBubbleGradient1: "msgOutBg",
+  chat_outBubbleGradient2: "msgOutBg",
+  chat_outBubbleGradient3: "msgOutBg",
+  chat_outBubbleGradientSelectedOverlay: "msgOutBgSelected",
+  chat_messageTextIn: "historyTextInFg",
+  chat_messageTextOut: "historyTextOutFg",
+  chat_messageLinkIn: "historyLinkInFg",
+  chat_messageLinkOut: "historyLinkOutFg",
+  chat_inReplyNameText: "msgInServiceFg",
+  chat_outReplyNameText: "msgOutServiceFg",
+  chat_inReplyMessageText: "msgInReplyBarSelFg",
+  chat_outReplyMessageText: "msgOutReplyBarSelFg",
+  chat_inReplyLine: "msgInReplyBarColor",
+  chat_outReplyLine: "msgOutReplyBarColor",
+  chat_inReplyMediaMessageText: "msgInDateFg",
+  chat_outReplyMediaMessageText: "msgOutDateFg",
+  chat_inForwardedNameText: "msgInServiceFg",
+  chat_outForwardedNameText: "msgOutServiceFg",
+  chat_inViaBotNameText: "msgInServiceFg",
+  chat_outViaBotNameText: "msgOutServiceFg",
+  chat_inTimeText: "msgInDateFg",
+  chat_outTimeText: "msgOutDateFg",
+  chat_inTimeSelectedText: "msgInDateFgSelected",
+  chat_outTimeSelectedText: "msgOutDateFgSelected",
+  chat_inViews: "msgInDateFg",
+  chat_outViews: "msgOutDateFg",
+  chat_inViewsSelected: "msgInDateFgSelected",
+  chat_outViewsSelected: "msgOutDateFgSelected",
+  chat_inMenu: "msgInDateFg",
+  chat_outMenu: "msgOutDateFg",
+  chat_inMenuSelected: "msgInDateFgSelected",
+  chat_outMenuSelected: "msgOutDateFgSelected",
+  chat_outSentCheck: "historyOutIconFg",
+  chat_outSentCheckRead: "historyOutIconFgSelected",
+  chat_outSentCheckSelected: "historyOutIconFgSelected",
+  chat_outSentCheckReadSelected: "historyOutIconFgSelected",
+  chat_outSentClock: "historyOutIconFg",
+  chat_inSentClock: "msgInDateFg",
+  chat_mediaTimeText: "msgInDateFg",
+  chat_mediaSentCheck: "historyOutIconFg",
+  chat_mediaProgress: "historyOutIconFg",
+  chat_selectedBackground: "msgSelectOverlay",
+  chat_status: "windowActiveTextFg",
+  chat_muteIcon: "windowSubTextFg",
+  chat_goDownButton: "historyToDownBg",
+  chat_goDownButtonShadow: "historyToDownShadow",
+  chat_goDownButtonIcon: "historyToDownFg",
+  chat_goDownButtonCounter: "historyToDownFgOver",
+  chat_goDownButtonCounterBackground: "historyToDownBgOver",
+  chat_inInstant: "msgInServiceFg",
+  chat_outInstant: "msgOutServiceFg",
+  chat_inInstantSelected: "msgInServiceFgSelected",
+  chat_outInstantSelected: "msgOutServiceFgSelected",
+  chat_sentError: "msgInBgSelected",
+  chat_sentErrorIcon: "msgInDateFg",
+  chat_inAudioSeekbar: "msgInDateFg",
+  chat_inAudioSeekbarFill: "msgInServiceFg",
+  chat_inAudioSeekbarSelected: "msgInDateFgSelected",
+  chat_outAudioSeekbar: "msgOutDateFg",
+  chat_outAudioSeekbarFill: "msgOutServiceFg",
+  chat_outAudioSeekbarSelected: "msgOutDateFgSelected",
+  chat_inVoiceSeekbar: "msgInDateFg",
+  chat_inVoiceSeekbarFill: "msgInServiceFg",
+  chat_inVoiceSeekbarSelected: "msgInDateFgSelected",
+  chat_outVoiceSeekbar: "msgOutDateFg",
+  chat_outVoiceSeekbarFill: "msgOutServiceFg",
+  chat_outVoiceSeekbarSelected: "msgOutDateFgSelected",
+  chat_inFileNameText: "historyTextInFg",
+  chat_outFileNameText: "historyTextOutFg",
+  chat_inFileInfoText: "msgInDateFg",
+  chat_outFileInfoText: "msgOutDateFg",
+  chat_inFileProgress: "msgInServiceFg",
+  chat_outFileProgress: "msgOutServiceFg",
+  chat_inFileBackground: "msgInBg",
+  chat_outFileBackground: "msgOutBg",
+  chat_inFileBackgroundSelected: "msgInBgSelected",
+  chat_outFileBackgroundSelected: "msgOutBgSelected",
+  chat_inLoader: "msgInServiceFg",
+  chat_outLoader: "msgOutServiceFg",
+  chat_inLoaderSelected: "msgInServiceFgSelected",
+  chat_outLoaderSelected: "msgOutServiceFgSelected",
+  chat_inLoaderPhoto: "msgInServiceFg",
+  chat_outLoaderPhoto: "msgOutServiceFg",
+  chat_emojiPanelBackground: "emojiPanBg",
+  chat_emojiPanelIcon: "emojiPanIconFg",
+  chat_emojiPanelIconSelected: "emojiPanIconFgActive",
+  chat_emojiPanelStickerPackSelector: "emojiPanBg",
+  chat_emojiPanelStickerPackSelectorLine: "activeLineFg",
+  chat_emojiPanelBadgeBackground: "emojiPanBadgeBg",
+  chat_emojiPanelBadgeText: "emojiPanBadgeFg",
+  chat_emojiPanelShadowLine: "windowShadowFg",
+  chat_emojiPanelTrendingTitle: "windowBoldFg",
+  chat_emojiPanelTrendingDescription: "windowSubTextFg",
+  chat_emojiSearchBackground: "windowBgOver",
+  chat_emojiSearchIcon: "windowSubTextFg",
+  chat_botKeyboardButtonText: "windowFg",
+  chat_botKeyboardButtonBackground: "windowBgOver",
+  chat_botKeyboardButtonBackgroundPressed: "windowBgRipple",
+  chat_botSwitchToInlineText: "windowActiveTextFg",
+  chat_unreadMessagesStartBackground: "msgServiceBg",
+  chat_unreadMessagesStartText: "msgServiceFg",
+  chat_unreadMessagesStartArrowIcon: "msgServiceFg",
+  chat_serviceBackground: "msgServiceBg",
+  chat_serviceBackgroundSelected: "msgServiceBgSelected",
+  chat_serviceText: "msgServiceFg",
+  chat_serviceLink: "msgServiceFg",
+  chat_serviceIcon: "msgServiceFg",
+  chat_topPanelBackground: "topBarBg",
+  chat_topPanelLine: "activeLineFg",
+  chat_topPanelTitle: "windowBoldFg",
+  chat_topPanelMessage: "windowSubTextFg",
+  chat_topPanelClose: "menuIconFg",
+  chat_wallpaper: "windowBg",
+  chat_wallpaper_temp: "windowBg",
   profile_tabSelectedText: "activeButtonFg",
   profile_tabSelectedLine: "activeLineFg",
   profile_tabText: "windowSubTextFg",
+  profile_tabSelector: "windowBgRipple",
   profile_actionBackground: "activeButtonBg",
-  profile_actionIcon: "windowFg",
-  avatar_backgroundActionBarBlue: "topBarBg",
-  calls_callReceivedGreenIcon: "activeButtonFg",
-  calls_callReceivedRedIcon: "attentionButtonFg",
-  inappPlayerBackground: "windowBg",
-  inappPlayerPlayPause: "windowFg",
-  player_progress: "activeButtonFg",
-  player_progressBackground: "windowSubTextFg",
+  profile_actionIcon: "windowFgActive",
+  profile_actionPressedBackground: "activeButtonBgOver",
+  profile_verifiedBackground: "dialogsVerifiedIconBg",
+  profile_verifiedCheck: "dialogsVerifiedIconFg",
+  profile_title: "windowBoldFg",
+  profile_creatorIcon: "windowActiveTextFg",
+  profile_status: "windowSubTextFg",
+  calls_callReceivedGreenIcon: "callsReceivedFg",
+  calls_callReceivedRedIcon: "callsMissedFg",
+  inappPlayerBackground: "playerBg",
+  inappPlayerPlayPause: "playerButtonActive",
+  inappPlayerClose: "playerButton",
+  inappPlayerPerformer: "playerTitleFg",
+  inappPlayerTitle: "playerTitleFg",
+  player_progress: "playerProgressFg",
+  player_progressBackground: "playerProgressBg",
+  player_progressCachedBackground: "playerProgressBg",
+  player_button: "playerButton",
+  player_buttonActive: "playerButtonActive",
+  player_time: "playerTimeFg",
+  player_placeholder: "playerPlaceholderFg",
+  player_placeholderBackground: "playerBg",
+  player_background: "playerBg",
   switchTrack: "windowSubTextFg",
-  switchTrackChecked: "activeButtonFg",
-  featuredStickers_addButton: "activeButtonFg",
+  switchTrackChecked: "activeButtonBg",
+  switchTrackBlue: "windowSubTextFg",
+  switchTrackBlueChecked: "activeButtonBg",
+  switchTrackBlueThumb: "windowBg",
+  switchTrackBlueThumbChecked: "windowFgActive",
+  switchTrackBlueSelector: "windowBgRipple",
+  switchTrackBlueSelectorChecked: "windowBgRipple",
+  featuredStickers_addButton: "activeButtonBg",
+  featuredStickers_addButtonPressed: "activeButtonBgOver",
+  featuredStickers_addedIcon: "activeButtonFg",
+  featuredStickers_buttonProgress: "windowFgActive",
+  featuredStickers_buttonText: "windowFgActive",
+  featuredStickers_unread: "dialogsUnreadBg",
   text_RedRegular: "attentionButtonFg",
+  text_RedBold: "attentionButtonFg",
+  key_graySection: "windowBgOver",
+  key_graySectionText: "windowSubTextFg",
+  key_radioBackground: "windowSubTextFg",
+  key_radioBackgroundChecked: "activeButtonBg",
+  checkbox: "activeButtonBg",
+  checkboxCheck: "windowFgActive",
+  checkboxDisabled: "windowSubTextFg",
+  checkboxSquareBackground: "activeButtonBg",
+  checkboxSquareCheck: "windowFgActive",
+  checkboxSquareUnchecked: "windowSubTextFg",
+  checkboxSquareDisabled: "windowSubTextFg",
+  dialogBackground: "boxBg",
+  dialogBackgroundGray: "boxBg",
+  dialogTextBlack: "boxTextFg",
+  dialogTextGray: "boxTextFg2",
+  dialogTextGray2: "boxTextFg2",
+  dialogTextGray3: "boxTextFg2",
+  dialogTextHint: "placeholderFg",
+  dialogTextLink: "windowActiveTextFg",
+  dialogTextBlue: "windowActiveTextFg",
+  dialogTextBlue2: "windowActiveTextFg",
+  dialogTextBlue4: "windowActiveTextFg",
+  dialogButton: "windowActiveTextFg",
+  dialogButtonSelector: "windowBgRipple",
+  dialogIcon: "boxTextFg2",
+  dialogGrayLine: "boxTextFg2",
+  dialogScrollGlow: "windowBg",
+  dialogRoundCheckBox: "activeButtonBg",
+  dialogRoundCheckBoxCheck: "windowFgActive",
+  dialogRadioBackground: "windowSubTextFg",
+  dialogRadioBackgroundChecked: "activeButtonBg",
+  dialogLineProgress: "activeButtonBg",
+  dialogLineProgressBackground: "windowBgOver",
+  dialogInputField: "inputBorderFg",
+  dialogInputFieldActivated: "activeLineFg",
+  dialogCheckboxSquareBackground: "activeButtonBg",
+  dialogCheckboxSquareCheck: "windowFgActive",
+  dialogCheckboxSquareUnchecked: "windowSubTextFg",
+  dialogCheckboxSquareDisabled: "windowSubTextFg",
+  dialogSearchBackground: "windowBgOver",
+  dialogSearchHint: "placeholderFg",
+  dialogSearchIcon: "windowSubTextFg",
+  dialogSearchText: "windowFg",
+  dialogFloatingButton: "activeButtonBg",
+  dialogFloatingButtonPressed: "activeButtonBgOver",
+  dialogFloatingIcon: "windowFgActive",
+  dialogShadowLine: "windowShadowFg",
+  dialogTopBackground: "topBarBg",
+  progressCircle: "activeButtonBg",
   divider: "windowShadowFg",
   listSelectorSDK21: "windowBgRipple",
+  emptyListPlaceholder: "windowSubTextFg",
+  fastScrollActive: "activeButtonBg",
+  fastScrollInactive: "windowSubTextFg",
+  fastScrollText: "windowFgActive",
+  contextProgressInner1: "windowSubTextFg",
+  contextProgressOuter1: "activeButtonBg",
+  undo_background: "toastBg",
+  undo_cancelColor: "toastFg",
+  undo_infoColor: "toastFg",
 };
 const D2A_MAP: Record<string, string> = {};
 for (const [a, d] of Object.entries(A2D_MAP)) D2A_MAP[d] = a;
@@ -440,24 +790,71 @@ for (const [a, d] of Object.entries(A2D_MAP)) D2A_MAP[d] = a;
 // ─── Mapping: Android ↔ TGX ─────────────────────────────────────────────────
 
 const A2T_MAP: Record<string, string> = {
-  windowBackgroundWhite: "chatListBackground",
+  windowBackgroundWhite: "filling",
+  windowBackgroundWhiteBlackText: "text",
+  windowBackgroundWhiteGrayText: "textLight",
+  windowBackgroundWhiteGrayText2: "textPlaceholder",
+  windowBackgroundWhiteHintText: "textPlaceholder",
+  windowBackgroundWhiteValueText: "text",
+  windowBackgroundWhiteLinkText: "textLink",
+  windowBackgroundWhiteBlueText: "textLink",
+  windowBackgroundWhiteBlueText2: "textLink",
+  windowBackgroundWhiteBlueText3: "textLink",
+  windowBackgroundWhiteBlueText4: "controlActive",
+  windowBackgroundWhiteBlueText5: "textLink",
+  windowBackgroundWhiteBlueText6: "textLink",
+  windowBackgroundWhiteBlueText7: "textLink",
+  windowBackgroundWhiteBlueButton: "controlActive",
+  windowBackgroundWhiteBlueIcon: "iconActive",
+  windowBackgroundWhiteGreenText: "textNeutral",
+  windowBackgroundWhiteInputField: "inputInactive",
+  windowBackgroundWhiteInputFieldActivated: "inputActive",
   actionBarDefault: "headerBackground",
   actionBarDefaultTitle: "headerTitle",
   actionBarDefaultIcon: "headerIcon",
-  profile_tabSelectedLine: "headerTabActive",
-  profile_tabSelectedText: "headerTabActive",
-  switchTrackChecked: "controlActive",
+  actionBarDefaultSubtitle: "headerText",
+  actionBarDefaultSearch: "headerText",
   actionBarDefaultSearchPlaceholder: "textPlaceholder",
+  actionBarDefaultSelector: "headerBackground",
+  profile_tabSelectedLine: "headerTabActive",
+  profile_tabSelectedText: "headerTabActiveText",
+  profile_tabText: "headerTabInactiveText",
+  profile_actionBackground: "controlActive",
+  profile_actionIcon: "controlContent",
+  switchTrack: "controlInactive",
+  switchTrackChecked: "controlActive",
+  chats_menuBackground: "drawer",
+  chats_name: "text",
+  chats_message: "textLight",
+  chats_date: "textLight",
   chats_unreadCounter: "badge",
   chats_unreadCounterMuted: "badgeMuted",
+  chats_unreadCounterText: "badgeText",
   chats_sentCheck: "ticks",
   chats_sentCheckRead: "ticksRead",
+  chats_draft: "textNegative",
+  chats_actionBackground: "controlActive",
+  chats_actionIcon: "controlContent",
+  chats_menuItemIcon: "icon",
+  chats_menuItemText: "text",
+  chats_onlineCircle: "online",
+  chats_muteIcon: "icon",
+  chats_verifiedBackground: "chatListVerify",
+  chats_verifiedCheck: "controlContent",
   avatar_text: "avatar_content",
   chat_goDownButton: "circleButtonChat",
   chat_goDownButtonIcon: "circleButtonChatIcon",
+  chat_goDownButtonCounter: "controlContent",
+  chat_goDownButtonCounterBackground: "badge",
   chat_messagePanelBackground: "chatKeyboard",
+  chat_messagePanelHint: "textPlaceholder",
+  chat_messagePanelText: "text",
+  chat_messagePanelSend: "chatSendButton",
+  chat_messagePanelIcons: "icon",
   chat_inBubble: "bubbleIn_background",
   chat_outBubble: "bubbleOut_background",
+  chat_inBubbleSelected: "bubbleIn_pressed",
+  chat_outBubbleSelected: "bubbleOut_pressed",
   chat_messageTextIn: "bubbleIn_text",
   chat_messageTextOut: "bubbleOut_text",
   chat_messageLinkIn: "bubbleIn_textLink",
@@ -466,47 +863,111 @@ const A2T_MAP: Record<string, string> = {
   chat_outReplyLine: "bubbleOut_chatVerticalLine",
   chat_inReplyNameText: "bubbleIn_messageAuthor",
   chat_outReplyNameText: "bubbleOut_messageAuthor",
+  chat_inReplyMessageText: "bubbleIn_text",
+  chat_outReplyMessageText: "bubbleOut_text",
   chat_inTimeText: "bubbleIn_time",
   chat_outTimeText: "bubbleOut_time",
+  chat_inViews: "bubbleIn_time",
+  chat_outViews: "bubbleOut_time",
+  chat_outSentCheck: "ticks",
+  chat_outSentCheckRead: "ticksRead",
   chat_selectedBackground: "bubble_messageSelection",
-  windowBackgroundWhiteBlackText: "headerTitle",
-  windowBackgroundWhiteGrayText: "textPlaceholder",
-  windowBackgroundWhiteGrayText2: "textPlaceholder",
-  chats_message: "chatListIcon",
-  chats_name: "headerTitle",
-  chats_date: "badgeMuted",
-  profile_tabText: "textPlaceholder",
-  inappPlayerBackground: "playerButtonActive",
-  player_progress: "controlActive",
-  switchTrack: "controlActive",
-  chat_serviceBackground: "badge",
-  chat_serviceText: "badge",
+  chat_serviceBackground: "bubble_date",
+  chat_serviceText: "bubble_dateText",
+  chat_serviceLink: "textLink",
+  chat_status: "textLink",
+  chat_muteIcon: "icon",
+  chat_inInstant: "bubbleIn_textLink",
+  chat_outInstant: "bubbleOut_textLink",
+  chat_inAudioSeekbar: "bubbleIn_waveformInactive",
+  chat_inAudioSeekbarFill: "bubbleIn_waveformActive",
+  chat_outAudioSeekbar: "bubbleOut_waveformInactive",
+  chat_outAudioSeekbarFill: "bubbleOut_waveformActive",
+  chat_inVoiceSeekbar: "bubbleIn_waveformInactive",
+  chat_inVoiceSeekbarFill: "bubbleIn_waveformActive",
+  chat_outVoiceSeekbar: "bubbleOut_waveformInactive",
+  chat_outVoiceSeekbarFill: "bubbleOut_waveformActive",
+  chat_inFileNameText: "bubbleIn_text",
+  chat_outFileNameText: "bubbleOut_text",
+  chat_inFileInfoText: "bubbleIn_time",
+  chat_outFileInfoText: "bubbleOut_time",
+  chat_inLoader: "bubbleIn_progress",
+  chat_outLoader: "bubbleOut_progress",
   chat_emojiPanelBackground: "chatKeyboard",
-  chat_emojiPanelIcon: "chatKeyboard",
+  chat_emojiPanelIcon: "icon",
+  chat_emojiPanelIconSelected: "iconActive",
+  chat_emojiPanelBadgeBackground: "badge",
+  chat_emojiPanelBadgeText: "badgeText",
+  chat_topPanelBackground: "headerBackground",
+  chat_topPanelTitle: "headerTitle",
+  chat_topPanelMessage: "headerText",
+  chat_topPanelClose: "headerIcon",
+  chat_topPanelLine: "headerTabActive",
+  inappPlayerBackground: "playerBackground",
+  inappPlayerPlayPause: "playerButton",
+  inappPlayerTitle: "playerTitle",
+  inappPlayerPerformer: "playerSubtitle",
+  inappPlayerClose: "playerButton",
+  player_progress: "playerProgress",
+  player_progressBackground: "playerProgressBackground",
+  player_button: "playerButton",
+  player_buttonActive: "playerButtonActive",
+  player_time: "playerTime",
   divider: "separator",
-  passcode: "passcode",
+  listSelectorSDK21: "fillingPressed",
+  text_RedRegular: "textNegative",
+  progressCircle: "progress",
+  dialogBackground: "overlayFilling",
+  dialogTextBlack: "text",
+  dialogTextLink: "textLink",
+  dialogButton: "textLink",
+  dialogIcon: "icon",
+  dialogSearchBackground: "filling",
+  dialogSearchText: "text",
+  dialogSearchHint: "textPlaceholder",
+  dialogSearchIcon: "icon",
+  dialogFloatingButton: "controlActive",
+  dialogFloatingIcon: "controlContent",
+  featuredStickers_addButton: "controlActive",
+  calls_callReceivedGreenIcon: "textNeutral",
+  calls_callReceivedRedIcon: "textNegative",
   // desktop-specific fallbacks
-  windowBg: "chatListBackground",
-  windowFg: "headerTitle",
-  windowSubTextFg: "textPlaceholder",
+  windowBg: "filling",
+  windowFg: "text",
+  windowSubTextFg: "textLight",
+  windowBoldFg: "text",
+  windowActiveTextFg: "textLink",
   primaryColor: "controlActive",
   topBarBg: "headerBackground",
   msgInBg: "bubbleIn_background",
   msgOutBg: "bubbleOut_background",
-  msgInBgSelected: "bubble_messageSelection",
-  msgOutBgSelected: "bubble_messageSelection",
+  msgInBgSelected: "bubbleIn_pressed",
+  msgOutBgSelected: "bubbleOut_pressed",
+  historyTextInFg: "bubbleIn_text",
+  historyTextOutFg: "bubbleOut_text",
+  historyLinkInFg: "bubbleIn_textLink",
+  historyLinkOutFg: "bubbleOut_textLink",
   dialogsBg: "chatListBackground",
-  dialogsNameFg: "headerTitle",
+  dialogsNameFg: "text",
+  dialogsTextFg: "textLight",
+  dialogsDateFg: "textLight",
   dialogsUnreadBg: "badge",
   dialogsUnreadBgMuted: "badgeMuted",
-  dialogsUnreadFg: "badge",
+  dialogsUnreadFg: "badgeText",
+  dialogsSentIconFg: "ticks",
+  dialogsDraftFg: "textNegative",
   activeButtonBg: "controlActive",
   activeButtonFg: "controlContent",
-  historySendIconFg: "controlActive",
-  dialogsSentIconFg: "ticks",
-  dialogsDraftFg: "badge",
+  historySendIconFg: "chatSendButton",
   menuIconFg: "headerIcon",
   placeholderFg: "textPlaceholder",
+  playerBg: "playerBackground",
+  playerProgressFg: "playerProgress",
+  playerTitleFg: "playerTitle",
+  msgServiceBg: "bubble_date",
+  msgServiceFg: "bubble_dateText",
+  onlineFg: "online",
+  attentionButtonFg: "textNegative",
 };
 const T2A_MAP: Record<string, string> = {};
 for (const [a, t] of Object.entries(A2T_MAP)) T2A_MAP[t] = a;
@@ -626,15 +1087,16 @@ for (const [a, i] of Object.entries(A2I_MAP)) I2A_MAP[i] = a;
 // ─── Generators ──────────────────────────────────────────────────────────────
 
 function genDesktop(colors: Record<string, string>): string {
-  const f = (ak: string, fb: string) => colors[A2D_MAP[ak] || ak] || colors[ak] || fb;
+  const cx = remapAllColors(colors, "to-desktop");
+  const f = (ak: string, fb: string) => cx[A2D_MAP[ak] || ak] || cx[ak] || fb;
   const p = toRgb(f("windowBackgroundWhiteBlueText", "#6750a4"));
   const bg = toRgb(f("windowBackgroundWhite", "#1c1b1f"));
   const t = toRgb(f("windowBackgroundWhiteBlackText", "#e6e1e5"));
   const st = toRgb(f("windowBackgroundWhiteGrayText", "#938f96"));
-  const mi = colors["msgInBg"] || colors["chat_inBubble"] || "#2b2930";
-  const mo = colors["msgOutBg"] || colors["chat_outBubble"] || p;
-  const tb = colors["topBarBg"] || colors["actionBarDefault"] || bg;
-  const cl = colors["dialogsBg"] || colors["chats_menuBackground"] || bg;
+  const mi = cx["msgInBg"] || cx["chat_inBubble"] || "#2b2930";
+  const mo = cx["msgOutBg"] || cx["chat_outBubble"] || p;
+  const tb = cx["topBarBg"] || cx["actionBarDefault"] || bg;
+  const cl = cx["dialogsBg"] || cx["chats_menuBackground"] || bg;
   return [
     "// Telegram Desktop Theme // Generated by TeleBox Theme Converter",
     `primaryColor: ${p}; primaryColorDark: ${adjustBright(p, -30)}; primaryColorTrans: ${p}80;`,
@@ -643,10 +1105,10 @@ function genDesktop(colors: Record<string, string>): string {
     `windowBg: primaryDark; windowFg: primaryText; windowBgOver: tertiaryDark; windowBgRipple: ${p};`,
     `windowSubTextFg: ${st}; windowBoldFg: primaryText; windowBgActive: primaryColor; windowFgActive: #ffffff;`,
     `activeButtonBg: primaryColor; activeButtonBgOver: ${adjustBright(p, 10)}; activeButtonFg: #ffffff;`,
-    `activeLineFg: primaryColor; attentionButtonFg: ${colors["text_RedRegular"] || "#f44336"};`,
+    `activeLineFg: primaryColor; attentionButtonFg: ${cx["text_RedRegular"] || "#f44336"};`,
     `dialogsBg: ${cl}; dialogsNameFg: primaryText; dialogsTextFg: secondaryText;`,
     `dialogsDateFg: secondaryText; dialogsChatIconFg: primaryColor; dialogsTextFgService: primaryColor;`,
-    `dialogsDraftFg: ${colors["chats_draft"] || "#f44336"}; dialogsSentIconFg: primaryColor;`,
+    `dialogsDraftFg: ${cx["chats_draft"] || "#f44336"}; dialogsSentIconFg: primaryColor;`,
     `dialogsUnreadBg: primaryColor; dialogsUnreadBgMuted: secondaryText; dialogsUnreadFg: #ffffff;`,
     `topBarBg: ${tb}; menuBg: primaryDark; menuBgOver: quaternaryDark;`,
     `menuIconFg: ${p}; menuIconFgOver: primaryColor;`,
@@ -666,20 +1128,21 @@ function genDesktop(colors: Record<string, string>): string {
     `scrollBarBg: ${p}80; scrollBarBgOver: primaryColor;`,
     `playerBg: primaryDark; playerTitleFg: primaryText; playerProgressFg: primaryColor;`,
     `callsBg: primaryDark; callsNameFg: primaryText;`,
-    `callsReceivedFg: ${colors["calls_callReceivedGreenIcon"] || "#4caf50"};`,
-    `callsMissedFg: ${colors["calls_callReceivedRedIcon"] || "#f44336"};`,
+    `callsReceivedFg: ${cx["calls_callReceivedGreenIcon"] || "#4caf50"};`,
+    `callsMissedFg: ${cx["calls_callReceivedRedIcon"] || "#f44336"};`,
   ].join("\n");
 }
 
 function genAndroid(colors: Record<string, string>): string[] {
-  const f = (dk: string, fb: string) => colors[D2A_MAP[dk] || dk] || colors[dk] || fb;
+  const cx = remapAllColors(colors, "to-android");
+  const f = (dk: string, fb: string) => cx[D2A_MAP[dk] || dk] || cx[dk] || fb;
   const p = toRgb(f("primaryColor", "#6750a4"));
   const bg = toRgb(f("windowBg", "#1c1b1f"));
   const t = toRgb(f("windowFg", "#e6e1e5"));
   const st = toRgb(f("windowSubTextFg", "#938f96"));
-  const mi = colors["msgInBg"] || "#2b2930";
-  const mo = colors["msgOutBg"] || p;
-  const tb = colors["topBarBg"] || bg;
+  const mi = cx["msgInBg"] || "#2b2930";
+  const mo = cx["msgOutBg"] || p;
+  const tb = cx["topBarBg"] || bg;
   const r: Record<string, string> = {
     windowBackgroundWhite: bg, windowBackgroundWhiteBlackText: t,
     windowBackgroundWhiteGrayText: st, windowBackgroundWhiteGrayText2: st,
@@ -722,95 +1185,119 @@ function genAndroid(colors: Record<string, string>): string[] {
   return Object.entries(r).map(([k, v]) => `${k}=${v}`);
 }
 
-/** Real TGX format: `!` meta / `@` props / `#` colors (NOT JSON). */
-function genTgx(colors: Record<string, string>, name = "TeleBox Theme"): string {
-  const bg = pickColor(colors, ["windowBackgroundWhite", "filling", "background", "windowBg", "chatListBackground"], "#1C2733");
-  const t = pickColor(colors, ["windowBackgroundWhiteBlackText", "text", "windowFg"], "#E6E1E5");
-  const p = pickColor(colors, ["windowBackgroundWhiteBlueText", "textLink", "progress", "iconActive", "windowBackgroundWhiteBlueText4"], "#6750A4");
-  const st = pickColor(colors, ["windowBackgroundWhiteGrayText", "textLight", "icon", "windowSubTextFg"], "#7D8E98");
-  const mi = pickColor(colors, ["chat_inBubble", "bubbleIn_background", "msgInBg"], "#2B2930");
-  const mo = pickColor(colors, ["chat_outBubble", "bubbleOut_background", "msgOutBg"], p);
-  const tb = pickColor(colors, ["actionBarDefault", "headerBackground", "topBarBg"], bg);
-  const sep = pickColor(colors, ["divider", "separator"], adjustBright(bg, 15));
+/** Real TGX format: `!` meta / `@` props / `#` colors (NOT JSON).
+ *  Wallpaper is NOT binary-embedded in the text file; the `!` section can
+ *  contain `wallpaper: "slug"` referencing a cloud wallpaper (see 
+ *  https://t.me/addtheme/ZXc0i6wFjMITudh8). The slug is written when available.
+ */
+function genTgx(
+  colors: Record<string, string>,
+  name = "TeleBox Theme",
+  wallpaperSlug?: string | null,
+): string {
+  // Expand aliases so known cross-format keys map to TGX names
+  const cx = remapAllColors(colors, "to-tgx");
+  const bg = pickColor(cx, ["filling", "background", "windowBackgroundWhite", "windowBg", "chatListBackground"], "#1C2733");
+  const t = pickColor(cx, ["text", "windowBackgroundWhiteBlackText", "windowFg", "headerTitle"], "#E6E1E5");
+  const p = pickColor(cx, ["controlActive", "windowBackgroundWhiteBlueText", "textLink", "progress", "iconActive", "windowBackgroundWhiteBlueText4"], "#6750A4");
+  const st = pickColor(cx, ["textLight", "windowBackgroundWhiteGrayText", "icon", "windowSubTextFg", "textPlaceholder"], "#7D8E98");
+  const mi = pickColor(cx, ["bubbleIn_background", "chat_inBubble", "msgInBg"], "#2B2930");
+  const mo = pickColor(cx, ["bubbleOut_background", "chat_outBubble", "msgOutBg"], p);
+  const tb = pickColor(cx, ["headerBackground", "actionBarDefault", "topBarBg"], bg);
+  const sep = pickColor(cx, ["separator", "divider"], adjustBright(bg, 15));
   const dark = isDarkHex(bg) ? 1 : 0;
   const c = (hex: string) => toTgxColor(hex);
-  // Group identical colors on one line (official TGX export style)
+
+  // Group ALL known TGX colors by value (official TGX export style)
   const colorGroups: Record<string, string[]> = {};
-  const add = (key: string, hex: string) => {
-    const v = c(hex);
+
+  const tgxKeys = [
+    "filling", "background", "overlayFilling", "chatBackground", "chatKeyboard", "passcode",
+    "headerBackground", "headerLightBackground",
+    "text", "background_text", "headerTitle", "headerText",
+    "icon", "textLight", "textPlaceholder", "textNeutral", "textNegative", "background_icon",
+    "bubbleIn_time", "bubbleIn_text", "bubbleIn_textLink", "bubbleIn_background", "bubbleIn_chatVerticalLine",
+    "bubbleIn_messageAuthor", "bubbleIn_waveformActive", "bubbleIn_waveformInactive", "bubbleIn_progress",
+    "bubbleIn_pressed", "bubbleIn_separator", "bubbleIn_outline", "bubbleIn_fillingPositive",
+    "bubbleOut_text", "bubbleOut_textLink", "bubbleOut_background", "bubbleOut_chatVerticalLine",
+    "bubbleOut_messageAuthor", "bubbleOut_waveformActive", "bubbleOut_waveformInactive", "bubbleOut_progress",
+    "bubbleOut_pressed", "bubbleOut_separator", "bubbleOut_outline", "bubbleOut_fillingPositive",
+    "bubbleOut_file", "bubbleOut_time", "bubbleOut_ticks", "bubbleOut_ticksRead",
+    "ticks", "ticksRead", "badge", "badgeMuted", "badgeText",
+    "progress", "textLink", "iconActive", "controlActive", "controlInactive", "controlContent",
+    "circleButtonRegular", "circleButtonTheme", "circleButtonActive", "circleButtonChat", "circleButtonChatIcon",
+    "circleButtonOverlay", "circleButtonOverlayIcon",
+    "unread", "unreadText",
+    "playerProgress", "playerBackground", "playerTitle", "playerSubtitle", "playerButton", "playerButtonActive", "playerTime",
+    "attachPhoto", "attachFile", "attachContact", "attachLocation", "attachInlineBot",
+    "chatListBackground", "chatListAction", "chatListVerify", "chatListIcon",
+    "headerTabActive", "headerTabActiveText", "headerTabInactiveText",
+    "bubble_date", "bubble_dateText", "bubble_date_noWallpaper",
+    "bubble_messageSelection", "bubble_messageSelectionNoWallpaper",
+    "bubble_button_noWallpaper", "bubble_buttonRipple_noWallpaper",
+    "bubble_chatSeparator", "bubble_mediaReply_noWallpaper", "bubble_unread_noWallpaper",
+    "chatSeparator", "chatSendButton", "chatKeyboard",
+    "separator", "shareSeparator",
+    "drawer", "drawerText",
+    "inputActive", "inputInactive", "fillingPressed",
+    "messageAuthor", "messageSwipeBackground",
+    "notificationLink", "notificationAccent",
+    "online", "onlineDot",
+    "promo", "introSectionActive",
+    "checkActive", "checkInactive",
+    "sliderActive", "seekDone", "seekBar",
+    "togglerActive", "togglerPositive", "togglerInactive",
+    "profileSectionActive", "profileSectionActiveContent",
+    "searchResult", "searchResultHighlight",
+    "snackbarUpdate", "textSearchQueryHighlight",
+    "themeBlackWhite",
+    "headerLightIcon", "headerLightText",
+    "iv_background", "iv_caption", "iv_chatLinkBackground", "iv_header", "iv_icon",
+    "iv_pageAuthor", "iv_pageFooter", "iv_pageTitle", "iv_preBlockBackground",
+    "iv_separator", "iv_text", "iv_textCode", "iv_textCodeBackground",
+    "iv_textCodeBackgroundPressed", "iv_textLink", "iv_textLinkPressHighlight",
+    "iv_textMarked", "iv_textMarkedLink", "iv_textReference", "iv_blockQuoteLine",
+  ];
+
+  for (const key of tgxKeys) {
+    const val = cx[key] || colors[key];
+    if (!val) continue;
+    const v = c(toRgb(val));
     if (!colorGroups[v]) colorGroups[v] = [];
-    colorGroups[v].push(key);
-  };
-  add("filling", bg);
-  add("background", bg);
-  add("overlayFilling", bg);
-  add("chatBackground", bg);
-  add("chatKeyboard", bg);
-  add("passcode", bg);
-  add("headerBackground", tb);
-  add("headerLightBackground", tb);
-  add("text", t);
-  add("background_text", t);
-  add("headerTitle", t);
-  add("icon", st);
-  add("textLight", st);
-  add("textPlaceholder", st);
-  add("background_icon", st);
-  add("bubbleIn_time", st);
-  add("separator", sep);
-  add("bubbleIn_background", mi);
-  add("bubbleOut_background", mo);
-  add("bubbleIn_text", t);
-  add("bubbleOut_text", t);
-  add("bubbleIn_textLink", p);
-  add("bubbleOut_textLink", p);
-  add("bubbleIn_messageAuthor", p);
-  add("bubbleOut_messageAuthor", p);
-  add("bubbleIn_chatVerticalLine", p);
-  add("bubbleOut_chatVerticalLine", p);
-  add("bubbleIn_waveformActive", p);
-  add("bubbleOut_waveformActive", p);
-  add("bubbleIn_waveformInactive", st);
-  add("bubbleOut_waveformInactive", st);
-  add("ticks", p);
-  add("ticksRead", p);
-  add("badge", p);
-  add("progress", p);
-  add("textLink", p);
-  add("iconActive", p);
-  add("controlActive", p);
-  add("circleButtonRegular", p);
-  add("circleButtonTheme", p);
-  add("circleButtonActive", adjustBright(p, -15));
-  add("circleButtonChat", bg);
-  add("circleButtonChatIcon", p);
-  add("unread", p);
-  add("playerProgress", p);
-  add("playerBackground", bg);
-  add("playerTitle", t);
-  add("attachPhoto", bg);
-  add("attachFile", bg);
-  add("attachContact", bg);
-  add("attachLocation", bg);
-  add("attachInlineBot", bg);
+    if (!colorGroups[v].includes(key)) colorGroups[v].push(key);
+  }
+
+  // Also add any remaining mapped colors from source
+  for (const [key, val] of Object.entries(cx)) {
+    const v = c(toRgb(val));
+    if (colorGroups[v] && colorGroups[v].includes(key)) continue;
+    if (key.startsWith("chat.") || key.startsWith("list.") || key.startsWith("root.")) continue;
+    if (!colorGroups[v]) colorGroups[v] = [key];
+    else if (!colorGroups[v].includes(key)) colorGroups[v].push(key);
+  }
 
   const lines: string[] = [
     "!",
     `id: ${Math.floor(Date.now() / 1000) % 100000}`,
     `name: ${JSON.stringify(name)}`,
     `time: ${Math.floor(Date.now() / 1000)}`,
+  ];
+  if (wallpaperSlug && wallpaperSlug.trim()) {
+    lines.push(`wallpaper: ${wallpaperSlug.trim()}`);
+  }
+  lines.push(
     "@",
     `dark: ${dark}`,
     `parentTheme: ${dark ? 1 : 0}`,
     "shadowDepth: 1",
-    "wallpaperUsageId: 1",
+    wallpaperSlug ? "wallpaperUsageId: 1" : "wallpaperUsageId: 0",
     "bubbleCorner: 18",
     "bubbleCornerMerged: 6",
     "bubbleDateCorner: 13",
     "dateCorner: 13",
     "bubbleOuterMargin: 8",
     "#",
-  ];
+  );
   for (const [hex, keys] of Object.entries(colorGroups)) {
     lines.push(`${keys.join(", ")}: ${hex}`);
   }
@@ -826,14 +1313,15 @@ function genIos(
   name = "TeleBox Theme",
   wallpaperSlug?: string | null,
 ): string {
-  const bg = pickColor(colors, ["windowBackgroundWhite", "backgroundColor", "windowBg", "list.plainBg"], "#1c1b1f");
-  const t = pickColor(colors, ["windowBackgroundWhiteBlackText", "primaryText", "windowFg", "list.primaryText"], "#e6e1e5");
-  const p = pickColor(colors, ["windowBackgroundWhiteBlueText", "accentColor", "list.accent", "windowBackgroundWhiteBlueText4"], "#6750a4");
-  const st = pickColor(colors, ["windowBackgroundWhiteGrayText", "secondaryText", "list.secondaryText"], "#938f96");
-  const mi = pickColor(colors, ["chat_inBubble", "chatIncomingBubble", "msgInBg"], "#2b2930");
-  const mo = pickColor(colors, ["chat_outBubble", "chatOutgoingBubble", "msgOutBg"], p);
-  const tb = pickColor(colors, ["actionBarDefault", "navigationBarBackground", "topBarBg", "root.navBar.background"], bg);
-  const sep = pickColor(colors, ["divider", "separatorColor", "list.blocksSeparator"], adjustBright(bg, 15));
+  const cx = remapAllColors(colors, "to-ios");
+  const bg = pickColor(cx, ["windowBackgroundWhite", "backgroundColor", "windowBg", "list.plainBg"], "#1c1b1f");
+  const t = pickColor(cx, ["windowBackgroundWhiteBlackText", "primaryText", "windowFg", "list.primaryText"], "#e6e1e5");
+  const p = pickColor(cx, ["windowBackgroundWhiteBlueText", "accentColor", "list.accent", "windowBackgroundWhiteBlueText4"], "#6750a4");
+  const st = pickColor(cx, ["windowBackgroundWhiteGrayText", "secondaryText", "list.secondaryText"], "#938f96");
+  const mi = pickColor(cx, ["chat_inBubble", "chatIncomingBubble", "msgInBg"], "#2b2930");
+  const mo = pickColor(cx, ["chat_outBubble", "chatOutgoingBubble", "msgOutBg"], p);
+  const tb = pickColor(cx, ["actionBarDefault", "navigationBarBackground", "topBarBg", "root.navBar.background"], bg);
+  const sep = pickColor(cx, ["divider", "separatorColor", "list.blocksSeparator"], adjustBright(bg, 15));
   const dark = isDarkHex(bg);
   const ic = (hex: string) => toIosColor(hex);
   const white = "ffffff";
@@ -1313,11 +1801,20 @@ function parseTgx(buf: Buffer): ThemeDoc | null {
     // Real TGX: sections ! / @ / # — parse # color lines
     if (text.trimStart().startsWith("!") || /^#\s*$/m.test(text) || text.includes("\nbubbleIn_background") || text.includes("filling:")) {
       const colors: Record<string, string> = {};
+      let wallpaperSlug: string | null = null;
       let section = "";
       for (const rawLine of text.split("\n")) {
         const line = rawLine.trim();
         if (!line || line.startsWith("//")) continue;
         if (line === "!" || line === "@" || line === "#") { section = line; continue; }
+        // In ! section: metadata — check for wallpaper: <slug>
+        if (section === "!") {
+          if (line.startsWith("wallpaper:")) {
+            const slug = line.slice("wallpaper:".length).trim().replace(/^["\']|["\']$/g, "");
+            if (slug && slug.length > 8) wallpaperSlug = slug;
+          }
+          continue;
+        }
         if (section !== "#" && !line.includes("#")) {
           // still try color-like values anywhere
         }
@@ -1334,7 +1831,9 @@ function parseTgx(buf: Buffer): ThemeDoc | null {
           if (key) colors[key] = pv.startsWith("#") ? pv : `#${pv}`;
         }
       }
-      if (Object.keys(colors).length) return { format: "tgx-theme", colors };
+      if (Object.keys(colors).length || wallpaperSlug) {
+        return { format: "tgx-theme", colors, wallpaperSlug };
+      }
     }
     // Legacy JSON fallback
     const obj = JSON.parse(text);
@@ -1494,8 +1993,8 @@ function renderDoc(doc: ThemeDoc, target: ThemeFormat, name = "TeleBox Theme"): 
       return buildDesktopTheme(genDesktop(withWp.colors), wp, tiled);
     }
     if (target === "tgx-theme") {
-      // TGX file format has no embedded image; keep wallpaper on ThemeDoc for sidecar send
-      return Buffer.from(genTgx(withWp.colors, name), "utf-8");
+      // TGX can embed wallpaper slug in ! section (cloud wallpaper reference)
+      return Buffer.from(genTgx(withWp.colors, name, doc.wallpaperSlug || null), "utf-8");
     }
     if (target === "ios-theme") {
       // iOS packages wallpaper as cloud slug in defaultWallpaper, not binary
