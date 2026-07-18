@@ -155,6 +155,62 @@ function detectImageExt(buf: Buffer): "jpg" | "png" | null {
   return null;
 }
 
+/** Read JPEG SOF dimensions without full decode. Returns null if not JPEG / truncated. */
+function readJpegDimensions(buf: Buffer): { width: number; height: number } | null {
+  if (!isJpeg(buf) || buf.length < 4) return null;
+  let i = 2;
+  while (i + 9 < buf.length) {
+    if (buf[i] !== 0xff) { i++; continue; }
+    const marker = buf[i + 1];
+    if (marker === 0xd8 || marker === 0xd9) { i += 2; continue; } // SOI/EOI
+    if (marker >= 0xd0 && marker <= 0xd7) { i += 2; continue; } // RSTn
+    if (i + 3 >= buf.length) break;
+    const segLen = buf.readUInt16BE(i + 2);
+    if (segLen < 2) break;
+    // SOF0..SOF3, SOF5..SOF7, SOF9..SOF11, SOF13..SOF15 (baseline/progressive/etc.)
+    if (
+      (marker >= 0xc0 && marker <= 0xc3) ||
+      (marker >= 0xc5 && marker <= 0xc7) ||
+      (marker >= 0xc9 && marker <= 0xcb) ||
+      (marker >= 0xcd && marker <= 0xcf)
+    ) {
+      if (i + 8 >= buf.length) break;
+      const height = buf.readUInt16BE(i + 5);
+      const width = buf.readUInt16BE(i + 7);
+      if (width > 0 && height > 0) return { width, height };
+      break;
+    }
+    i += 2 + segLen;
+  }
+  return null;
+}
+
+/** Read PNG IHDR dimensions. */
+function readPngDimensions(buf: Buffer): { width: number; height: number } | null {
+  if (!isPng(buf) || buf.length < 24) return null;
+  // signature 8 + IHDR len 4 + type 4 + width 4 + height 4
+  if (buf.toString("ascii", 12, 16) !== "IHDR") return null;
+  const width = buf.readUInt32BE(16);
+  const height = buf.readUInt32BE(20);
+  if (width > 0 && height > 0) return { width, height };
+  return null;
+}
+
+function readImageDimensions(buf: Buffer | null | undefined): { width: number; height: number; orient: "portrait" | "landscape" | "square" } | null {
+  const wp = normalizeWallpaper(buf || null);
+  if (!wp) return null;
+  const d = detectImageExt(wp) === "png" ? readPngDimensions(wp) : readJpegDimensions(wp);
+  if (!d) return null;
+  const orient = d.height > d.width * 1.05 ? "portrait" : d.width > d.height * 1.05 ? "landscape" : "square";
+  return { ...d, orient };
+}
+
+function formatImageDim(d: { width: number; height: number; orient: string } | null): string {
+  if (!d) return "";
+  const o = d.orient === "portrait" ? "竖图" : d.orient === "landscape" ? "横图" : "方图";
+  return `${d.width}×${d.height} ${o}`;
+}
+
 /** Strip accidental WPS/WPE wrappers; return pure image bytes or null */
 function normalizeWallpaper(raw: Buffer | null | undefined): Buffer | null {
   if (!raw || raw.length < 16) return null;
@@ -455,8 +511,12 @@ function pickColor(colors: Record<string, string>, keys: string[], fallback: str
 
 /** Normalize color key aliases so lookups work across Android/Desktop/TGX/iOS names */
 function expandColorAliases(colors: Record<string, string>): Record<string, string> {
-  const out: Record<string, string> = { ...colors };
-  const put = (k: string, v: string) => { if (v && !out[k]) out[k] = v; };
+  const out: Record<string, string> = {};
+  for (const [k, v] of Object.entries(colors)) {
+    if (!v || k.startsWith("__") || isAtthemeMetaKey(k)) continue;
+    out[k] = v;
+  }
+  const put = (k: string, v: string) => { if (v && !out[k] && !k.startsWith("__") && !isAtthemeMetaKey(k)) out[k] = v; };
 
   // Cross-map every known pair both directions
   for (const [a, d] of Object.entries(A2D_MAP)) {
@@ -567,7 +627,9 @@ function mergeThemeDocs(docs: ThemeDoc[], preferredOrder: ThemeFormat[] = ["atth
 
   for (const d of ordered) {
     for (const [k, v] of Object.entries(d.colors || {})) {
-      if (v && !colors[k]) colors[k] = v;
+      // Never leak internal markers / non-color metadata into merged palette
+      if (!v || k.startsWith("__") || isAtthemeMetaKey(k)) continue;
+      if (colors[k] === undefined) colors[k] = v;
     }
     // slug/options: mobile-first sources only (never take slug metadata only from desktop)
     if (d.format !== "tdesktop-theme") {
@@ -586,6 +648,7 @@ function mergeThemeDocs(docs: ThemeDoc[], preferredOrder: ThemeFormat[] = ["atth
       if (d.wallpaperSlug) { wallpaperSlug = d.wallpaperSlug; break; }
     }
   }
+  if (!Object.keys(colors).length && !wallpaperSlug) return null;
 
   const expanded = expandColorAliases(colors);
   return {
@@ -2570,7 +2633,19 @@ function detectFmt(buf: Buffer): ThemeFormat | null {
     // prefer attheme if key=value color lines present
     if (t.split("\n").some((l: string) => /^[A-Za-z0-9_]+=/.test(l.trim()))) return "attheme";
   }
+  // Desktop palette: classic "key: val;" OR bare "key: #hex" / "key: alias" (no semicolon)
   if (t.split("\n").some((l: string) => l.includes(":") && l.includes(";"))) return "tdesktop-theme";
+  if (
+    t.split("\n").some((l: string) => {
+      const s = l.trim();
+      if (!s || s.startsWith("//") || s.startsWith("!")) return false;
+      // desktop-like: identifier: value (value may be #hex, alias, or hex without #)
+      return /^[A-Za-z][A-Za-z0-9_]*\s*:\s*(#[0-9a-fA-F]{3,8}|[0-9a-fA-F]{6,8}|[A-Za-z][A-Za-z0-9_]*)\s*;?\s*$/.test(s);
+    })
+    && (t.includes("windowBg") || t.includes("primaryColor") || t.includes("msgInBg") || t.includes("historyComposeAreaBg") || t.includes("dialogsBg"))
+  ) {
+    return "tdesktop-theme";
+  }
   if (t.split("\n").some((l: string) => (l.includes("=") && !l.trim().startsWith("//")) || l.includes("WPS"))) return "attheme";
   return null;
 }
@@ -2677,6 +2752,9 @@ class ThemePlugin extends Plugin {
   };
 
   listenMessageHandlerIgnoreEdited = true;
+
+  /** In-flight addtheme slug → promise (dedupe concurrent link fetches) */
+  private readonly inflightLinks = new Map<string, Promise<void>>();
 
   async handleCmd(msg: MessageContext): Promise<void> {
     const parts = (msg.text ?? "").trim().split(/\s+/).slice(1);
@@ -3071,6 +3149,23 @@ class ThemePlugin extends Plugin {
   // ── Handle t.me/addtheme/SLUG ────────────────────────────────────────
 
   private async handleAddThemeLink(msg: MessageContext, slug: string): Promise<void> {
+    const key = slug.toLowerCase();
+    const existing = this.inflightLinks.get(key);
+    if (existing) {
+      try {
+        await msg.edit({ text: html`⏳ 主题 <code>${slug}</code> 已在处理中，请稍候…` });
+      } catch { /* */ }
+      try { await existing; } catch { /* primary handler reports */ }
+      return;
+    }
+    const run = this.handleAddThemeLinkInner(msg, slug).finally(() => {
+      if (this.inflightLinks.get(key) === run) this.inflightLinks.delete(key);
+    });
+    this.inflightLinks.set(key, run);
+    await run;
+  }
+
+  private async handleAddThemeLinkInner(msg: MessageContext, slug: string): Promise<void> {
     const client = await getGlobalClient();
     try {
       await msg.edit({ text: html`⏳ 获取主题 <code>${slug}</code>...` });
@@ -3667,13 +3762,14 @@ ${webPage.description ? `<br/>${webPage.description}` : ""}
         : wallpaperSource === "tgx-theme" ? "TGX"
         : wallpaperSource === "settings" ? "云端设置"
         : wallpaperSource || "unknown";
+      const dim = formatImageDim(readImageDimensions(wallpaper));
       await client.sendMedia(msg.chat.id, {
         type: "document",
         file: wallpaper,
         fileName: `${slug || "theme"}-chat-background.${ext}`,
         fileMime: ext === "png" ? "image/png" : "image/jpeg",
       } as any, {
-        caption: html`🖼️ <b>移动端聊天背景</b>（来源: ${srcLabel}${wallpaperSlug ? ` · slug: <code>${wallpaperSlug}</code>` : ""}；仅 Android/iOS/TGX/settings，绝不使用 Desktop）`,
+        caption: html`🖼️ <b>移动端聊天背景</b>（来源: ${srcLabel}${dim ? ` · ${dim}` : ""}${wallpaperSlug ? ` · slug: <code>${wallpaperSlug}</code>` : ""}；仅 Android/iOS/TGX/settings，绝不使用 Desktop）`,
         replyTo: msg.id,
       });
       wpSidecarSent = true;
@@ -3683,13 +3779,14 @@ ${webPage.description ? `<br/>${webPage.description}` : ""}
     // separate "Desktop-only background" sidecar so user can still grab it — NOT as mobile bg
     if (!wallpaper && desktopKeptOwn && desktopWallpaper) {
       const ext = detectImageExt(desktopWallpaper) === "png" ? "png" : "jpg";
+      const dim = formatImageDim(readImageDimensions(desktopWallpaper));
       await client.sendMedia(msg.chat.id, {
         type: "document",
         file: desktopWallpaper,
         fileName: `${slug || "theme"}-desktop-background.${ext}`,
         fileMime: ext === "png" ? "image/png" : "image/jpeg",
       } as any, {
-        caption: html`🖥️ <b>Desktop 专用壁纸</b>（Android 主题无壁纸 · 未注入移动端，避免主体出画）`,
+        caption: html`🖥️ <b>Desktop 专用壁纸</b>${dim ? `（${dim}）` : ""}（Android 主题无壁纸 · 未注入移动端，避免主体出画）`,
         replyTo: msg.id,
       });
     }
@@ -3705,14 +3802,16 @@ ${webPage.description ? `<br/>${webPage.description}` : ""}
       const short = FORMAT_LABELS[s.target].split(" ")[0];
       return `${short}:${s.colors}色${s.wp ? "+壁纸" : ""}`;
     }).join(" · ");
+    const mobileDim = formatImageDim(readImageDimensions(wallpaper));
+    const desktopDim = desktopKeptOwn ? formatImageDim(readImageDimensions(desktopWallpaper)) : "";
 
     await msg.edit({
       text: html`
 🎨 <b>${title}</b>
 🔗 <code>t.me/addtheme/${slug}</code>
 📊 源: ${synthesized ? "云端颜色设置" : `${sourceFmts.map(f => FORMAT_LABELS[f]).join(" + ") || FORMAT_LABELS[bestFmt]}（合并 ${bestCount} 色）`}
-<br/>🖼️ 移动端壁纸: <b>${mobileSrcLabel}</b>${wallpaperSlug ? ` · slug <code>${wallpaperSlug}</code>` : ""}
-${desktopKeptOwn ? "<br/>🖥️ Desktop 使用自带壁纸（不注入移动端）" : wallpaper ? "<br/>🖥️ Desktop 无原图 → 使用移动端壁纸" : ""}
+<br/>🖼️ 移动端壁纸: <b>${mobileSrcLabel}</b>${mobileDim ? ` · ${mobileDim}` : ""}${wallpaperSlug ? ` · slug <code>${wallpaperSlug}</code>` : ""}
+${desktopKeptOwn ? `<br/>🖥️ Desktop 使用自带壁纸${desktopDim ? ` · ${desktopDim}` : ""}（不注入移动端）` : wallpaper ? "<br/>🖥️ Desktop 无原图 → 使用移动端壁纸" : ""}
 <br/>✅ 已输出: ${sent.join(" · ") || "无"}
 ${statLine ? `<br/>📈 ${statLine}` : ""}
 <br/>⏱ ${ms}ms
