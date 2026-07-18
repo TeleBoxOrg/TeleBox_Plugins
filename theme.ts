@@ -21,13 +21,6 @@ if (!fs.existsSync(ASSETS_DIR)) fs.mkdirSync(ASSETS_DIR, { recursive: true });
 
 type ThemeFormat = "attheme" | "tdesktop-theme" | "tgx-theme" | "ios-theme";
 
-const API_FORMATS: Record<ThemeFormat, string> = {
-  attheme: "android",
-  "tdesktop-theme": "tdesktop",
-  "tgx-theme": "macos",
-  "ios-theme": "ios",
-};
-
 const API_MIME: Record<ThemeFormat, string> = {
   attheme: "application/x-tgtheme-android",
   "tdesktop-theme": "application/x-tgtheme-tdesktop",
@@ -39,32 +32,12 @@ interface ThemeDoc {
   format: ThemeFormat;
   colors: Record<string, string>;
   wallpaper?: any;
-  slug?: string;
-  title?: string;
-}
-
-interface PendingState {
-  chatId: number;
-  msgId: number;
-  format: ThemeFormat;
-  buf: number[];
-  createdAt: number;
-}
-
-interface PendingCloud {
-  chatId: number;
-  msgId: number;
-  format: string;
-  colors: Record<string, string>;
-  slug: string;
-  title: string;
-  createdAt: number;
 }
 
 const FORMAT_LABELS: Record<ThemeFormat, string> = {
   attheme: "Android (.attheme)",
   "tdesktop-theme": "Desktop (.tdesktop-theme)",
-  "tgx-theme": "Telegram X (.tgx-theme)",
+  "tgx-theme": "TGX (.tgx-theme)",
   "ios-theme": "iOS (.tgios-theme)",
 };
 
@@ -75,12 +48,21 @@ const FORMAT_EXT: Record<ThemeFormat, string> = {
   "ios-theme": ".json",
 };
 
-const FORMAT_EMOJI: Record<ThemeFormat, string> = {
-  attheme: "📱 Android",
-  "tdesktop-theme": "💻 Desktop",
-  "tgx-theme": "📲 TGX",
-  "ios-theme": "🍎 iOS",
-};
+// all conversions in a single table
+const CONVERSIONS: { id: string; from: ThemeFormat; to: ThemeFormat }[] = [
+  { id: "adt", from: "attheme", to: "tdesktop-theme" },
+  { id: "dta", from: "tdesktop-theme", to: "attheme" },
+  { id: "attgx", from: "attheme", to: "tgx-theme" },
+  { id: "dtatgx", from: "tdesktop-theme", to: "tgx-theme" },
+  { id: "tgxat", from: "tgx-theme", to: "attheme" },
+  { id: "tgxdt", from: "tgx-theme", to: "tdesktop-theme" },
+  { id: "atios", from: "attheme", to: "ios-theme" },
+  { id: "iostat", from: "ios-theme", to: "attheme" },
+  { id: "iostdt", from: "ios-theme", to: "tdesktop-theme" },
+  { id: "iostgx", from: "ios-theme", to: "tgx-theme" },
+  { id: "tgxios", from: "tgx-theme", to: "ios-theme" },
+  { id: "dtios", from: "tdesktop-theme", to: "ios-theme" },
+];
 
 // ─── Color utilities ─────────────────────────────────────────────────────────
 
@@ -408,10 +390,6 @@ const I2A_MAP: Record<string, string> = {};
 for (const [a, i] of Object.entries(A2I_MAP)) I2A_MAP[i] = a;
 
 // ─── Generic map helper ──────────────────────────────────────────────────────
-
-function mapColor(colors: Record<string, string>, from: string, fallback: string): string {
-  return colors[from] || fallback;
-}
 
 // ─── Generators ──────────────────────────────────────────────────────────────
 
@@ -832,36 +810,30 @@ function renderDoc(doc: ThemeDoc, target: ThemeFormat): Buffer | null {
 
 // ─── State management ────────────────────────────────────────────────────────
 
-function savePending(state: PendingState | PendingCloud): void {
-  try {
-    for (const f of fs.readdirSync(ASSETS_DIR)) {
-      if (f.startsWith(`pending_${state.chatId}_`)) {
-        try {
-          const d = JSON.parse(fs.readFileSync(path.join(ASSETS_DIR, f), "utf-8"));
-          if (d.chatId === state.chatId && Date.now() - d.createdAt > 60000) fs.unlinkSync(path.join(ASSETS_DIR, f));
-        } catch { fs.unlinkSync(path.join(ASSETS_DIR, f)); }
-      }
-    }
-  } catch { /* */ }
-  fs.writeFileSync(path.join(ASSETS_DIR, `pending_${state.chatId}_${state.msgId}.json`), JSON.stringify(state));
-}
+const PENDING_DIR = ASSETS_DIR;
 
-function loadPending(chatId: number, replyMsgId: number): PendingState | PendingCloud | null {
+function getPendingPath(chatId: number, msgId: number): string {
+  return path.join(PENDING_DIR, `pending_${chatId}_${msgId}.json`);
+}
+function savePending(chatId: number, msgId: number, data: any): void {
+  fs.writeFileSync(getPendingPath(chatId, msgId), JSON.stringify(data));
+}
+function loadPending(chatId: number, msgId: number): any | null {
   try {
-    const p = path.join(ASSETS_DIR, `pending_${chatId}_${replyMsgId}.json`);
+    const p = getPendingPath(chatId, msgId);
     if (!fs.existsSync(p)) return null;
     const data = JSON.parse(fs.readFileSync(p, "utf-8"));
-    if (Date.now() - data.createdAt > 60000) { fs.unlinkSync(p); return null; }
     return data;
   } catch { return null; }
 }
-
-function cleanupPending(chatId: number, msgId: number): void {
-  try { fs.unlinkSync(path.join(ASSETS_DIR, `pending_${chatId}_${msgId}.json`)); } catch { /* */ }
+function clearPending(chatId: number, msgId: number): void {
+  try { fs.unlinkSync(getPendingPath(chatId, msgId)); } catch { /* */ }
 }
-
 function genSlug(): string {
   return Math.random().toString(36).slice(2, 10) + Math.random().toString(36).slice(2, 6);
+}
+function genUniqueId(): string {
+  return `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 }
 
 // ─── Download helper ─────────────────────────────────────────────────────────
@@ -878,26 +850,44 @@ async function downloadMedia(
   } catch { return null; }
 }
 
+// ─── Help text ───────────────────────────────────────────────────────────────
+
+function buildHelpText(): ReturnType<typeof html> {
+  return html`
+<b>🎨 主题转换器</b>
+
+<b>互转格式</b>
+📱 Android (.attheme)
+💻 Desktop (.tdesktop-theme)
+📲 TGX (.tgx-theme)
+🍎 iOS (.tgios-theme)
+
+<b>用法</b>
+• 发送 <b>主题文件</b> → 自动解析并转换全部可用格式
+• ${mainPrefix}theme link <code>t.me/addtheme/xxx</code> → 获取云端主题
+• ${mainPrefix}theme cloud <i>(回复文件)</i> → 上传到云端生成链接
+
+<b>单步转换</b> <i>(回复文件)</i>
+• ${mainPrefix}theme adt → Desktop
+• ${mainPrefix}theme dta → Android
+• ${mainPrefix}theme attgx → TGX
+• ${mainPrefix}theme atios → iOS
+• ${mainPrefix}theme tgxdt → Desktop
+• ${mainPrefix}theme tgxat → Android
+• ${mainPrefix}theme dtatgx → TGX
+• ${mainPrefix}theme dtios → iOS
+• ${mainPrefix}theme iostat → Android
+• ${mainPrefix}theme iostdt → Desktop
+• ${mainPrefix}theme iostgx → TGX
+• ${mainPrefix}theme tgxios → iOS
+  `;
+}
+
 // ─── Plugin ──────────────────────────────────────────────────────────────────
 
 class ThemePlugin extends Plugin {
   name = "theme";
-  description =
-    `🎨 <b>Telegram 主题转换器</b>\n\n` +
-    `<b>支持格式互转：</b>\n` +
-    `📱 Android (.attheme) ↔ 💻 Desktop (.tdesktop-theme) ↔ 📲 TGX (.tgx-theme) ↔ 🍎 iOS (.tgios-theme)\n\n` +
-    `<b>使用方法：</b>\n` +
-    `• 发送主题文件，自动识别后回复序号选择目标格式\n` +
-    `• 发送 <code>t.me/addtheme/SLUG</code> 链接，获取云端主题\n` +
-    `• <code>${mainPrefix}theme</code> - 显示帮助\n` +
-    `• <code>${mainPrefix}theme adt</code> - 回复文件: → Desktop\n` +
-    `• <code>${mainPrefix}theme dta</code> - 回复文件: → Android\n` +
-    `• <code>${mainPrefix}theme attgx</code> - → TGX\n` +
-    `• <code>${mainPrefix}theme atios</code> - → iOS\n` +
-    `• <code>${mainPrefix}theme cloud</code> - 回复文件: 上传为云端主题\n` +
-    `• <code>${mainPrefix}theme link <t.me/addtheme/xxx></code> - 处理云端主题链接\n\n` +
-    `<b>云端主题（Cloud Theme）：</b>\n` +
-    `转换后可上传到 Telegram 云端，生成 <code>t.me/addtheme</code> 链接`;
+  description = "🎨 主题转换器 | Android↔Desktop↔TGX↔iOS";
 
   cmdHandlers = {
     theme: this.handleCmd.bind(this),
@@ -912,334 +902,311 @@ class ThemePlugin extends Plugin {
 
     // ── Help ────────────────────────────────────────────────────────────
     if (!sub || sub === "help") {
-      await msg.edit({ text: html`${this.description}` });
+      await msg.edit({ text: buildHelpText() });
       return;
     }
 
-    // ── Handle link subcommand ──────────────────────────────────────────
+    // ── link ────────────────────────────────────────────────────────────
     if (sub === "link" && parts[1]) {
       const linkMatch = parts[1].match(/(?:https?:\/\/)?t\.me\/addtheme\/([a-zA-Z0-9_\-\.]+)/);
       if (linkMatch) {
         await this.handleAddThemeLink(msg, linkMatch[1]);
         return;
       }
-      await msg.edit({ text: "❌ 无效的链接格式，请使用 <code>t.me/addtheme/xxx</code>" });
+      await msg.edit({ text: html`❌ 无效链接，格式: <code>t.me/addtheme/xxx</code>` });
       return;
     }
 
-    // ── Cloud upload ────────────────────────────────────────────────────
+    // ── cloud ───────────────────────────────────────────────────────────
     if (sub === "cloud") {
-      if (!msg.replyToMessage?.id) {
-        await msg.edit({ text: "❌ 请回复一个主题文件来上传到云端" });
-        return;
-      }
-      try {
-        const reply = await safeGetReplyMessage(msg);
-        if (!reply || !(reply as any).media || (reply as any).media.type !== "document") {
-          await msg.edit({ text: "❌ 回复的消息不是文件" }); return;
-        }
-        await msg.edit({ text: "⏳ 下载并解析主题..." });
-        const buf = await downloadMedia(reply, client);
-        if (!buf || buf.length === 0) { await msg.edit({ text: "❌ 下载失败" }); return; }
-        const format = detectFmt(buf);
-        if (!format) { await msg.edit({ text: "❌ 无法识别主题格式" }); return; }
-        const p = format === "attheme" ? parseAttheme : format === "tdesktop-theme" ? parseDesktop : format === "tgx-theme" ? parseTgx : parseIos;
-        const doc = p(buf);
-        if (!doc || !Object.keys(doc.colors).length) { await msg.edit({ text: "❌ 解析失败" }); return; }
-        await msg.edit({ text: "⏳ 上传到 Telegram 云端..." });
-
-        const slug = genSlug();
-        const converted = renderDoc(doc, format) || buf;
-        const uploaded = await client.uploadFile({
-          file: converted,
-          fileName: `theme${FORMAT_EXT[format]}`,
-          fileMime: API_MIME[format],
-        });
-        const created = await client.call({
-          _: "account.createTheme",
-          slug,
-          title: `TeleBox Theme (${FORMAT_LABELS[format]})`,
-          document: { _: "inputDocument", id: (uploaded as any).id, accessHash: (uploaded as any).accessHash },
-        } as any);
-
-        const themeSlug = (created as any).slug || slug;
-        const link = `https://t.me/addtheme/${themeSlug}`;
-        await msg.edit({ text: `✅ <b>云端主题创建成功！</b>\n\n<a href="${link}">${link}</a>\n\n📊 ${Object.keys(doc.colors).length} 个颜色变量` });
-      } catch (e: any) {
-        await msg.edit({ text: `❌ 云端上传失败: ${getErrorMessage(e)}` });
-      }
+      await this.handleCloudUpload(msg);
       return;
     }
 
-    // ── Direct conversion commands ──────────────────────────────────────
-    const cmds: Record<string, { from: ThemeFormat; to: ThemeFormat; label: string }> = {
-      adt: { from: "attheme", to: "tdesktop-theme", label: "→ Desktop" },
-      dta: { from: "tdesktop-theme", to: "attheme", label: "→ Android" },
-      attgx: { from: "attheme", to: "tgx-theme", label: "→ TGX" },
-      dtatgx: { from: "tdesktop-theme", to: "tgx-theme", label: "→ TGX" },
-      tgxat: { from: "tgx-theme", to: "attheme", label: "→ Android" },
-      tgxdt: { from: "tgx-theme", to: "tdesktop-theme", label: "→ Desktop" },
-      atios: { from: "attheme", to: "ios-theme", label: "→ iOS" },
-      iostat: { from: "ios-theme", to: "attheme", label: "→ Android" },
-      iostdt: { from: "ios-theme", to: "tdesktop-theme", label: "→ Desktop" },
-      iostgx: { from: "ios-theme", to: "tgx-theme", label: "→ TGX" },
-      tgxios: { from: "tgx-theme", to: "ios-theme", label: "→ iOS" },
-      dtios: { from: "tdesktop-theme", to: "ios-theme", label: "→ iOS" },
-      iost: { from: "ios-theme", to: "tdesktop-theme", label: "→ Desktop" },
-    };
-
-    const cmd = cmds[sub];
-    if (!cmd) {
-      await msg.edit({ text: html`${this.description}` });
+    // ── direct conversion ───────────────────────────────────────────────
+    const conv = CONVERSIONS.find(c => c.id === sub);
+    if (conv) {
+      await this.handleDirectConvert(msg, conv.from, conv.to);
       return;
     }
 
-    if (!msg.replyToMessage?.id) {
-      await msg.edit({ text: `❌ 请回复主题文件后使用 <code>${mainPrefix}theme ${sub}</code>` });
-      return;
-    }
-
-    try {
-      const reply = await safeGetReplyMessage(msg);
-      if (!reply || !(reply as any).media || (reply as any).media.type !== "document") {
-        await msg.edit({ text: "❌ 回复不是文件" }); return;
-      }
-      await msg.edit({ text: `⏳ 下载并转换 ${FORMAT_LABELS[cmd.from]} ${cmd.label}...` });
-      const buf = await downloadMedia(reply, client);
-      if (!buf || buf.length === 0) { await msg.edit({ text: "❌ 下载失败" }); return; }
-      const detected = detectFmt(buf);
-      if (detected !== cmd.from) {
-        await msg.edit({ text: `❌ 格式不匹配: 检测到 ${FORMAT_LABELS[detected || "attheme"]}，需要 ${FORMAT_LABELS[cmd.from]}` });
-        return;
-      }
-      const parsers: Record<string, (b: Buffer) => ThemeDoc | null> = {
-        attheme: parseAttheme, "tdesktop-theme": parseDesktop, "tgx-theme": parseTgx, "ios-theme": parseIos,
-      };
-      const doc = parsers[cmd.from](buf);
-      if (!doc || !Object.keys(doc.colors).length) { await msg.edit({ text: `❌ 解析失败` }); return; }
-      const out = renderDoc(doc, cmd.to);
-      if (!out) { await msg.edit({ text: "❌ 转换失败" }); return; }
-      const cc = Object.keys(doc.colors).length;
-      const hasWp = doc.wallpaper && doc.wallpaper.length > 10;
-      await msg.delete();
-
-      await client.sendMedia(msg.chat.id, {
-        type: "document", file: out, fileName: `theme${FORMAT_EXT[cmd.to]}`,
-      }, {
-        caption:
-          `✅ <b>转换完成</b>  ${FORMAT_LABELS[cmd.from]} ${cmd.label}\n` +
-          `📊 ${cc} 个颜色变量${hasWp ? "\n🖼️ 壁纸已保留" : ""}\n\n` +
-          `<i>回复本消息 <code>${mainPrefix}theme cloud</code> 上传到云端生成链接</i>`,
-        replyTo: msg.id,
-      });
-    } catch (e) {
-      await msg.edit({ text: `❌ 转换失败: ${getErrorMessage(e)}` });
-    }
+    // fallback: show help
+    await msg.edit({ text: buildHelpText() });
   }
 
-  // ── Listen: file attachments + t.me/addtheme links + choice responses ──
+  // ── listen: file attachments + t.me/addtheme links ───────────────────
 
   listenMessageHandler = async (msg: MessageContext): Promise<void> => {
     try {
       const text = msg.text?.trim();
-      const num = text ? parseInt(text) : NaN;
 
-      // 1) Check if this is a number response to a pending conversion
-      if (!isNaN(num) && msg.replyToMessage?.id) {
-        const pending = loadPending(msg.chat.id, msg.replyToMessage.id);
-        if (pending) {
-          if ("buf" in pending) {
-            await this.handleFileChoice(msg, pending as PendingState, num);
-          } else if ("slug" in pending) {
-            await this.handleCloudChoice(msg, pending as PendingCloud, num);
-          }
+      // t.me/addtheme link in any message
+      if (text) {
+        const addthemeMatch = text.match(/(?:https?:\/\/)?t\.me\/addtheme\/([a-zA-Z0-9_\-\.]+)/);
+        if (addthemeMatch) {
+          await this.handleAddThemeLink(msg, addthemeMatch[1]);
           return;
         }
       }
 
-      // 2) Check for t.me/addtheme/SLUG links (works for both incoming and outgoing messages)
-      const addthemeMatch = text?.match(/(?:https?:\/\/)?t\.me\/addtheme\/([a-zA-Z0-9_\-\.]+)/);
-      if (addthemeMatch) {
-        await this.handleAddThemeLink(msg, addthemeMatch[1]);
-        return;
-      }
-
-      // 3) Check if it's a theme file
+      // theme file attached
       if (!msg.media || msg.media.type !== "document") return;
-      const doc = (msg.media as any).document as { fileName?: string; size?: number };
-      const name = (doc.fileName || "").toLowerCase();
-      const size = doc.size || 0;
+      const docInfo = (msg.media as any).document as { fileName?: string; size?: number };
+      const name = (docInfo.fileName || "").toLowerCase();
+      const size = docInfo.size || 0;
       if (size > MAX_FILE_SIZE || size === 0) return;
       if (!name.endsWith(".attheme") && !name.endsWith(".tdesktop-theme") && !name.endsWith(".tgios-theme") && !name.includes("theme") && !name.includes("tgx")) return;
 
-      await msg.edit({ text: "⏳ 识别主题文件..." });
+      await msg.edit({ text: html`⏳ 解析主题文件...` });
       const client = await getGlobalClient();
       const buf = await downloadMedia(msg, client);
       if (!buf || buf.length === 0) return;
       const format = detectFmt(buf);
       if (!format) {
-        await msg.edit({ text: `❌ 无法识别: 支持 .attheme / .tdesktop-theme / TGX / iOS JSON\n\n发送 <code>${mainPrefix}theme</code> 查看帮助` });
+        await msg.edit({ text: html`❌ 无法识别格式，支持 .attheme / .tdesktop-theme / TGX JSON / iOS JSON<br/><br/>使用 <code>${mainPrefix}theme</code> 查看帮助` });
         return;
       }
-      const p = format === "attheme" ? parseAttheme : format === "tdesktop-theme" ? parseDesktop : format === "tgx-theme" ? parseTgx : parseIos;
-      const parsed = p(buf);
-      if (!parsed || !Object.keys(parsed.colors).length) {
-        await msg.edit({ text: "❌ 解析失败，未找到颜色变量" }); return;
+      const parser = format === "attheme" ? parseAttheme : format === "tdesktop-theme" ? parseDesktop : format === "tgx-theme" ? parseTgx : parseIos;
+      const doc = parser(buf);
+      if (!doc || !Object.keys(doc.colors).length) {
+        await msg.edit({ text: html`❌ 解析失败，未找到颜色变量` });
+        return;
       }
-      const cc = Object.keys(parsed.colors).length;
-      const hasWp = parsed.wallpaper && parsed.wallpaper.length > 10;
-      const targets = (["attheme", "tdesktop-theme", "tgx-theme", "ios-theme"] as ThemeFormat[]).filter(f => f !== format);
+
+      const cc = Object.keys(doc.colors).length;
+      const hasWp = doc.wallpaper && doc.wallpaper.length > 10;
+      const targets = (["attheme", "tdesktop-theme", "tgx-theme", "ios-theme"] as ThemeFormat[]).filter(f => f !== format) as ThemeFormat[];
+
+      // convert to all targets
+      const converted: { target: ThemeFormat; result: Buffer | null }[] = targets.map(t => ({
+        target: t,
+        result: renderDoc(doc, t),
+      }));
+
+      const count = converted.filter(c => c.result).length;
+      const id = genUniqueId();
+
+      // save original buffer in pending for manual conversions
+      savePending(msg.chat.id, msg.id, { format, buf: [...buf] });
 
       await msg.edit({
-        text:
-          `✅ <b>已识别</b>  ${FORMAT_LABELS[format]}\n` +
-          `📊 ${cc} 颜色变量${hasWp ? "\n🖼️  壁纸已嵌入" : ""}\n\n` +
-          `<b>转换目标：</b>\n\n` +
-          targets.map((f, i) => `• <code>${i + 1}</code> — ${FORMAT_LABELS[f]}`).join("\n") + "\n\n" +
-          `<i>回复数字选择（<code>0</code> 取消，60 秒超时）</i>`,
+        text: html`
+✅ <b>已识别</b> ${FORMAT_LABELS[format]}
+📊 ${cc} 个颜色变量${hasWp ? "<br/>🖼️ 壁纸已嵌入" : ""}
+
+<b>自动转换为 ${count}/${targets.length} 个格式</b>
+
+${converted.map((c, i) => {
+  const ok = c.result !== null;
+  const label = FORMAT_LABELS[c.target];
+  return `${ok ? "✅" : "❌"} <code>${i + 1}</code> — ${label}`;
+}).join("<br/>")}
+
+<i>回复对应数字获取单个格式，或使用</i> <code>${mainPrefix}theme &lt;cmd&gt;</code> <i>直接转换</i>
+      `,
       });
 
-      savePending({ chatId: msg.chat.id, msgId: msg.id, format, buf: [...buf], createdAt: Date.now() });
+      // send each successful conversion
+      for (let i = 0; i < converted.length; i++) {
+        const c = converted[i];
+        if (!c.result) continue;
+        await client.sendMedia(msg.chat.id, {
+          type: "document",
+          file: c.result,
+          fileName: `theme${FORMAT_EXT[c.target]}`,
+        }, {
+          caption: html`
+✅ <b>${FORMAT_LABELS[format]}</b> → <b>${FORMAT_LABELS[c.target]}</b>
+📊 ${cc} 个颜色变量${hasWp ? "<br/>🖼️ 壁纸已保留" : ""}
+          `,
+          replyTo: msg.id,
+        });
+      }
+
+      // update the info message with the last note
+      // (edit is already done above)
     } catch (e) {
       logger.error("[theme] listen:", e);
     }
   };
 
-  // ── Handle t.me/addtheme/SLUG ─────────────────────────────────────────
+  // ── Handle t.me/addtheme/SLUG ────────────────────────────────────────
 
   private async handleAddThemeLink(msg: MessageContext, slug: string): Promise<void> {
     const client = await getGlobalClient();
     try {
-      await msg.edit({ text: `⏳ 获取云端主题 <code>${slug}</code>...` });
+      await msg.edit({ text: html`⏳ 获取云端主题 <code>${slug}</code>...` });
 
-      const formats = ["android", "tdesktop", "macos", "ios"] as const;
-      const results: { format: string; raw: any }[] = [];
+      const apiFormats = ["android", "tdesktop", "macos", "ios"] as const;
+      const fmtMap: Record<string, { format: ThemeFormat; buf: Buffer }> = {};
+      let themeTitle = "Unknown Theme";
 
-      for (const f of formats) {
+      for (const f of apiFormats) {
         try {
-          const raw = await client.call({
+          const raw: any = await client.call({
             _: "account.getTheme",
             format: f,
             theme: { _: "inputThemeSlug", slug },
           } as any);
-          results.push({ format: f, raw });
-        } catch { /* format not available */ }
+          if (!themeTitle || themeTitle === "Unknown Theme") themeTitle = raw?.title || "Unnamed Theme";
+          if (!raw?.document?.id || !raw?.document?.accessHash) continue;
+          const dlBuf = await client.downloadAsBuffer({
+            _: "inputDocument",
+            id: Number(raw.document.id),
+            accessHash: Number(raw.document.accessHash),
+          } as any);
+          if (!dlBuf) continue;
+          const full = Buffer.from(dlBuf);
+          const fLabel: Record<string, ThemeFormat> = { android: "attheme", tdesktop: "tdesktop-theme", macos: "tgx-theme", ios: "ios-theme" };
+          fmtMap[f] = { format: fLabel[f] || "attheme", buf: full };
+        } catch { /* not available */ }
       }
 
-      if (results.length === 0) {
-        await msg.edit({ text: `❌ 未找到主题 <code>${slug}</code>` });
+      if (Object.keys(fmtMap).length === 0) {
+        await msg.edit({ text: html`❌ 未找到主题 <code>${slug}</code>` });
         return;
       }
 
-      const first = results[0];
-      const themeTitle = (first.raw as any)?.title || "Unnamed Theme";
-      const formatLabels = { android: "📱 Android", tdesktop: "💻 Desktop", macos: "📲 TGX", ios: "🍎 iOS" } as Record<string, string>;
-      const avail = results.map(r => `• ${formatLabels[r.format] || r.format}`).join("\n");
+      // parse and convert each available format
+      const results: { label: string; from: ThemeFormat; targets: { t: ThemeFormat; ok: boolean }[] }[] = [];
+
+      for (const [apiFmt, info] of Object.entries(fmtMap)) {
+        const { format: fmt, buf } = info;
+        const parser = fmt === "attheme" ? parseAttheme : fmt === "tdesktop-theme" ? parseDesktop : fmt === "tgx-theme" ? parseTgx : parseIos;
+        const doc = parser(buf);
+        if (!doc) continue;
+        const cc = Object.keys(doc.colors).length;
+        const targets = (["attheme", "tdesktop-theme", "tgx-theme", "ios-theme"] as ThemeFormat[]).filter(f => f !== fmt);
+        const convResults = targets.map(t => ({ t, ok: renderDoc(doc, t) !== null }));
+        results.push({ label: `${FORMAT_LABELS[fmt]} (${cc}色)`, from: fmt, targets: convResults });
+
+        // send files for each target
+        for (const cr of convResults) {
+          if (!cr.ok) continue;
+          const out = renderDoc(doc, cr.t);
+          if (!out) continue;
+          await client.sendMedia(msg.chat.id, {
+            type: "document",
+            file: out,
+            fileName: `theme${FORMAT_EXT[cr.t]}`,
+          }, {
+            caption: html`✅ <b>${FORMAT_LABELS[fmt]}</b> → <b>${FORMAT_LABELS[cr.t]}</b> 📊 ${cc} 色`,
+            replyTo: msg.id,
+          });
+        }
+      }
 
       await msg.edit({
-        text:
-          `🎨 <b>${themeTitle}</b>\n\n` +
-          `🔗 <code>t.me/addtheme/${slug}</code>\n\n` +
-          `<b>可用格式：</b>\n${avail}\n\n` +
-          `<b>操作：</b>\n` +
-          `• <code>1</code> — 下载并转换为其他格式\n` +
-          `• <code>0</code> — 取消\n\n` +
-          `<i>60 秒内回复数字</i>`,
-      });
+        text: html`
+🎨 <b>${themeTitle}</b>
+🔗 <code>t.me/addtheme/${slug}</code>
 
-      savePending({
-        chatId: msg.chat.id,
-        msgId: msg.id,
-        format: results[0].format,
-        colors: {},
+${results.map(r => `📦 ${r.label}<br/>${r.targets.map(t => `${t.ok ? "✅" : "❌"} ${FORMAT_LABELS[t.t]}`).join("<br/>")}`).join("<br/><br/>")}
+        `,
+      });
+    } catch (e: any) {
+      await msg.edit({ text: html`❌ 获取主题失败: ${getErrorMessage(e)}` });
+    }
+  }
+
+  // ── Handle cloud upload ──────────────────────────────────────────────
+
+  private async handleCloudUpload(msg: MessageContext): Promise<void> {
+    if (!msg.replyToMessage?.id) {
+      await msg.edit({ text: html`❌ 请回复一个主题文件后再使用 <code>${mainPrefix}theme cloud</code>` });
+      return;
+    }
+    const client = await getGlobalClient();
+    try {
+      const reply = await safeGetReplyMessage(msg);
+      if (!reply || !(reply as any).media || (reply as any).media.type !== "document") {
+        await msg.edit({ text: html`❌ 回复的消息不是文件` }); return;
+      }
+      await msg.edit({ text: html`⏳ 下载并解析主题...` });
+      const buf = await downloadMedia(reply, client);
+      if (!buf || buf.length === 0) { await msg.edit({ text: html`❌ 下载失败` }); return; }
+      const format = detectFmt(buf);
+      if (!format) { await msg.edit({ text: html`❌ 无法识别主题格式` }); return; }
+      const parser = format === "attheme" ? parseAttheme : format === "tdesktop-theme" ? parseDesktop : format === "tgx-theme" ? parseTgx : parseIos;
+      const doc = parser(buf);
+      if (!doc || !Object.keys(doc.colors).length) { await msg.edit({ text: html`❌ 解析失败` }); return; }
+      await msg.edit({ text: html`⏳ 上传到 Telegram 云端...` });
+
+      const slug = genSlug();
+      const converted = renderDoc(doc, format) || buf;
+      const uploaded = await client.uploadFile({
+        file: converted,
+        fileName: `theme${FORMAT_EXT[format]}`,
+        fileMime: API_MIME[format],
+      });
+      const created: any = await client.call({
+        _: "account.createTheme",
         slug,
-        title: themeTitle,
-        createdAt: Date.now(),
-      } as PendingCloud);
+        title: `TeleBox Theme (${FORMAT_LABELS[format]})`,
+        document: { _: "inputDocument", id: (uploaded as any).id, accessHash: (uploaded as any).accessHash },
+      } as any);
 
-      fs.writeFileSync(path.join(ASSETS_DIR, `cloud_${msg.chat.id}_${msg.id}.json`), JSON.stringify({
-        slug, title: themeTitle,
-        documents: results.map(r => ({
-          format: r.format,
-          id: (r.raw as any)?.document?.id ? Number((r.raw as any).document.id) : null,
-          accessHash: (r.raw as any)?.document?.accessHash ? Number((r.raw as any).document.accessHash) : null,
-        })),
-      }));
-    } catch (e: any) {
-      await msg.edit({ text: `❌ 获取云端主题失败: ${getErrorMessage(e)}` });
-    }
-  }
-
-  // ── Handle cloud theme choice ─────────────────────────────────────────
-
-  private async handleCloudChoice(msg: MessageContext, pending: PendingCloud, choice: number): Promise<void> {
-    cleanupPending(pending.chatId, pending.msgId);
-    if (choice !== 1) { await msg.edit({ text: "❌ 已取消" }); return; }
-
-    const client = await getGlobalClient();
-    try {
-      await msg.edit({ text: "⏳ 读取云端主题数据..." });
-
-      let docInfo: any = null;
-      try {
-        docInfo = JSON.parse(fs.readFileSync(path.join(ASSETS_DIR, `cloud_${pending.chatId}_${pending.msgId}.json`), "utf-8"));
-      } catch { /* */ }
-      if (!docInfo) { await msg.edit({ text: "❌ 未找到主题文档信息" }); return; }
-      try { fs.unlinkSync(path.join(ASSETS_DIR, `cloud_${pending.chatId}_${pending.msgId}.json`)); } catch { /* */ }
-
-      const availableDocs = docInfo.documents?.filter((d: any) => d.id && d.accessHash) || [];
-      if (availableDocs.length === 0) { await msg.edit({ text: "❌ 无可下载的文档" }); return; }
-
-      const fl = { android: "📱 Android", tdesktop: "💻 Desktop", macos: "📲 TGX", ios: "🍎 iOS" } as Record<string, string>;
-      const lines = availableDocs.map((d: any, i: number) => `• <code>${i + 1}</code> — ${fl[d.format] || d.format}`);
-
+      const themeSlug = (created as any).slug || slug;
+      const link = `https://t.me/addtheme/${themeSlug}`;
       await msg.edit({
-        text:
-          `🎨 <b>${docInfo.title}</b>\n\n` +
-          `<b>选择要下载的格式：</b>\n\n${lines.join("\n")}\n\n` +
-          `<i>回复数字选择（60 秒超时）</i>`,
-      });
+        text: html`
+✅ <b>云端主题创建成功！</b>
 
-      savePending({ chatId: pending.chatId, msgId: msg.id, format: pending.format, buf: [], createdAt: Date.now() } as any);
-      fs.writeFileSync(path.join(ASSETS_DIR, `cloudfmt_${pending.chatId}_${msg.id}.json`), JSON.stringify(docInfo));
+<a href="${link}">${link}</a>
+
+📊 ${Object.keys(doc.colors).length} 个颜色变量
+        `,
+      });
     } catch (e: any) {
-      await msg.edit({ text: `❌ 处理失败: ${getErrorMessage(e)}` });
+      await msg.edit({ text: html`❌ 云端上传失败: ${getErrorMessage(e)}` });
     }
   }
 
-  // ── Handle file choice (original file conversion) ────────────────────
+  // ── Handle direct conversion ─────────────────────────────────────────
 
-  private async handleFileChoice(msg: MessageContext, pending: PendingState, choice: number): Promise<void> {
+  private async handleDirectConvert(msg: MessageContext, from: ThemeFormat, to: ThemeFormat): Promise<void> {
+    if (!msg.replyToMessage?.id) {
+      await msg.edit({ text: html`❌ 请回复主题文件后使用 <code>${mainPrefix}theme ${from}→${to}</code>` });
+      return;
+    }
     const client = await getGlobalClient();
-    cleanupPending(pending.chatId, pending.msgId);
-
-    if (choice <= 0 || choice > 4) { await msg.edit({ text: "❌ 已取消" }); return; }
-    const targets = (["attheme", "tdesktop-theme", "tgx-theme", "ios-theme"] as ThemeFormat[]).filter(f => f !== pending.format);
-    if (choice > targets.length) { await msg.edit({ text: "❌ 无效选择" }); return; }
-    const target = targets[choice - 1];
-
     try {
-      await msg.edit({ text: `⏳ 转换为 ${FORMAT_LABELS[target]}...` });
-      const buf = Buffer.from(pending.buf);
-      const p = pending.format === "attheme" ? parseAttheme : pending.format === "tdesktop-theme" ? parseDesktop : pending.format === "tgx-theme" ? parseTgx : parseIos;
-      const doc = p(buf);
-      if (!doc) { await msg.edit({ text: "❌ 重新解析失败" }); return; }
-      const out = renderDoc(doc, target);
-      if (!out) { await msg.edit({ text: "❌ 转换失败" }); return; }
+      const reply = await safeGetReplyMessage(msg);
+      if (!reply || !(reply as any).media || (reply as any).media.type !== "document") {
+        await msg.edit({ text: html`❌ 回复不是文件` }); return;
+      }
+      await msg.edit({ text: html`⏳ ${FORMAT_LABELS[from]} → ${FORMAT_LABELS[to]}...` });
+      const buf = await downloadMedia(reply, client);
+      if (!buf || buf.length === 0) { await msg.edit({ text: html`❌ 下载失败` }); return; }
+      const detected = detectFmt(buf);
+      if (detected !== from) {
+        const dLabel = FORMAT_LABELS[detected || "attheme"];
+        const fLabel = FORMAT_LABELS[from];
+        await msg.edit({ text: html`❌ 格式不匹配: 检测到 ${dLabel}，需要 ${fLabel}` });
+        return;
+      }
+      const parsers: Record<string, (b: Buffer) => ThemeDoc | null> = {
+        attheme: parseAttheme, "tdesktop-theme": parseDesktop, "tgx-theme": parseTgx, "ios-theme": parseIos,
+      };
+      const doc = parsers[from](buf);
+      if (!doc || !Object.keys(doc.colors).length) { await msg.edit({ text: html`❌ 解析失败` }); return; }
+      const out = renderDoc(doc, to);
+      if (!out) { await msg.edit({ text: html`❌ 转换失败` }); return; }
       const cc = Object.keys(doc.colors).length;
       const hasWp = doc.wallpaper && doc.wallpaper.length > 10;
       await msg.delete();
+
       await client.sendMedia(msg.chat.id, {
-        type: "document", file: out, fileName: `theme_${target}${FORMAT_EXT[target]}`,
+        type: "document", file: out, fileName: `theme${FORMAT_EXT[to]}`,
       }, {
-        caption:
-          `✅ <b>转换完成</b>  ${FORMAT_LABELS[pending.format]} → ${FORMAT_LABELS[target]}\n` +
-          `📊 ${cc} 颜色变量${hasWp ? "\n🖼️ 壁纸已保留" : ""}\n\n` +
-          `<i>回复此消息 <code>${mainPrefix}theme cloud</code> 上传到云端</i>`,
+        caption: html`
+✅ <b>转换完成</b> ${FORMAT_LABELS[from]} → ${FORMAT_LABELS[to]}
+📊 ${cc} 个颜色变量${hasWp ? "<br/>🖼️ 壁纸已保留" : ""}
+        `,
         replyTo: msg.id,
       });
     } catch (e) {
-      await msg.edit({ text: `❌ 转换失败: ${getErrorMessage(e)}` });
+      await msg.edit({ text: html`❌ 转换失败: ${getErrorMessage(e)}` });
     }
   }
 }
