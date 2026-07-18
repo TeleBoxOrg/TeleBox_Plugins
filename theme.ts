@@ -2693,21 +2693,26 @@ ${converted.map((c) => {
   private async downloadWallpaperFromSettings(
     client: Awaited<ReturnType<typeof getGlobalClient>>,
     settings: any,
-  ): Promise<Buffer | null> {
+  ): Promise<{ bytes: Buffer | null; slug: string | null }> {
     try {
       const wp = settings?.wallpaper;
-      if (!wp) return null;
-      // wallPaper { document } | wallPaperNoFile
+      if (!wp) return { bytes: null, slug: null };
+      // wallPaper { document, slug } | wallPaperNoFile
+      const slug = (wp._ === "wallPaper" && typeof wp.slug === "string" && wp.slug.length > 8)
+        ? wp.slug
+        : null;
       if (wp._ === "wallPaper" && wp.document?._ === "document") {
-        return await this.downloadTlDocument(client, wp.document);
+        const bytes = await this.downloadTlDocument(client, wp.document);
+        return { bytes, slug };
       }
       if (wp.document?._ === "document") {
-        return await this.downloadTlDocument(client, wp.document);
+        const bytes = await this.downloadTlDocument(client, wp.document);
+        return { bytes, slug };
       }
-      return null;
+      return { bytes: null, slug };
     } catch (e) {
       logger.warn("[theme] wallpaper download failed:", getErrorMessage(e));
-      return null;
+      return { bytes: null, slug: null };
     }
   }
 
@@ -2716,6 +2721,7 @@ ${converted.map((c) => {
     settings: any,
     title: string,
     wallpaper?: Buffer | null,
+    wallpaperSlug?: string | null,
   ): Record<string, { format: ThemeFormat; buf: Buffer }> | null {
     const colors = colorsFromThemeSettings(settings);
     if (!Object.keys(colors).length) return null;
@@ -2723,6 +2729,7 @@ ${converted.map((c) => {
       format: "attheme",
       colors,
       wallpaper: normalizeWallpaper(wallpaper || null),
+      wallpaperSlug: wallpaperSlug || null,
     };
     const fmtMap: Record<string, { format: ThemeFormat; buf: Buffer }> = {};
     for (const format of ["attheme", "tdesktop-theme", "tgx-theme", "ios-theme"] as ThemeFormat[]) {
@@ -2874,8 +2881,8 @@ ${converted.map((c) => {
       // Many installable themes only ship settings (no document). Clients still
       // install them; we generate .attheme / .tdesktop-theme / .tgx-theme / .tgios-theme.
       if (settingsFallback) {
-        const cloudWp = await this.downloadWallpaperFromSettings(client, settingsFallback);
-        const synth = this.synthesizeFromSettings(settingsFallback, themeTitle, cloudWp);
+        const { bytes: cloudWp, slug: wpSlug } = await this.downloadWallpaperFromSettings(client, settingsFallback);
+        const synth = this.synthesizeFromSettings(settingsFallback, themeTitle, cloudWp, wpSlug);
         if (synth) {
           await this.sendThemeResults(msg, themeTitle, slug, synth, true, cloudWp);
           return;
