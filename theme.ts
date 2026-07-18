@@ -282,31 +282,76 @@ function parseZip(buf: Buffer): Record<string, Buffer> {
   let i = 0;
   while (i + 30 <= buf.length) {
     const sig = buf.readUInt32LE(i);
-    if (sig !== 0x04034b50) break;
+    if (sig !== 0x04034b50) break; // PK\x03\x04 local file
     const method = buf.readUInt16LE(i + 8);
     const flags = buf.readUInt16LE(i + 6);
     let comp = buf.readUInt32LE(i + 18);
+    let uncomp = buf.readUInt32LE(i + 22);
     const nlen = buf.readUInt16LE(i + 26);
     const elen = buf.readUInt16LE(i + 28);
     const name = buf.subarray(i + 30, i + 30 + nlen).toString("utf8");
     let start = i + 30 + nlen + elen;
-    // data descriptor when bit 3 set and sizes zero
-    if ((flags & 0x8) && comp === 0) {
-      // scan for next local header or data descriptor — rare for theme zips; skip if empty
-      break;
+    let data: Buffer;
+
+    // Bit 3: data descriptor — sizes in local header may be zero; payload ends at descriptor
+    if ((flags & 0x8) && (comp === 0 || uncomp === 0)) {
+      // Find data descriptor: optional PK\x07\x08 signature, then crc32 + comp + uncomp
+      // Scan for next local header / central dir, then walk back 12 or 16 bytes
+      let scan = start;
+      let next = -1;
+      while (scan + 4 <= buf.length) {
+        const s = buf.readUInt32LE(scan);
+        if (s === 0x04034b50 || s === 0x02014b50 || s === 0x06054b50) {
+          next = scan;
+          break;
+        }
+        // also stop at explicit data descriptor signature followed by plausible sizes
+        if (s === 0x08074b50 && scan + 16 <= buf.length) {
+          // descriptor is right here — compressed data ends at scan
+          next = scan;
+          break;
+        }
+        scan++;
+      }
+      if (next < 0) next = buf.length;
+      // If descriptor has signature at next, data is [start, next)
+      // Else descriptor is 12 bytes before next (no signature)
+      let end = next;
+      if (next >= start + 16 && buf.readUInt32LE(next - 16) === 0x08074b50) {
+        end = next - 16;
+        comp = buf.readUInt32LE(next - 12);
+        uncomp = buf.readUInt32LE(next - 8);
+        // prefer declared comp size if it fits
+        if (comp > 0 && start + comp <= next - 16) end = start + comp;
+      } else if (next >= start + 12) {
+        // try 12-byte descriptor without signature
+        const maybeComp = buf.readUInt32LE(next - 8);
+        if (maybeComp > 0 && start + maybeComp === next - 12) {
+          end = start + maybeComp;
+          comp = maybeComp;
+          uncomp = buf.readUInt32LE(next - 4);
+        }
+      }
+      data = buf.subarray(start, end);
+      i = next;
+      // if descriptor signature sits at next, skip it
+      if (i + 4 <= buf.length && buf.readUInt32LE(i) === 0x08074b50) i += 16;
+      else if (comp > 0 && start + comp + 12 <= buf.length && i === start + comp + 12) {
+        /* already positioned */
+      }
+    } else {
+      data = buf.subarray(start, start + comp);
+      i = start + comp;
     }
-    let data = buf.subarray(start, start + comp);
+
     if (method === 8) {
       try { data = zlib.inflateRawSync(data); } catch { /* keep raw */ }
     } else if (method !== 0) {
-      i = start + comp;
       continue;
     }
     out[name] = Buffer.from(data);
-    // also index by basename lower
     const base = name.split("/").pop() || name;
     if (base !== name) out[base] = out[name];
-    i = start + comp;
   }
   return out;
 }
@@ -3128,6 +3173,8 @@ class ThemePlugin extends Plugin {
   ): Record<string, { format: ThemeFormat; buf: Buffer }> | null {
     const colors = colorsFromThemeSettings(settings);
     if (!Object.keys(colors).length) return null;
+    const base = String(settings?.baseTheme || settings?.baseTheme?._ || "");
+    const basedOn = /night|dark/i.test(base) ? "night" : /classic/i.test(base) ? "classic" : "day";
     const doc: ThemeDoc = {
       format: "attheme",
       colors,
@@ -3135,6 +3182,7 @@ class ThemePlugin extends Plugin {
       wallpaperSlug: wallpaperSlug || null,
       wallpaperBlur: wallpaperBlur ?? 0,
       wallpaperMotion: wallpaperMotion ?? true,
+      basedOn,
     };
     const fmtMap: Record<string, { format: ThemeFormat; buf: Buffer }> = {};
     for (const format of ["attheme", "tdesktop-theme", "tgx-theme", "ios-theme"] as ThemeFormat[]) {
@@ -3143,6 +3191,9 @@ class ThemePlugin extends Plugin {
     }
     // stash wallpaper for sidecar send via special key on first entry — callers use parse path
     (fmtMap as any).__wallpaper = doc.wallpaper || null;
+    (fmtMap as any).__wallpaperSlug = doc.wallpaperSlug || null;
+    (fmtMap as any).__wallpaperBlur = doc.wallpaperBlur;
+    (fmtMap as any).__wallpaperMotion = doc.wallpaperMotion;
     return Object.keys(fmtMap).length ? fmtMap : null;
   }
 
@@ -3272,20 +3323,36 @@ class ThemePlugin extends Plugin {
         ios: "ios-theme",
       } as const;
       // Prefer missing mobile formats; still fill Desktop if absent
-      for (const f of apiFormats) {
-        const want = apiToFmt[f];
-        if (fmtMap[want]) continue; // already have this platform file
-        try {
-          const raw: any = await client.call({
-            _: "account.getTheme",
-            format: f,
-            theme: { _: "inputThemeSlug", slug },
-          } as any);
-          if (raw?._ !== "theme") continue;
-          if (raw.title) themeTitle = raw.title;
+      // Parallel getTheme for all missing formats (android first in list order for logging only)
+      const missingFormats = apiFormats.filter(f => !fmtMap[apiToFmt[f]]);
+      if (missingFormats.length) {
+        const results = await Promise.all(missingFormats.map(async (f) => {
+          try {
+            const raw: any = await client.call({
+              _: "account.getTheme",
+              format: f,
+              theme: { _: "inputThemeSlug", slug },
+            } as any);
+            if (raw?._ !== "theme") return { f, raw: null as any, buf: null as Buffer | null, err: null as string | null };
+            let buf: Buffer | null = null;
+            if (raw.document?._ === "document") {
+              buf = await this.downloadTlDocument(client, raw.document);
+              if (!buf) return { f, raw, buf: null, err: `getTheme(${f}): download failed` };
+            }
+            return { f, raw, buf, err: null };
+          } catch (e) {
+            return { f, raw: null as any, buf: null as Buffer | null, err: `getTheme(${f}): ${getErrorMessage(e)}` };
+          }
+        }));
+        // Apply android first so mobile wallpaper source is preferred when multiple arrive
+        const order = ["android", "ios", "macos", "tdesktop"] as const;
+        results.sort((a, b) => order.indexOf(a.f as any) - order.indexOf(b.f as any));
+        for (const r of results) {
+          if (r.err) { errors.push(r.err); continue; }
+          if (!r.raw) continue;
+          if (r.raw.title) themeTitle = r.raw.title;
           if (!settingsFallback) {
-            settingsFallback = this.collectThemeSettings(raw);
-            // late settings wallpaper fetch
+            settingsFallback = this.collectThemeSettings(r.raw);
             if (settingsFallback && !settingsWpBytes) {
               const wpInfo = await this.downloadWallpaperFromSettings(client, settingsFallback);
               settingsWpBytes = wpInfo.bytes;
@@ -3294,17 +3361,11 @@ class ThemePlugin extends Plugin {
               settingsWpMotion = wpInfo.motion;
             }
           }
-          if (raw.document?._ === "document") {
-            const buf = await this.downloadTlDocument(client, raw.document);
-            if (!buf) {
-              errors.push(`getTheme(${f}): download failed`);
-              continue;
-            }
-            const format = this.inferThemeFormat(raw.document, buf) || want;
-            if (!fmtMap[format]) fmtMap[format] = { format, buf };
+          if (r.buf) {
+            const want = apiToFmt[r.f];
+            const format = this.inferThemeFormat(r.raw.document, r.buf) || want;
+            if (!fmtMap[format]) fmtMap[format] = { format, buf: r.buf };
           }
-        } catch (e) {
-          errors.push(`getTheme(${f}): ${getErrorMessage(e)}`);
         }
       }
 
@@ -3974,12 +4035,16 @@ ${statLine ? `<br/>📈 ${statLine}` : ""}
       if (!buf || buf.length === 0) { await msg.edit({ text: html`❌ 下载失败` }); return; }
       const format = detectFmt(buf);
       if (!format) { await msg.edit({ text: html`❌ 无法识别文件格式` }); return; }
-      if (format === target) { await msg.edit({ text: html`❌ 文件已经是 ${TARGET_CLIENT_LABELS[target]} 格式` }); return; }
       const parsers: Record<string, (b: Buffer) => ThemeDoc | null> = {
         attheme: parseAttheme, "tdesktop-theme": parseDesktop, "tgx-theme": parseTgx, "ios-theme": parseIos,
       };
       let doc = parsers[format](buf);
       if (!doc || !Object.keys(doc.colors).length) { await msg.edit({ text: html`❌ 解析失败` }); return; }
+
+      const sameFmt = format === target;
+      if (sameFmt) {
+        await msg.edit({ text: html`⏳ 同格式重规范化（补齐壁纸/offset/slug）...` });
+      }
 
       // Resolve / package wallpaper for target
       if (doc.wallpaperSlug && !normalizeWallpaper(doc.wallpaper || null)) {
@@ -3998,6 +4063,7 @@ ${statLine ? `<br/>📈 ${statLine}` : ""}
       const wp = normalizeWallpaper(doc.wallpaper || null);
       const emb = !!(wp && (target === "attheme" || target === "tdesktop-theme"));
       const slugPacked = !!((target === "ios-theme" || target === "tgx-theme") && doc.wallpaperSlug);
+      const dim = formatImageDim(readImageDimensions(wp));
       await msg.delete();
       await client.sendMedia(msg.chat.id, {
         type: "document",
@@ -4006,32 +4072,24 @@ ${statLine ? `<br/>📈 ${statLine}` : ""}
         fileMime: API_MIME[target],
       } as any, {
         caption: html`
-✅ <b>转换完成</b> ${TARGET_CLIENT_LABELS[target]}
-📊 ${cc} 个颜色变量${emb ? "<br/>🖼️ 壁纸已嵌入" : slugPacked ? `<br/>🖼️ 壁纸已打包（slug: <code>${doc.wallpaperSlug}</code>）` : wp ? "<br/>🖼️ 壁纸见附图" : ""}
+✅ <b>${sameFmt ? "重规范化完成" : "转换完成"}</b> ${TARGET_CLIENT_LABELS[target]}
+📊 ${cc} 个颜色变量${emb ? "<br/>🖼️ 壁纸已嵌入" : slugPacked ? `<br/>🖼️ 壁纸已打包（slug: <code>${doc.wallpaperSlug}</code>）` : wp ? "<br/>🖼️ 壁纸见附图" : ""}${dim ? `<br/>📐 ${dim}` : ""}
+${sameFmt ? "<br/><i>源格式相同：已按生产级规范重写（offset/signed int/slug）</i>" : ""}
         `,
         replyTo: msg.id,
       });
-      if (wp && !emb && !slugPacked) {
+      if (wp && !emb) {
         const ext = detectImageExt(wp) === "png" ? "png" : "jpg";
+        const cap = slugPacked
+          ? html`🖼️ <b>聊天背景原图</b>${dim ? ` · ${dim}` : ""}（已写入 ${target === "ios-theme" ? "iOS defaultWallpaper" : "TGX wallpaper"} slug）`
+          : html`🖼️ 聊天背景${dim ? ` · ${dim}` : ""}`;
         await client.sendMedia(msg.chat.id, {
           type: "document",
           file: wp,
           fileName: `theme-chat-background.${ext}`,
           fileMime: ext === "png" ? "image/png" : "image/jpeg",
         } as any, {
-          caption: html`🖼️ <b>聊天背景</b>`,
-          replyTo: msg.id,
-        });
-      } else if (wp && slugPacked) {
-        // still send image copy for convenience / other clients
-        const ext = detectImageExt(wp) === "png" ? "png" : "jpg";
-        await client.sendMedia(msg.chat.id, {
-          type: "document",
-          file: wp,
-          fileName: `theme-chat-background.${ext}`,
-          fileMime: ext === "png" ? "image/png" : "image/jpeg",
-        } as any, {
-          caption: html`🖼️ <b>聊天背景原图</b>（已写入 ${target === "ios-theme" ? "iOS defaultWallpaper" : "TGX wallpaper"} slug）`,
+          caption: cap,
           replyTo: msg.id,
         });
       }
