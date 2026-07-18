@@ -270,12 +270,27 @@ function parseDesktopColorText(text: string): Record<string, string> {
       if (k && v) raw[k] = v;
     }
   }
+  // Resolve alias chains (windowBg → primaryDark → #RRGGBB) multi-pass
+  const resolve = (v: string, depth = 0): string | null => {
+    if (!v || depth > 12) return null;
+    const t = v.trim();
+    if (t.startsWith("#")) {
+      const pv = parseColor(t);
+      return pv || t;
+    }
+    if (/^[0-9a-fA-F]{6,8}$/.test(t)) {
+      const pv = parseColor(`#${t}`);
+      return pv || `#${t}`;
+    }
+    // transparent / special desktop tokens
+    if (t === "transparent" || t === "00000000") return "#00000000";
+    if (raw[t] !== undefined) return resolve(raw[t], depth + 1);
+    return null;
+  };
   const colors: Record<string, string> = {};
   for (const [k, v] of Object.entries(raw)) {
-    if (v.startsWith("#")) colors[k] = v;
-    else if (raw[v]?.startsWith("#")) colors[k] = raw[v];
-    else if (/^[0-9a-fA-F]{6,8}$/.test(v)) colors[k] = `#${v}`;
-    else colors[k] = v.startsWith("#") ? v : (raw[v] || v);
+    const hex = resolve(v);
+    if (hex) colors[k] = hex;
   }
   return colors;
 }
@@ -1374,11 +1389,19 @@ function genDesktop(colors: Record<string, string>): string {
     `msgInShadow: ${bg}; msgOutShadow: ${bg};`,
   ];
   // Spillover: any remaining cx key not yet in output — zero loss
-  const known = new Set(lines.map(l => l.split(":")[0].trim()));
+  // Multi-key lines like "a: x; b: y;" — collect ALL keys that appear before a ':'
+  const known = new Set<string>();
+  for (const l of lines) {
+    for (const part of l.split(";")) {
+      const col = part.indexOf(":");
+      if (col > 0) known.add(part.slice(0, col).trim());
+    }
+  }
   for (const [k, v] of Object.entries(cx)) {
     const hex = toRgb(v);
-    if (!known.has(k) && hex && !k.includes(".") && !k.includes("__")) {
+    if (!known.has(k) && hex && !k.includes(".") && !k.startsWith("__") && !isAtthemeMetaKey(k)) {
       lines.push(`${k}: ${hex};`);
+      known.add(k);
     }
   }
   return lines.join("\n");
@@ -3717,33 +3740,116 @@ ${statLine ? `<br/>📈 ${statLine}` : ""}
       const format = detectFmt(buf);
       if (!format) { await msg.edit({ text: html`❌ 无法识别主题格式` }); return; }
       const parser = format === "attheme" ? parseAttheme : format === "tdesktop-theme" ? parseDesktop : format === "tgx-theme" ? parseTgx : parseIos;
-      const doc = parser(buf);
+      let doc = parser(buf);
       if (!doc || !Object.keys(doc.colors).length) { await msg.edit({ text: html`❌ 解析失败` }); return; }
-      await msg.edit({ text: html`⏳ 上传到 Telegram 云端...` });
 
+      // Resolve slug→bytes; upload image→slug so iOS/TGX cloud themes keep wallpaper
+      if (doc.wallpaperSlug && !normalizeWallpaper(doc.wallpaper || null)) {
+        await msg.edit({ text: html`⏳ 下载云壁纸...` });
+        doc = await this.resolveWallpaperBytes(client, doc);
+      }
+      if (!doc.wallpaperSlug && normalizeWallpaper(doc.wallpaper || null) && (format === "ios-theme" || format === "tgx-theme")) {
+        await msg.edit({ text: html`⏳ 上传聊天背景到云壁纸...` });
+        doc = await this.ensureIosWallpaperSlug(client, doc);
+      }
+
+      await msg.edit({ text: html`⏳ 上传到 Telegram 云端...` });
       const slug = genSlug();
-      const converted = renderDoc(doc, format) || buf;
-      const uploaded = await client.uploadFile({
+      // Prefer original buffer when it already has native wallpaper/slug; else re-render
+      const origHasWp =
+        (format === "attheme" && !!normalizeWallpaper(parseAttheme(buf)?.wallpaper || null))
+        || (format === "tdesktop-theme" && !!normalizeWallpaper(parseDesktop(buf)?.wallpaper || null))
+        || (format === "ios-theme" && !!(parseIos(buf)?.wallpaperSlug))
+        || (format === "tgx-theme" && !!(parseTgx(buf)?.wallpaperSlug));
+      const docHasWp = !!(normalizeWallpaper(doc.wallpaper || null) || doc.wallpaperSlug);
+      let converted = buf;
+      if (format === "attheme") {
+        // Always normalize to official wallpaperFileOffset + signed ints
+        converted = renderDoc(doc, format) || buf;
+      } else if (!origHasWp && docHasWp) {
+        converted = renderDoc(doc, format, "TeleBox Theme") || buf;
+      } else if ((format === "ios-theme" || format === "tgx-theme") && doc.wallpaperSlug) {
+        // Ensure slug is written even if original lacked it
+        const origSlug = format === "ios-theme" ? parseIos(buf)?.wallpaperSlug : parseTgx(buf)?.wallpaperSlug;
+        if (origSlug !== doc.wallpaperSlug) converted = renderDoc(doc, format, "TeleBox Theme") || buf;
+      }
+
+      const uploaded: any = await client.uploadFile({
         file: converted,
         fileName: `theme${FORMAT_EXT[format]}`,
         fileMime: API_MIME[format],
-      });
+      } as any);
+
+      // Build inputDocument correctly from uploadFile result shape variants
+      let inputDoc: any = null;
+      if (uploaded?._ === "inputDocument" || (uploaded?.id && uploaded?.accessHash)) {
+        inputDoc = {
+          _: "inputDocument",
+          id: uploaded.id,
+          accessHash: uploaded.accessHash,
+          fileReference: uploaded.fileReference || new Uint8Array(0),
+        };
+      } else if (uploaded?.document) {
+        const d = uploaded.document;
+        inputDoc = {
+          _: "inputDocument",
+          id: d.id,
+          accessHash: d.accessHash,
+          fileReference: d.fileReference || new Uint8Array(0),
+        };
+      } else if (uploaded?._ === "inputFile" || uploaded?._ === "inputFileBig" || uploaded?.id != null) {
+        // Some mtcute builds return InputFile — createTheme wants InputDocument.
+        // Fallback: send as media to Saved Messages style is heavy; try createTheme with document: uploaded via messages.uploadMedia path.
+        try {
+          const media: any = await client.call({
+            _: "messages.uploadMedia",
+            peer: { _: "inputPeerSelf" },
+            media: {
+              _: "inputMediaUploadedDocument",
+              file: uploaded,
+              mimeType: API_MIME[format],
+              attributes: [
+                { _: "documentAttributeFilename", fileName: `theme${FORMAT_EXT[format]}` },
+              ],
+            },
+          } as any);
+          const d = media?.document;
+          if (d?._ === "document") {
+            inputDoc = {
+              _: "inputDocument",
+              id: d.id,
+              accessHash: d.accessHash,
+              fileReference: d.fileReference || new Uint8Array(0),
+            };
+          }
+        } catch (e) {
+          logger.warn("[theme] cloud uploadMedia bridge failed:", getErrorMessage(e));
+        }
+      }
+      if (!inputDoc) {
+        await msg.edit({ text: html`❌ 云端上传失败: 无法构造 inputDocument` });
+        return;
+      }
+
       const created: any = await client.call({
         _: "account.createTheme",
         slug,
         title: `TeleBox Theme (${FORMAT_LABELS[format]})`,
-        document: { _: "inputDocument", id: (uploaded as any).id, accessHash: (uploaded as any).accessHash },
+        document: inputDoc,
       } as any);
 
       const themeSlug = (created as any).slug || slug;
       const link = `https://t.me/addtheme/${themeSlug}`;
+      const wpNote = normalizeWallpaper(doc.wallpaper || null)
+        ? (doc.wallpaperSlug ? ` · 🖼️ 壁纸 + slug <code>${doc.wallpaperSlug}</code>` : " · 🖼️ 壁纸已保留")
+        : (doc.wallpaperSlug ? ` · 🖼️ slug <code>${doc.wallpaperSlug}</code>` : "");
       await msg.edit({
         text: html`
 ✅ <b>云端主题创建成功！</b>
 
 <a href="${link}">${link}</a>
 
-📊 ${Object.keys(doc.colors).length} 个颜色变量
+📊 ${Object.keys(doc.colors).length} 个颜色变量 · ${FORMAT_LABELS[format]}${wpNote}
         `,
       });
     } catch (e: any) {
