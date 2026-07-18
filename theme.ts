@@ -72,17 +72,67 @@ const FORMAT_EXT: Record<ThemeFormat, string> = {
 };
 
 // client-target aliases (user doesn't need to know source format)
+// Official file formats are ONLY 4 (API getTheme format strings):
+//   android → .attheme | ios → .tgios-theme | macos → .tgx-theme | tdesktop → .tdesktop-theme
+// Other clients reuse one of these engines or cloud themeSettings only.
 const TARGET_ALIASES: Record<string, ThemeFormat> = {
+  // Android engine (.attheme) — official + forks
   android: "attheme",
-  tgx: "tgx-theme",
+  official: "attheme",
+  nekogram: "attheme",
+  neko: "attheme",
+  nicegram: "attheme",
+  owlgram: "attheme",
+  extera: "attheme",
+  cherrygram: "attheme",
+  materialgram: "attheme",
+  // Desktop engine
   desktop: "tdesktop-theme",
+  tdesktop: "tdesktop-theme",
+  "64gram": "tdesktop-theme",
+  kotatogram: "tdesktop-theme",
+  ayugram: "tdesktop-theme",
+  // TGX / macOS engine
+  tgx: "tgx-theme",
+  macos: "tgx-theme",
+  mac: "tgx-theme",
+  // iOS engine
   ios: "ios-theme",
+  iphone: "ios-theme",
+  // Cloud themeSettings clients (no proprietary file — use settings export / cloud link)
+  // Still map convert-to-X to closest file format for palette transfer
+  unigram: "tdesktop-theme",
+  web: "tdesktop-theme",
+  webk: "tdesktop-theme",
+  weba: "tdesktop-theme",
+  telegramweb: "tdesktop-theme",
 };
+
 const TARGET_CLIENT_LABELS: Record<ThemeFormat, string> = {
   attheme: "📱 Android",
   "tdesktop-theme": "💻 Desktop",
-  "tgx-theme": "📲 TGX",
+  "tgx-theme": "📲 TGX / macOS",
   "ios-theme": "🍎 iOS",
+};
+
+/** Human labels for alias → which real engine */
+const CLIENT_ENGINE_NOTE: Record<string, string> = {
+  android: "官方 Android · .attheme",
+  nekogram: "Nekogram 等 Android 衍生 · .attheme",
+  neko: "Nekogram · .attheme",
+  nicegram: "Nicegram · .attheme",
+  desktop: "Telegram Desktop · .tdesktop-theme",
+  tdesktop: "Telegram Desktop · .tdesktop-theme",
+  "64gram": "64Gram · .tdesktop-theme",
+  kotatogram: "Kotatogram · .tdesktop-theme",
+  ayugram: "AyuGram · .tdesktop-theme",
+  tgx: "Telegram X · .tgx-theme",
+  macos: "Telegram macOS · .tgx-theme",
+  ios: "官方 iOS · .tgios-theme",
+  unigram: "Unigram → 云端 themeSettings（无独立文件）",
+  web: "Telegram Web → 云端 themeSettings",
+  webk: "WebK → 云端 themeSettings",
+  weba: "WebA → 云端 themeSettings",
 };
 
 // ─── Color utilities ─────────────────────────────────────────────────────────
@@ -2463,6 +2513,112 @@ function colorsFromThemeSettings(settings: any): Record<string, string> {
   return colors;
 }
 
+/**
+ * Export cloud themeSettings JSON for clients without proprietary theme files
+ * (Unigram / Telegram Web / WebK / WebA). Colors are signed int32 AARRGGBB.
+ */
+function hexToSignedColorInt(hex: string): number | null {
+  const pv = parseColor(hex);
+  if (!pv) return null;
+  let r = 0, g = 0, b = 0, a = 255;
+  if (pv.length === 9) {
+    a = parseInt(pv.slice(1, 3), 16);
+    r = parseInt(pv.slice(3, 5), 16);
+    g = parseInt(pv.slice(5, 7), 16);
+    b = parseInt(pv.slice(7, 9), 16);
+  } else {
+    r = parseInt(pv.slice(1, 3), 16);
+    g = parseInt(pv.slice(3, 5), 16);
+    b = parseInt(pv.slice(5, 7), 16);
+  }
+  const n = ((a << 24) | (r << 16) | (g << 8) | b) >>> 0;
+  return n > 0x7fffffff ? n - 0x100000000 : n;
+}
+
+function genCloudThemeSettingsExport(
+  colors: Record<string, string>,
+  meta?: {
+    title?: string;
+    basedOn?: string | null;
+    wallpaperSlug?: string | null;
+    wallpaperBlur?: number;
+    wallpaperMotion?: boolean;
+  },
+): string {
+  const cx = expandColorAliases(colors);
+  const pick = (...keys: string[]) => {
+    for (const k of keys) {
+      if (cx[k]) return cx[k];
+    }
+    return null;
+  };
+  const accentHex = pick(
+    "windowBackgroundWhiteBlueText4", "windowBackgroundWhiteBlueText",
+    "windowActiveTextFg", "accentColor", "controlActive", "textLink", "progress",
+  ) || "#2481cc";
+  const outHex = pick(
+    "chat_outBubble", "bubbleOut_background", "msgOutBg", "chatOutgoingBubble",
+  ) || accentHex;
+  const bgHex = pick(
+    "windowBackgroundWhite", "windowBg", "filling", "background", "chatListBackground",
+  ) || "#ffffff";
+  const dark = isDarkHex(bgHex) || /night|dark/i.test(meta?.basedOn || "");
+  const baseTheme = dark
+    ? (/tinted/i.test(meta?.basedOn || "") ? "baseThemeTinted" : "baseThemeNight")
+    : (/classic/i.test(meta?.basedOn || "") ? "baseThemeClassic" : "baseThemeDay");
+
+  const accent = hexToSignedColorInt(accentHex) ?? 0x2481cc;
+  const outbox = hexToSignedColorInt(outHex) ?? accent;
+  const msgIn = hexToSignedColorInt(
+    pick("chat_inBubble", "bubbleIn_background", "msgInBg") || (dark ? "#1e1e1e" : "#f1f1f4"),
+  );
+  const msgOut = hexToSignedColorInt(outHex);
+
+  const settings: any = {
+    _: "themeSettings",
+    baseTheme: { _: baseTheme },
+    accentColor: accent,
+    outboxAccentColor: outbox,
+    messageColors: [msgOut, msgIn].filter((x): x is number => x != null),
+  };
+  if (meta?.wallpaperSlug) {
+    settings.wallpaper = {
+      _: "wallPaper",
+      slug: meta.wallpaperSlug,
+      settings: {
+        _: "wallPaperSettings",
+        blur: meta.wallpaperBlur ?? 0,
+        motion: meta.wallpaperMotion !== false,
+      },
+    };
+  }
+
+  const doc = {
+    teleboxExport: "cloud-theme-settings",
+    version: 1,
+    title: meta?.title || "TeleBox Theme",
+    note: "Unigram / Telegram Web 等无独立主题文件的客户端使用云端 themeSettings。"
+      + " 可用 theme cloud 上传生成 t.me/addtheme 链接；本 JSON 便于调试/二次导入。",
+    clients: ["unigram", "web", "webk", "weba", "telegram-web"],
+    officialFileFormats: {
+      android: ".attheme",
+      ios: ".tgios-theme",
+      macos: ".tgx-theme",
+      tdesktop: ".tdesktop-theme",
+    },
+    settings,
+    palettePreview: {
+      accent: accentHex,
+      outbox: outHex,
+      background: bgHex,
+      dark,
+      basedOn: meta?.basedOn || (dark ? "night" : "day"),
+      wallpaperSlug: meta?.wallpaperSlug || null,
+    },
+  };
+  return JSON.stringify(doc, null, 2) + "\n";
+}
+
 // ─── Parsers ─────────────────────────────────────────────────────────────────
 
 function parseAttheme(buf: Buffer): ThemeDoc | null {
@@ -2854,16 +3010,21 @@ function buildHelpText(): ReturnType<typeof html> {
 <b>🎨 主题转换器</b>
 
 <b>用法</b>
-• 发送主题文件 → 自动转换全部格式
-• <code>${mainPrefix}theme &lt;客户端&gt;</code> <i>(回复文件)</i> → 转换到指定客户端
-• <code>${mainPrefix}theme link t.me/addtheme/xxx</code> → 获取云端主题
-• <code>${mainPrefix}theme cloud</code> <i>(回复文件)</i> → 上传到云端
+• 发送主题文件 → 自动转换全部格式 + 云端 settings
+• <code>${mainPrefix}theme &lt;客户端&gt;</code> <i>(回复文件)</i> → 转到指定引擎
+• <code>${mainPrefix}theme link t.me/addtheme/xxx</code> → 拉取云端主题
+• <code>${mainPrefix}theme cloud</code> <i>(回复文件)</i> → 上传文件主题
+• <code>${mainPrefix}theme cloud-settings</code> <i>(回复文件)</i> → 创建云端 accent 主题（Unigram/Web）
 
-<b>目标客户端</b>
-• <code>android</code> — 📱 Android (.attheme)
-• <code>desktop</code> — 💻 Desktop (.tdesktop-theme)
-• <code>tgx</code> — 📲 TGX (.tgx-theme)
-• <code>ios</code> — 🍎 iOS (.tgios-theme)
+<b>官方文件格式（仅 4 种）</b>
+• <code>android</code> → .attheme（Nekogram / Nicegram 等同）
+• <code>desktop</code> → .tdesktop-theme（64Gram / Kotatogram / AyuGram 等同）
+• <code>tgx</code> / <code>macos</code> → .tgx-theme
+• <code>ios</code> → .tgios-theme
+
+<b>无独立文件的客户端</b>
+• Unigram / Telegram Web / WebK / WebA → 使用云端 <code>themeSettings</code>
+  （link 输出会附带 settings JSON；也可用 <code>cloud-settings</code>）
   `;
 }
 
@@ -2907,6 +3068,34 @@ class ThemePlugin extends Plugin {
     // ── cloud ───────────────────────────────────────────────────────────
     if (sub === "cloud") {
       await this.handleCloudUpload(msg);
+      return;
+    }
+
+    // ── cloud-settings: createTheme with InputThemeSettings (Unigram/Web) ─
+    if (sub === "cloud-settings" || sub === "settings" || sub === "cloudsettings") {
+      await this.handleCloudSettingsUpload(msg);
+      return;
+    }
+
+    // ── clients: list supported engines ─────────────────────────────────
+    if (sub === "clients" || sub === "list") {
+      await msg.edit({
+        text: html`
+<b>支持的客户端 / 引擎</b>
+
+<b>有独立主题文件（API format）</b>
+• Android / Nekogram / Nicegram / … → <code>android</code> · .attheme
+• Desktop / 64Gram / Kotatogram / AyuGram → <code>desktop</code> · .tdesktop-theme
+• Telegram X / macOS → <code>tgx</code> / <code>macos</code> · .tgx-theme
+• iOS → <code>ios</code> · .tgios-theme
+
+<b>仅云端 themeSettings（无专有文件）</b>
+• Unigram · Telegram Web / WebK / WebA
+  → 使用 <code>${mainPrefix}theme cloud-settings</code> 或 link 附带的 settings JSON
+
+<i>官方 API 没有第 5 种文件 format；第三方客户端要么复用上述引擎，要么只吃 accent/settings。</i>
+        `,
+      });
       return;
     }
 
@@ -4018,6 +4207,31 @@ ${webPage.description ? `<br/>${webPage.description}` : ""}
     const mobileDim = formatImageDim(readImageDimensions(wallpaper));
     const desktopDim = desktopKeptOwn ? formatImageDim(readImageDimensions(desktopWallpaper)) : "";
 
+    // Cloud themeSettings export for Unigram / Web (no proprietary file format)
+    try {
+      const settingsJson = genCloudThemeSettingsExport(bestDoc?.colors || {}, {
+        title,
+        basedOn: bestDoc?.basedOn,
+        wallpaperSlug,
+        wallpaperBlur,
+        wallpaperMotion,
+      });
+      await client.sendMedia(msg.chat.id, {
+        type: "document",
+        file: Buffer.from(settingsJson, "utf-8"),
+        fileName: `${slug || "theme"}-cloud-settings.json`,
+        fileMime: "application/json",
+      } as any, {
+        caption: html`☁️ <b>云端 themeSettings</b>（Unigram / Web / WebK / WebA）
+<br/>无独立主题文件的客户端走 accent + baseTheme + wallpaper slug
+<br/>也可用 <code>${mainPrefix}theme cloud-settings</code> 直接创建云端链接`,
+        replyTo: msg.id,
+      });
+      sent.push("Cloud settings");
+    } catch (e) {
+      logger.warn("[theme] settings export failed:", getErrorMessage(e));
+    }
+
     await msg.edit({
       text: html`
 🎨 <b>${title}</b>
@@ -4028,7 +4242,7 @@ ${desktopKeptOwn ? `<br/>🖥️ Desktop 使用自带壁纸${desktopDim ? ` · $
 <br/>✅ 已输出: ${sent.join(" · ") || "无"}
 ${statLine ? `<br/>📈 ${statLine}` : ""}
 <br/>⏱ ${ms}ms
-<br/><i>壁纸: 移动端=Android/iOS/TGX/settings · Desktop 原图仅给 Desktop · attheme 含 wallpaperFileOffset</i>
+<br/><i>四端文件 + 云端 settings · 移动壁纸永不 Desktop</i>
       `,
     });
   }
@@ -4166,6 +4380,107 @@ ${statLine ? `<br/>📈 ${statLine}` : ""}
       });
     } catch (e: any) {
       await msg.edit({ text: html`❌ 云端上传失败: ${getErrorMessage(e)}` });
+    }
+  }
+
+  /**
+   * Create a cloud accent theme via account.createTheme(settings=InputThemeSettings).
+   * This is what Unigram / Telegram Web consume — no proprietary theme file.
+   */
+  private async handleCloudSettingsUpload(msg: MessageContext): Promise<void> {
+    if (!msg.replyToMessage?.id) {
+      await msg.edit({ text: html`❌ 请回复主题文件后使用 <code>${mainPrefix}theme cloud-settings</code>` });
+      return;
+    }
+    const client = await getGlobalClient();
+    try {
+      const reply = await safeGetReplyMessage(msg);
+      if (!reply || !(reply as any).media || (reply as any).media.type !== "document") {
+        await msg.edit({ text: html`❌ 回复不是文件` }); return;
+      }
+      await msg.edit({ text: html`⏳ 解析并生成云端 themeSettings...` });
+      const buf = await downloadMedia(reply, client);
+      if (!buf || buf.length === 0) { await msg.edit({ text: html`❌ 下载失败` }); return; }
+      const format = detectFmt(buf);
+      if (!format) { await msg.edit({ text: html`❌ 无法识别主题格式` }); return; }
+      const parser = format === "attheme" ? parseAttheme
+        : format === "tdesktop-theme" ? parseDesktop
+        : format === "tgx-theme" ? parseTgx : parseIos;
+      let doc = parser(buf);
+      if (!doc || !Object.keys(doc.colors).length) { await msg.edit({ text: html`❌ 解析失败` }); return; }
+
+      if (doc.wallpaperSlug && !normalizeWallpaper(doc.wallpaper || null)) {
+        doc = await this.resolveWallpaperBytes(client, doc);
+      }
+      if (!doc.wallpaperSlug && normalizeWallpaper(doc.wallpaper || null)) {
+        await msg.edit({ text: html`⏳ 上传壁纸到云端...` });
+        doc = await this.ensureIosWallpaperSlug(client, doc);
+      }
+
+      const exportJson = genCloudThemeSettingsExport(doc.colors, {
+        title: "TeleBox Theme",
+        basedOn: doc.basedOn,
+        wallpaperSlug: doc.wallpaperSlug,
+        wallpaperBlur: doc.wallpaperBlur,
+        wallpaperMotion: doc.wallpaperMotion,
+      });
+      const parsed = JSON.parse(exportJson);
+      const s = parsed.settings;
+      const baseName = String(s.baseTheme?._ || s.baseTheme || "baseThemeDay");
+      const inputSettings: any = {
+        _: "inputThemeSettings",
+        baseTheme: { _: baseName },
+        accentColor: s.accentColor,
+        outboxAccentColor: s.outboxAccentColor,
+        messageColors: s.messageColors || [],
+      };
+      if (doc.wallpaperSlug) {
+        inputSettings.wallpaper = { _: "inputWallPaperSlug", slug: doc.wallpaperSlug };
+        inputSettings.wallpaperSettings = {
+          _: "wallPaperSettings",
+          blur: !!doc.wallpaperBlur,
+          motion: doc.wallpaperMotion !== false,
+          intensity: doc.wallpaperIntensity ?? 50,
+        };
+      }
+
+      await msg.edit({ text: html`⏳ 创建云端 accent 主题（Unigram/Web）...` });
+      const slug = genSlug();
+      const created: any = await client.call({
+        _: "account.createTheme",
+        slug,
+        title: `TeleBox Cloud (${parsed.palettePreview?.dark ? "dark" : "light"})`,
+        settings: [inputSettings],
+      } as any);
+
+      const themeSlug = created?.slug || slug;
+      const link = `https://t.me/addtheme/${themeSlug}`;
+
+      await client.sendMedia(msg.chat.id, {
+        type: "document",
+        file: Buffer.from(exportJson, "utf-8"),
+        fileName: `${themeSlug}-cloud-settings.json`,
+        fileMime: "application/json",
+      } as any, {
+        caption: html`☁️ settings JSON 备份`,
+        replyTo: msg.id,
+      });
+
+      await msg.edit({
+        text: html`
+✅ <b>云端 accent 主题已创建</b>（Unigram / Web / WebK / WebA）
+
+<a href="${link}">${link}</a>
+
+📊 accent <code>${parsed.palettePreview?.accent}</code>
+· outbox <code>${parsed.palettePreview?.outbox}</code>
+· ${parsed.palettePreview?.dark ? "dark" : "light"}
+${doc.wallpaperSlug ? `<br/>🖼️ wallpaper slug <code>${doc.wallpaperSlug}</code>` : ""}
+<br/><i>此类客户端无 .attheme 等文件，靠 themeSettings 同步配色</i>
+        `,
+      });
+    } catch (e) {
+      await msg.edit({ text: html`❌ cloud-settings 失败: ${getErrorMessage(e)}` });
     }
   }
 
