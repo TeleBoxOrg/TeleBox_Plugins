@@ -996,8 +996,9 @@ ${converted.map((c, i) => {
     try {
       await msg.edit({ text: html`⏳ 获取主题 <code>${slug}</code>...` });
 
-      // Try all 4 API formats first
+      // ── Strategy 1: cloud theme via account.getTheme ────────────────
       const apiFormats = ["android", "tdesktop", "macos", "ios"] as const;
+      const fLabel: Record<string, ThemeFormat> = { android: "attheme", tdesktop: "tdesktop-theme", macos: "tgx-theme", ios: "ios-theme" };
       const fmtMap: Record<string, { format: ThemeFormat; buf: Buffer }> = {};
       let themeTitle = "Unknown Theme";
 
@@ -1010,156 +1011,154 @@ ${converted.map((c, i) => {
           } as any);
           if (!themeTitle || themeTitle === "Unknown Theme") themeTitle = raw?.title || "Unnamed Theme";
           if (!raw?.document?.id || !raw?.document?.accessHash) continue;
+          const docId = typeof raw.document.id === "object" ? Number(raw.document.id) : Number(raw.document.id);
+          const accessHash = typeof raw.document.accessHash === "object" ? Number(raw.document.accessHash) : Number(raw.document.accessHash);
           const dlBuf = await client.downloadAsBuffer({
             _: "inputDocument",
-            id: Number(raw.document.id),
-            accessHash: Number(raw.document.accessHash),
+            id: docId,
+            accessHash,
           } as any);
           if (!dlBuf) continue;
-          const full = Buffer.from(dlBuf);
-          const fLabel: Record<string, ThemeFormat> = { android: "attheme", tdesktop: "tdesktop-theme", macos: "tgx-theme", ios: "ios-theme" };
-          fmtMap[f] = { format: fLabel[f] || "attheme", buf: full };
-        } catch { /* not available */ }
+          fmtMap[f] = { format: fLabel[f] || "attheme", buf: Buffer.from(dlBuf as any) };
+        } catch { /* not available in this format */ }
       }
 
       if (Object.keys(fmtMap).length > 0) {
-        // cloud theme found — parse and convert
-        const results: { label: string; from: ThemeFormat; targets: { t: ThemeFormat; ok: boolean }[] }[] = [];
-
-        for (const [apiFmt, info] of Object.entries(fmtMap)) {
-          const { format: fmt, buf } = info;
-          const parser = fmt === "attheme" ? parseAttheme : fmt === "tdesktop-theme" ? parseDesktop : fmt === "tgx-theme" ? parseTgx : parseIos;
-          const doc = parser(buf);
-          if (!doc) continue;
-          const cc = Object.keys(doc.colors).length;
-          const targets = (["attheme", "tdesktop-theme", "tgx-theme", "ios-theme"] as ThemeFormat[]).filter(f => f !== fmt);
-          const convResults = targets.map(t => ({ t, ok: renderDoc(doc, t) !== null }));
-          results.push({ label: `${FORMAT_LABELS[fmt]} (${cc}色)`, from: fmt, targets: convResults });
-
-          for (const cr of convResults) {
-            if (!cr.ok) continue;
-            const out = renderDoc(doc, cr.t);
-            if (!out) continue;
-            await client.sendMedia(msg.chat.id, {
-              type: "document",
-              file: out,
-              fileName: `theme${FORMAT_EXT[cr.t]}`,
-            }, {
-              caption: html`✅ <b>${FORMAT_LABELS[fmt]}</b> → <b>${FORMAT_LABELS[cr.t]}</b> 📊 ${cc} 色`,
-              replyTo: msg.id,
-            });
-          }
-        }
-
-        await msg.edit({
-          text: html`
-🎨 <b>${themeTitle}</b>
-🔗 <code>t.me/addtheme/${slug}</code>
-
-${results.map(r => `📦 ${r.label}<br/>${r.targets.map(t => `${t.ok ? "✅" : "❌"} ${FORMAT_LABELS[t.t]}`).join("<br/>")}`).join("<br/><br/>")}
-          `,
-        });
+        await this.sendThemeResults(msg, themeTitle, slug, fmtMap);
         return;
       }
 
-      // ── Fallback: try web page preview (non-theme t.me/addtheme links) ──
-      await msg.edit({ text: html`⏳ 不是云端主题，尝试获取网页内容...` });
+      // ── Strategy 2: web page with theme attributes ───────────────────
+      // t.me/addtheme links produce a WebPage with attributes[] containing
+      // webPageAttributeTheme, whose .documents[] holds all format theme files.
+      await msg.edit({ text: html`⏳ 尝试从网页获取主题文件...` });
 
-      // Resolve the web page
       const url = `https://t.me/addtheme/${slug}`;
-      const webPagePreview: any = await client.call({
-        _: "messages.getWebPagePreview",
-        message: url,
-      } as any);
-
       let webPage: any = null;
-      if (webPagePreview?._ === "messageMediaWebPage" && webPagePreview?.webpage) {
-        webPage = webPagePreview.webpage;
-      } else {
-        // Try direct getWebPage
+
+      // Try messages.getWebPage first (more reliable)
+      try {
         const wpResult: any = await client.call({
           _: "messages.getWebPage",
           url,
           hash: 0,
         } as any);
-        if (wpResult?._ === "webPage" || wpResult?.webpage) {
-          webPage = wpResult._ === "webPage" ? wpResult : wpResult.webpage;
-        }
+        if (wpResult?.webpage?._ === "webPage") webPage = wpResult.webpage;
+        else if (wpResult?._ === "webPage") webPage = wpResult;
+      } catch { /* fall through */ }
+
+      if (!webPage) {
+        try {
+          const preview: any = await client.call({
+            _: "messages.getWebPagePreview",
+            message: url,
+          } as any);
+          if (preview?._ === "messageMediaWebPage" && preview?.webpage?._ === "webPage") webPage = preview.webpage;
+        } catch { /* fall through */ }
       }
 
       if (!webPage) {
-        await msg.edit({ text: html`❌ 未找到主题 <code>${slug}</code>，该链接可能不是有效的主题或页面` });
+        await msg.edit({ text: html`❌ 无法获取链接信息，请检查链接是否正确` });
         return;
       }
 
-      const siteName = webPage.site_name || "";
-      const title = webPage.title || slug;
-      const desc = webPage.description || "";
-
-      // Check if the page has a theme document attachment
-      let themeDoc: any = null;
-      if (webPage.document) {
-        const docName = (webPage.document.fileName || "").toLowerCase();
-        if (docName.endsWith(".attheme") || docName.endsWith(".tdesktop-theme") || docName.includes("theme")) {
-          themeDoc = webPage.document;
-        }
-      }
-
-      if (themeDoc) {
-        await msg.edit({ text: html`⏳ 从网页下载主题文件...` });
-        const dlBuf = await client.downloadAsBuffer({
-          _: "inputDocument",
-          id: Number(themeDoc.id),
-          accessHash: Number(themeDoc.accessHash),
-        } as any);
-        if (dlBuf) {
-          const full = Buffer.from(dlBuf);
-          const format = detectFmt(full);
-          if (format) {
-            const parser = format === "attheme" ? parseAttheme : format === "tdesktop-theme" ? parseDesktop : format === "tgx-theme" ? parseTgx : parseIos;
-            const doc = parser(full);
-            if (doc && Object.keys(doc.colors).length > 0) {
-              const cc = Object.keys(doc.colors).length;
-              const targets = (["attheme", "tdesktop-theme", "tgx-theme", "ios-theme"] as ThemeFormat[]).filter(f => f !== format);
-              let sent = 0;
-              for (const t of targets) {
-                const out = renderDoc(doc, t);
-                if (!out) continue;
-                await client.sendMedia(msg.chat.id, {
-                  type: "document", file: out, fileName: `theme${FORMAT_EXT[t]}`,
-                }, {
-                  caption: html`✅ <b>${FORMAT_LABELS[format]}</b> → <b>${FORMAT_LABELS[t]}</b> 📊 ${cc} 色`,
-                  replyTo: msg.id,
-                });
-                sent++;
-              }
-              await msg.edit({
-                text: html`
-📄 <b>${title}</b>
+      // theme files live in webPageAttributeTheme.documents[]
+      const themeAttr = (webPage.attributes || []).find((a: any) => a._ === "webPageAttributeTheme");
+      if (!themeAttr?.documents?.length) {
+        await msg.edit({
+          text: html`
+📄 <b>${webPage.title || slug}</b>
 🔗 <code>t.me/addtheme/${slug}</code>
-${desc ? `<br/>${desc}` : ""}
-<br/>✅ ${sent} 个格式已转换
-                `,
-              });
-              return;
-            }
-          }
-        }
-      }
-
-      // No downloadable theme — show info
-      await msg.edit({
-        text: html`
-📄 <b>${title}</b>
-🔗 <code>t.me/addtheme/${slug}</code>
-${siteName ? `<br/>📌 ${siteName}` : ""}
-${desc ? `<br/><br/>${desc}` : ""}
+${webPage.description ? `<br/>${webPage.description}` : ""}
 <br/><br/><i>该链接不包含可下载的主题文件</i>
-        `,
-      });
+          `,
+        });
+        return;
+      }
+
+      const apiFormatNames: Record<string, string> = {
+        android: "attheme", tdesktop: "tdesktop-theme", macos: "tgx-theme", ios: "ios-theme",
+      };
+
+      // download each theme document
+      for (const doc of themeAttr.documents) {
+        const docId = typeof doc.id === "object" ? Number(doc.id) : Number(doc.id);
+        const ah = typeof doc.accessHash === "object" ? Number(doc.accessHash) : Number(doc.accessHash);
+        let dlBuf: any;
+        try {
+          dlBuf = await client.downloadAsBuffer({
+            _: "inputDocument",
+            id: docId,
+            accessHash: ah,
+          } as any);
+        } catch { continue; }
+        if (!dlBuf) continue;
+        const buf = Buffer.from(dlBuf as any);
+        const detect = detectFmt(buf);
+        if (detect) {
+          // find the API format name from mime type or filename
+          let ap = "android";
+          if (doc.mimeType?.includes("tgtheme-tdesktop")) ap = "tdesktop";
+          else if (doc.mimeType?.includes("tgtheme-macos")) ap = "macos";
+          else if (doc.mimeType?.includes("tgtheme-ios")) ap = "ios";
+          fmtMap[ap] = { format: detect, buf };
+        }
+      }
+
+      if (Object.keys(fmtMap).length === 0) {
+        await msg.edit({ text: html`❌ 无法解析网页中的主题文件` });
+        return;
+      }
+
+      await this.sendThemeResults(msg, webPage.title || slug, slug, fmtMap);
     } catch (e: any) {
       await msg.edit({ text: html`❌ 获取失败: ${getErrorMessage(e)}` });
     }
+  }
+
+  /** Shared: parse + convert downloaded theme files, send results */
+  private async sendThemeResults(
+    msg: MessageContext,
+    title: string,
+    slug: string,
+    fmtMap: Record<string, { format: ThemeFormat; buf: Buffer }>,
+  ): Promise<void> {
+    const client = await getGlobalClient();
+    const results: { label: string; from: ThemeFormat; targets: { t: ThemeFormat; ok: boolean }[] }[] = [];
+
+    for (const [, info] of Object.entries(fmtMap)) {
+      const { format: fmt, buf } = info;
+      const parser = fmt === "attheme" ? parseAttheme : fmt === "tdesktop-theme" ? parseDesktop : fmt === "tgx-theme" ? parseTgx : parseIos;
+      const doc = parser(buf);
+      if (!doc) continue;
+      const cc = Object.keys(doc.colors).length;
+      const targets = (["attheme", "tdesktop-theme", "tgx-theme", "ios-theme"] as ThemeFormat[]).filter(f => f !== fmt);
+      const convResults = targets.map(t => ({ t, ok: renderDoc(doc, t) !== null }));
+      results.push({ label: `${FORMAT_LABELS[fmt]} (${cc}色)`, from: fmt, targets: convResults });
+
+      for (const cr of convResults) {
+        if (!cr.ok) continue;
+        const out = renderDoc(doc, cr.t);
+        if (!out) continue;
+        await client.sendMedia(msg.chat.id, {
+          type: "document",
+          file: out,
+          fileName: `theme${FORMAT_EXT[cr.t]}`,
+        }, {
+          caption: html`✅ <b>${FORMAT_LABELS[fmt]}</b> → <b>${FORMAT_LABELS[cr.t]}</b> 📊 ${cc} 色`,
+          replyTo: msg.id,
+        });
+      }
+    }
+
+    await msg.edit({
+      text: html`
+🎨 <b>${title}</b>
+🔗 <code>t.me/addtheme/${slug}</code>
+
+${results.map(r => `📦 ${r.label}<br/>${r.targets.map(t => `${t.ok ? "✅" : "❌"} ${FORMAT_LABELS[t.t]}`).join("<br/>")}`).join("<br/><br/>")}
+      `,
+    });
   }
 
   // ── Handle cloud upload ──────────────────────────────────────────────
