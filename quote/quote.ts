@@ -533,7 +533,8 @@ function quoteSenderKey(message: any): string {
 function emojiStatusPayload(entity: any, customEmojiBuffer?: Buffer): any | undefined {
   const id = emojiStatusIdFromEntity(entity);
   if (!id) return undefined;
-  return { custom_emoji_id: id, customEmojiBuffer };
+  // Always string ID for vendor map lookups
+  return { custom_emoji_id: String(id), ...(customEmojiBuffer ? { customEmojiBuffer } : {}) };
 }
 
 function displayName(entity: any): string {
@@ -1457,11 +1458,26 @@ async function normalizeCustomEmojiBuffer(buffer: Buffer | undefined): Promise<B
   }
 }
 
-async function getCustomEmojiDocuments(client: any, ids: string[]): Promise<any[]> {
-  const unique = Array.from(new Set(ids.filter(Boolean)));
+async function getCustomEmojiDocuments(client: any, ids: string[]): Promise<Array<{ id: string; doc: any }>> {
+  const unique = Array.from(new Set(ids.map(String).filter(Boolean)));
   if (!client || unique.length === 0 || !(Api as any).messages?.GetCustomEmojiDocuments) return [];
   try {
-    return await withTimeout(client.invoke(new (Api as any).messages.GetCustomEmojiDocuments({ documentId: unique.map((id) => BigInt(id)) })), QUOTE_RPC_TIMEOUT_MS, "getCustomEmojiDocuments.invoke");
+    const docs = await withTimeout(
+      client.invoke(new (Api as any).messages.GetCustomEmojiDocuments({ documentId: unique.map((id) => big_integer(id)) })),
+      QUOTE_RPC_TIMEOUT_MS,
+      "getCustomEmojiDocuments.invoke",
+    );
+    const list = Array.isArray(docs) ? docs : [];
+    const out: Array<{ id: string; doc: any }> = [];
+    for (let i = 0; i < unique.length; i++) {
+      const d = list[i];
+      if (!d) continue;
+      const cls = d.className || d._ || "";
+      if (String(cls).includes("Empty")) continue;
+      const rid = String(d.id ?? d.documentId ?? unique[i]);
+      out.push({ id: unique[i] || rid, doc: d });
+    }
+    return out;
   } catch (err: any) {
     console.warn("quote custom emoji fetch failed", err?.message || err);
     return [];
@@ -1477,15 +1493,23 @@ async function hydrateCustomEmojiBuffers(client: any, messages: any[]): Promise<
   const scanMessage = (message: any) => {
     (message.entities || []).forEach(scanEntity);
     (message.caption_entities || []).forEach(scanEntity);
-    const statusId = message.from?.emoji_status?.custom_emoji_id || message.from?.emoji_status?.customEmojiId || message.emoji_status?.custom_emoji_id || message.emoji_status?.customEmojiId;
-    if (statusId && !customEmojiCache.get(String(statusId))) ids.push(String(statusId));
+    const status = message.from?.emoji_status ?? message.emoji_status;
+    if (status != null) {
+      if (typeof status === "object") {
+        const statusId = status.custom_emoji_id ?? status.customEmojiId ?? status.documentId ?? status.id;
+        if (statusId && !customEmojiCache.get(String(statusId))) ids.push(String(statusId));
+      } else if (!customEmojiCache.get(String(status))) {
+        ids.push(String(status));
+      }
+    }
     if (message.replyMessage) scanMessage(message.replyMessage);
     if (message.forward) scanMessage(message.forward);
   };
   messages.forEach(scanMessage);
   const docs = await getCustomEmojiDocuments(client, ids);
-  await runWithConcurrency(docs, EMOJI_FETCH_CONCURRENCY, async (doc: any) => {
-    const id = String(doc.id ?? doc.documentId ?? doc.document_id ?? "");
+  await runWithConcurrency(docs, EMOJI_FETCH_CONCURRENCY, async (entry: { id: string; doc: any }) => {
+    const id = entry.id;
+    const doc = entry.doc;
     if (!id) return;
     let rawBuffer = await downloadCustomEmojiAnimatedPreferred(client, doc);
     const wasAnimated = looksLikeAnimatedEmoji(rawBuffer);
@@ -1494,7 +1518,7 @@ async function hydrateCustomEmojiBuffers(client: any, messages: any[]): Promise<
     customEmojiCache.set(id, buffer);
     console.warn("quote custom emoji loaded", id, buffer ? buffer.length : 0, wasAnimated ? "animated-converted" : "static", "source", isGifBuffer(rawBuffer) ? "gif" : isWebmBuffer(rawBuffer) ? "webm" : "other", "mime", doc.mimeType || doc.mime_type || "", "thumbs", doc.thumbs?.length || 0, "videoThumbs", doc.videoThumbs?.length || doc.video_thumbs?.length || 0);
   });
-  const loadedDocIds = new Set(docs.map((doc: any) => String(doc.id ?? doc.documentId ?? doc.document_id ?? "")).filter(Boolean));
+  const loadedDocIds = new Set(docs.map((entry: any) => String(entry.id || "")).filter(Boolean));
   ids.forEach((id) => {
     if (!loadedDocIds.has(id)) console.warn("quote custom emoji document missing", id);
     else if (!customEmojiCache.get(id)) console.warn("quote custom emoji buffer missing", id);
@@ -1510,15 +1534,21 @@ async function hydrateCustomEmojiBuffers(client: any, messages: any[]): Promise<
   const applyMessage = (message: any) => {
     (message.entities || []).forEach(applyEntity);
     (message.caption_entities || []).forEach(applyEntity);
-    const statusId = message.from?.emoji_status?.custom_emoji_id || message.from?.emoji_status?.customEmojiId || message.emoji_status?.custom_emoji_id || message.emoji_status?.customEmojiId;
-    if (statusId) {
-      const buffer = customEmojiCache.get(String(statusId));
-      if (buffer) {
-        console.warn("quote sender emoji status cached", String(statusId), buffer.length);
-        if (message.from?.emoji_status) message.from.emoji_status.customEmojiBuffer = buffer;
-        if (message.emoji_status) message.emoji_status.customEmojiBuffer = buffer;
+    const status = message.from?.emoji_status ?? message.emoji_status;
+    if (status != null) {
+      let key: string | undefined;
+      if (typeof status === "object") {
+        key = String(status.custom_emoji_id ?? status.customEmojiId ?? status.documentId ?? status.id ?? "");
       } else {
-        console.warn("quote sender emoji status missing", String(statusId));
+        key = String(status);
+      }
+      if (key && key !== "undefined" && key !== "") {
+        const buffer = customEmojiCache.get(key);
+        const payload = { custom_emoji_id: key, ...(buffer ? { customEmojiBuffer: buffer } : {}) };
+        if (message.from) message.from.emoji_status = payload;
+        message.emoji_status = payload;
+        if (buffer) console.warn("quote sender emoji status cached", key, buffer.length);
+        else console.warn("quote sender emoji status missing", key);
       }
     }
     if (message.replyMessage) applyMessage(message.replyMessage);

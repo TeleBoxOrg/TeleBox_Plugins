@@ -176,11 +176,41 @@ async function loadEmojiImages (emojis, emojiBrand) {
   return localMap
 }
 
-// Load custom emoji stickers via Telegram API
+// Load custom emoji stickers via pre-downloaded buffers OR Telegram API
 async function loadCustomEmojis (customEmojiIds, telegram) {
   const result = {}
   if (customEmojiIds.length === 0 || !telegram) return result
 
+  // PATH 1: plain object map { [id]: Buffer|base64|Image }
+  // TeleBox userbot pre-downloads buffers and passes them here.
+  if (typeof telegram === 'object' && typeof telegram.callApi !== 'function') {
+    const promises = customEmojiIds.map(async (id) => {
+      const key = String(id)
+      const raw = telegram[key] ?? telegram[id]
+      if (!raw) return
+      try {
+        let buf = raw
+        if (typeof raw === 'string') {
+          // Accept raw base64 or data URL
+          const b64 = raw.startsWith('data:') ? raw.split(',')[1] : raw
+          buf = Buffer.from(b64, 'base64')
+        } else if (raw && raw.type === 'Buffer' && Array.isArray(raw.data)) {
+          buf = Buffer.from(raw.data)
+        }
+        if (Buffer.isBuffer(buf) && buf.length > 0) {
+          const png = await sharp(buf).png({ lossless: true, force: true }).toBuffer()
+          result[key] = await loadImage(png).catch(() => null)
+        } else if (raw && typeof raw.width === 'number') {
+          // Already a canvas Image
+          result[key] = raw
+        }
+      } catch (e) { /* skip broken buffer */ }
+    })
+    await Promise.all(promises).catch(() => {})
+    return result
+  }
+
+  // PATH 2: Telegraf bot instance with callApi
   const stickers = await telegram.callApi('getCustomEmojiStickers', {
     custom_emoji_ids: customEmojiIds
   }).catch(() => null)

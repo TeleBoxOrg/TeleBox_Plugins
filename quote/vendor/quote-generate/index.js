@@ -113,12 +113,15 @@ class QuoteGenerate {
       }]
 
       if (message.from.emoji_status) {
-        name += ' \uD83E\uDD21'
+        const statusId = typeof message.from.emoji_status === 'object'
+          ? (message.from.emoji_status.custom_emoji_id ?? message.from.emoji_status.customEmojiId ?? message.from.emoji_status.documentId ?? message.from.emoji_status.id)
+          : message.from.emoji_status
+        name += ' 🤡'
         nameEntities.push({
           type: 'custom_emoji',
           offset: name.length - 2,
           length: 2,
-          custom_emoji_id: message.from.emoji_status
+          custom_emoji_id: String(statusId)
         })
       }
 

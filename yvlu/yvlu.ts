@@ -988,15 +988,26 @@ class YvluPlugin extends Plugin {
         try {
           const client = await getGlobalClient();
 
-          const messages = await safeGetMessages(msg.client, replied.peerId, {
-            offsetId: replied!.id,
-            limit: count,
-            reverse: true,
-          });
+          // teleproto reverse=true 会把 offsetId+1，所以要用 replied.id-1 才能包含被回复消息
+          // count=1 时直接用 replied，避免 history 扫描偏移
+          let messages: any[];
+          if (count <= 1) {
+            messages = [replied];
+          } else {
+            messages = await safeGetMessages(msg.client, replied.peerId, {
+              offsetId: replied!.id - 1,
+              limit: count,
+              reverse: true,
+            });
+          }
 
           if (!messages || messages.length === 0) {
             await msg.edit({ text: "未找到消息" });
             return;
+          }
+          // 兜底：history 结果若不含被回复消息，强制插入到开头
+          if (!messages.some((m: any) => Number(m?.id) === Number(replied.id))) {
+            messages = [replied, ...messages].slice(0, count);
           }
 
           const items = [] as any[];
