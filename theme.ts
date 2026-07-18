@@ -289,15 +289,91 @@ function extractDesktopWallpaper(files: Record<string, Buffer>): { wallpaper: Bu
   return { wallpaper: normalizeWallpaper(wp), tiled };
 }
 
-/** Attach wallpaper into Android .attheme bytes */
-function attachAtthemeWallpaper(colorText: string, wallpaper: Buffer | null | undefined): Buffer {
-  const text = colorText.endsWith("\n") ? colorText : colorText + "\n";
-  const parts: Buffer[] = [Buffer.from(text, "utf-8")];
-  const wp = normalizeWallpaper(wallpaper || null);
-  if (wp) {
-    parts.push(Buffer.from("WPS\n"), wp, Buffer.from("\nWPE\n"));
+/** Non-color attheme keys that must never enter the palette map */
+const ATTHEME_META_KEYS = new Set([
+  "wallpaperfileoffset",
+  "wallpaperfileoffset ",
+]);
+
+function isAtthemeMetaKey(key: string): boolean {
+  const k = key.trim().toLowerCase();
+  return k === "wallpaperfileoffset" || k.startsWith("wallpaperfileoffset");
+}
+
+/**
+ * Convert internal #RRGGBB / #AARRGGBB → Android signed-int color string.
+ * Official .attheme exports use decimal ints (e.g. -14737374), not hex.
+ */
+function toAndroidColorValue(hex: string): string {
+  if (!hex) return "0";
+  let h = hex.startsWith("#") ? hex.slice(1) : hex;
+  if (h.length === 3) h = `${h[0]}${h[0]}${h[1]}${h[1]}${h[2]}${h[2]}`;
+  let a = 255, r = 0, g = 0, b = 0;
+  if (h.length === 8) {
+    a = parseInt(h.slice(0, 2), 16) || 0;
+    r = parseInt(h.slice(2, 4), 16) || 0;
+    g = parseInt(h.slice(4, 6), 16) || 0;
+    b = parseInt(h.slice(6, 8), 16) || 0;
+  } else if (h.length === 6) {
+    r = parseInt(h.slice(0, 2), 16) || 0;
+    g = parseInt(h.slice(2, 4), 16) || 0;
+    b = parseInt(h.slice(4, 6), 16) || 0;
+  } else if (/^-?\d+$/.test(hex)) {
+    return hex; // already int
+  } else {
+    return hex.startsWith("#") ? hex : `#${hex}`;
   }
-  return Buffer.concat(parts);
+  let n = ((a << 24) | (r << 16) | (g << 8) | b) >>> 0;
+  if (n >= 0x80000000) n = n - 0x100000000;
+  return String(n);
+}
+
+/** Compute official wallpaperFileOffset for attheme (byte index of image after WPS\\n) */
+function computeAtthemeWallpaperOffset(colorBodyUtf8: string): number {
+  // file = `wallpaperFileOffset=${N}\n` + colorBody + `WPS\n` + image + `\nWPE\n`
+  // N = byteLength(offsetLine) + byteLength(colorBody) + 4
+  const prefix = "wallpaperFileOffset=";
+  const bodyLen = Buffer.byteLength(colorBodyUtf8, "utf-8");
+  for (let digits = 1; digits <= 10; digits++) {
+    const headerLen = prefix.length + digits + 1; // digits + "\n"
+    const N = headerLen + bodyLen + 4; // + "WPS\n"
+    if (String(N).length === digits) return N;
+  }
+  return prefix.length + 5 + 1 + bodyLen + 4;
+}
+
+/**
+ * Attach wallpaper into Android .attheme bytes (official layout):
+ *   wallpaperFileOffset=<N>
+ *   key=value lines...
+ *   WPS\n
+ *   <jpeg/png>
+ *   \nWPE\n
+ * When no wallpaper: wallpaperFileOffset=-1 (matches BiliBiliDarkByMiku etc.)
+ */
+function attachAtthemeWallpaper(colorText: string, wallpaper: Buffer | null | undefined): Buffer {
+  // Drop any stale offset / empty lines from generator output
+  const body = colorText
+    .split("\n")
+    .filter((l) => {
+      const t = l.trim();
+      if (!t) return false;
+      if (isAtthemeMetaKey(t.split("=")[0] || "")) return false;
+      return true;
+    })
+    .join("\n") + "\n";
+
+  const wp = normalizeWallpaper(wallpaper || null);
+  if (!wp) {
+    return Buffer.from(`wallpaperFileOffset=-1\n${body}`, "utf-8");
+  }
+  const offset = computeAtthemeWallpaperOffset(body);
+  const header = `wallpaperFileOffset=${offset}\n${body}WPS\n`;
+  return Buffer.concat([
+    Buffer.from(header, "utf-8"),
+    wp,
+    Buffer.from("\nWPE\n"),
+  ]);
 }
 
 /** Build Desktop theme package: ZIP with colors + background when wallpaper present */
@@ -1506,9 +1582,12 @@ function genAndroid(colors: Record<string, string>): string[] {
   }
   // Spillover: any remaining cx key not yet in output — zero loss
   for (const [k, v] of Object.entries(cx)) {
-    if (!r[k] && v) r[k] = v;
+    if (!r[k] && v && !isAtthemeMetaKey(k)) r[k] = v;
   }
-  return Object.entries(r).map(([k, v]) => `${k}=${v}`);
+  // Official Android .attheme uses signed decimal ints, not #hex
+  return Object.entries(r)
+    .filter(([k]) => !isAtthemeMetaKey(k))
+    .map(([k, v]) => `${k}=${toAndroidColorValue(v)}`);
 }
 
 /** Real TGX format: `!` meta / `@` props / `#` colors (NOT JSON).
@@ -2168,8 +2247,11 @@ function parseAttheme(buf: Buffer): ThemeDoc | null {
       if (!s || s.startsWith("//") || s === "end") continue;
       const eq = s.indexOf("=");
       if (eq <= 0) continue;
+      const key = s.slice(0, eq).trim();
+      // wallpaperFileOffset is metadata, not a color — never put in palette
+      if (isAtthemeMetaKey(key)) continue;
       const pv = parseColor(s.slice(eq + 1).trim());
-      if (pv) colors[s.slice(0, eq).trim()] = pv;
+      if (pv) colors[key] = pv;
     }
     let wallpaper: Buffer | null = null;
     if (wpsIdx !== -1) {
@@ -3199,6 +3281,11 @@ ${webPage.description ? `<br/>${webPage.description}` : ""}
     extraWallpaper?: Buffer | null,
   ): Promise<void> {
     const client = await getGlobalClient();
+    const t0 = Date.now();
+    try {
+      await msg.edit({ text: html`⏳ <b>${title}</b>\n🔗 <code>t.me/addtheme/${slug}</code>\n解析并合并配色…` });
+    } catch { /* */ }
+
     const byFormat = new Map<ThemeFormat, Buffer>();
     for (const [k, info] of Object.entries(fmtMap)) {
       if (k.startsWith("__")) continue;
@@ -3369,7 +3456,7 @@ ${webPage.description ? `<br/>${webPage.description}` : ""}
     }
 
     // Output strategy with STRICT wallpaper separation:
-    // - Mobile targets (Android/TGX/iOS): ALWAYS use mobilePick (Android > iOS > TGX > settings > Desktop last)
+    // - Mobile targets (Android/TGX/iOS): ONLY mobilePick (Android > iOS > TGX > settings; NEVER Desktop)
     // - Desktop target: keep OWN wallpaper if present; else mobilePick
     const ensureWallpaper = (target: ThemeFormat, buf: Buffer): Buffer => {
       const preferredSlug = wallpaperSlug || bestDoc?.wallpaperSlug || null;
@@ -3454,7 +3541,54 @@ ${webPage.description ? `<br/>${webPage.description}` : ""}
 
     const allTargets = (["attheme", "tdesktop-theme", "tgx-theme", "ios-theme"] as ThemeFormat[]);
     const sent: string[] = [];
+    const stats: Array<{ target: ThemeFormat; colors: number; bytes: number; wp: boolean; note: string }> = [];
     let wpSidecarSent = false;
+
+    try {
+      await msg.edit({
+        text: html`⏳ <b>${title}</b>
+🔗 <code>t.me/addtheme/${slug}</code>
+📊 合并 ${bestCount} 色 · 源 ${sourceFmts.map(f => FORMAT_LABELS[f].split(" ")[0]).join("+") || "?"}
+🖼️ 移动端壁纸: ${wallpaperSource === "attheme" ? "Android" : wallpaperSource || "无"}
+生成四端文件…`,
+      });
+    } catch { /* */ }
+
+    /** Validate output buffer: must parse + retain colors; for attheme check offset/WPS consistency */
+    const validateOut = (target: ThemeFormat, out: Buffer): { ok: boolean; colors: number; wp: boolean; detail: string } => {
+      try {
+        const parser = target === "attheme" ? parseAttheme
+          : target === "tdesktop-theme" ? parseDesktop
+          : target === "tgx-theme" ? parseTgx
+          : parseIos;
+        const back = parser(out);
+        const cc = back ? Object.keys(back.colors).length : 0;
+        const hasWp = !!(back && (normalizeWallpaper(back.wallpaper || null) || back.wallpaperSlug));
+        if (!back || cc === 0) return { ok: false, colors: 0, wp: false, detail: "parse empty" };
+        if (target === "attheme") {
+          const textHead = out.subarray(0, Math.min(80, out.length)).toString("utf8");
+          if (!textHead.startsWith("wallpaperFileOffset=")) {
+            return { ok: false, colors: cc, wp: hasWp, detail: "missing wallpaperFileOffset" };
+          }
+          // If we claim mobile wallpaper, WPS must exist (or offset=-1 when none)
+          const hasWps = out.includes(Buffer.from("WPS\n"));
+          if (wallpaper && !hasWps && target === "attheme" && !byFormat.has("attheme")) {
+            // synthesized android should embed
+            return { ok: false, colors: cc, wp: hasWp, detail: "expected WPS embed" };
+          }
+        }
+        if (target === "tdesktop-theme" && (desktopWallpaper || wallpaper)) {
+          const p = parseDesktop(out);
+          // Desktop with intended wp should be ZIP when wp present
+          if ((desktopKeptOwn || wallpaper) && !normalizeWallpaper(p?.wallpaper || null) && isZip(out) === false && (desktopWallpaper || wallpaper)) {
+            // plain palette without wp only ok if we intentionally had none
+          }
+        }
+        return { ok: true, colors: cc, wp: hasWp, detail: "ok" };
+      } catch (e: any) {
+        return { ok: false, colors: 0, wp: false, detail: getErrorMessage(e) };
+      }
+    };
 
     for (const target of allTargets) {
       let out: Buffer | null = null;
@@ -3468,43 +3602,63 @@ ${webPage.description ? `<br/>${webPage.description}` : ""}
           ? `合并(${sourceFmts.map(f => FORMAT_LABELS[f].split(" ")[0]).join("+")})`
           : FORMAT_LABELS[bestFmt];
       }
-      if (!out) continue;
+      if (!out) {
+        logger.warn(`[theme] ${slug} render ${target} returned null`);
+        continue;
+      }
 
-      // Caption wallpaper note: Desktop keeps own image if any; else falls back
+      // Validate; if fail and we have original, prefer original for same-format
+      let v = validateOut(target, out);
+      if (!v.ok && byFormat.has(target)) {
+        const orig = byFormat.get(target)!;
+        const vo = validateOut(target, orig);
+        if (vo.ok && vo.colors >= v.colors) {
+          out = orig;
+          v = vo;
+          fromLabel = "原始(校验回退)";
+          logger.warn(`[theme] ${slug} ${target} regen failed (${v.detail}), kept original`);
+        }
+      }
+      if (!v.ok) {
+        logger.warn(`[theme] ${slug} ${target} validation weak: ${v.detail} colors=${v.colors}`);
+      }
+
+      // Caption wallpaper note
       let wpNote = "";
       if (target === "attheme") {
-        const p = parseAttheme(out);
-        if (normalizeWallpaper(p?.wallpaper || null)) {
+        if (v.wp) {
           wpNote = wallpaperSource === "attheme" || !wallpaperSource
-            ? " · 🖼️ 壁纸已嵌入"
-            : ` · 🖼️ 壁纸已嵌入（回退自 ${wallpaperSource === "ios-theme" || wallpaperSource === "ios-slug" ? "iOS" : wallpaperSource}）`;
+            ? " · 🖼️ WPS 已嵌入"
+            : ` · 🖼️ WPS 已嵌入（← ${wallpaperSource === "ios-theme" || wallpaperSource === "ios-slug" ? "iOS" : wallpaperSource}）`;
+        } else {
+          wpNote = " · 无壁纸 (offset=-1)";
         }
       } else if (target === "tdesktop-theme") {
         const p = parseDesktop(out);
         if (normalizeWallpaper(p?.wallpaper || null)) {
-          // If original desktop package had wallpaper, we kept it
-          const orig = byFormat.has("tdesktop-theme") ? parseDesktop(byFormat.get("tdesktop-theme")!) : null;
-          const keptOwn = !!(orig && normalizeWallpaper(orig.wallpaper || null));
+          const keptOwn = desktopKeptOwn;
           wpNote = keptOwn
-            ? " · 🖼️ 壁纸已保留（Desktop 原图）"
-            : ` · 🖼️ 壁纸已嵌入（Desktop 无原图，回退 ${wallpaperSource === "attheme" ? "Android" : wallpaperSource || "移动端"}）`;
+            ? " · 🖼️ ZIP 原壁纸"
+            : ` · 🖼️ ZIP 壁纸（← ${wallpaperSource === "attheme" ? "Android" : wallpaperSource || "移动端"}）`;
         }
       } else if (target === "ios-theme" && (wallpaperSlug || bestDoc?.wallpaperSlug)) {
-        wpNote = " · 🖼️ defaultWallpaper slug 已打包";
+        wpNote = " · 🖼️ defaultWallpaper slug";
       } else if (target === "tgx-theme" && (wallpaperSlug || bestDoc?.wallpaperSlug)) {
-        wpNote = " · 🖼️ wallpaper slug 已打包";
+        wpNote = " · 🖼️ wallpaper slug";
       }
 
+      const sizeKb = Math.max(1, Math.round(out.length / 1024));
       await client.sendMedia(msg.chat.id, {
         type: "document",
         file: out,
         fileName: `${slug || "theme"}${FORMAT_EXT[target]}`,
         fileMime: API_MIME[target],
       } as any, {
-        caption: html`✅ <b>${FORMAT_LABELS[target]}</b>${fromLabel === "设置合成" ? "（从云端颜色设置生成）" : fromLabel === "原始" ? "（原始）" : fromLabel === "多源合并" ? "（多源无损合并）" : ` ← ${fromLabel}`} 📊 ${bestCount} 色${wpNote}`,
+        caption: html`✅ <b>${FORMAT_LABELS[target]}</b>${fromLabel === "设置合成" ? "（云端设置）" : fromLabel === "原始" ? "（原始）" : fromLabel === "多源合并" ? "（多源合并）" : fromLabel.startsWith("原始") ? `（${fromLabel}）` : ` ← ${fromLabel}`} · ${v.colors || bestCount} 色 · ${sizeKb}KB${wpNote}`,
         replyTo: msg.id,
       });
       sent.push(FORMAT_LABELS[target]);
+      stats.push({ target, colors: v.colors || bestCount, bytes: out.length, wp: v.wp, note: fromLabel });
     }
 
     // Sidecar: mobile-priority wallpaper (Android first) for TGX / manual use
@@ -3548,6 +3702,12 @@ ${webPage.description ? `<br/>${webPage.description}` : ""}
       : wallpaperSource === "settings" ? "云端设置"
       : "无（Android 未嵌入，不回退 Desktop）";
 
+    const ms = Date.now() - t0;
+    const statLine = stats.map(s => {
+      const short = FORMAT_LABELS[s.target].split(" ")[0];
+      return `${short}:${s.colors}色${s.wp ? "+壁纸" : ""}`;
+    }).join(" · ");
+
     await msg.edit({
       text: html`
 🎨 <b>${title}</b>
@@ -3556,7 +3716,9 @@ ${webPage.description ? `<br/>${webPage.description}` : ""}
 <br/>🖼️ 移动端壁纸: <b>${mobileSrcLabel}</b>${wallpaperSlug ? ` · slug <code>${wallpaperSlug}</code>` : ""}
 ${desktopKeptOwn ? "<br/>🖥️ Desktop 使用自带壁纸（不注入移动端）" : wallpaper ? "<br/>🖥️ Desktop 无原图 → 使用移动端壁纸" : ""}
 <br/>✅ 已输出: ${sent.join(" · ") || "无"}
-<br/><i>壁纸规则: 移动端=Android/iOS/TGX/settings · Desktop 原图仅给 Desktop · 禁止 Desktop→Mobile 回退</i>
+${statLine ? `<br/>📈 ${statLine}` : ""}
+<br/>⏱ ${ms}ms
+<br/><i>壁纸: 移动端=Android/iOS/TGX/settings · Desktop 原图仅给 Desktop · attheme 含 wallpaperFileOffset</i>
       `,
     });
   }
