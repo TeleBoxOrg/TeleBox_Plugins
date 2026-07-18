@@ -1,16 +1,101 @@
 import { Plugin } from "@utils/pluginBase";
 import { getPrefixes } from "@utils/pluginManager";
-import type { MessageContext } from "@mtcute/dispatcher";
-import { thtml as html } from "@mtcute/html-parser";
-import { FileLocation } from "@mtcute/core";
 import { getGlobalClient } from "@utils/runtimeManager";
-import { logger } from "@utils/logger";
-import { getErrorMessage } from "@utils/errorHelpers";
 import { safeGetReplyMessage } from "@utils/safeGetMessages";
-import type { MtcuteFileDownloadLocation } from "@utils/mtcuteTypes";
+import { htmlEscape } from "@utils/htmlEscape";
+import { Api, TelegramClient } from "teleproto";
+import { CustomFile } from "teleproto/client/uploads";
+import bigInt from "big-integer";
 import * as fs from "fs";
 import * as path from "path";
 import * as crypto from "crypto";
+
+function getErrorMessage(error: unknown): string {
+  if (error instanceof Error) return error.message;
+  if (typeof error === "string") return error;
+  try { return JSON.stringify(error); } catch { return String(error); }
+}
+
+function html(strings: TemplateStringsArray, ...values: unknown[]): string {
+  let result = "";
+  for (let i = 0; i < strings.length; i++) {
+    result += strings[i];
+    if (i < values.length) result += htmlEscape(values[i]);
+  }
+  return result;
+}
+
+function tlType(value: unknown): string {
+  if (!value || typeof value !== "object") return "";
+  const object = value as { _: string; className?: string };
+  if (typeof object._ === "string") return object._;
+  if (typeof object.className === "string") return object.className;
+  return "";
+}
+
+function hasTlType(value: unknown, expected: string): boolean {
+  const type = tlType(value).toLowerCase();
+  const wanted = expected.toLowerCase();
+  return type === wanted || type.endsWith(`.${wanted}`);
+}
+
+function toLong(value: unknown): bigInt.BigInteger {
+  if (value == null) return bigInt.zero;
+  if (typeof value === "number" || typeof value === "string" || typeof value === "bigint") return bigInt(value.toString());
+  try { return bigInt(String(value)); } catch { return bigInt.zero; }
+}
+
+function toBytes(value: unknown): Buffer {
+  if (!value) return Buffer.alloc(0);
+  if (Buffer.isBuffer(value)) return value;
+  if (value instanceof Uint8Array) return Buffer.from(value);
+  return Buffer.from(value as ArrayBuffer);
+}
+
+function documentAttributeFileName(document: any): string {
+  const attribute = (document?.attributes || []).find((item: any) =>
+    hasTlType(item, "documentAttributeFilename") || item instanceof Api.DocumentAttributeFilename,
+  );
+  return typeof attribute?.fileName === "string" ? attribute.fileName : "";
+}
+
+function toInputDocument(document: any): Api.InputDocument | null {
+  if (!document || document.id == null || document.accessHash == null) return null;
+  return new Api.InputDocument({
+    id: toLong(document.id),
+    accessHash: toLong(document.accessHash),
+    fileReference: toBytes(document.fileReference),
+  });
+}
+
+function toBaseTheme(name: string): any {
+  const normalized = String(name || "").toLowerCase();
+  if (normalized.includes("night")) return new Api.BaseThemeNight();
+  if (normalized.includes("classic")) return new Api.BaseThemeClassic();
+  const Tinted = (Api as any).BaseThemeTinted;
+  if (normalized.includes("tinted") && Tinted) return new Tinted();
+  return new Api.BaseThemeDay();
+}
+
+async function sendThemeDocument(
+  client: TelegramClient,
+  peer: any,
+  buffer: Buffer,
+  fileName: string,
+  mimeType: string,
+  caption: string,
+  replyTo?: number,
+): Promise<void> {
+  await client.sendFile(peer, {
+    file: new CustomFile(fileName, buffer.length, "", buffer),
+    forceDocument: true,
+    mimeType,
+    attributes: [new Api.DocumentAttributeFilename({ fileName })],
+    caption,
+    parseMode: "html",
+    replyTo,
+  } as any);
+}
 
 const prefixes = getPrefixes();
 const mainPrefix = prefixes[0];
@@ -2707,8 +2792,8 @@ function parseCloudSettingsJson(buf: Buffer): ThemeDoc | null {
     if (!obj || typeof obj !== "object") return null;
     let settings: any = null;
     if (obj.teleboxExport === "cloud-theme-settings" && obj.settings) settings = obj.settings;
-    else if (obj._ === "themeSettings" || obj.accentColor != null) settings = obj;
-    else if (obj.settings && (obj.settings._ === "themeSettings" || obj.settings.accentColor != null)) settings = obj.settings;
+    else if (hasTlType(obj, "themeSettings") || obj.accentColor != null) settings = obj;
+    else if (obj.settings && (hasTlType(obj.settings, "themeSettings") || obj.settings.accentColor != null)) settings = obj.settings;
     if (!settings) return null;
     const colors = colorsFromThemeSettings(settings);
     if (!Object.keys(colors).length) return null;
@@ -3044,8 +3129,8 @@ function detectFmt(buf: Buffer): ThemeFormat | null {
         // Our own cloud-settings export or raw themeSettings
         if (
           obj.teleboxExport === "cloud-theme-settings"
-          || obj.settings?._ === "themeSettings"
-          || (obj._ === "themeSettings" && (obj.accentColor != null || obj.baseTheme))
+          || hasTlType(obj.settings, "themeSettings")
+          || (hasTlType(obj, "themeSettings") && (obj.accentColor != null || obj.baseTheme))
         ) {
           // Synthesize as attheme-colored doc via colorsFromThemeSettings — detectFmt returns attheme
           // so parsers route through a dedicated path in listen/convert
@@ -3125,10 +3210,10 @@ function renderDoc(doc: ThemeDoc, target: ThemeFormat, name = "TeleBox Theme"): 
         : parseIos;
       const back = parser(buf);
       if (!back || Object.keys(back.colors).length === 0) {
-        logger.warn(`[theme] renderDoc roundtrip empty for ${target}, using original`);
+        console.warn(`[theme] renderDoc roundtrip empty for ${target}, using original`);
       }
     } catch {
-      logger.warn(`[theme] renderDoc roundtrip failed for ${target}, using original`);
+      console.warn(`[theme] renderDoc roundtrip failed for ${target}, using original`);
     }
     return buf;
   } catch { return null; }
@@ -3143,20 +3228,21 @@ function genSlug(): string {
 // ─── Download helper ─────────────────────────────────────────────────────────
 
 async function downloadMedia(
-  msg: { media: any },
-  client: Awaited<ReturnType<typeof getGlobalClient>>,
+  msg: Api.Message,
+  client: TelegramClient,
 ): Promise<Buffer | null> {
   try {
-    if (!msg.media) return null;
-    const raw = await client.downloadAsBuffer(msg.media as MtcuteFileDownloadLocation);
+    const raw = await client.downloadMedia(msg, { outputFile: Buffer.alloc(0) });
     if (!raw) return null;
-    return Buffer.from(raw);
+    if (Buffer.isBuffer(raw)) return raw;
+    if (typeof raw === "string") return fs.readFileSync(raw);
+    return Buffer.from(raw as ArrayBuffer);
   } catch { return null; }
 }
 
 // ─── Help text ───────────────────────────────────────────────────────────────
 
-function buildHelpText(): ReturnType<typeof html> {
+function buildHelpText(): string {
   return html`
 <b>🎨 主题转换器</b>
 
@@ -3194,14 +3280,14 @@ class ThemePlugin extends Plugin {
   /** In-flight addtheme slug → promise (dedupe concurrent link fetches) */
   private readonly inflightLinks = new Map<string, Promise<void>>();
 
-  async handleCmd(msg: MessageContext): Promise<void> {
-    const parts = (msg.text ?? "").trim().split(/\s+/).slice(1);
+  async handleCmd(msg: Api.Message): Promise<void> {
+    const parts = (msg.message ?? "").trim().split(/\s+/).slice(1);
     const sub = parts[0]?.toLowerCase() || "";
     const client = await getGlobalClient();
 
     // ── Help ────────────────────────────────────────────────────────────
     if (!sub || sub === "help") {
-      await msg.edit({ text: buildHelpText() });
+      await msg.edit({ text: buildHelpText(), parseMode: "html" });
       return;
     }
 
@@ -3212,7 +3298,7 @@ class ThemePlugin extends Plugin {
         await this.handleAddThemeLink(msg, linkMatch[1]);
         return;
       }
-      await msg.edit({ text: html`❌ 无效链接，格式: <code>t.me/addtheme/xxx</code>` });
+      await msg.edit({ text: html`❌ 无效链接，格式: <code>t.me/addtheme/xxx</code>`, parseMode: "html" });
       return;
     }
 
@@ -3245,8 +3331,7 @@ class ThemePlugin extends Plugin {
   → 使用 <code>${mainPrefix}theme cloud-settings</code> 或 link 附带的 settings JSON
 
 <i>官方 API 没有第 5 种文件 format；第三方客户端要么复用上述引擎，要么只吃 accent/settings。</i>
-        `,
-      });
+        `, parseMode: "html" });
       return;
     }
 
@@ -3258,14 +3343,14 @@ class ThemePlugin extends Plugin {
     }
 
     // fallback: show help
-    await msg.edit({ text: buildHelpText() });
+    await msg.edit({ text: buildHelpText(), parseMode: "html" });
   }
 
   // ── listen: file attachments + t.me/addtheme links ───────────────────
 
-  listenMessageHandler = async (msg: MessageContext): Promise<void> => {
+  listenMessageHandler = async (msg: Api.Message): Promise<void> => {
     try {
-      const text = msg.text?.trim();
+      const text = msg.message?.trim();
 
       // t.me/addtheme link in any message
       if (text) {
@@ -3277,22 +3362,22 @@ class ThemePlugin extends Plugin {
       }
 
       // theme file attached
-      if (!msg.media || msg.media.type !== "document") return;
-      const docInfo = (msg.media as any).document as { fileName?: string; size?: number };
-      const name = (docInfo.fileName || "").toLowerCase();
-      const size = docInfo.size || 0;
+      const docInfo = (msg as any).document as Api.Document | undefined;
+      if (!docInfo) return;
+      const name = documentAttributeFileName(docInfo).toLowerCase();
+      const size = Number(docInfo.size || 0);
       if (size > MAX_FILE_SIZE || size === 0) return;
       if (!name.endsWith(".attheme") && !name.endsWith(".tdesktop-theme") && !name.endsWith(".tgios-theme") && !name.endsWith(".tgx-theme") && !name.endsWith(".json") && !name.endsWith(".tdesktop-palette") && !name.includes("theme") && !name.includes("tgx") && !name.includes("settings")) return;
 
-      await msg.edit({ text: html`⏳ 解析主题文件...` });
+      await msg.edit({ text: html`⏳ 解析主题文件...`, parseMode: "html" });
       const client = await getGlobalClient();
       const buf = await downloadMedia(msg, client);
       if (!buf || buf.length === 0) return;
       // cloud-settings JSON first, then binary formats
       const cloudDoc = parseCloudSettingsJson(buf);
       if (cloudDoc) {
-        const baseName = (docInfo.fileName || "cloud-theme").replace(/\.[^.]+$/, "") || "theme";
-        await msg.edit({ text: html`⏳ 识别为云端 themeSettings JSON，转换四端…` });
+        const baseName = (documentAttributeFileName(docInfo) || "cloud-theme").replace(/\.[^.]+$/, "") || "theme";
+        await msg.edit({ text: html`⏳ 识别为云端 themeSettings JSON，转换四端…`, parseMode: "html" });
         // Materialize as synthetic attheme buffer is unnecessary — feed colors via render path
         // by building a minimal attheme for the pipeline
         const lines = genAndroid(cloudDoc.colors);
@@ -3312,11 +3397,11 @@ class ThemePlugin extends Plugin {
       }
       const format = detectFmt(buf);
       if (!format) {
-        await msg.edit({ text: html`❌ 无法识别格式，支持 .attheme / .tdesktop-theme / .tgx-theme / .tgios-theme / cloud-settings.json<br/><br/>使用 <code>${mainPrefix}theme</code> 查看帮助` });
+        await msg.edit({ text: html`❌ 无法识别格式，支持 .attheme / .tdesktop-theme / .tgx-theme / .tgios-theme / cloud-settings.json<br/><br/>使用 <code>${mainPrefix}theme</code> 查看帮助`, parseMode: "html" });
         return;
       }
       // Route through the same lossless multi-format pipeline as link
-      const baseName = (docInfo.fileName || "theme").replace(/\.[^.]+$/, "") || "theme";
+      const baseName = (documentAttributeFileName(docInfo) || "theme").replace(/\.[^.]+$/, "") || "theme";
       await this.sendThemeResults(
         msg,
         baseName,
@@ -3326,14 +3411,13 @@ class ThemePlugin extends Plugin {
         null,
       );
     } catch (e) {
-      logger.error("[theme] listen:", e);
+      console.error("[theme] listen:", e);
     }
   };
 
   // ── Download a raw TL document correctly ────────────────────────────
-  // mtcute downloadAsBuffer needs inputDocumentFileLocation (NOT inputDocument)
-  // and Long ids must be passed as-is — Number() destroys 64-bit precision.
-  // Fallback: upload.getFile (handles some dc cases better for small theme files).
+  // teleproto downloadFile needs InputDocumentFileLocation, not InputDocument
+  // Keep document ids, access hashes, and sizes as BigInteger values.
   /** slug → base64 image */
   private readonly wallpaperSlugCache = new Map<string, string>();
   /** contentHash → slug (reverse lookup without O(n) buffer equals) */
@@ -3360,143 +3444,43 @@ class ThemePlugin extends Plugin {
   }
 
   private async downloadTlDocument(
-    client: Awaited<ReturnType<typeof getGlobalClient>>,
+    client: TelegramClient,
     doc: any,
     retries = 2,
   ): Promise<Buffer | null> {
-    if (!doc || doc._ !== "document") return null;
-
-    const sleep = (ms: number) => new Promise<void>(r => setTimeout(r, ms));
-    const floodWaitSec = (e: unknown): number => {
-      const msg = getErrorMessage(e);
-      const m = msg.match(/FLOOD_WAIT[_\s]?(\d+)/i) || msg.match(/wait of (\d+) seconds/i);
-      return m ? Math.min(30, Math.max(1, parseInt(m[1], 10))) : 0;
+    if (!doc || doc.id == null || doc.accessHash == null) return null;
+    const location = new Api.InputDocumentFileLocation({
+      id: toLong(doc.id),
+      accessHash: toLong(doc.accessHash),
+      fileReference: toBytes(doc.fileReference),
+      thumbSize: "",
+    });
+    const fileSize = doc.size == null ? undefined : toLong(doc.size);
+    let dcId = doc.dcId == null ? undefined : Number(doc.dcId);
+    const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+    const migrateDc = (error: unknown): number | undefined => {
+      const match = getErrorMessage(error).match(/(?:FILE_)?MIGRATE[_ ](\d+)/i);
+      return match ? Number(match[1]) : undefined;
     };
-    const migrateDc = (e: unknown): number | null => {
-      const msg = getErrorMessage(e);
-      const m = msg.match(/FILE_MIGRATE_(\d+)/i) || msg.match(/MIGRATE_(\d+)/i);
-      if (m) return parseInt(m[1], 10);
-      const anyE = e as any;
-      if (anyE?.dcId != null) return Number(anyE.dcId);
-      if (anyE?.errorMessage && /FILE_MIGRATE_(\d+)/.test(String(anyE.errorMessage))) {
-        return parseInt(String(anyE.errorMessage).match(/FILE_MIGRATE_(\d+)/)![1], 10);
-      }
-      return null;
-    };
-
-    let dcId = doc.dcId != null ? Number(doc.dcId) : undefined;
-
     for (let attempt = 0; attempt <= retries; attempt++) {
       try {
-        const inputLoc = {
-          _: "inputDocumentFileLocation" as const,
-          id: doc.id,
-          accessHash: doc.accessHash,
-          fileReference: doc.fileReference || new Uint8Array(0),
-          thumbSize: "",
-        };
-        const fileSize = doc.size != null ? Number(doc.size) : undefined;
-
-        // 1) FileLocation with positional (location, fileSize, dcId)
-        try {
-          const raw = await client.downloadAsBuffer(
-            new FileLocation(inputLoc, fileSize, dcId) as any,
-          );
-          if (raw && (raw as any).length) return Buffer.from(raw as any);
-        } catch (e) {
-          const fw = floodWaitSec(e);
-          if (fw > 0) {
-            logger.warn(`[theme] download FLOOD_WAIT ${fw}s`);
-            await sleep(fw * 1000);
-          }
-          const mig = migrateDc(e);
-          if (mig != null && mig !== dcId) {
-            logger.info(`[theme] FILE_MIGRATE → dc${mig}`);
-            dcId = mig;
-          }
-          if (attempt === retries) logger.warn(`[theme] download FileLocation failed:`, getErrorMessage(e));
+        const raw = await client.downloadFile(location, {
+          outputFile: Buffer.alloc(0),
+          fileSize,
+          dcId,
+        });
+        if (Buffer.isBuffer(raw) && raw.length) return raw;
+        if (typeof raw === "string") {
+          const data = fs.readFileSync(raw);
+          try { fs.unlinkSync(raw); } catch { /* best effort */ }
+          if (data.length) return data;
         }
-
-        // 2) raw inputDocumentFileLocation
-        try {
-          const raw = await client.downloadAsBuffer(inputLoc as any);
-          if (raw && (raw as any).length) return Buffer.from(raw as any);
-        } catch (e) {
-          const fw = floodWaitSec(e);
-          if (fw > 0) await sleep(fw * 1000);
-          const mig = migrateDc(e);
-          if (mig != null) dcId = mig;
-        }
-
-        // 3) upload.getFile direct (works when downloadAsBuffer returns empty / FILE_MIGRATE)
-        try {
-          const parts: Buffer[] = [];
-          let offset = 0;
-          const limit = 512 * 1024;
-          const total = fileSize && fileSize > 0 ? fileSize : Infinity;
-          let getFileAttempts = 0;
-          while (offset < total && getFileAttempts < 40) {
-            getFileAttempts++;
-            try {
-              const r: any = await client.call({
-                _: "upload.getFile",
-                precise: true,
-                cdnSupported: false, // CDN redirect needs extra hop; prefer main DC
-                location: inputLoc,
-                offset,
-                limit,
-              } as any);
-              if (r?._ === "upload.file" && r.bytes) {
-                const chunk = Buffer.from(r.bytes);
-                parts.push(chunk);
-                offset += chunk.length;
-                if (chunk.length < limit) break;
-                continue;
-              }
-              if (r?._ === "upload.fileCdnRedirect") {
-                // Fall back to FileLocation download which handles CDN internally
-                logger.warn("[theme] CDN redirect — fallback FileLocation");
-                try {
-                  const raw = await client.downloadAsBuffer(
-                    new FileLocation(inputLoc, fileSize, dcId ?? r.dcId) as any,
-                  );
-                  if (raw && (raw as any).length) return Buffer.from(raw as any);
-                } catch { /* */ }
-                break;
-              }
-              break;
-            } catch (e) {
-              const fw = floodWaitSec(e);
-              if (fw > 0) {
-                logger.warn(`[theme] getFile FLOOD_WAIT ${fw}s`);
-                await sleep(fw * 1000);
-                continue;
-              }
-              const mig = migrateDc(e);
-              if (mig != null && mig !== dcId) {
-                logger.info(`[theme] getFile FILE_MIGRATE → dc${mig}`);
-                dcId = mig;
-                // retry same offset on new dc via FileLocation
-                try {
-                  const raw = await client.downloadAsBuffer(
-                    new FileLocation(inputLoc, fileSize, dcId) as any,
-                  );
-                  if (raw && (raw as any).length) return Buffer.from(raw as any);
-                } catch { /* */ }
-              }
-              if (attempt === retries) logger.warn(`[theme] upload.getFile failed:`, getErrorMessage(e));
-              break;
-            }
-          }
-          if (parts.length) return Buffer.concat(parts);
-        } catch (e) {
-          if (attempt === retries) logger.warn(`[theme] upload.getFile failed:`, getErrorMessage(e));
-        }
-        logger.warn(`[theme] downloadTlDocument attempt ${attempt} failed, retries left: ${retries - attempt}`);
-      } catch (e) {
-        const fw = floodWaitSec(e);
-        if (fw > 0) await sleep(fw * 1000);
-        logger.warn(`[theme] downloadTlDocument attempt ${attempt} failed:`, getErrorMessage(e));
+      } catch (error) {
+        const migrated = migrateDc(error);
+        if (migrated != null) dcId = migrated;
+        const flood = getErrorMessage(error).match(/FLOOD_WAIT[_ ]?(\d+)/i);
+        if (flood) await sleep(Math.min(30, Number(flood[1])) * 1000);
+        if (attempt === retries) console.warn("[theme] document download failed:", getErrorMessage(error));
       }
     }
     return null;
@@ -3504,21 +3488,20 @@ class ThemePlugin extends Plugin {
 
   /** Resolve iOS cloud wallpaper slug → image bytes via account.getWallPaper */
   private async downloadWallpaperBySlug(
-    client: Awaited<ReturnType<typeof getGlobalClient>>,
+    client: TelegramClient,
     slug: string,
   ): Promise<Buffer | null> {
     if (!slug || slug.length < 4) return null;
     try {
-      const wp: any = await client.call({
-        _: "account.getWallPaper",
-        wallpaper: { _: "inputWallPaperSlug", slug },
-      } as any);
-      if (wp?._ === "wallPaper" && wp.document?._ === "document") {
+      const wp: any = await client.invoke(new Api.account.GetWallPaper({
+        wallpaper: new Api.InputWallPaperSlug({ slug }),
+      }));
+      if (hasTlType(wp, "wallPaper") && hasTlType(wp.document, "document")) {
         return await this.downloadTlDocument(client, wp.document);
       }
       return null;
     } catch (e) {
-      logger.warn("[theme] getWallPaper failed:", getErrorMessage(e));
+      console.warn("[theme] getWallPaper failed:", getErrorMessage(e));
       return null;
     }
   }
@@ -3528,7 +3511,7 @@ class ThemePlugin extends Plugin {
    * `chat.defaultWallpaper: <slug>`.
    */
   private async uploadWallpaperForIos(
-    client: Awaited<ReturnType<typeof getGlobalClient>>,
+    client: TelegramClient,
     image: Buffer,
   ): Promise<string | null> {
     try {
@@ -3536,43 +3519,33 @@ class ThemePlugin extends Plugin {
       if (!wp) return null;
       const ext = detectImageExt(wp) === "png" ? "png" : "jpg";
       const mime = ext === "png" ? "image/png" : "image/jpeg";
-      const uploaded: any = await client.uploadFile({
-        file: wp,
-        fileName: `theme-wallpaper.${ext}`,
-        fileMime: mime,
-      } as any);
+      const uploaded: any = await client.uploadFile({ file: new CustomFile(`theme-wallpaper.${ext}`, Buffer.isBuffer(wp) ? wp.length : Buffer.from(wp as any).length, "", Buffer.isBuffer(wp) ? wp : Buffer.from(wp as any)) });
       // uploadFile may return InputFile or document-like — prefer inputFile for uploadWallPaper
       let inputFile: any = uploaded;
       if (uploaded && uploaded._ !== "inputFile" && uploaded._ !== "inputFileBig") {
-        // some mtcute versions wrap
+        // Some API responses wrap the uploaded wallpaper
         if (uploaded.inputFile) inputFile = uploaded.inputFile;
         else if (uploaded.file) inputFile = uploaded.file;
       }
-      const result: any = await client.call({
-        _: "account.uploadWallPaper",
+      const result: any = await client.invoke(new Api.account.UploadWallPaper({
         file: inputFile,
         mimeType: mime,
-        settings: {
-          _: "wallPaperSettings",
-          blur: false,
-          motion: false,
-          intensity: 50,
-        },
-      } as any);
-      if (result?._ === "wallPaper" && result.slug) {
+        settings: new Api.WallPaperSettings({ blur: false, motion: false, intensity: 50 }),
+      }));
+      if (hasTlType(result, "wallPaper") && result.slug) {
         return String(result.slug);
       }
-      logger.warn("[theme] uploadWallPaper unexpected:", result?._);
+      console.warn("[theme] uploadWallPaper unexpected:", tlType(result));
       return null;
     } catch (e) {
-      logger.warn("[theme] uploadWallPaper failed:", getErrorMessage(e));
+      console.warn("[theme] uploadWallPaper failed:", getErrorMessage(e));
       return null;
     }
   }
 
   /** Ensure ThemeDoc has wallpaper bytes if only iOS slug is known */
   private async resolveWallpaperBytes(
-    client: Awaited<ReturnType<typeof getGlobalClient>>,
+    client: TelegramClient,
     doc: ThemeDoc,
   ): Promise<ThemeDoc> {
     if (normalizeWallpaper(doc.wallpaper || null)) return doc;
@@ -3595,7 +3568,7 @@ class ThemePlugin extends Plugin {
    * Used for BOTH iOS (defaultWallpaper) and TGX (wallpaper: slug).
    */
   private async ensureIosWallpaperSlug(
-    client: Awaited<ReturnType<typeof getGlobalClient>>,
+    client: TelegramClient,
     doc: ThemeDoc,
   ): Promise<ThemeDoc> {
     if (doc.wallpaperSlug) return doc;
@@ -3615,7 +3588,7 @@ class ThemePlugin extends Plugin {
   /** Infer ThemeFormat from mime / filename / content */
   private inferThemeFormat(doc: any, buf: Buffer): ThemeFormat | null {
     const mime = (doc.mimeType || "").toLowerCase();
-    const name = ((doc.attributes || []).find((a: any) => a._ === "documentAttributeFilename")?.fileName || "").toLowerCase();
+    const name = ((doc.attributes || []).find((a: any) => hasTlType(a, "documentAttributeFilename"))?.fileName || "").toLowerCase();
     if (mime.includes("tgtheme-android") || name.endsWith(".attheme")) return "attheme";
     if (mime.includes("tgtheme-tdesktop") || name.endsWith(".tdesktop-theme")) return "tdesktop-theme";
     if (mime.includes("tgtheme-macos") || name.includes("tgx") || name.endsWith(".tgx-theme")) return "tgx-theme";
@@ -3631,19 +3604,19 @@ class ThemePlugin extends Plugin {
     const push = (s: any) => {
       if (!s) return;
       if (Array.isArray(s)) { for (const x of s) push(x); return; }
-      if (s._ === "themeSettings" || s.accentColor != null || s.baseTheme || s.wallpaper) candidates.push(s);
+      if (hasTlType(s, "themeSettings") || s.accentColor != null || s.baseTheme || s.wallpaper) candidates.push(s);
     };
-    if (source._ === "themeSettings" || source.accentColor != null || source.baseTheme) push(source);
+    if (hasTlType(source, "themeSettings") || source.accentColor != null || source.baseTheme) push(source);
     push(source.settings);
     for (const attr of source.attributes || []) {
-      if (attr._ === "webPageAttributeTheme") push(attr.settings);
+      if (hasTlType(attr, "webPageAttributeTheme")) push(attr.settings);
     }
     if (!candidates.length) return null;
     // Prefer settings that carry a downloadable / slug wallpaper
     const score = (s: any) => {
       let n = 0;
       if (s.wallpaper) n += 10;
-      if (s.wallpaper?._ === "wallPaper" && s.wallpaper.document) n += 20;
+      if (hasTlType(s.wallpaper, "wallPaper") && s.wallpaper.document) n += 20;
       if (typeof s.wallpaper?.slug === "string" && s.wallpaper.slug.length > 4) n += 15;
       if (s.accentColor != null) n += 3;
       if (s.outboxAccentColor != null) n += 2;
@@ -3657,31 +3630,31 @@ class ThemePlugin extends Plugin {
 
   /** Download wallpaper image document from themeSettings.wallpaper (wallPaper) */
   private async downloadWallpaperFromSettings(
-    client: Awaited<ReturnType<typeof getGlobalClient>>,
+    client: TelegramClient,
     settings: any,
   ): Promise<{ bytes: Buffer | null; slug: string | null; blur: number; motion: boolean }> {
     try {
       const wp = settings?.wallpaper;
       if (!wp) return { bytes: null, slug: null, blur: 0, motion: true };
       // wallPaper { document, slug, settings } | wallPaperNoFile
-      const slug = (wp._ === "wallPaper" && typeof wp.slug === "string" && wp.slug.length > 8)
+      const slug = (hasTlType(wp, "wallPaper") && typeof wp.slug === "string" && wp.slug.length > 8)
         ? wp.slug
         : null;
       // Extract wallpaper options from wallpaper settings
       const wpSettings = wp.settings || {};
       const blur = (typeof wpSettings.blur === "number" ? wpSettings.blur : 0);
       const motion = wpSettings.motion !== false;
-      if (wp._ === "wallPaper" && wp.document?._ === "document") {
+      if (hasTlType(wp, "wallPaper") && hasTlType(wp.document, "document")) {
         const bytes = await this.downloadTlDocument(client, wp.document);
         return { bytes, slug, blur, motion };
       }
-      if (wp.document?._ === "document") {
+      if (hasTlType(wp.document, "document")) {
         const bytes = await this.downloadTlDocument(client, wp.document);
         return { bytes, slug, blur, motion };
       }
       return { bytes: null, slug, blur, motion };
     } catch (e) {
-      logger.warn("[theme] wallpaper download failed:", getErrorMessage(e));
+      console.warn("[theme] wallpaper download failed:", getErrorMessage(e));
       return { bytes: null, slug: null, blur: 0, motion: true };
     }
   }
@@ -3723,12 +3696,12 @@ class ThemePlugin extends Plugin {
 
   // ── Handle t.me/addtheme/SLUG ────────────────────────────────────────
 
-  private async handleAddThemeLink(msg: MessageContext, slug: string): Promise<void> {
+  private async handleAddThemeLink(msg: Api.Message, slug: string): Promise<void> {
     const key = slug.toLowerCase();
     const existing = this.inflightLinks.get(key);
     if (existing) {
       try {
-        await msg.edit({ text: html`⏳ 主题 <code>${slug}</code> 已在处理中，请稍候…` });
+        await msg.edit({ text: html`⏳ 主题 <code>${slug}</code> 已在处理中，请稍候…`, parseMode: "html" });
       } catch { /* */ }
       try { await existing; } catch { /* primary handler reports */ }
       return;
@@ -3740,10 +3713,10 @@ class ThemePlugin extends Plugin {
     await run;
   }
 
-  private async handleAddThemeLinkInner(msg: MessageContext, slug: string): Promise<void> {
+  private async handleAddThemeLinkInner(msg: Api.Message, slug: string): Promise<void> {
     const client = await getGlobalClient();
     try {
-      await msg.edit({ text: html`⏳ 获取主题 <code>${slug}</code>...` });
+      await msg.edit({ text: html`⏳ 获取主题 <code>${slug}</code>...`, parseMode: "html" });
 
       const fmtMap: Record<string, { format: ThemeFormat; buf: Buffer }> = {};
       let themeTitle = slug;
@@ -3755,16 +3728,15 @@ class ThemePlugin extends Plugin {
       // This is what real Telegram clients use and works for cloud accent themes.
       let webPage: any = null;
       try {
-        const wpResult: any = await client.call({
-          _: "messages.getWebPage",
+        const wpResult: any = await client.invoke(new Api.messages.GetWebPage({
           url,
           hash: 0,
-        } as any);
-        if (wpResult?._ === "messages.webPage" && wpResult.webpage?._ === "webPage") {
+        }));
+        if (hasTlType(wpResult, "messages.webPage") && hasTlType(wpResult.webpage, "webPage")) {
           webPage = wpResult.webpage;
-        } else if (wpResult?.webpage?._ === "webPage") {
+        } else if (hasTlType(wpResult?.webpage, "webPage")) {
           webPage = wpResult.webpage;
-        } else if (wpResult?._ === "webPage") {
+        } else if (hasTlType(wpResult, "webPage")) {
           webPage = wpResult;
         }
       } catch (e) {
@@ -3773,12 +3745,11 @@ class ThemePlugin extends Plugin {
 
       if (!webPage) {
         try {
-          const preview: any = await client.call({
-            _: "messages.getWebPagePreview",
+          const preview: any = await client.invoke(new Api.messages.GetWebPagePreview({
             message: url,
-          } as any);
+          }));
           const media = preview?.media || preview;
-          if (media?._ === "messageMediaWebPage" && media.webpage?._ === "webPage") {
+          if (hasTlType(media, "messageMediaWebPage") && hasTlType(media.webpage, "webPage")) {
             webPage = media.webpage;
           }
         } catch (e) {
@@ -3793,9 +3764,9 @@ class ThemePlugin extends Plugin {
       const docs: any[] = [];
       if (webPage) {
         for (const attr of webPage.attributes || []) {
-          if (attr._ === "webPageAttributeTheme" && Array.isArray(attr.documents)) {
+          if (hasTlType(attr, "webPageAttributeTheme") && Array.isArray(attr.documents)) {
             for (const d of attr.documents) {
-              if (d?._ === "document") docs.push(d);
+              if (hasTlType(d, "document")) docs.push(d);
             }
           }
         }
@@ -3856,14 +3827,13 @@ class ThemePlugin extends Plugin {
       if (missingFormats.length) {
         const results = await Promise.all(missingFormats.map(async (f) => {
           try {
-            const raw: any = await client.call({
-              _: "account.getTheme",
+            const raw: any = await client.invoke(new Api.account.GetTheme({
               format: f,
-              theme: { _: "inputThemeSlug", slug },
-            } as any);
-            if (raw?._ !== "theme") return { f, raw: null as any, buf: null as Buffer | null, err: null as string | null };
+              theme: new Api.InputThemeSlug({ slug }),
+            }));
+            if (!hasTlType(raw, "theme")) return { f, raw: null as any, buf: null as Buffer | null, err: null as string | null };
             let buf: Buffer | null = null;
-            if (raw.document?._ === "document") {
+            if (hasTlType(raw.document, "document")) {
               buf = await this.downloadTlDocument(client, raw.document);
               if (!buf) return { f, raw, buf: null, err: `getTheme(${f}): download failed` };
             }
@@ -3906,7 +3876,7 @@ class ThemePlugin extends Plugin {
       }
 
       if (Object.keys(fmtMap).filter(k => !k.startsWith("__")).length > 0) {
-        logger.info(
+        console.info(
           `[theme] link ${slug}: formats=${Object.keys(fmtMap).filter(k => !k.startsWith("__")).join(",")} ` +
           `android=${!!fmtMap.attheme} desktop=${!!fmtMap["tdesktop-theme"]} settingsWp=${!!settingsWpBytes}`,
         );
@@ -3932,8 +3902,7 @@ class ThemePlugin extends Plugin {
           text: html`
 ❌ 无法获取主题 <code>${slug}</code>
 <br/><br/><i>调试: ${errors.slice(0, 3).join(" | ") || "无响应"}</i>
-          `,
-        });
+          `, parseMode: "html" });
         return;
       }
 
@@ -3945,17 +3914,16 @@ ${webPage.description ? `<br/>${webPage.description}` : ""}
 <br/><br/><i>未找到可下载主题文件，且无法从颜色设置合成</i>
 <br/><i>type=${webPage.type || "?"} attrs=${(webPage.attributes || []).map((a: any) => a._).join(",") || "none"} docs=${docs.length}</i>
 <br/><i>${errors.slice(0, 3).join(" | ")}</i>
-        `,
-      });
+        `, parseMode: "html" });
     } catch (e: any) {
-      logger.error("[theme] handleAddThemeLink:", e);
-      await msg.edit({ text: html`❌ 获取失败: ${getErrorMessage(e)}` });
+      console.error("[theme] handleAddThemeLink:", e);
+      await msg.edit({ text: html`❌ 获取失败: ${getErrorMessage(e)}`, parseMode: "html" });
     }
   }
 
   /** Shared: parse + convert downloaded theme files, send results */
   private async sendThemeResults(
-    msg: MessageContext,
+    msg: Api.Message,
     title: string,
     slug: string,
     fmtMap: Record<string, { format: ThemeFormat; buf: Buffer }>,
@@ -3965,7 +3933,7 @@ ${webPage.description ? `<br/>${webPage.description}` : ""}
     const client = await getGlobalClient();
     const t0 = Date.now();
     try {
-      await msg.edit({ text: html`⏳ <b>${title}</b>\n🔗 <code>t.me/addtheme/${slug}</code>\n解析并合并配色…` });
+      await msg.edit({ text: html`⏳ <b>${title}</b>\n🔗 <code>t.me/addtheme/${slug}</code>\n解析并合并配色…`, parseMode: "html" });
     } catch { /* */ }
 
     const byFormat = new Map<ThemeFormat, Buffer>();
@@ -4082,7 +4050,7 @@ ${webPage.description ? `<br/>${webPage.description}` : ""}
     const wallpaperTiled = desktopPick.tiled;
     const desktopKeptOwn = desktopPick.keptOwn;
 
-    logger.info(
+    console.info(
       `[theme] wallpaper pick slug=${slug}: mobileSrc=${wallpaperSource || "none"} ` +
       `androidWp=${!!normalizeWallpaper(parsedByFmt.get("attheme")?.wallpaper || null)} ` +
       `desktopOwn=${desktopKeptOwn} mobileBytes=${!!wallpaper} desktopBytes=${!!desktopWallpaper}`,
@@ -4126,15 +4094,7 @@ ${webPage.description ? `<br/>${webPage.description}` : ""}
     if (!bestDoc || !bestFmt) {
       const sentRaw: string[] = [];
       for (const [fmt, buf] of byFormat) {
-        await client.sendMedia(msg.chat.id, {
-          type: "document",
-          file: buf,
-          fileName: `${slug || "theme"}${FORMAT_EXT[fmt]}`,
-          fileMime: API_MIME[fmt],
-        } as any, {
-          caption: html`✅ <b>${FORMAT_LABELS[fmt]}</b>（原始文件）`,
-          replyTo: msg.id,
-        });
+        await sendThemeDocument(client, msg.peerId, Buffer.isBuffer(buf) ? buf : Buffer.from(buf as any), `${slug || "theme"}${FORMAT_EXT[fmt]}`, API_MIME[fmt], html`✅ <b>${FORMAT_LABELS[fmt]}</b>（原始文件）`, msg.id);
         sentRaw.push(FORMAT_LABELS[fmt]);
       }
       if (sentRaw.length) {
@@ -4143,11 +4103,10 @@ ${webPage.description ? `<br/>${webPage.description}` : ""}
 🎨 <b>${title}</b>
 🔗 <code>t.me/addtheme/${slug}</code>
 <br/>✅ 已输出: ${sentRaw.join(" · ")}
-          `,
-        });
+          `, parseMode: "html" });
         return;
       }
-      await msg.edit({ text: html`❌ 主题文件解析失败（无颜色变量）` });
+      await msg.edit({ text: html`❌ 主题文件解析失败（无颜色变量）`, parseMode: "html" });
       return;
     }
 
@@ -4246,8 +4205,7 @@ ${webPage.description ? `<br/>${webPage.description}` : ""}
 🔗 <code>t.me/addtheme/${slug}</code>
 📊 合并 ${bestCount} 色 · 源 ${sourceFmts.map(f => FORMAT_LABELS[f].split(" ")[0]).join("+") || "?"}
 🖼️ 移动端壁纸: ${wallpaperSource === "attheme" ? "Android" : wallpaperSource || "无"}
-生成四端文件…`,
-      });
+生成四端文件…`, parseMode: "html" });
     } catch { /* */ }
 
     /** Validate output buffer: must parse + retain colors; for attheme check offset/WPS consistency */
@@ -4299,7 +4257,7 @@ ${webPage.description ? `<br/>${webPage.description}` : ""}
           : FORMAT_LABELS[bestFmt];
       }
       if (!out) {
-        logger.warn(`[theme] ${slug} render ${target} returned null`);
+        console.warn(`[theme] ${slug} render ${target} returned null`);
         continue;
       }
 
@@ -4312,11 +4270,11 @@ ${webPage.description ? `<br/>${webPage.description}` : ""}
           out = orig;
           v = vo;
           fromLabel = "原始(校验回退)";
-          logger.warn(`[theme] ${slug} ${target} regen failed (${v.detail}), kept original`);
+          console.warn(`[theme] ${slug} ${target} regen failed (${v.detail}), kept original`);
         }
       }
       if (!v.ok) {
-        logger.warn(`[theme] ${slug} ${target} validation weak: ${v.detail} colors=${v.colors}`);
+        console.warn(`[theme] ${slug} ${target} validation weak: ${v.detail} colors=${v.colors}`);
       }
 
       // Caption wallpaper note
@@ -4344,15 +4302,7 @@ ${webPage.description ? `<br/>${webPage.description}` : ""}
       }
 
       const sizeKb = Math.max(1, Math.round(out.length / 1024));
-      await client.sendMedia(msg.chat.id, {
-        type: "document",
-        file: out,
-        fileName: `${slug || "theme"}${FORMAT_EXT[target]}`,
-        fileMime: API_MIME[target],
-      } as any, {
-        caption: html`✅ <b>${FORMAT_LABELS[target]}</b>${fromLabel === "设置合成" ? "（云端设置）" : fromLabel === "原始" ? "（原始）" : fromLabel === "多源合并" ? "（多源合并）" : fromLabel.startsWith("原始") ? `（${fromLabel}）` : ` ← ${fromLabel}`} · ${v.colors || bestCount} 色 · ${sizeKb}KB${wpNote}`,
-        replyTo: msg.id,
-      });
+      await sendThemeDocument(client, msg.peerId, Buffer.isBuffer(out) ? out : Buffer.from(out as any), `${slug || "theme"}${FORMAT_EXT[target]}`, API_MIME[target], html`✅ <b>${FORMAT_LABELS[target]}</b>${fromLabel === "设置合成" ? "（云端设置）" : fromLabel === "原始" ? "（原始）" : fromLabel === "多源合并" ? "（多源合并）" : fromLabel.startsWith("原始") ? `（${fromLabel}）` : ` ← ${fromLabel}`} · ${v.colors || bestCount} 色 · ${sizeKb}KB${wpNote}`, msg.id);
       sent.push(FORMAT_LABELS[target]);
       stats.push({ target, colors: v.colors || bestCount, bytes: out.length, wp: v.wp, note: fromLabel });
     }
@@ -4366,15 +4316,7 @@ ${webPage.description ? `<br/>${webPage.description}` : ""}
         : wallpaperSource === "settings" ? "云端设置"
         : wallpaperSource || "unknown";
       const dim = formatImageDim(readImageDimensions(wallpaper));
-      await client.sendMedia(msg.chat.id, {
-        type: "document",
-        file: wallpaper,
-        fileName: `${slug || "theme"}-chat-background.${ext}`,
-        fileMime: ext === "png" ? "image/png" : "image/jpeg",
-      } as any, {
-        caption: html`🖼️ <b>移动端聊天背景</b>（来源: ${srcLabel}${dim ? ` · ${dim}` : ""}${wallpaperSlug ? ` · slug: <code>${wallpaperSlug}</code>` : ""}；仅 Android/iOS/TGX/settings，绝不使用 Desktop）`,
-        replyTo: msg.id,
-      });
+      await sendThemeDocument(client, msg.peerId, Buffer.isBuffer(wallpaper) ? wallpaper : Buffer.from(wallpaper as any), `${slug || "theme"}-chat-background.${ext}`, ext === "png" ? "image/png" : "image/jpeg", html`🖼️ <b>移动端聊天背景</b>（来源: ${srcLabel}${dim ? ` · ${dim}` : ""}${wallpaperSlug ? ` · slug: <code>${wallpaperSlug}</code>` : ""}；仅 Android/iOS/TGX/settings，绝不使用 Desktop）`, msg.id);
       wpSidecarSent = true;
     }
 
@@ -4383,15 +4325,7 @@ ${webPage.description ? `<br/>${webPage.description}` : ""}
     if (!wallpaper && desktopKeptOwn && desktopWallpaper) {
       const ext = detectImageExt(desktopWallpaper) === "png" ? "png" : "jpg";
       const dim = formatImageDim(readImageDimensions(desktopWallpaper));
-      await client.sendMedia(msg.chat.id, {
-        type: "document",
-        file: desktopWallpaper,
-        fileName: `${slug || "theme"}-desktop-background.${ext}`,
-        fileMime: ext === "png" ? "image/png" : "image/jpeg",
-      } as any, {
-        caption: html`🖥️ <b>Desktop 专用壁纸</b>${dim ? `（${dim}）` : ""}（Android 主题无壁纸 · 未注入移动端，避免主体出画）`,
-        replyTo: msg.id,
-      });
+      await sendThemeDocument(client, msg.peerId, Buffer.isBuffer(desktopWallpaper) ? desktopWallpaper : Buffer.from(desktopWallpaper as any), `${slug || "theme"}-desktop-background.${ext}`, ext === "png" ? "image/png" : "image/jpeg", html`🖥️ <b>Desktop 专用壁纸</b>${dim ? `（${dim}）` : ""}（Android 主题无壁纸 · 未注入移动端，避免主体出画）`, msg.id);
     }
 
     const mobileSrcLabel = wallpaperSource === "attheme" ? "Android"
@@ -4417,20 +4351,12 @@ ${webPage.description ? `<br/>${webPage.description}` : ""}
         wallpaperBlur,
         wallpaperMotion,
       });
-      await client.sendMedia(msg.chat.id, {
-        type: "document",
-        file: Buffer.from(settingsJson, "utf-8"),
-        fileName: `${slug || "theme"}-cloud-settings.json`,
-        fileMime: "application/json",
-      } as any, {
-        caption: html`☁️ <b>云端 themeSettings</b>（Unigram / Web / WebK / WebA）
+      await sendThemeDocument(client, msg.peerId, Buffer.isBuffer(Buffer.from(settingsJson, "utf-8")) ? Buffer.from(settingsJson, "utf-8") : Buffer.from(Buffer.from(settingsJson, "utf-8") as any), `${slug || "theme"}-cloud-settings.json`, "application/json", html`☁️ <b>云端 themeSettings</b>（Unigram / Web / WebK / WebA）
 <br/>无独立主题文件的客户端走 accent + baseTheme + wallpaper slug
-<br/>也可用 <code>${mainPrefix}theme cloud-settings</code> 直接创建云端链接`,
-        replyTo: msg.id,
-      });
+<br/>也可用 <code>${mainPrefix}theme cloud-settings</code> 直接创建云端链接`, msg.id);
       sent.push("Cloud settings");
     } catch (e) {
-      logger.warn("[theme] settings export failed:", getErrorMessage(e));
+      console.warn("[theme] settings export failed:", getErrorMessage(e));
     }
 
     await msg.edit({
@@ -4444,42 +4370,41 @@ ${desktopKeptOwn ? `<br/>🖥️ Desktop 使用自带壁纸${desktopDim ? ` · $
 ${statLine ? `<br/>📈 ${statLine}` : ""}
 <br/>⏱ ${ms}ms
 <br/><i>四端文件 + 云端 settings · 移动壁纸永不 Desktop</i>
-      `,
-    });
+      `, parseMode: "html" });
   }
 
   // ── Handle cloud upload ──────────────────────────────────────────────
 
-  private async handleCloudUpload(msg: MessageContext): Promise<void> {
-    if (!msg.replyToMessage?.id) {
-      await msg.edit({ text: html`❌ 请回复一个主题文件后再使用 <code>${mainPrefix}theme cloud</code>` });
+  private async handleCloudUpload(msg: Api.Message): Promise<void> {
+    if (!msg.replyToMsgId) {
+      await msg.edit({ text: html`❌ 请回复一个主题文件后再使用 <code>${mainPrefix}theme cloud</code>`, parseMode: "html" });
       return;
     }
     const client = await getGlobalClient();
     try {
       const reply = await safeGetReplyMessage(msg);
-      if (!reply || !(reply as any).media || (reply as any).media.type !== "document") {
-        await msg.edit({ text: html`❌ 回复的消息不是文件` }); return;
+      if (!reply || !(reply as any).document) {
+        await msg.edit({ text: html`❌ 回复的消息不是文件`, parseMode: "html" }); return;
       }
-      await msg.edit({ text: html`⏳ 下载并解析主题...` });
+      await msg.edit({ text: html`⏳ 下载并解析主题...`, parseMode: "html" });
       const buf = await downloadMedia(reply, client);
-      if (!buf || buf.length === 0) { await msg.edit({ text: html`❌ 下载失败` }); return; }
+      if (!buf || buf.length === 0) { await msg.edit({ text: html`❌ 下载失败`, parseMode: "html" }); return; }
       const format = detectFmt(buf);
       let doc = parseThemeBuffer(buf, format);
-      if (!doc || !Object.keys(doc.colors).length) { await msg.edit({ text: html`❌ 无法识别或解析主题格式` }); return; }
+      if (!doc || !Object.keys(doc.colors).length) { await msg.edit({ text: html`❌ 无法识别或解析主题格式`, parseMode: "html" }); return; }
       const fmt: ThemeFormat = (doc.format || format || "attheme") as ThemeFormat;
 
       // Resolve slug→bytes; upload image→slug so iOS/TGX cloud themes keep wallpaper
       if (doc.wallpaperSlug && !normalizeWallpaper(doc.wallpaper || null)) {
-        await msg.edit({ text: html`⏳ 下载云壁纸...` });
+        await msg.edit({ text: html`⏳ 下载云壁纸...`, parseMode: "html" });
         doc = await this.resolveWallpaperBytes(client, doc);
       }
       if (!doc.wallpaperSlug && normalizeWallpaper(doc.wallpaper || null) && (fmt === "ios-theme" || fmt === "tgx-theme")) {
-        await msg.edit({ text: html`⏳ 上传聊天背景到云壁纸...` });
+        await msg.edit({ text: html`⏳ 上传聊天背景到云壁纸...`, parseMode: "html" });
         doc = await this.ensureIosWallpaperSlug(client, doc);
       }
 
-      await msg.edit({ text: html`⏳ 上传到 Telegram 云端...` });
+      await msg.edit({ text: html`⏳ 上传到 Telegram 云端...`, parseMode: "html" });
       const slug = genSlug();
       // Prefer original buffer when it already has native wallpaper/slug; else re-render
       const origHasWp =
@@ -4505,69 +4430,45 @@ ${statLine ? `<br/>📈 ${statLine}` : ""}
 
       const outFmt: ThemeFormat = (!format || parseCloudSettingsJson(buf)) ? "attheme" : fmt;
 
-      const uploaded: any = await client.uploadFile({
-        file: converted,
-        fileName: `theme${FORMAT_EXT[outFmt]}`,
-        fileMime: API_MIME[outFmt],
-      } as any);
+      const uploaded: any = await client.uploadFile({ file: new CustomFile(`theme${FORMAT_EXT[outFmt]}`, Buffer.isBuffer(converted) ? converted.length : Buffer.from(converted as any).length, "", Buffer.isBuffer(converted) ? converted : Buffer.from(converted as any)) });
 
       // Build inputDocument correctly from uploadFile result shape variants
       let inputDoc: any = null;
-      if (uploaded?._ === "inputDocument" || (uploaded?.id && uploaded?.accessHash)) {
-        inputDoc = {
-          _: "inputDocument",
-          id: uploaded.id,
-          accessHash: uploaded.accessHash,
-          fileReference: uploaded.fileReference || new Uint8Array(0),
-        };
+      if (hasTlType(uploaded, "inputDocument") || (uploaded?.id && uploaded?.accessHash)) {
+        inputDoc = toInputDocument(uploaded);
       } else if (uploaded?.document) {
         const d = uploaded.document;
-        inputDoc = {
-          _: "inputDocument",
-          id: d.id,
-          accessHash: d.accessHash,
-          fileReference: d.fileReference || new Uint8Array(0),
-        };
-      } else if (uploaded?._ === "inputFile" || uploaded?._ === "inputFileBig" || uploaded?.id != null) {
-        // Some mtcute builds return InputFile — createTheme wants InputDocument.
+        inputDoc = toInputDocument(d);
+      } else if (hasTlType(uploaded, "inputFile") || hasTlType(uploaded, "inputFileBig") || uploaded?.id != null) {
+        // teleproto uploadFile returns InputFile; createTheme requires InputDocument.
         // Fallback: send as media to Saved Messages style is heavy; try createTheme with document: uploaded via messages.uploadMedia path.
         try {
-          const media: any = await client.call({
-            _: "messages.uploadMedia",
-            peer: { _: "inputPeerSelf" },
-            media: {
-              _: "inputMediaUploadedDocument",
+          const media: any = await client.invoke(new Api.messages.UploadMedia({
+            peer: new Api.InputPeerSelf(),
+            media: new Api.InputMediaUploadedDocument({
               file: uploaded,
               mimeType: API_MIME[outFmt],
-              attributes: [
-                { _: "documentAttributeFilename", fileName: `theme${FORMAT_EXT[outFmt]}` },
-              ],
-            },
-          } as any);
+              attributes: [new Api.DocumentAttributeFilename({ fileName: `theme${FORMAT_EXT[outFmt]}` })],
+            }),
+          }));
           const d = media?.document;
-          if (d?._ === "document") {
-            inputDoc = {
-              _: "inputDocument",
-              id: d.id,
-              accessHash: d.accessHash,
-              fileReference: d.fileReference || new Uint8Array(0),
-            };
+          if (hasTlType(d, "document")) {
+            inputDoc = toInputDocument(d);
           }
         } catch (e) {
-          logger.warn("[theme] cloud uploadMedia bridge failed:", getErrorMessage(e));
+          console.warn("[theme] cloud uploadMedia bridge failed:", getErrorMessage(e));
         }
       }
       if (!inputDoc) {
-        await msg.edit({ text: html`❌ 云端上传失败: 无法构造 inputDocument` });
+        await msg.edit({ text: html`❌ 云端上传失败: 无法构造 inputDocument`, parseMode: "html" });
         return;
       }
 
-      const created: any = await client.call({
-        _: "account.createTheme",
+      const created: any = await client.invoke(new Api.account.CreateTheme({
         slug,
         title: `TeleBox Theme (${FORMAT_LABELS[outFmt]})`,
         document: inputDoc,
-      } as any);
+      }));
 
       const themeSlug = (created as any).slug || slug;
       const link = `https://t.me/addtheme/${themeSlug}`;
@@ -4581,10 +4482,9 @@ ${statLine ? `<br/>📈 ${statLine}` : ""}
 <a href="${link}">${link}</a>
 
 📊 ${Object.keys(doc.colors).length} 个颜色变量 · ${FORMAT_LABELS[outFmt]}${wpNote}
-        `,
-      });
+        `, parseMode: "html" });
     } catch (e: any) {
-      await msg.edit({ text: html`❌ 云端上传失败: ${getErrorMessage(e)}` });
+      await msg.edit({ text: html`❌ 云端上传失败: ${getErrorMessage(e)}`, parseMode: "html" });
     }
   }
 
@@ -4592,28 +4492,28 @@ ${statLine ? `<br/>📈 ${statLine}` : ""}
    * Create a cloud accent theme via account.createTheme(settings=InputThemeSettings).
    * This is what Unigram / Telegram Web consume — no proprietary theme file.
    */
-  private async handleCloudSettingsUpload(msg: MessageContext): Promise<void> {
-    if (!msg.replyToMessage?.id) {
-      await msg.edit({ text: html`❌ 请回复主题文件后使用 <code>${mainPrefix}theme cloud-settings</code>` });
+  private async handleCloudSettingsUpload(msg: Api.Message): Promise<void> {
+    if (!msg.replyToMsgId) {
+      await msg.edit({ text: html`❌ 请回复主题文件后使用 <code>${mainPrefix}theme cloud-settings</code>`, parseMode: "html" });
       return;
     }
     const client = await getGlobalClient();
     try {
       const reply = await safeGetReplyMessage(msg);
-      if (!reply || !(reply as any).media || (reply as any).media.type !== "document") {
-        await msg.edit({ text: html`❌ 回复不是文件` }); return;
+      if (!reply || !(reply as any).document) {
+        await msg.edit({ text: html`❌ 回复不是文件`, parseMode: "html" }); return;
       }
-      await msg.edit({ text: html`⏳ 解析并生成云端 themeSettings...` });
+      await msg.edit({ text: html`⏳ 解析并生成云端 themeSettings...`, parseMode: "html" });
       const buf = await downloadMedia(reply, client);
-      if (!buf || buf.length === 0) { await msg.edit({ text: html`❌ 下载失败` }); return; }
+      if (!buf || buf.length === 0) { await msg.edit({ text: html`❌ 下载失败`, parseMode: "html" }); return; }
       let doc = parseThemeBuffer(buf, detectFmt(buf));
-      if (!doc || !Object.keys(doc.colors).length) { await msg.edit({ text: html`❌ 解析失败` }); return; }
+      if (!doc || !Object.keys(doc.colors).length) { await msg.edit({ text: html`❌ 解析失败`, parseMode: "html" }); return; }
 
       if (doc.wallpaperSlug && !normalizeWallpaper(doc.wallpaper || null)) {
         doc = await this.resolveWallpaperBytes(client, doc);
       }
       if (!doc.wallpaperSlug && normalizeWallpaper(doc.wallpaper || null)) {
-        await msg.edit({ text: html`⏳ 上传壁纸到云端...` });
+        await msg.edit({ text: html`⏳ 上传壁纸到云端...`, parseMode: "html" });
         doc = await this.ensureIosWallpaperSlug(client, doc);
       }
 
@@ -4627,44 +4527,35 @@ ${statLine ? `<br/>📈 ${statLine}` : ""}
       const parsed = JSON.parse(exportJson);
       const s = parsed.settings;
       const baseName = String(s.baseTheme?._ || s.baseTheme || "baseThemeDay");
-      const inputSettings: any = {
-        _: "inputThemeSettings",
-        baseTheme: { _: baseName },
+      const inputSettings = new Api.InputThemeSettings({
+        baseTheme: toBaseTheme(baseName),
         accentColor: s.accentColor,
         outboxAccentColor: s.outboxAccentColor,
         messageColors: s.messageColors || [],
-      };
-      if (doc.wallpaperSlug) {
-        inputSettings.wallpaper = { _: "inputWallPaperSlug", slug: doc.wallpaperSlug };
-        inputSettings.wallpaperSettings = {
-          _: "wallPaperSettings",
-          blur: !!doc.wallpaperBlur,
-          motion: doc.wallpaperMotion !== false,
-          intensity: doc.wallpaperIntensity ?? 50,
-        };
-      }
+        wallpaper: doc.wallpaperSlug
+          ? new Api.InputWallPaperSlug({ slug: doc.wallpaperSlug })
+          : undefined,
+        wallpaperSettings: doc.wallpaperSlug
+          ? new Api.WallPaperSettings({
+              blur: !!doc.wallpaperBlur,
+              motion: doc.wallpaperMotion !== false,
+              intensity: doc.wallpaperIntensity ?? 50,
+            })
+          : undefined,
+      });
 
-      await msg.edit({ text: html`⏳ 创建云端 accent 主题（Unigram/Web）...` });
+      await msg.edit({ text: html`⏳ 创建云端 accent 主题（Unigram/Web）...`, parseMode: "html" });
       const slug = genSlug();
-      const created: any = await client.call({
-        _: "account.createTheme",
+      const created: any = await client.invoke(new Api.account.CreateTheme({
         slug,
         title: `TeleBox Cloud (${parsed.palettePreview?.dark ? "dark" : "light"})`,
         settings: [inputSettings],
-      } as any);
+      }));
 
       const themeSlug = created?.slug || slug;
       const link = `https://t.me/addtheme/${themeSlug}`;
 
-      await client.sendMedia(msg.chat.id, {
-        type: "document",
-        file: Buffer.from(exportJson, "utf-8"),
-        fileName: `${themeSlug}-cloud-settings.json`,
-        fileMime: "application/json",
-      } as any, {
-        caption: html`☁️ settings JSON 备份`,
-        replyTo: msg.id,
-      });
+      await sendThemeDocument(client, msg.peerId, Buffer.isBuffer(Buffer.from(exportJson, "utf-8")) ? Buffer.from(exportJson, "utf-8") : Buffer.from(Buffer.from(exportJson, "utf-8") as any), `${themeSlug}-cloud-settings.json`, "application/json", html`☁️ settings JSON 备份`, msg.id);
 
       await msg.edit({
         text: html`
@@ -4677,88 +4568,71 @@ ${statLine ? `<br/>📈 ${statLine}` : ""}
 · ${parsed.palettePreview?.dark ? "dark" : "light"}
 ${doc.wallpaperSlug ? `<br/>🖼️ wallpaper slug <code>${doc.wallpaperSlug}</code>` : ""}
 <br/><i>此类客户端无 .attheme 等文件，靠 themeSettings 同步配色</i>
-        `,
-      });
+        `, parseMode: "html" });
     } catch (e) {
-      await msg.edit({ text: html`❌ cloud-settings 失败: ${getErrorMessage(e)}` });
+      await msg.edit({ text: html`❌ cloud-settings 失败: ${getErrorMessage(e)}`, parseMode: "html" });
     }
   }
 
   // ── Handle convert to target client (auto-detect source) ─────────────
 
-  private async handleConvertToTarget(msg: MessageContext, target: ThemeFormat): Promise<void> {
-    if (!msg.replyToMessage?.id) {
-      await msg.edit({ text: html`❌ 请回复主题文件后使用 <code>${mainPrefix}theme ${target}</code>` });
+  private async handleConvertToTarget(msg: Api.Message, target: ThemeFormat): Promise<void> {
+    if (!msg.replyToMsgId) {
+      await msg.edit({ text: html`❌ 请回复主题文件后使用 <code>${mainPrefix}theme ${target}</code>`, parseMode: "html" });
       return;
     }
     const client = await getGlobalClient();
     try {
       const reply = await safeGetReplyMessage(msg);
-      if (!reply || !(reply as any).media || (reply as any).media.type !== "document") {
-        await msg.edit({ text: html`❌ 回复不是文件` }); return;
+      if (!reply || !(reply as any).document) {
+        await msg.edit({ text: html`❌ 回复不是文件`, parseMode: "html" }); return;
       }
-      await msg.edit({ text: html`⏳ 转换为 ${TARGET_CLIENT_LABELS[target]}...` });
+      await msg.edit({ text: html`⏳ 转换为 ${TARGET_CLIENT_LABELS[target]}...`, parseMode: "html" });
       const buf = await downloadMedia(reply, client);
-      if (!buf || buf.length === 0) { await msg.edit({ text: html`❌ 下载失败` }); return; }
+      if (!buf || buf.length === 0) { await msg.edit({ text: html`❌ 下载失败`, parseMode: "html" }); return; }
       const format = detectFmt(buf);
-      if (!format && !parseCloudSettingsJson(buf)) { await msg.edit({ text: html`❌ 无法识别文件格式` }); return; }
+      if (!format && !parseCloudSettingsJson(buf)) { await msg.edit({ text: html`❌ 无法识别文件格式`, parseMode: "html" }); return; }
       let doc = parseThemeBuffer(buf, format);
-      if (!doc || !Object.keys(doc.colors).length) { await msg.edit({ text: html`❌ 解析失败` }); return; }
+      if (!doc || !Object.keys(doc.colors).length) { await msg.edit({ text: html`❌ 解析失败`, parseMode: "html" }); return; }
       const srcFmt = doc.format || format!;
       const sameFmt = srcFmt === target;
       if (sameFmt) {
-        await msg.edit({ text: html`⏳ 同格式重规范化（补齐壁纸/offset/slug）...` });
+        await msg.edit({ text: html`⏳ 同格式重规范化（补齐壁纸/offset/slug）...`, parseMode: "html" });
       }
 
       // Resolve / package wallpaper for target
       if (doc.wallpaperSlug && !normalizeWallpaper(doc.wallpaper || null)) {
-        await msg.edit({ text: html`⏳ 下载云壁纸...` });
+        await msg.edit({ text: html`⏳ 下载云壁纸...`, parseMode: "html" });
         doc = await this.resolveWallpaperBytes(client, doc);
       }
       // iOS + TGX both need cloud wallpaper slug when only image bytes exist
       if ((target === "ios-theme" || target === "tgx-theme") && !doc.wallpaperSlug && normalizeWallpaper(doc.wallpaper || null)) {
-        await msg.edit({ text: html`⏳ 上传聊天背景到云壁纸（${target === "ios-theme" ? "iOS" : "TGX"} 打包）...` });
+        await msg.edit({ text: html`⏳ 上传聊天背景到云壁纸（${target === "ios-theme" ? "iOS" : "TGX"} 打包）...`, parseMode: "html" });
         doc = await this.ensureIosWallpaperSlug(client, doc);
       }
 
       const out = renderDoc(doc, target);
-      if (!out) { await msg.edit({ text: html`❌ 转换失败` }); return; }
+      if (!out) { await msg.edit({ text: html`❌ 转换失败`, parseMode: "html" }); return; }
       const cc = Object.keys(doc.colors).length;
       const wp = normalizeWallpaper(doc.wallpaper || null);
       const emb = !!(wp && (target === "attheme" || target === "tdesktop-theme"));
       const slugPacked = !!((target === "ios-theme" || target === "tgx-theme") && doc.wallpaperSlug);
       const dim = formatImageDim(readImageDimensions(wp));
       await msg.delete();
-      await client.sendMedia(msg.chat.id, {
-        type: "document",
-        file: out,
-        fileName: `theme${FORMAT_EXT[target]}`,
-        fileMime: API_MIME[target],
-      } as any, {
-        caption: html`
+      await sendThemeDocument(client, msg.peerId, Buffer.isBuffer(out) ? out : Buffer.from(out as any), `theme${FORMAT_EXT[target]}`, API_MIME[target], html`
 ✅ <b>${sameFmt ? "重规范化完成" : "转换完成"}</b> ${TARGET_CLIENT_LABELS[target]}
 📊 ${cc} 个颜色变量${emb ? "<br/>🖼️ 壁纸已嵌入" : slugPacked ? `<br/>🖼️ 壁纸已打包（slug: <code>${doc.wallpaperSlug}</code>）` : wp ? "<br/>🖼️ 壁纸见附图" : ""}${dim ? `<br/>📐 ${dim}` : ""}
 ${sameFmt ? "<br/><i>源格式相同：已按生产级规范重写（offset/signed int/slug）</i>" : ""}
-        `,
-        replyTo: msg.id,
-      });
+        `, msg.id);
       if (wp && !emb) {
         const ext = detectImageExt(wp) === "png" ? "png" : "jpg";
         const cap = slugPacked
           ? html`🖼️ <b>聊天背景原图</b>${dim ? ` · ${dim}` : ""}（已写入 ${target === "ios-theme" ? "iOS defaultWallpaper" : "TGX wallpaper"} slug）`
           : html`🖼️ 聊天背景${dim ? ` · ${dim}` : ""}`;
-        await client.sendMedia(msg.chat.id, {
-          type: "document",
-          file: wp,
-          fileName: `theme-chat-background.${ext}`,
-          fileMime: ext === "png" ? "image/png" : "image/jpeg",
-        } as any, {
-          caption: cap,
-          replyTo: msg.id,
-        });
+        await sendThemeDocument(client, msg.peerId, Buffer.isBuffer(wp) ? wp : Buffer.from(wp as any), `theme-chat-background.${ext}`, ext === "png" ? "image/png" : "image/jpeg", cap, msg.id);
       }
     } catch (e) {
-      await msg.edit({ text: html`❌ 转换失败: ${getErrorMessage(e)}` });
+      await msg.edit({ text: html`❌ 转换失败: ${getErrorMessage(e)}`, parseMode: "html" });
     }
   }
 }
