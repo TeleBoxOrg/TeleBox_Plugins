@@ -793,6 +793,26 @@ async function senderRankInChat(msg: Api.Message, entity: any): Promise<string |
   } catch { return undefined; }
 }
 
+const QUOTE_API_URL = "https://quote-api-enhanced.zhetengsha.eu.org/generate.webp";
+const QUOTE_API_HEADERS = {
+  "Content-Type": "application/json",
+  "User-Agent": "TeleBox/0.2.1",
+};
+
+function detectQuoteImageExt(buffer: Buffer): "webp" | "png" {
+  if (
+    buffer.length >= 12 &&
+    buffer.subarray(0, 4).toString("ascii") === "RIFF" &&
+    buffer.subarray(8, 12).toString("ascii") === "WEBP"
+  ) return "webp";
+  if (
+    buffer.length >= 8 &&
+    buffer.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))
+  ) return "png";
+  const preview = buffer.subarray(0, 120).toString("utf8").replace(/\s+/g, " ").trim();
+  throw new Error(`quote-api 返回了非图片数据${preview ? `：${preview.slice(0, 100)}` : ""}`);
+}
+
 // 调用quote-api生成语录
 async function generateQuote(
   quoteData: any,
@@ -800,51 +820,26 @@ async function generateQuote(
   try {
     const response = await axios({
       method: "post",
+      url: QUOTE_API_URL,
+      headers: QUOTE_API_HEADERS,
       timeout,
       data: quoteData,
       responseType: "arraybuffer",
-      ...JSON.parse(
-        Buffer.from(
-          "eyJ1cmwiOiJodHRwczovL3F1b3RlLWFwaS1lbmhhbmNlZC56aGV0ZW5nc2hhLmV1Lm9yZy9nZW5lcmF0ZS53ZWJwIiwiaGVhZGVycyI6eyJDb250ZW50LVR5cGUiOiJhcHBsaWNhdGlvbi9qc29uIiwiVXNlci1BZ2VudCI6IlRlbGVCb3gvMC4yLjEifX0=",
-          "base64",
-        ).toString("utf-8"),
-      ),
+      transformResponse: [(data) => data],
+      validateStatus: () => true,
     });
 
     console.log("quote-api响应状态:", response.status);
-
-    // // 检查响应格式
-    // if (!response.data.ok || !response.data.result) {
-    //   throw new Error("API响应格式错误，缺少result字段");
-    // }
-
-    // if (!response.data.result.image) {
-    //   throw new Error("API响应中缺少image字段");
-    // }
-
-    // let imageBuffer: Buffer;
-
-    // // 如果image是base64字符串，需要解码
-    // if (typeof response.data.result.image === "string") {
-    //   // 移除可能的data URL前缀
-    //   const base64Data = response.data.result.image.replace(
-    //     /^data:image\/[a-z]+;base64,/,
-    //     ""
-    //   );
-    //   imageBuffer = Buffer.from(base64Data, "base64");
-    // } else if (Buffer.isBuffer(response.data.result.image)) {
-    //   imageBuffer = response.data.result.image;
-    // } else {
-    //   throw new Error("不支持的图片数据格式");
-    // }
-
-    // console.log("解码后图片数据长度:", imageBuffer.length);
-
-    // 推断返回图片格式：
-    // - 当 type === 'quote' 且 format === 'webp' 时，后端会生成 webp 贴纸
-    // - 当 type === 'image' 或 type === 'stories' 时，后端输出的是 png
-    const outExt = quoteData?.type === "quote" && quoteData?.format !== "png" ? "webp" : "png";
-    return { buffer: response.data, ext: outExt };
+    const imageBuffer = Buffer.from(response.data);
+    if (response.status < 200 || response.status >= 300) {
+      const detail = imageBuffer.subarray(0, 160).toString("utf8").replace(/\s+/g, " ").trim();
+      throw new Error(`quote-api HTTP ${response.status}${detail ? `：${detail.slice(0, 120)}` : ""}`);
+    }
+    const contentType = String(response.headers["content-type"] || "").toLowerCase();
+    if (!contentType.startsWith("image/") && contentType !== "application/octet-stream") {
+      throw new Error(`quote-api 返回类型异常：${contentType || "unknown"}`);
+    }
+    return { buffer: imageBuffer, ext: detectQuoteImageExt(imageBuffer) };
   } catch (error) {
     if (axios.isAxiosError(error)) {
       console.error(`quote-api请求失败:`, {
@@ -1391,36 +1386,40 @@ class YvluPlugin extends Plugin {
                 } catch (e) {}
               }
             } else {
-              // webp/png 格式：发送为静态贴纸
               const file = new CustomFile(
-                `sticker.${imageExt}`,
+                `quote.${imageExt}`,
                 imageBuffer.length,
                 "",
                 imageBuffer,
               );
 
-              const stickerAttr = new Api.DocumentAttributeSticker({
-                alt: "📝",
-                stickerset: new Api.InputStickerSetEmpty(),
-              });
-
-              const imageSizeAttr = new Api.DocumentAttributeImageSize({
-                w: dimensions.width,
-                h: dimensions.height,
-              });
-
-              const filenameAttr = new Api.DocumentAttributeFilename({
-                fileName: `sticker.${imageExt}`,
-              });
-
-              await client.sendFile(msg.peerId, {
-                file,
-                forceDocument: false,
-                attributes: [stickerAttr, imageSizeAttr, filenameAttr],
-                replyTo: replied?.id,
-              });
-
-              console.log("[yvlu] 静态贴纸发送成功");
+              if (imageExt === "webp") {
+                const stickerAttr = new Api.DocumentAttributeSticker({
+                  alt: "📝",
+                  stickerset: new Api.InputStickerSetEmpty(),
+                });
+                const imageSizeAttr = new Api.DocumentAttributeImageSize({
+                  w: dimensions.width,
+                  h: dimensions.height,
+                });
+                const filenameAttr = new Api.DocumentAttributeFilename({
+                  fileName: "quote.webp",
+                });
+                await client.sendFile(msg.peerId, {
+                  file,
+                  forceDocument: false,
+                  attributes: [stickerAttr, imageSizeAttr, filenameAttr],
+                  replyTo: replied?.id,
+                });
+                console.log("[yvlu] 静态贴纸发送成功");
+              } else {
+                await client.sendFile(msg.peerId, {
+                  file,
+                  forceDocument: false,
+                  replyTo: replied?.id,
+                });
+                console.log("[yvlu] PNG 图片发送成功");
+              }
             }
 
             console.log("[yvlu] 文件发送成功");
