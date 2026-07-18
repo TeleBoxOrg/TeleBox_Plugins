@@ -42,6 +42,18 @@ interface ThemeDoc {
    * wallpaper uploaded via account.uploadWallPaper / existing wallpapers.
    */
   wallpaperSlug?: string | null;
+  /** Wallpaper blur radius (0 = no blur) */
+  wallpaperBlur?: number;
+  /** Wallpaper motion effect flag (iOS parallax) */
+  wallpaperMotion?: boolean;
+  /** Wallpaper pattern intensity 0..100 (Android) */
+  wallpaperIntensity?: number;
+  /** Wallpaper solid background color (Android fallback behind pattern) */
+  wallpaperColor?: string | null;
+  /** Wallpaper pattern ID/slug (Android) */
+  wallpaperPattern?: string | null;
+  /** Parent / based-on theme identifier */
+  basedOn?: string | null;
 }
 
 const FORMAT_LABELS: Record<ThemeFormat, string> = {
@@ -1487,6 +1499,7 @@ function genIos(
   colors: Record<string, string>,
   name = "TeleBox Theme",
   wallpaperSlug?: string | null,
+  options?: { blur?: number; motion?: boolean },
 ): string {
   const cx = remapAllColors(colors, "to-ios");
   const bg = pickColor(cx, ["windowBackgroundWhite", "backgroundColor", "windowBg", "list.plainBg"], "#1c1b1f");
@@ -1499,14 +1512,19 @@ function genIos(
   const sep = pickColor(cx, ["divider", "separatorColor", "list.blocksSeparator"], adjustBright(bg, 15));
   const dark = isDarkHex(bg);
   const ic = (hex: string) => toIosColor(hex);
+  // Derive semantic colors from cx when available
   const white = "ffffff";
   const black = "000000";
-  const destructive = "ff3b30";
-  const outText = isDarkHex(mo) ? white : black;
+  const destructive = ic(cx["text_RedRegular"] || cx["destructiveText"] || cx["attentionButtonFg"] || "#ff3b30");
+  const outText = ic(isDarkHex(mo)
+    ? (cx["windowBackgroundWhiteBlackText"] || "#e6e1e5")
+    : (cx["windowBackgroundWhiteBlackText"] || "#000000"));
+  const inText = ic(t);
   // Prefer cloud slug when available; otherwise solid color (client still installs)
   const defaultWp = (wallpaperSlug && wallpaperSlug.trim())
     ? wallpaperSlug.trim()
     : ic(bg);
+  const wpOpts = wallpaperSlug ? ` blur: ${options?.blur ?? 0} motion: ${options?.motion ?? true}` : "";
 
   // Minimal but valid nested structure accepted by Telegram iOS
   const lines: string[] = [
@@ -1661,7 +1679,7 @@ function genIos(
     `    foreground: ${white}`,
     `  onlineDot: 4cc91f`,
     "chat:",
-    `  defaultWallpaper: ${defaultWp}`,
+    `  defaultWallpaper: ${defaultWp}${wpOpts}`,
     "  message:",
     "    incoming:",
     "      bubble:",
@@ -2125,6 +2143,7 @@ function parseIos(buf: Buffer): ThemeDoc | null {
     if (text.includes("basedOn:") || text.includes("navBar:") || text.includes("chatList:") || text.includes("primaryText:")) {
       const colors: Record<string, string> = {};
       let wallpaperSlug: string | null = null;
+      let basedOn: string | null = null;
       const stack: string[] = [];
       for (const rawLine of text.split("\n")) {
         if (!rawLine.trim()) continue;
@@ -2143,17 +2162,25 @@ function parseIos(buf: Buffer): ThemeDoc | null {
         const key = line.slice(0, col).trim();
         let val = line.slice(col + 1).trim();
         if (!val || val === "true" || val === "false" || val === "clear" || val === "light" || val === "dark" || val === "black" || val === "white" || val === "day" || val === "night" || val === "nightTinted" || val === "classic") {
+          if (key === "basedOn") basedOn = val;
           stack[level] = key;
           stack.length = level + 1;
           continue;
         }
 
         // chat.defaultWallpaper: solid color OR cloud wallpaper slug (+ optional settings)
-        // Real example: `  defaultWallpaper: eSUFoZbLCUXaAAAAi8b2YcKWYqo`
+        // Real example: `  defaultWallpaper: eSUFoZbLCUXaAAAAi8b2YcKWYqo blur: 0 motion: true`
         if (key === "defaultWallpaper") {
           const parts = val.split(/\s+/).filter(Boolean);
           const first = parts[0] || "";
           const hexOnly = first.replace(/^#/, "");
+          // Parse optional wallpaper options: blur:N, motion:true/false, intensity:0..100
+          let blur = 0, motion = true, intensity = 100;
+          for (const p of parts.slice(1)) {
+            if (p.startsWith("blur:")) blur = parseInt(p.slice(5), 10) || 0;
+            else if (p.startsWith("motion:")) motion = p.slice(7) === "true";
+            else if (p.startsWith("intensity:")) intensity = parseInt(p.slice(10), 10) || 100;
+          }
           if (/^[0-9a-fA-F]{6,8}$/.test(hexOnly) && first.length <= 9) {
             // solid color wallpaper
             colors["chat.defaultWallpaper"] = `#${hexOnly}`;
@@ -2167,6 +2194,11 @@ function parseIos(buf: Buffer): ThemeDoc | null {
           } else if (/^[0-9a-fA-F]{6,8}$/.test(hexOnly)) {
             colors["chat.defaultWallpaper"] = `#${hexOnly}`;
           }
+          // Store wallpaper options for later use (they're not part of the flat color map)
+          // We'll inject them into the return doc via a tag on the colors map
+          (colors as any)["__wpBlur"] = blur;
+          (colors as any)["__wpMotion"] = motion;
+          (colors as any)["__wpIntensity"] = intensity;
           continue;
         }
 
@@ -2190,7 +2222,14 @@ function parseIos(buf: Buffer): ThemeDoc | null {
       mapIf("chat.message.outgoing.bubble.withoutWp.bg", "chat_outBubble");
       mapIf("chatList.bg", "chatListBackground");
       if (Object.keys(colors).length || wallpaperSlug) {
-        return { format: "ios-theme", colors, wallpaperSlug };
+        const wpBlur = (colors as any)["__wpBlur"] as number | undefined;
+        const wpMotion = (colors as any)["__wpMotion"] as boolean | undefined;
+        const wpIntensity = (colors as any)["__wpIntensity"] as number | undefined;
+        // Clean up internal markers before returning
+        delete (colors as any)["__wpBlur"];
+        delete (colors as any)["__wpMotion"];
+        delete (colors as any)["__wpIntensity"];
+        return { format: "ios-theme", colors, wallpaperSlug, basedOn, wallpaperBlur: wpBlur, wallpaperMotion: wpMotion, wallpaperIntensity: wpIntensity };
       }
     }
     // Legacy JSON fallback
@@ -2247,7 +2286,8 @@ function renderDoc(doc: ThemeDoc, target: ThemeFormat, name = "TeleBox Theme"): 
     const wp = normalizeWallpaper(doc.wallpaper || null);
     const tiled = !!doc.wallpaperTiled;
     const slug = doc.wallpaperSlug || null;
-    const withWp: ThemeDoc = { ...doc, wallpaper: wp, wallpaperTiled: tiled, wallpaperSlug: slug };
+    const options = { blur: doc.wallpaperBlur ?? 0, motion: doc.wallpaperMotion ?? true };
+    const withWp: ThemeDoc = { ...doc, wallpaper: wp, wallpaperTiled: tiled, wallpaperSlug: slug, wallpaperBlur: doc.wallpaperBlur, wallpaperMotion: doc.wallpaperMotion };
 
     if (target === "attheme") {
       // Always re-render colors + re-attach wallpaper so conversions keep chat background
@@ -2263,7 +2303,7 @@ function renderDoc(doc: ThemeDoc, target: ThemeFormat, name = "TeleBox Theme"): 
     }
     if (target === "ios-theme") {
       // iOS packages wallpaper as cloud slug in defaultWallpaper, not binary
-      return Buffer.from(genIos(withWp.colors, name, slug), "utf-8");
+      return Buffer.from(genIos(withWp.colors, name, doc.wallpaperSlug || null, { blur: doc.wallpaperBlur, motion: doc.wallpaperMotion }), "utf-8");
     }
     return null;
   } catch { return null; }
@@ -2693,26 +2733,30 @@ ${converted.map((c) => {
   private async downloadWallpaperFromSettings(
     client: Awaited<ReturnType<typeof getGlobalClient>>,
     settings: any,
-  ): Promise<{ bytes: Buffer | null; slug: string | null }> {
+  ): Promise<{ bytes: Buffer | null; slug: string | null; blur: number; motion: boolean }> {
     try {
       const wp = settings?.wallpaper;
-      if (!wp) return { bytes: null, slug: null };
-      // wallPaper { document, slug } | wallPaperNoFile
+      if (!wp) return { bytes: null, slug: null, blur: 0, motion: true };
+      // wallPaper { document, slug, settings } | wallPaperNoFile
       const slug = (wp._ === "wallPaper" && typeof wp.slug === "string" && wp.slug.length > 8)
         ? wp.slug
         : null;
+      // Extract wallpaper options from wallpaper settings
+      const wpSettings = wp.settings || {};
+      const blur = (typeof wpSettings.blur === "number" ? wpSettings.blur : 0);
+      const motion = wpSettings.motion !== false;
       if (wp._ === "wallPaper" && wp.document?._ === "document") {
         const bytes = await this.downloadTlDocument(client, wp.document);
-        return { bytes, slug };
+        return { bytes, slug, blur, motion };
       }
       if (wp.document?._ === "document") {
         const bytes = await this.downloadTlDocument(client, wp.document);
-        return { bytes, slug };
+        return { bytes, slug, blur, motion };
       }
-      return { bytes: null, slug };
+      return { bytes: null, slug, blur, motion };
     } catch (e) {
       logger.warn("[theme] wallpaper download failed:", getErrorMessage(e));
-      return { bytes: null, slug: null };
+      return { bytes: null, slug: null, blur: 0, motion: true };
     }
   }
 
@@ -2722,6 +2766,8 @@ ${converted.map((c) => {
     title: string,
     wallpaper?: Buffer | null,
     wallpaperSlug?: string | null,
+    wallpaperBlur?: number,
+    wallpaperMotion?: boolean,
   ): Record<string, { format: ThemeFormat; buf: Buffer }> | null {
     const colors = colorsFromThemeSettings(settings);
     if (!Object.keys(colors).length) return null;
@@ -2730,6 +2776,8 @@ ${converted.map((c) => {
       colors,
       wallpaper: normalizeWallpaper(wallpaper || null),
       wallpaperSlug: wallpaperSlug || null,
+      wallpaperBlur: wallpaperBlur ?? 0,
+      wallpaperMotion: wallpaperMotion ?? true,
     };
     const fmtMap: Record<string, { format: ThemeFormat; buf: Buffer }> = {};
     for (const format of ["attheme", "tdesktop-theme", "tgx-theme", "ios-theme"] as ThemeFormat[]) {
@@ -2881,8 +2929,8 @@ ${converted.map((c) => {
       // Many installable themes only ship settings (no document). Clients still
       // install them; we generate .attheme / .tdesktop-theme / .tgx-theme / .tgios-theme.
       if (settingsFallback) {
-        const { bytes: cloudWp, slug: wpSlug } = await this.downloadWallpaperFromSettings(client, settingsFallback);
-        const synth = this.synthesizeFromSettings(settingsFallback, themeTitle, cloudWp, wpSlug);
+        const { bytes: cloudWp, slug: wpSlug, blur: wpBlur, motion: wpMotion } = await this.downloadWallpaperFromSettings(client, settingsFallback);
+        const synth = this.synthesizeFromSettings(settingsFallback, themeTitle, cloudWp, wpSlug, wpBlur, wpMotion);
         if (synth) {
           await this.sendThemeResults(msg, themeTitle, slug, synth, true, cloudWp);
           return;
