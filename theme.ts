@@ -507,7 +507,11 @@ function mergeThemeDocs(docs: ThemeDoc[], preferredOrder: ThemeFormat[] = ["atth
   };
 }
 
-/** Mobile wallpaper priority: Android embed → iOS/TGX resolved bytes → settings → NEVER Desktop unless nothing else */
+/** Mobile wallpaper priority: Android embed → iOS/TGX resolved bytes → settings.
+ *  NEVER Desktop — Desktop crops are landscape and push subject off-screen on mobile.
+ *  If Android theme has wallpaperFileOffset=-1 / no WPS, official mobile install
+ *  also has NO chat wallpaper (e.g. BiliBiliDarkByMiku). Mirroring that is correct.
+ */
 function pickMobileWallpaper(
   parsedByFmt: Map<ThemeFormat, ThemeDoc>,
   extras?: { settingsWp?: Buffer | null; extraWp?: Buffer | null },
@@ -543,17 +547,12 @@ function pickMobileWallpaper(
     const w = normalizeWallpaper(d?.wallpaper || null);
     if (w) return { wallpaper: w, source: "tgx-theme", slug: slug || d?.wallpaperSlug || null, blur, motion };
   }
-  // 4) themeSettings / synthesize extras (cloud accent wallpaper — usually mobile-correct)
+  // 4) themeSettings / synthesize extras (cloud accent wallpaper — mobile-correct)
   {
     const w = normalizeWallpaper(extras?.settingsWp || null) || normalizeWallpaper(extras?.extraWp || null);
     if (w) return { wallpaper: w, source: "settings", slug, blur, motion };
   }
-  // 5) Desktop LAST RESORT only — different crop, can push subject off-screen on mobile
-  {
-    const d = parsedByFmt.get("tdesktop-theme");
-    const w = normalizeWallpaper(d?.wallpaper || null);
-    if (w) return { wallpaper: w, source: "tdesktop-theme", slug, blur, motion };
-  }
+  // NO step 5 Desktop — intentional. Desktop background is a different asset.
   return { wallpaper: null, source: null, slug, blur, motion };
 }
 
@@ -3270,7 +3269,8 @@ ${webPage.description ? `<br/>${webPage.description}` : ""}
 
     // ── MOBILE wallpaper pick (Android absolute priority) ──
     // NEVER seed from bestDoc.wallpaper (merge no longer carries bytes).
-    // Desktop is last resort only — different crop pushes subject off-screen.
+    // NEVER use Desktop crop for mobile — BiliBiliDarkByMiku proves Android can
+    // ship wallpaperFileOffset=-1 while only Desktop has background.jpg.
     const settingsWp = normalizeWallpaper(extraWallpaper || null)
       || normalizeWallpaper((fmtMap as any).__wallpaper || null);
     const mobilePick = pickMobileWallpaper(parsedByFmt, {
@@ -3283,7 +3283,7 @@ ${webPage.description ? `<br/>${webPage.description}` : ""}
     let wallpaperBlur = mobilePick.blur ?? bestDoc?.wallpaperBlur ?? (fmtMap as any).__wallpaperBlur;
     let wallpaperMotion = mobilePick.motion ?? bestDoc?.wallpaperMotion ?? (fmtMap as any).__wallpaperMotion;
 
-    // last chance: resolve remaining mobile slug → bytes
+    // last chance: resolve remaining mobile slug → bytes (still not Desktop)
     if (!wallpaper && wallpaperSlug) {
       const img = await this.downloadWallpaperBySlug(client, wallpaperSlug);
       if (img) {
@@ -3292,15 +3292,17 @@ ${webPage.description ? `<br/>${webPage.description}` : ""}
       }
     }
 
-    // Desktop own wallpaper (separate from mobile shared wallpaper)
-    const desktopPick = pickDesktopWallpaper(parsedByFmt, wallpaper);
-    const desktopWallpaper = desktopPick.wallpaper;
+    // Desktop own wallpaper (SEPARATE — never fed into mobile shared wallpaper)
+    const desktopPick = pickDesktopWallpaper(parsedByFmt, null /* do not inject mobile into desktop pick source label */);
+    // If Desktop has no own wp but mobile has one, Desktop may use mobile (ok for desktop)
+    const desktopWallpaper = desktopPick.wallpaper || wallpaper;
     const wallpaperTiled = desktopPick.tiled;
+    const desktopKeptOwn = desktopPick.keptOwn;
 
     logger.info(
       `[theme] wallpaper pick slug=${slug}: mobileSrc=${wallpaperSource || "none"} ` +
-      `androidFile=${!!parsedByFmt.get("attheme")?.wallpaper} ` +
-      `desktopOwn=${desktopPick.keptOwn} mobileBytes=${!!wallpaper}`,
+      `androidWp=${!!normalizeWallpaper(parsedByFmt.get("attheme")?.wallpaper || null)} ` +
+      `desktopOwn=${desktopKeptOwn} mobileBytes=${!!wallpaper} desktopBytes=${!!desktopWallpaper}`,
     );
 
     if (bestDoc) {
@@ -3511,7 +3513,6 @@ ${webPage.description ? `<br/>${webPage.description}` : ""}
       const srcLabel = wallpaperSource === "attheme" ? "Android"
         : wallpaperSource === "ios-theme" || wallpaperSource === "ios-slug" ? "iOS"
         : wallpaperSource === "tgx-theme" ? "TGX"
-        : wallpaperSource === "tdesktop-theme" ? "Desktop(末位回退)"
         : wallpaperSource === "settings" ? "云端设置"
         : wallpaperSource || "unknown";
       await client.sendMedia(msg.chat.id, {
@@ -3520,30 +3521,42 @@ ${webPage.description ? `<br/>${webPage.description}` : ""}
         fileName: `${slug || "theme"}-chat-background.${ext}`,
         fileMime: ext === "png" ? "image/png" : "image/jpeg",
       } as any, {
-        caption: html`🖼️ <b>移动端聊天背景</b>（来源: ${srcLabel}${wallpaperSlug ? ` · slug: <code>${wallpaperSlug}</code>` : ""}；优先级 Android→iOS→TGX→settings→Desktop末位）`,
+        caption: html`🖼️ <b>移动端聊天背景</b>（来源: ${srcLabel}${wallpaperSlug ? ` · slug: <code>${wallpaperSlug}</code>` : ""}；仅 Android/iOS/TGX/settings，绝不使用 Desktop）`,
         replyTo: msg.id,
       });
       wpSidecarSent = true;
     }
 
-    const desktopOwn = desktopPick.keptOwn;
+    // Optional: if Desktop has own wallpaper and mobile has none, send Desktop bg as
+    // separate "Desktop-only background" sidecar so user can still grab it — NOT as mobile bg
+    if (!wallpaper && desktopKeptOwn && desktopWallpaper) {
+      const ext = detectImageExt(desktopWallpaper) === "png" ? "png" : "jpg";
+      await client.sendMedia(msg.chat.id, {
+        type: "document",
+        file: desktopWallpaper,
+        fileName: `${slug || "theme"}-desktop-background.${ext}`,
+        fileMime: ext === "png" ? "image/png" : "image/jpeg",
+      } as any, {
+        caption: html`🖥️ <b>Desktop 专用壁纸</b>（Android 主题无壁纸 · 未注入移动端，避免主体出画）`,
+        replyTo: msg.id,
+      });
+    }
 
     const mobileSrcLabel = wallpaperSource === "attheme" ? "Android"
       : wallpaperSource === "ios-theme" || wallpaperSource === "ios-slug" ? "iOS"
       : wallpaperSource === "tgx-theme" ? "TGX"
-      : wallpaperSource === "tdesktop-theme" ? "Desktop(仅末位回退)"
       : wallpaperSource === "settings" ? "云端设置"
-      : wallpaperSource || "无";
+      : "无（Android 未嵌入，不回退 Desktop）";
 
     await msg.edit({
       text: html`
 🎨 <b>${title}</b>
 🔗 <code>t.me/addtheme/${slug}</code>
 📊 源: ${synthesized ? "云端颜色设置" : `${sourceFmts.map(f => FORMAT_LABELS[f]).join(" + ") || FORMAT_LABELS[bestFmt]}（合并 ${bestCount} 色）`}
-${wallpaper || wallpaperSlug ? `<br/>🖼️ 移动端壁纸: <b>${mobileSrcLabel}</b>${wallpaperSlug ? ` · slug <code>${wallpaperSlug}</code>` : ""}` : "<br/>🖼️ 移动端壁纸: 无"}
-${desktopOwn ? "<br/>🖥️ Desktop 使用自带壁纸（不覆盖）" : wallpaper ? "<br/>🖥️ Desktop 无原图 → 使用移动端壁纸" : ""}
+<br/>🖼️ 移动端壁纸: <b>${mobileSrcLabel}</b>${wallpaperSlug ? ` · slug <code>${wallpaperSlug}</code>` : ""}
+${desktopKeptOwn ? "<br/>🖥️ Desktop 使用自带壁纸（不注入移动端）" : wallpaper ? "<br/>🖥️ Desktop 无原图 → 使用移动端壁纸" : ""}
 <br/>✅ 已输出: ${sent.join(" · ") || "无"}
-<br/><i>壁纸: Android 绝对优先 · Desktop 绝不污染移动端 · 仅无移动源时才末位回退 Desktop</i>
+<br/><i>壁纸规则: 移动端=Android/iOS/TGX/settings · Desktop 原图仅给 Desktop · 禁止 Desktop→Mobile 回退</i>
       `,
     });
   }
