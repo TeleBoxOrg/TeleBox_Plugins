@@ -1123,7 +1123,7 @@ class YvluPlugin extends Plugin {
                   if (emojiBuffer) {
                     emojiStatusPayload = {
                       custom_emoji_id: emojiId,
-                      customEmojiBuffer: emojiBuffer,
+                      customEmojiBuffer: emojiBuffer.toString("base64"),
                     };
                   }
                 } catch (e) {
