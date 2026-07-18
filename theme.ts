@@ -32,7 +32,10 @@ const API_MIME: Record<ThemeFormat, string> = {
 interface ThemeDoc {
   format: ThemeFormat;
   colors: Record<string, string>;
-  wallpaper?: any;
+  /** Raw wallpaper image bytes (JPEG/PNG), without WPS/WPE wrappers */
+  wallpaper?: Buffer | null;
+  /** Desktop tiled wallpaper flag */
+  wallpaperTiled?: boolean;
 }
 
 const FORMAT_LABELS: Record<ThemeFormat, string> = {
@@ -110,6 +113,190 @@ function adjustBright(hex: string, pct: number): string {
 }
 
 function toRgb(hex: string): string { return hex.length === 9 ? "#" + hex.slice(3) : hex; }
+
+// ─── Wallpaper / ZIP helpers ─────────────────────────────────────────────────
+
+function isJpeg(buf: Buffer): boolean {
+  return buf.length >= 3 && buf[0] === 0xff && buf[1] === 0xd8 && buf[2] === 0xff;
+}
+function isPng(buf: Buffer): boolean {
+  return buf.length >= 8 && buf[0] === 0x89 && buf[1] === 0x50 && buf[2] === 0x4e && buf[3] === 0x47;
+}
+function isZip(buf: Buffer): boolean {
+  return buf.length >= 4 && buf[0] === 0x50 && buf[1] === 0x4b && (buf[2] === 0x03 || buf[2] === 0x05 || buf[2] === 0x07);
+}
+function detectImageExt(buf: Buffer): "jpg" | "png" | null {
+  if (isJpeg(buf)) return "jpg";
+  if (isPng(buf)) return "png";
+  return null;
+}
+
+/** Strip accidental WPS/WPE wrappers; return pure image bytes or null */
+function normalizeWallpaper(raw: Buffer | null | undefined): Buffer | null {
+  if (!raw || raw.length < 16) return null;
+  let b = Buffer.isBuffer(raw) ? raw : Buffer.from(raw as any);
+  // strip leading WPS\n
+  if (b.length >= 4 && b.subarray(0, 4).equals(Buffer.from("WPS\n"))) b = b.subarray(4);
+  // strip trailing \nWPE\n or WPE\n
+  if (b.length >= 5 && b.subarray(b.length - 5).equals(Buffer.from("\nWPE\n"))) b = b.subarray(0, b.length - 5);
+  else if (b.length >= 4 && b.subarray(b.length - 4).equals(Buffer.from("WPE\n"))) b = b.subarray(0, b.length - 4);
+  if (!detectImageExt(b)) {
+    // search for embedded jpeg/png signature
+    const j = b.indexOf(Buffer.from([0xff, 0xd8, 0xff]));
+    const p = b.indexOf(Buffer.from([0x89, 0x50, 0x4e, 0x47]));
+    let start = -1;
+    if (j >= 0 && (p < 0 || j < p)) start = j;
+    else if (p >= 0) start = p;
+    if (start > 0) b = b.subarray(start);
+    if (!detectImageExt(b)) return null;
+  }
+  return b;
+}
+
+function crc32(buf: Buffer): number {
+  let c = ~0;
+  for (let i = 0; i < buf.length; i++) {
+    c ^= buf[i];
+    for (let k = 0; k < 8; k++) c = (c >>> 1) ^ (0xedb88320 & -(c & 1));
+  }
+  return (~c) >>> 0;
+}
+function u16le(n: number): Buffer { const b = Buffer.alloc(2); b.writeUInt16LE(n >>> 0, 0); return b; }
+function u32le(n: number): Buffer { const b = Buffer.alloc(4); b.writeUInt32LE(n >>> 0, 0); return b; }
+
+/** Create a store-only ZIP (method 0) — enough for tdesktop theme packages */
+function makeZip(files: Array<[string, Buffer]>): Buffer {
+  const locals: Buffer[] = [];
+  const centrals: Buffer[] = [];
+  let offset = 0;
+  for (const [name, data] of files) {
+    const nameBuf = Buffer.from(name, "utf8");
+    const crc = crc32(data);
+    const local = Buffer.concat([
+      u32le(0x04034b50), u16le(20), u16le(0), u16le(0), u16le(0), u16le(0),
+      u32le(crc), u32le(data.length), u32le(data.length), u16le(nameBuf.length), u16le(0),
+      nameBuf, data,
+    ]);
+    const central = Buffer.concat([
+      u32le(0x02014b50), u16le(20), u16le(20), u16le(0), u16le(0), u16le(0), u16le(0),
+      u32le(crc), u32le(data.length), u32le(data.length), u16le(nameBuf.length), u16le(0),
+      u16le(0), u16le(0), u16le(0), u32le(0), u32le(offset),
+      nameBuf,
+    ]);
+    locals.push(local);
+    centrals.push(central);
+    offset += local.length;
+  }
+  const centralDir = Buffer.concat(centrals);
+  const end = Buffer.concat([
+    u32le(0x06054b50), u16le(0), u16le(0), u16le(files.length), u16le(files.length),
+    u32le(centralDir.length), u32le(offset), u16le(0),
+  ]);
+  return Buffer.concat([...locals, centralDir, end]);
+}
+
+/** Parse local-file entries from a ZIP (store or deflate) */
+function parseZip(buf: Buffer): Record<string, Buffer> {
+  const zlib = require("zlib") as typeof import("zlib");
+  const out: Record<string, Buffer> = {};
+  let i = 0;
+  while (i + 30 <= buf.length) {
+    const sig = buf.readUInt32LE(i);
+    if (sig !== 0x04034b50) break;
+    const method = buf.readUInt16LE(i + 8);
+    const flags = buf.readUInt16LE(i + 6);
+    let comp = buf.readUInt32LE(i + 18);
+    const nlen = buf.readUInt16LE(i + 26);
+    const elen = buf.readUInt16LE(i + 28);
+    const name = buf.subarray(i + 30, i + 30 + nlen).toString("utf8");
+    let start = i + 30 + nlen + elen;
+    // data descriptor when bit 3 set and sizes zero
+    if ((flags & 0x8) && comp === 0) {
+      // scan for next local header or data descriptor — rare for theme zips; skip if empty
+      break;
+    }
+    let data = buf.subarray(start, start + comp);
+    if (method === 8) {
+      try { data = zlib.inflateRawSync(data); } catch { /* keep raw */ }
+    } else if (method !== 0) {
+      i = start + comp;
+      continue;
+    }
+    out[name] = Buffer.from(data);
+    // also index by basename lower
+    const base = name.split("/").pop() || name;
+    if (base !== name) out[base] = out[name];
+    i = start + comp;
+  }
+  return out;
+}
+
+function parseDesktopColorText(text: string): Record<string, string> {
+  const raw: Record<string, string> = {};
+  for (const line of text.split("\n")) {
+    const s = line.trim();
+    if (!s || s.startsWith("//")) continue;
+    // support multiple "key: val;" on one line
+    const parts = s.split(";").map(x => x.trim()).filter(Boolean);
+    for (const part of parts) {
+      const col = part.indexOf(":");
+      if (col <= 0) continue;
+      const k = part.slice(0, col).trim();
+      const v = part.slice(col + 1).trim();
+      if (k && v) raw[k] = v;
+    }
+  }
+  const colors: Record<string, string> = {};
+  for (const [k, v] of Object.entries(raw)) {
+    if (v.startsWith("#")) colors[k] = v;
+    else if (raw[v]?.startsWith("#")) colors[k] = raw[v];
+    else if (/^[0-9a-fA-F]{6,8}$/.test(v)) colors[k] = `#${v}`;
+    else colors[k] = v.startsWith("#") ? v : (raw[v] || v);
+  }
+  return colors;
+}
+
+function extractDesktopWallpaper(files: Record<string, Buffer>): { wallpaper: Buffer | null; tiled: boolean } {
+  const names = Object.keys(files);
+  const lower = (n: string) => n.toLowerCase();
+  const find = (cands: string[]) => {
+    for (const c of cands) {
+      const hit = names.find(n => lower(n) === c || lower(n).endsWith("/" + c));
+      if (hit && files[hit]?.length) return files[hit];
+    }
+    return null;
+  };
+  const tiled = !!(find(["tiled.jpg", "tiled.jpeg", "tiled.png"]));
+  const wp = find(["background.jpg", "background.jpeg", "background.png", "tiled.jpg", "tiled.jpeg", "tiled.png"]);
+  return { wallpaper: normalizeWallpaper(wp), tiled };
+}
+
+/** Attach wallpaper into Android .attheme bytes */
+function attachAtthemeWallpaper(colorText: string, wallpaper: Buffer | null | undefined): Buffer {
+  const text = colorText.endsWith("\n") ? colorText : colorText + "\n";
+  const parts: Buffer[] = [Buffer.from(text, "utf-8")];
+  const wp = normalizeWallpaper(wallpaper || null);
+  if (wp) {
+    parts.push(Buffer.from("WPS\n"), wp, Buffer.from("\nWPE\n"));
+  }
+  return Buffer.concat(parts);
+}
+
+/** Build Desktop theme package: ZIP with colors + background when wallpaper present */
+function buildDesktopTheme(colorText: string, wallpaper: Buffer | null | undefined, tiled = false): Buffer {
+  const colorsBuf = Buffer.from(colorText.endsWith("\n") ? colorText : colorText + "\n", "utf-8");
+  const wp = normalizeWallpaper(wallpaper || null);
+  if (!wp) {
+    // plain palette file is valid for desktop (no chat wallpaper)
+    return colorsBuf;
+  }
+  const ext = detectImageExt(wp) === "png" ? "png" : "jpg";
+  const bgName = tiled ? `tiled.${ext}` : `background.${ext}`;
+  return makeZip([
+    ["colors.tdesktop-theme", colorsBuf],
+    [bgName, wp],
+  ]);
+}
 
 /** Normalize to #RRGGBB / #AARRGGBB for TGX (#-prefixed) */
 function toTgxColor(hex: string): string {
@@ -1026,7 +1213,7 @@ function parseAttheme(buf: Buffer): ThemeDoc | null {
   try {
     const colors: Record<string, string> = {};
     const wps = Buffer.from("WPS\n");
-    const wpe = Buffer.from("\nWPE\n");
+    // WPE may appear as \nWPE\n or WPE\n
     const wpsIdx = buf.indexOf(wps);
     const textEnd = wpsIdx !== -1 ? wpsIdx : buf.length;
     for (const line of buf.subarray(0, textEnd).toString("utf-8").split("\n")) {
@@ -1037,11 +1224,16 @@ function parseAttheme(buf: Buffer): ThemeDoc | null {
       const pv = parseColor(s.slice(eq + 1).trim());
       if (pv) colors[s.slice(0, eq).trim()] = pv;
     }
-    let wallpaper: any = null;
+    let wallpaper: Buffer | null = null;
     if (wpsIdx !== -1) {
       const imgStart = wpsIdx + wps.length;
-      const wpeIdx = buf.indexOf(wpe, imgStart);
-      wallpaper = buf.subarray(imgStart, wpeIdx !== -1 ? wpeIdx : buf.length);
+      // find WPE marker near end
+      let imgEnd = buf.length;
+      const wpe1 = buf.indexOf(Buffer.from("\nWPE\n"), imgStart);
+      const wpe2 = buf.indexOf(Buffer.from("WPE\n"), imgStart);
+      if (wpe1 !== -1) imgEnd = wpe1;
+      else if (wpe2 !== -1) imgEnd = wpe2;
+      wallpaper = normalizeWallpaper(buf.subarray(imgStart, imgEnd));
     }
     return { format: "attheme", colors, wallpaper };
   } catch { return null; }
@@ -1049,21 +1241,52 @@ function parseAttheme(buf: Buffer): ThemeDoc | null {
 
 function parseDesktop(buf: Buffer): ThemeDoc | null {
   try {
-    const raw: Record<string, string> = {};
-    for (const line of buf.toString("utf-8").split("\n")) {
-      const s = line.trim();
-      if (!s || s.startsWith("//")) continue;
-      const semi = s.indexOf(";");
-      const c = semi !== -1 ? s.slice(0, semi) : s;
-      const col = c.indexOf(":");
-      if (col <= 0) continue;
-      const k = c.slice(0, col).trim();
-      const v = c.slice(col + 1).trim();
-      if (k && v) raw[k] = v;
+    // ZIP package: colors.tdesktop-theme + background.jpg/png
+    if (isZip(buf)) {
+      const files = parseZip(buf);
+      const names = Object.keys(files);
+      const colorName = names.find(n => {
+        const l = n.toLowerCase();
+        return l.endsWith("colors.tdesktop-theme") || l.endsWith("colors.tdesktop-palette") || l.endsWith(".tdesktop-theme") || l.endsWith(".tdesktop-palette");
+      });
+      // Prefer explicit colors.* name
+      let colorBuf: Buffer | null = null;
+      for (const prefer of ["colors.tdesktop-theme", "colors.tdesktop-palette"]) {
+        const hit = names.find(n => n.toLowerCase() === prefer || n.toLowerCase().endsWith("/" + prefer));
+        if (hit) { colorBuf = files[hit]; break; }
+      }
+      if (!colorBuf && colorName) colorBuf = files[colorName];
+      if (!colorBuf) {
+        // any non-image text file
+        for (const n of names) {
+          const f = files[n];
+          if (f && !detectImageExt(f) && f.toString("utf-8", 0, Math.min(200, f.length)).includes(":")) {
+            colorBuf = f; break;
+          }
+        }
+      }
+      if (!colorBuf) return null;
+      const colors = parseDesktopColorText(colorBuf.toString("utf-8"));
+      const { wallpaper, tiled } = extractDesktopWallpaper(files);
+      return { format: "tdesktop-theme", colors, wallpaper, wallpaperTiled: tiled };
     }
-    const colors: Record<string, string> = {};
-    for (const [k, v] of Object.entries(raw)) colors[k] = v.startsWith("#") ? v : (raw[v] || v);
-    return { format: "tdesktop-theme", colors };
+
+    // Plain palette text (optionally with trailing binary wrongly concatenated — try recover)
+    let text = buf.toString("utf-8");
+    let wallpaper: Buffer | null = null;
+    // If binary jpeg/png appended after text (old broken export), recover it
+    const j = buf.indexOf(Buffer.from([0xff, 0xd8, 0xff]));
+    const p = buf.indexOf(Buffer.from([0x89, 0x50, 0x4e, 0x47]));
+    let imgAt = -1;
+    if (j > 50 && (p < 0 || j < p)) imgAt = j;
+    else if (p > 50) imgAt = p;
+    if (imgAt > 0) {
+      text = buf.subarray(0, imgAt).toString("utf-8");
+      wallpaper = normalizeWallpaper(buf.subarray(imgAt));
+    }
+    const colors = parseDesktopColorText(text);
+    if (!Object.keys(colors).length) return null;
+    return { format: "tdesktop-theme", colors, wallpaper };
   } catch { return null; }
 }
 
@@ -1179,7 +1402,10 @@ function parseIos(buf: Buffer): ThemeDoc | null {
 }
 
 function detectFmt(buf: Buffer): ThemeFormat | null {
-  const t = buf.toString("utf-8").trim();
+  if (!buf || buf.length === 0) return null;
+  // ZIP = desktop theme package
+  if (isZip(buf)) return "tdesktop-theme";
+  const t = buf.toString("utf-8", 0, Math.min(buf.length, 4096)).trim();
   // Real TGX text format
   if (t.startsWith("!") || (t.includes("\n#\n") && (t.includes("filling") || t.includes("bubbleIn_background") || t.includes("parentTheme")))) {
     return "tgx-theme";
@@ -1191,7 +1417,7 @@ function detectFmt(buf: Buffer): ThemeFormat | null {
   // JSON (legacy / accidental)
   if (t[0] === "{" || t[0] === "[") {
     try {
-      const obj = JSON.parse(t);
+      const obj = JSON.parse(buf.toString("utf-8").trim());
       if (typeof obj === "object" && obj !== null) {
         if (obj.backgroundColor || obj.navigationBarBackground || obj.chatIncomingBubble) return "ios-theme";
         if (obj.bubbleIn_background || obj.chatListBackground || obj.headerBackground || obj.filling) return "tgx-theme";
@@ -1201,35 +1427,36 @@ function detectFmt(buf: Buffer): ThemeFormat | null {
       }
     } catch { /* */ }
   }
-  if (t.split("\n").some((l: string) => (l.includes("=") && !l.trim().startsWith("//")) || l.includes("WPS"))) return "attheme";
+  // Android with or without wallpaper
+  if (buf.includes(Buffer.from("WPS\n")) || t.split("\n").some((l: string) => l.includes("=") && !l.trim().startsWith("//") && !l.includes(":"))) {
+    // prefer attheme if key=value color lines present
+    if (t.split("\n").some((l: string) => /^[A-Za-z0-9_]+=/.test(l.trim()))) return "attheme";
+  }
   if (t.split("\n").some((l: string) => l.includes(":") && l.includes(";"))) return "tdesktop-theme";
+  if (t.split("\n").some((l: string) => (l.includes("=") && !l.trim().startsWith("//")) || l.includes("WPS"))) return "attheme";
   return null;
 }
 
 function renderDoc(doc: ThemeDoc, target: ThemeFormat, name = "TeleBox Theme"): Buffer | null {
   try {
-    const df = doc.format;
-    if (df === "attheme" && target === "tdesktop-theme") {
-      const buf = Buffer.from(genDesktop(doc.colors), "utf-8");
-      if (doc.wallpaper && doc.wallpaper.length > 10) return Buffer.concat([buf, Buffer.from("\n\n"), doc.wallpaper] as any);
-      return buf;
+    const wp = normalizeWallpaper(doc.wallpaper || null);
+    const tiled = !!doc.wallpaperTiled;
+    const withWp: ThemeDoc = { ...doc, wallpaper: wp, wallpaperTiled: tiled };
+
+    if (target === "attheme") {
+      // Always re-render colors + re-attach wallpaper so conversions keep chat background
+      const text = genAndroid(withWp.colors).join("\n") + "\n";
+      return attachAtthemeWallpaper(text, wp);
     }
-    if (target === "attheme" && (df === "tdesktop-theme" || df === "tgx-theme" || df === "ios-theme")) {
-      const text = genAndroid(doc.colors).join("\n") + "\n";
-      const parts: any[] = [Buffer.from(text, "utf-8")];
-      if (doc.wallpaper && doc.wallpaper.length > 10) {
-        parts.push(Buffer.from("WPS\n"), doc.wallpaper);
-        if (!Buffer.from(doc.wallpaper).slice(-5).equals(Buffer.from("\nWPE\n"))) parts.push(Buffer.from("\nWPE\n"));
-      }
-      return Buffer.concat(parts);
+    if (target === "tdesktop-theme") {
+      return buildDesktopTheme(genDesktop(withWp.colors), wp, tiled);
     }
-    if (target === "tgx-theme") return Buffer.from(genTgx(doc.colors, name), "utf-8");
-    if (target === "ios-theme") return Buffer.from(genIos(doc.colors, name), "utf-8");
-    if (target === "tdesktop-theme") return Buffer.from(genDesktop(doc.colors), "utf-8");
-    if (target === "attheme" && df === "attheme") {
-      // re-render same format
-      const text = genAndroid(doc.colors).join("\n") + "\n";
-      return Buffer.from(text, "utf-8");
+    if (target === "tgx-theme") {
+      // TGX file format has no embedded image; keep wallpaper on ThemeDoc for sidecar send
+      return Buffer.from(genTgx(withWp.colors, name), "utf-8");
+    }
+    if (target === "ios-theme") {
+      return Buffer.from(genIos(withWp.colors, name), "utf-8");
     }
     return null;
   } catch { return null; }
@@ -1366,10 +1593,10 @@ class ThemePlugin extends Plugin {
       }
 
       const cc = Object.keys(doc.colors).length;
-      const hasWp = doc.wallpaper && doc.wallpaper.length > 10;
+      const hasWp = !!(normalizeWallpaper(doc.wallpaper || null));
       const targets = (["attheme", "tdesktop-theme", "tgx-theme", "ios-theme"] as ThemeFormat[]).filter(f => f !== format) as ThemeFormat[];
 
-      // convert to all targets
+      // convert to all targets (wallpaper preserved via renderDoc)
       const converted: { target: ThemeFormat; result: Buffer | null }[] = targets.map(t => ({
         target: t,
         result: renderDoc(doc, t),
@@ -1380,17 +1607,17 @@ class ThemePlugin extends Plugin {
       await msg.edit({
         text: html`
 ✅ <b>已识别</b> ${FORMAT_LABELS[format]}
-📊 ${cc} 个颜色变量${hasWp ? "<br/>🖼️ 壁纸已嵌入" : ""}
+📊 ${cc} 个颜色变量${hasWp ? "<br/>🖼️ 聊天背景已提取" : ""}
 
 <b>转换：${count}/${targets.length} 个格式</b>
 
-${converted.map((c, i) => {
+${converted.map((c) => {
   const ok = c.result !== null;
   const label = FORMAT_LABELS[c.target];
   return `${ok ? "✅" : "❌"} ${label}`;
 }).join("<br/>")}
 
-<i>回复文件使用</i> <code>${mainPrefix}theme ${"{"}android|desktop|tgx|ios${"}"}</code> <i>转换到单格式</i>
+<i>回复文件使用</i> <code>${mainPrefix}theme ${"{"}android|desktop|tgx|ios{"}"}</code> <i>转换到单格式</i>
         `,
       });
 
@@ -1398,6 +1625,7 @@ ${converted.map((c, i) => {
       for (let i = 0; i < converted.length; i++) {
         const c = converted[i];
         if (!c.result) continue;
+        const emb = hasWp && (c.target === "attheme" || c.target === "tdesktop-theme");
         await client.sendMedia(msg.chat.id, {
           type: "document",
           file: c.result,
@@ -1406,8 +1634,23 @@ ${converted.map((c, i) => {
         } as any, {
           caption: html`
 ✅ <b>${FORMAT_LABELS[format]}</b> → <b>${FORMAT_LABELS[c.target]}</b>
-📊 ${cc} 个颜色变量${hasWp ? "<br/>🖼️ 壁纸已保留" : ""}
+📊 ${cc} 个颜色变量${emb ? "<br/>🖼️ 壁纸已嵌入" : hasWp ? "<br/>🖼️ 壁纸见附图" : ""}
           `,
+          replyTo: msg.id,
+        });
+      }
+
+      // Sidecar wallpaper for TGX/iOS (and any path that cannot embed)
+      const wp = normalizeWallpaper(doc.wallpaper || null);
+      if (wp) {
+        const ext = detectImageExt(wp) === "png" ? "png" : "jpg";
+        await client.sendMedia(msg.chat.id, {
+          type: "document",
+          file: wp,
+          fileName: `theme-chat-background.${ext}`,
+          fileMime: ext === "png" ? "image/png" : "image/jpeg",
+        } as any, {
+          caption: html`🖼️ <b>聊天背景</b>（Android/Desktop 已嵌入主题；TGX/iOS 请手动设为聊天背景）`,
           replyTo: msg.id,
         });
       }
@@ -1481,6 +1724,12 @@ ${converted.map((c, i) => {
     if (source.settings && (source.settings._ === "themeSettings" || source.settings.accentColor != null)) {
       return source.settings;
     }
+    // theme.settings is Vector<ThemeSettings>
+    if (Array.isArray(source.settings)) {
+      for (const s of source.settings) {
+        if (s && (s._ === "themeSettings" || s.accentColor != null || s.wallpaper)) return s;
+      }
+    }
     for (const attr of source.attributes || []) {
       if (attr._ === "webPageAttributeTheme") {
         if (attr.settings) return attr.settings;
@@ -1489,19 +1738,48 @@ ${converted.map((c, i) => {
     return null;
   }
 
-  /** If only settings exist, synthesize all client formats from accent colors */
+  /** Download wallpaper image document from themeSettings.wallpaper (wallPaper) */
+  private async downloadWallpaperFromSettings(
+    client: Awaited<ReturnType<typeof getGlobalClient>>,
+    settings: any,
+  ): Promise<Buffer | null> {
+    try {
+      const wp = settings?.wallpaper;
+      if (!wp) return null;
+      // wallPaper { document } | wallPaperNoFile
+      if (wp._ === "wallPaper" && wp.document?._ === "document") {
+        return await this.downloadTlDocument(client, wp.document);
+      }
+      if (wp.document?._ === "document") {
+        return await this.downloadTlDocument(client, wp.document);
+      }
+      return null;
+    } catch (e) {
+      logger.warn("[theme] wallpaper download failed:", getErrorMessage(e));
+      return null;
+    }
+  }
+
+  /** If only settings exist, synthesize all client formats from accent colors (+ wallpaper) */
   private synthesizeFromSettings(
     settings: any,
     title: string,
+    wallpaper?: Buffer | null,
   ): Record<string, { format: ThemeFormat; buf: Buffer }> | null {
     const colors = colorsFromThemeSettings(settings);
     if (!Object.keys(colors).length) return null;
-    const doc: ThemeDoc = { format: "attheme", colors };
+    const doc: ThemeDoc = {
+      format: "attheme",
+      colors,
+      wallpaper: normalizeWallpaper(wallpaper || null),
+    };
     const fmtMap: Record<string, { format: ThemeFormat; buf: Buffer }> = {};
     for (const format of ["attheme", "tdesktop-theme", "tgx-theme", "ios-theme"] as ThemeFormat[]) {
       const buf = renderDoc(doc, format, title);
       if (buf) fmtMap[format] = { format, buf };
     }
+    // stash wallpaper for sidecar send via special key on first entry — callers use parse path
+    (fmtMap as any).__wallpaper = doc.wallpaper || null;
     return Object.keys(fmtMap).length ? fmtMap : null;
   }
 
@@ -1645,9 +1923,10 @@ ${converted.map((c, i) => {
       // Many installable themes only ship settings (no document). Clients still
       // install them; we generate .attheme / .tdesktop-theme / .tgx-theme / .tgios-theme.
       if (settingsFallback) {
-        const synth = this.synthesizeFromSettings(settingsFallback, themeTitle);
+        const cloudWp = await this.downloadWallpaperFromSettings(client, settingsFallback);
+        const synth = this.synthesizeFromSettings(settingsFallback, themeTitle, cloudWp);
         if (synth) {
-          await this.sendThemeResults(msg, themeTitle, slug, synth, true);
+          await this.sendThemeResults(msg, themeTitle, slug, synth, true, cloudWp);
           return;
         }
       }
@@ -1685,11 +1964,13 @@ ${webPage.description ? `<br/>${webPage.description}` : ""}
     slug: string,
     fmtMap: Record<string, { format: ThemeFormat; buf: Buffer }>,
     synthesized = false,
+    extraWallpaper?: Buffer | null,
   ): Promise<void> {
     const client = await getGlobalClient();
     const byFormat = new Map<ThemeFormat, Buffer>();
-    for (const info of Object.values(fmtMap)) {
-      if (!byFormat.has(info.format)) byFormat.set(info.format, info.buf);
+    for (const [k, info] of Object.entries(fmtMap)) {
+      if (k.startsWith("__")) continue;
+      if (info && info.format && info.buf && !byFormat.has(info.format)) byFormat.set(info.format, info.buf);
     }
 
     let bestDoc: ThemeDoc | null = null;
@@ -1707,16 +1988,33 @@ ${webPage.description ? `<br/>${webPage.description}` : ""}
       }
     }
 
+    // Merge wallpaper from richest source + any extras (cloud settings / stashed)
+    let wallpaper = normalizeWallpaper(bestDoc?.wallpaper || null)
+      || normalizeWallpaper(extraWallpaper || null)
+      || normalizeWallpaper((fmtMap as any).__wallpaper || null);
+    // Prefer wallpaper embedded in any original buffer (e.g. attheme/desktop)
+    if (!wallpaper) {
+      for (const [fmt, buf] of byFormat) {
+        const parser = fmt === "attheme" ? parseAttheme : fmt === "tdesktop-theme" ? parseDesktop : null;
+        if (!parser) continue;
+        const d = parser(buf);
+        const w = normalizeWallpaper(d?.wallpaper || null);
+        if (w) { wallpaper = w; break; }
+      }
+    }
+    if (bestDoc) {
+      bestDoc = { ...bestDoc, wallpaper };
+    }
+
     // If originals failed parse but we have buffers that are already rendered, still send them
     if (!bestDoc || !bestFmt) {
-      // try treat first buffer as synthetic attheme colors via detect
       for (const [fmt, buf] of byFormat) {
         const det = detectFmt(buf);
         if (!det) continue;
         const parser = det === "attheme" ? parseAttheme : det === "tdesktop-theme" ? parseDesktop : det === "tgx-theme" ? parseTgx : parseIos;
         const doc = parser(buf);
         if (doc && Object.keys(doc.colors).length > bestCount) {
-          bestDoc = doc;
+          bestDoc = { ...doc, wallpaper: normalizeWallpaper(doc.wallpaper) || wallpaper };
           bestFmt = det;
           bestCount = Object.keys(doc.colors).length;
         }
@@ -1724,7 +2022,6 @@ ${webPage.description ? `<br/>${webPage.description}` : ""}
     }
 
     if (!bestDoc || !bestFmt) {
-      // Last chance: send raw files as-is with correct extensions
       const sentRaw: string[] = [];
       for (const [fmt, buf] of byFormat) {
         await client.sendMedia(msg.chat.id, {
@@ -1752,30 +2049,70 @@ ${webPage.description ? `<br/>${webPage.description}` : ""}
       return;
     }
 
+    // Ensure conversions re-embed wallpaper even when using "original" buffer that lacks it
+    const ensureWallpaper = (target: ThemeFormat, buf: Buffer): Buffer => {
+      if (!wallpaper) return buf;
+      if (target === "attheme") {
+        const parsed = parseAttheme(buf);
+        if (parsed && !normalizeWallpaper(parsed.wallpaper)) {
+          return renderDoc({ ...bestDoc!, wallpaper }, "attheme", title) || buf;
+        }
+      }
+      if (target === "tdesktop-theme") {
+        if (isZip(buf)) {
+          const parsed = parseDesktop(buf);
+          if (parsed && !normalizeWallpaper(parsed.wallpaper)) {
+            return renderDoc({ ...bestDoc!, wallpaper }, "tdesktop-theme", title) || buf;
+          }
+        } else {
+          // plain palette without zip — rebuild package with wallpaper
+          return renderDoc({ ...bestDoc!, wallpaper }, "tdesktop-theme", title) || buf;
+        }
+      }
+      return buf;
+    };
+
     const allTargets = (["attheme", "tdesktop-theme", "tgx-theme", "ios-theme"] as ThemeFormat[]);
     const sent: string[] = [];
+    let wpSidecarSent = false;
 
     for (const target of allTargets) {
       let out: Buffer | null = null;
       let fromLabel: string;
       if (byFormat.has(target)) {
-        out = byFormat.get(target)!;
+        out = ensureWallpaper(target, byFormat.get(target)!);
         fromLabel = synthesized ? "设置合成" : "原始";
       } else {
         out = renderDoc(bestDoc, target, title);
         fromLabel = FORMAT_LABELS[bestFmt];
       }
       if (!out) continue;
+      const hasWp = !!(wallpaper && (target === "attheme" || target === "tdesktop-theme"));
       await client.sendMedia(msg.chat.id, {
         type: "document",
         file: out,
         fileName: `${slug || "theme"}${FORMAT_EXT[target]}`,
         fileMime: API_MIME[target],
       } as any, {
-        caption: html`✅ <b>${FORMAT_LABELS[target]}</b>${fromLabel !== "原始" && fromLabel !== "设置合成" ? ` ← ${fromLabel}` : fromLabel === "设置合成" ? "（从云端颜色设置生成）" : "（原始）"} 📊 ${bestCount} 色`,
+        caption: html`✅ <b>${FORMAT_LABELS[target]}</b>${fromLabel !== "原始" && fromLabel !== "设置合成" ? ` ← ${fromLabel}` : fromLabel === "设置合成" ? "（从云端颜色设置生成）" : "（原始）"} 📊 ${bestCount} 色${hasWp ? " · 🖼️ 壁纸已嵌入" : ""}`,
         replyTo: msg.id,
       });
       sent.push(FORMAT_LABELS[target]);
+    }
+
+    // TGX/iOS 文件本身不嵌壁纸：附带聊天背景图供手动设置
+    if (wallpaper && !wpSidecarSent) {
+      const ext = detectImageExt(wallpaper) === "png" ? "png" : "jpg";
+      await client.sendMedia(msg.chat.id, {
+        type: "document",
+        file: wallpaper,
+        fileName: `${slug || "theme"}-chat-background.${ext}`,
+        fileMime: ext === "png" ? "image/png" : "image/jpeg",
+      } as any, {
+        caption: html`🖼️ <b>聊天背景</b>（TGX/iOS 主题文件不含嵌入壁纸，请在客户端「聊天背景」中手动设置此图）`,
+        replyTo: msg.id,
+      });
+      wpSidecarSent = true;
     }
 
     await msg.edit({
@@ -1783,6 +2120,7 @@ ${webPage.description ? `<br/>${webPage.description}` : ""}
 🎨 <b>${title}</b>
 🔗 <code>t.me/addtheme/${slug}</code>
 📊 源: ${synthesized ? "云端颜色设置" : `${FORMAT_LABELS[bestFmt]}（${bestCount} 色）`}
+${wallpaper ? "<br/>🖼️ 聊天背景已保留（Android/Desktop 已嵌入；TGX/iOS 见附图）" : ""}
 <br/>✅ 已输出: ${sent.join(" · ") || "无"}
 <br/><i>TGX/iOS 请点文件安装（.tgx-theme / .tgios-theme）</i>
       `,
@@ -1869,7 +2207,8 @@ ${webPage.description ? `<br/>${webPage.description}` : ""}
       const out = renderDoc(doc, target);
       if (!out) { await msg.edit({ text: html`❌ 转换失败` }); return; }
       const cc = Object.keys(doc.colors).length;
-      const hasWp = doc.wallpaper && doc.wallpaper.length > 10;
+      const wp = normalizeWallpaper(doc.wallpaper || null);
+      const emb = !!(wp && (target === "attheme" || target === "tdesktop-theme"));
       await msg.delete();
       await client.sendMedia(msg.chat.id, {
         type: "document",
@@ -1879,10 +2218,22 @@ ${webPage.description ? `<br/>${webPage.description}` : ""}
       } as any, {
         caption: html`
 ✅ <b>转换完成</b> ${TARGET_CLIENT_LABELS[target]}
-📊 ${cc} 个颜色变量${hasWp ? "<br/>🖼️ 壁纸已保留" : ""}
+📊 ${cc} 个颜色变量${emb ? "<br/>🖼️ 壁纸已嵌入" : wp ? "<br/>🖼️ 壁纸见附图" : ""}
         `,
         replyTo: msg.id,
       });
+      if (wp && !emb) {
+        const ext = detectImageExt(wp) === "png" ? "png" : "jpg";
+        await client.sendMedia(msg.chat.id, {
+          type: "document",
+          file: wp,
+          fileName: `theme-chat-background.${ext}`,
+          fileMime: ext === "png" ? "image/png" : "image/jpeg",
+        } as any, {
+          caption: html`🖼️ <b>聊天背景</b>`,
+          replyTo: msg.id,
+        });
+      }
     } catch (e) {
       await msg.edit({ text: html`❌ 转换失败: ${getErrorMessage(e)}` });
     }
