@@ -95,22 +95,54 @@ function toHex(r: number, g: number, b: number, a = 255): string {
 
 function parseColor(raw: string): string | null {
   const s = raw.trim();
+  if (!s) return null;
   if (s.startsWith("#")) {
     const h = s.slice(1);
     if (/^[0-9a-fA-F]{6}$/.test(h)) return `#${h}`;
     if (/^[0-9a-fA-F]{8}$/.test(h)) return `#${h}`;
     if (/^[0-9a-fA-F]{3}$/.test(h)) return `#${h[0]}${h[0]}${h[1]}${h[1]}${h[2]}${h[2]}`;
+    if (/^[0-9a-fA-F]{4}$/.test(h)) {
+      // #RGBA → #AARRGGBB
+      return `#${h[3]}${h[3]}${h[0]}${h[0]}${h[1]}${h[1]}${h[2]}${h[2]}`;
+    }
     return null;
   }
-  if (s.endsWith("h")) {
+  // rgb(r,g,b) / rgba(r,g,b,a)
+  const rgb = s.match(/^rgba?\(\s*([0-9.]+)\s*,\s*([0-9.]+)\s*,\s*([0-9.]+)(?:\s*,\s*([0-9.]+))?\s*\)$/i);
+  if (rgb) {
+    const r = Math.max(0, Math.min(255, Math.round(Number(rgb[1]))));
+    const g = Math.max(0, Math.min(255, Math.round(Number(rgb[2]))));
+    const b = Math.max(0, Math.min(255, Math.round(Number(rgb[3]))));
+    if (rgb[4] != null) {
+      const aF = Number(rgb[4]);
+      const a = aF <= 1 ? Math.round(aF * 255) : Math.round(aF);
+      if (a >= 0 && a < 255) return toHex(r, g, b, Math.max(0, Math.min(255, a)));
+    }
+    return toHex(r, g, b);
+  }
+  // 0xAARRGGBB / 0xRRGGBB
+  if (/^0x[0-9a-fA-F]{6,8}$/i.test(s)) {
+    const n = parseInt(s.slice(2), 16) >>> 0;
+    if (s.length === 10) {
+      // 0xAARRGGBB
+      return toHex((n >> 16) & 0xff, (n >> 8) & 0xff, n & 0xff, (n >> 24) & 0xff);
+    }
+    return toHex((n >> 16) & 0xff, (n >> 8) & 0xff, n & 0xff);
+  }
+  if (s.endsWith("h") || s.endsWith("H")) {
     try {
       const n = parseInt(s.slice(0, -1), 16) >>> 0;
+      // 8 hex digits → AARRGGBB
+      if (s.length === 9) return toHex((n >> 16) & 0xff, (n >> 8) & 0xff, n & 0xff, (n >> 24) & 0xff);
       return toHex((n >> 16) & 0xff, (n >> 8) & 0xff, n & 0xff);
     } catch { return null; }
   }
   try {
-    let n = parseInt(s);
-    if (isNaN(n)) return null;
+    // bare hex without # — must win over decimal parseInt("112233")
+    if (/^[0-9a-fA-F]{6}$/.test(s)) return `#${s}`;
+    if (/^[0-9a-fA-F]{8}$/.test(s)) return `#${s}`;
+    let n = parseInt(s, 10);
+    if (isNaN(n) || !/^-?\d+$/.test(s)) return null;
     if (n < 0) n = n >>> 0;
     const a = (n >> 24) & 0xff;
     const r = (n >> 16) & 0xff;
@@ -275,10 +307,27 @@ function makeZip(files: Array<[string, Buffer]>): Buffer {
   return Buffer.concat([...locals, centralDir, end]);
 }
 
-/** Parse local-file entries from a ZIP (store or deflate) */
+/** Parse local-file entries from a ZIP (store or deflate). Falls back to central directory. */
 function parseZip(buf: Buffer): Record<string, Buffer> {
   const zlib = require("zlib") as typeof import("zlib");
   const out: Record<string, Buffer> = {};
+
+  const inflate = (method: number, data: Buffer): Buffer => {
+    if (method === 8) {
+      try { return zlib.inflateRawSync(data); } catch { return data; }
+    }
+    return data;
+  };
+
+  const storeEntry = (name: string, data: Buffer) => {
+    out[name] = data;
+    const base = name.split("/").pop() || name;
+    if (base !== name) out[base] = data;
+    const lower = base.toLowerCase();
+    if (lower !== base) out[lower] = data;
+  };
+
+  // ── Pass 1: local file headers ──────────────────────────────────────
   let i = 0;
   while (i + 30 <= buf.length) {
     const sig = buf.readUInt32LE(i);
@@ -293,10 +342,8 @@ function parseZip(buf: Buffer): Record<string, Buffer> {
     let start = i + 30 + nlen + elen;
     let data: Buffer;
 
-    // Bit 3: data descriptor — sizes in local header may be zero; payload ends at descriptor
+    // Bit 3: data descriptor — sizes in local header may be zero
     if ((flags & 0x8) && (comp === 0 || uncomp === 0)) {
-      // Find data descriptor: optional PK\x07\x08 signature, then crc32 + comp + uncomp
-      // Scan for next local header / central dir, then walk back 12 or 16 bytes
       let scan = start;
       let next = -1;
       while (scan + 4 <= buf.length) {
@@ -305,54 +352,70 @@ function parseZip(buf: Buffer): Record<string, Buffer> {
           next = scan;
           break;
         }
-        // also stop at explicit data descriptor signature followed by plausible sizes
         if (s === 0x08074b50 && scan + 16 <= buf.length) {
-          // descriptor is right here — compressed data ends at scan
           next = scan;
           break;
         }
         scan++;
       }
       if (next < 0) next = buf.length;
-      // If descriptor has signature at next, data is [start, next)
-      // Else descriptor is 12 bytes before next (no signature)
       let end = next;
       if (next >= start + 16 && buf.readUInt32LE(next - 16) === 0x08074b50) {
         end = next - 16;
         comp = buf.readUInt32LE(next - 12);
-        uncomp = buf.readUInt32LE(next - 8);
-        // prefer declared comp size if it fits
         if (comp > 0 && start + comp <= next - 16) end = start + comp;
       } else if (next >= start + 12) {
-        // try 12-byte descriptor without signature
         const maybeComp = buf.readUInt32LE(next - 8);
         if (maybeComp > 0 && start + maybeComp === next - 12) {
           end = start + maybeComp;
           comp = maybeComp;
-          uncomp = buf.readUInt32LE(next - 4);
         }
       }
       data = buf.subarray(start, end);
       i = next;
-      // if descriptor signature sits at next, skip it
       if (i + 4 <= buf.length && buf.readUInt32LE(i) === 0x08074b50) i += 16;
-      else if (comp > 0 && start + comp + 12 <= buf.length && i === start + comp + 12) {
-        /* already positioned */
-      }
     } else {
       data = buf.subarray(start, start + comp);
       i = start + comp;
     }
 
-    if (method === 8) {
-      try { data = zlib.inflateRawSync(data); } catch { /* keep raw */ }
-    } else if (method !== 0) {
-      continue;
-    }
-    out[name] = Buffer.from(data);
-    const base = name.split("/").pop() || name;
-    if (base !== name) out[base] = out[name];
+    if (method !== 0 && method !== 8) continue;
+    storeEntry(name, Buffer.from(inflate(method, data)));
   }
+
+  // ── Pass 2: central directory fallback (if local pass got nothing / incomplete) ──
+  // Find EOCD (PK\x05\x06) near end, then walk central headers
+  let eocd = -1;
+  for (let p = Math.max(0, buf.length - 22 - 65535); p + 22 <= buf.length; p++) {
+    if (buf.readUInt32LE(p) === 0x06054b50) { eocd = p; break; }
+  }
+  if (eocd >= 0) {
+    const cdOffset = buf.readUInt32LE(eocd + 16);
+    const cdTotal = buf.readUInt16LE(eocd + 10);
+    let c = cdOffset;
+    for (let n = 0; n < cdTotal && c + 46 <= buf.length; n++) {
+      if (buf.readUInt32LE(c) !== 0x02014b50) break;
+      const method = buf.readUInt16LE(c + 10);
+      const comp = buf.readUInt32LE(c + 20);
+      const nlen = buf.readUInt16LE(c + 28);
+      const elen = buf.readUInt16LE(c + 30);
+      const clen = buf.readUInt16LE(c + 32);
+      const localOff = buf.readUInt32LE(c + 42);
+      const name = buf.subarray(c + 46, c + 46 + nlen).toString("utf8");
+      c += 46 + nlen + elen + clen;
+      if (out[name]) continue; // already have from local pass
+      if (localOff + 30 > buf.length) continue;
+      if (buf.readUInt32LE(localOff) !== 0x04034b50) continue;
+      const lnlen = buf.readUInt16LE(localOff + 26);
+      const lelen = buf.readUInt16LE(localOff + 28);
+      const dataStart = localOff + 30 + lnlen + lelen;
+      if (dataStart + comp > buf.length) continue;
+      if (method !== 0 && method !== 8) continue;
+      const data = buf.subarray(dataStart, dataStart + comp);
+      storeEntry(name, Buffer.from(inflate(method, data)));
+    }
+  }
+
   return out;
 }
 
@@ -401,14 +464,32 @@ function extractDesktopWallpaper(files: Record<string, Buffer>): { wallpaper: Bu
   const lower = (n: string) => n.toLowerCase();
   const find = (cands: string[]) => {
     for (const c of cands) {
-      const hit = names.find(n => lower(n) === c || lower(n).endsWith("/" + c));
+      const hit = names.find(n => lower(n) === c || lower(n).endsWith("/" + c) || lower(n).split("/").pop() === c);
       if (hit && files[hit]?.length) return files[hit];
     }
     return null;
   };
-  const tiled = !!(find(["tiled.jpg", "tiled.jpeg", "tiled.png"]));
-  const wp = find(["background.jpg", "background.jpeg", "background.png", "tiled.jpg", "tiled.jpeg", "tiled.png"]);
-  return { wallpaper: normalizeWallpaper(wp), tiled };
+  // Prefer explicit background/tiled names; then any image that looks like wallpaper
+  const tiledBuf = find(["tiled.jpg", "tiled.jpeg", "tiled.png", "tiled.webp"]);
+  const tiled = !!tiledBuf;
+  let wp = find([
+    "background.jpg", "background.jpeg", "background.png", "background.webp",
+    "background", "bg.jpg", "bg.jpeg", "bg.png",
+    "tiled.jpg", "tiled.jpeg", "tiled.png", "tiled.webp",
+  ]);
+  if (!wp) {
+    // last resort: largest jpeg/png in package (excluding colors file)
+    let best: Buffer | null = null;
+    for (const n of names) {
+      const l = lower(n);
+      if (l.includes("color") || l.endsWith(".tdesktop-theme") || l.endsWith(".tdesktop-palette")) continue;
+      const b = files[n];
+      if (!b || b.length < 100) continue;
+      if (detectImageExt(b) && (!best || b.length > best.length)) best = b;
+    }
+    wp = best;
+  }
+  return { wallpaper: normalizeWallpaper(wp || tiledBuf), tiled };
 }
 
 /** Non-color attheme keys that must never enter the palette map */
@@ -2922,6 +3003,27 @@ class ThemePlugin extends Plugin {
     retries = 2,
   ): Promise<Buffer | null> {
     if (!doc || doc._ !== "document") return null;
+
+    const sleep = (ms: number) => new Promise<void>(r => setTimeout(r, ms));
+    const floodWaitSec = (e: unknown): number => {
+      const msg = getErrorMessage(e);
+      const m = msg.match(/FLOOD_WAIT[_\s]?(\d+)/i) || msg.match(/wait of (\d+) seconds/i);
+      return m ? Math.min(30, Math.max(1, parseInt(m[1], 10))) : 0;
+    };
+    const migrateDc = (e: unknown): number | null => {
+      const msg = getErrorMessage(e);
+      const m = msg.match(/FILE_MIGRATE_(\d+)/i) || msg.match(/MIGRATE_(\d+)/i);
+      if (m) return parseInt(m[1], 10);
+      const anyE = e as any;
+      if (anyE?.dcId != null) return Number(anyE.dcId);
+      if (anyE?.errorMessage && /FILE_MIGRATE_(\d+)/.test(String(anyE.errorMessage))) {
+        return parseInt(String(anyE.errorMessage).match(/FILE_MIGRATE_(\d+)/)![1], 10);
+      }
+      return null;
+    };
+
+    let dcId = doc.dcId != null ? Number(doc.dcId) : undefined;
+
     for (let attempt = 0; attempt <= retries; attempt++) {
       try {
         const inputLoc = {
@@ -2936,10 +3038,20 @@ class ThemePlugin extends Plugin {
         // 1) FileLocation with positional (location, fileSize, dcId)
         try {
           const raw = await client.downloadAsBuffer(
-            new FileLocation(inputLoc, fileSize, doc.dcId) as any,
+            new FileLocation(inputLoc, fileSize, dcId) as any,
           );
           if (raw && (raw as any).length) return Buffer.from(raw as any);
         } catch (e) {
+          const fw = floodWaitSec(e);
+          if (fw > 0) {
+            logger.warn(`[theme] download FLOOD_WAIT ${fw}s`);
+            await sleep(fw * 1000);
+          }
+          const mig = migrateDc(e);
+          if (mig != null && mig !== dcId) {
+            logger.info(`[theme] FILE_MIGRATE → dc${mig}`);
+            dcId = mig;
+          }
           if (attempt === retries) logger.warn(`[theme] download FileLocation failed:`, getErrorMessage(e));
         }
 
@@ -2947,7 +3059,12 @@ class ThemePlugin extends Plugin {
         try {
           const raw = await client.downloadAsBuffer(inputLoc as any);
           if (raw && (raw as any).length) return Buffer.from(raw as any);
-        } catch { /* */ }
+        } catch (e) {
+          const fw = floodWaitSec(e);
+          if (fw > 0) await sleep(fw * 1000);
+          const mig = migrateDc(e);
+          if (mig != null) dcId = mig;
+        }
 
         // 3) upload.getFile direct (works when downloadAsBuffer returns empty / FILE_MIGRATE)
         try {
@@ -2955,24 +3072,57 @@ class ThemePlugin extends Plugin {
           let offset = 0;
           const limit = 512 * 1024;
           const total = fileSize && fileSize > 0 ? fileSize : Infinity;
-          while (offset < total) {
-            const r: any = await client.call({
-              _: "upload.getFile",
-              precise: true,
-              cdnSupported: true,
-              location: inputLoc,
-              offset,
-              limit,
-            } as any);
-            if (r?._ === "upload.file" && r.bytes) {
-              const chunk = Buffer.from(r.bytes);
-              parts.push(chunk);
-              offset += chunk.length;
-              if (chunk.length < limit) break;
-            } else if (r?._ === "upload.fileCdnRedirect") {
-              logger.warn("[theme] CDN redirect not handled");
+          let getFileAttempts = 0;
+          while (offset < total && getFileAttempts < 40) {
+            getFileAttempts++;
+            try {
+              const r: any = await client.call({
+                _: "upload.getFile",
+                precise: true,
+                cdnSupported: false, // CDN redirect needs extra hop; prefer main DC
+                location: inputLoc,
+                offset,
+                limit,
+              } as any);
+              if (r?._ === "upload.file" && r.bytes) {
+                const chunk = Buffer.from(r.bytes);
+                parts.push(chunk);
+                offset += chunk.length;
+                if (chunk.length < limit) break;
+                continue;
+              }
+              if (r?._ === "upload.fileCdnRedirect") {
+                // Fall back to FileLocation download which handles CDN internally
+                logger.warn("[theme] CDN redirect — fallback FileLocation");
+                try {
+                  const raw = await client.downloadAsBuffer(
+                    new FileLocation(inputLoc, fileSize, dcId ?? r.dcId) as any,
+                  );
+                  if (raw && (raw as any).length) return Buffer.from(raw as any);
+                } catch { /* */ }
+                break;
+              }
               break;
-            } else {
+            } catch (e) {
+              const fw = floodWaitSec(e);
+              if (fw > 0) {
+                logger.warn(`[theme] getFile FLOOD_WAIT ${fw}s`);
+                await sleep(fw * 1000);
+                continue;
+              }
+              const mig = migrateDc(e);
+              if (mig != null && mig !== dcId) {
+                logger.info(`[theme] getFile FILE_MIGRATE → dc${mig}`);
+                dcId = mig;
+                // retry same offset on new dc via FileLocation
+                try {
+                  const raw = await client.downloadAsBuffer(
+                    new FileLocation(inputLoc, fileSize, dcId) as any,
+                  );
+                  if (raw && (raw as any).length) return Buffer.from(raw as any);
+                } catch { /* */ }
+              }
+              if (attempt === retries) logger.warn(`[theme] upload.getFile failed:`, getErrorMessage(e));
               break;
             }
           }
@@ -2982,6 +3132,8 @@ class ThemePlugin extends Plugin {
         }
         logger.warn(`[theme] downloadTlDocument attempt ${attempt} failed, retries left: ${retries - attempt}`);
       } catch (e) {
+        const fw = floodWaitSec(e);
+        if (fw > 0) await sleep(fw * 1000);
         logger.warn(`[theme] downloadTlDocument attempt ${attempt} failed:`, getErrorMessage(e));
       }
     }
