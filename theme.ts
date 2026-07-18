@@ -10,6 +10,7 @@ import { safeGetReplyMessage } from "@utils/safeGetMessages";
 import type { MtcuteFileDownloadLocation } from "@utils/mtcuteTypes";
 import * as fs from "fs";
 import * as path from "path";
+import * as crypto from "crypto";
 
 const prefixes = getPrefixes();
 const mainPrefix = prefixes[0];
@@ -131,6 +132,11 @@ function adjustBright(hex: string, pct: number): string {
 }
 
 function toRgb(hex: string): string { return hex.length === 9 ? "#" + hex.slice(3) : hex; }
+
+/** Fast stable content key for wallpaper bytes (slug reverse cache / disk) */
+function wallpaperContentHash(buf: Buffer): string {
+  return crypto.createHash("sha256").update(buf).digest("hex").slice(0, 40);
+}
 
 // ─── Wallpaper / ZIP helpers ─────────────────────────────────────────────────
 
@@ -1599,6 +1605,7 @@ function genTgx(
   colors: Record<string, string>,
   name = "TeleBox Theme",
   wallpaperSlug?: string | null,
+  basedOn?: string | null,
 ): string {
   // Expand aliases so known cross-format keys map to TGX names
   const cx = remapAllColors(colors, "to-tgx");
@@ -1610,7 +1617,10 @@ function genTgx(
   const mo = pickColor(cx, ["bubbleOut_background", "chat_outBubble", "msgOutBg"], p);
   const tb = pickColor(cx, ["headerBackground", "actionBarDefault", "topBarBg"], bg);
   const sep = pickColor(cx, ["separator", "divider"], adjustBright(bg, 15));
-  const dark = isDarkHex(bg) ? 1 : 0;
+  // Prefer explicit basedOn from source (day/night); else luminance
+  const dark = basedOn
+    ? (String(basedOn).toLowerCase().includes("night") || String(basedOn).toLowerCase().includes("dark") ? 1 : 0)
+    : (isDarkHex(bg) ? 1 : 0);
   const c = (hex: string) => toTgxColor(hex);
 
   // Group ALL known TGX colors by value (official TGX export style)
@@ -1716,7 +1726,7 @@ function genIos(
   colors: Record<string, string>,
   name = "TeleBox Theme",
   wallpaperSlug?: string | null,
-  options?: { blur?: number; motion?: boolean },
+  options?: { blur?: number; motion?: boolean; basedOn?: string | null },
 ): string {
   const cx = remapAllColors(colors, "to-ios");
   const bg = pickColor(cx, ["windowBackgroundWhite", "backgroundColor", "windowBg", "list.plainBg"], "#1c1b1f");
@@ -1727,7 +1737,15 @@ function genIos(
   const mo = pickColor(cx, ["chat_outBubble", "chatOutgoingBubble", "msgOutBg"], p);
   const tb = pickColor(cx, ["actionBarDefault", "navigationBarBackground", "topBarBg", "root.navBar.background"], bg);
   const sep = pickColor(cx, ["divider", "separatorColor", "list.blocksSeparator"], adjustBright(bg, 15));
-  const dark = isDarkHex(bg);
+  // Prefer source basedOn (day/night/nightTinted/classic) over luminance guess
+  const based = (options?.basedOn || "").toLowerCase();
+  const dark = based
+    ? (based.includes("night") || based.includes("dark"))
+    : isDarkHex(bg);
+  const basedOnOut = based.includes("night") ? (based.includes("tint") ? "nightTinted" : "night")
+    : based.includes("classic") ? "classic"
+    : based.includes("day") ? "day"
+    : (dark ? "night" : "day");
   const ic = (hex: string) => toIosColor(hex);
   // Derive semantic colors from cx when available
   const white = "ffffff";
@@ -1746,7 +1764,7 @@ function genIos(
   // Minimal but valid nested structure accepted by Telegram iOS
   const lines: string[] = [
     `name: ${name}`,
-    `basedOn: ${dark ? "night" : "day"}`,
+    `basedOn: ${basedOnOut}`,
     `dark: ${dark ? "true" : "false"}`,
     "intro:",
     `  statusBar: ${dark ? "white" : "black"}`,
@@ -2539,8 +2557,20 @@ function renderDoc(doc: ThemeDoc, target: ThemeFormat, name = "TeleBox Theme"): 
     const wp = normalizeWallpaper(doc.wallpaper || null);
     const tiled = !!doc.wallpaperTiled;
     const slug = doc.wallpaperSlug || null;
-    const options = { blur: doc.wallpaperBlur ?? 0, motion: doc.wallpaperMotion ?? true };
-    const withWp: ThemeDoc = { ...doc, wallpaper: wp, wallpaperTiled: tiled, wallpaperSlug: slug, wallpaperBlur: doc.wallpaperBlur, wallpaperMotion: doc.wallpaperMotion };
+    const options = {
+      blur: doc.wallpaperBlur ?? 0,
+      motion: doc.wallpaperMotion ?? true,
+      basedOn: doc.basedOn || null,
+    };
+    const withWp: ThemeDoc = {
+      ...doc,
+      wallpaper: wp,
+      wallpaperTiled: tiled,
+      wallpaperSlug: slug,
+      wallpaperBlur: doc.wallpaperBlur,
+      wallpaperMotion: doc.wallpaperMotion,
+      basedOn: doc.basedOn,
+    };
 
     let buf: Buffer | null = null;
     if (target === "attheme") {
@@ -2549,7 +2579,7 @@ function renderDoc(doc: ThemeDoc, target: ThemeFormat, name = "TeleBox Theme"): 
     } else if (target === "tdesktop-theme") {
       buf = buildDesktopTheme(genDesktop(withWp.colors), wp, tiled);
     } else if (target === "tgx-theme") {
-      buf = Buffer.from(genTgx(withWp.colors, name, doc.wallpaperSlug || null), "utf-8");
+      buf = Buffer.from(genTgx(withWp.colors, name, doc.wallpaperSlug || null, doc.basedOn || null), "utf-8");
     } else if (target === "ios-theme") {
       buf = Buffer.from(genIos(withWp.colors, name, doc.wallpaperSlug || null, options), "utf-8");
     }
@@ -2685,7 +2715,7 @@ class ThemePlugin extends Plugin {
       const name = (docInfo.fileName || "").toLowerCase();
       const size = docInfo.size || 0;
       if (size > MAX_FILE_SIZE || size === 0) return;
-      if (!name.endsWith(".attheme") && !name.endsWith(".tdesktop-theme") && !name.endsWith(".tgios-theme") && !name.includes("theme") && !name.includes("tgx")) return;
+      if (!name.endsWith(".attheme") && !name.endsWith(".tdesktop-theme") && !name.endsWith(".tgios-theme") && !name.endsWith(".tgx-theme") && !name.includes("theme") && !name.includes("tgx")) return;
 
       await msg.edit({ text: html`⏳ 解析主题文件...` });
       const client = await getGlobalClient();
@@ -2696,96 +2726,16 @@ class ThemePlugin extends Plugin {
         await msg.edit({ text: html`❌ 无法识别格式，支持 .attheme / .tdesktop-theme / .tgx-theme / .tgios-theme<br/><br/>使用 <code>${mainPrefix}theme</code> 查看帮助` });
         return;
       }
-      const parser = format === "attheme" ? parseAttheme : format === "tdesktop-theme" ? parseDesktop : format === "tgx-theme" ? parseTgx : parseIos;
-      let doc = parser(buf);
-      if (!doc || !Object.keys(doc.colors).length) {
-        await msg.edit({ text: html`❌ 解析失败，未找到颜色变量` });
-        return;
-      }
-
-      // iOS: resolve cloud wallpaper slug → image; other→iOS will upload later
-      if (doc.wallpaperSlug && !normalizeWallpaper(doc.wallpaper || null)) {
-        await msg.edit({ text: html`⏳ 下载 iOS 云壁纸...` });
-        doc = await this.resolveWallpaperBytes(client, doc);
-      }
-
-      // When converting to iOS with image wallpaper, upload to get cloud slug
-      const needsIosSlug = !doc.wallpaperSlug && !!normalizeWallpaper(doc.wallpaper || null);
-      if (needsIosSlug) {
-        await msg.edit({ text: html`⏳ 上传聊天背景到云壁纸（iOS 打包）...` });
-        doc = await this.ensureIosWallpaperSlug(client, doc);
-      }
-
-      const cc = Object.keys(doc.colors).length;
-      const hasWp = !!(normalizeWallpaper(doc.wallpaper || null) || doc.wallpaperSlug);
-      const targets = (["attheme", "tdesktop-theme", "tgx-theme", "ios-theme"] as ThemeFormat[]).filter(f => f !== format) as ThemeFormat[];
-
-      // convert to all targets (wallpaper preserved via renderDoc; iOS uses slug)
-      const converted: { target: ThemeFormat; result: Buffer | null }[] = targets.map(t => ({
-        target: t,
-        result: renderDoc(doc, t),
-      }));
-
-      const count = converted.filter(c => c.result).length;
-      const wpNote = normalizeWallpaper(doc.wallpaper || null)
-        ? (doc.wallpaperSlug ? "🖼️ 聊天背景已提取（iOS 已绑定云壁纸 slug）" : "🖼️ 聊天背景已提取")
-        : (doc.wallpaperSlug ? "🖼️ iOS 云壁纸 slug 已识别" : "");
-
-      await msg.edit({
-        text: html`
-✅ <b>已识别</b> ${FORMAT_LABELS[format]}
-📊 ${cc} 个颜色变量${wpNote ? `<br/>${wpNote}` : ""}
-
-<b>转换：${count}/${targets.length} 个格式</b>
-
-${converted.map((c) => {
-  const ok = c.result !== null;
-  const label = FORMAT_LABELS[c.target];
-  return `${ok ? "✅" : "❌"} ${label}`;
-}).join("<br/>")}
-
-<i>回复文件使用</i> <code>${mainPrefix}theme ${"{"}android|desktop|tgx|ios{"}"}</code> <i>转换到单格式</i>
-        `,
-      });
-
-      // send each successful conversion
-      for (let i = 0; i < converted.length; i++) {
-        const c = converted[i];
-        if (!c.result) continue;
-        const emb = !!(normalizeWallpaper(doc.wallpaper || null) && (c.target === "attheme" || c.target === "tdesktop-theme"));
-        const iosPacked = !!(c.target === "ios-theme" && doc.wallpaperSlug);
-        await client.sendMedia(msg.chat.id, {
-          type: "document",
-          file: c.result,
-          fileName: `theme${FORMAT_EXT[c.target]}`,
-          fileMime: API_MIME[c.target],
-        } as any, {
-          caption: html`
-✅ <b>${FORMAT_LABELS[format]}</b> → <b>${FORMAT_LABELS[c.target]}</b>
-📊 ${cc} 个颜色变量${emb ? "<br/>🖼️ 壁纸已嵌入" : iosPacked ? "<br/>🖼️ 壁纸已打包为 defaultWallpaper slug" : hasWp ? "<br/>🖼️ 壁纸见附图" : ""}
-          `,
-          replyTo: msg.id,
-        });
-      }
-
-      // Sidecar wallpaper only when image exists and target formats cannot fully use slug alone
-      // (still useful for manual set / TGX; skip pure iOS-only if already slug-packed and no bytes)
-      const wp = normalizeWallpaper(doc.wallpaper || null);
-      if (wp) {
-        const ext = detectImageExt(wp) === "png" ? "png" : "jpg";
-        await client.sendMedia(msg.chat.id, {
-          type: "document",
-          file: wp,
-          fileName: `theme-chat-background.${ext}`,
-          fileMime: ext === "png" ? "image/png" : "image/jpeg",
-        } as any, {
-          caption: html`🖼️ <b>聊天背景</b>${doc.wallpaperSlug ? `（slug: <code>${doc.wallpaperSlug}</code>）` : ""}（Android/Desktop 已嵌入；TGX 请手动设置）`,
-          replyTo: msg.id,
-        });
-      }
-
-      // update the info message with the last note
-      // (edit is already done above)
+      // Route through the same lossless multi-format pipeline as link
+      const baseName = (docInfo.fileName || "theme").replace(/\.[^.]+$/, "") || "theme";
+      await this.sendThemeResults(
+        msg,
+        baseName,
+        baseName.replace(/[^a-zA-Z0-9_\-\.]/g, "_").slice(0, 48) || genSlug(),
+        { [format]: { format, buf } },
+        false,
+        null,
+      );
     } catch (e) {
       logger.error("[theme] listen:", e);
     }
@@ -2795,7 +2745,30 @@ ${converted.map((c) => {
   // mtcute downloadAsBuffer needs inputDocumentFileLocation (NOT inputDocument)
   // and Long ids must be passed as-is — Number() destroys 64-bit precision.
   // Fallback: upload.getFile (handles some dc cases better for small theme files).
+  /** slug → base64 image */
   private readonly wallpaperSlugCache = new Map<string, string>();
+  /** contentHash → slug (reverse lookup without O(n) buffer equals) */
+  private readonly wallpaperHashToSlug = new Map<string, string>();
+
+  private cacheWallpaper(slug: string, img: Buffer): void {
+    const b64 = img.toString("base64");
+    this.wallpaperSlugCache.set(slug, b64);
+    this.wallpaperHashToSlug.set(wallpaperContentHash(img), slug);
+    // Bound memory: keep last ~40 entries
+    if (this.wallpaperSlugCache.size > 40) {
+      const first = this.wallpaperSlugCache.keys().next().value;
+      if (first) {
+        const oldB64 = this.wallpaperSlugCache.get(first);
+        this.wallpaperSlugCache.delete(first);
+        if (oldB64) {
+          try {
+            const h = wallpaperContentHash(Buffer.from(oldB64, "base64"));
+            if (this.wallpaperHashToSlug.get(h) === first) this.wallpaperHashToSlug.delete(h);
+          } catch { /* */ }
+        }
+      }
+    }
+  }
 
   private async downloadTlDocument(
     client: Awaited<ReturnType<typeof getGlobalClient>>,
@@ -2950,14 +2923,17 @@ ${converted.map((c) => {
       }
       const img = await this.downloadWallpaperBySlug(client, doc.wallpaperSlug);
       if (img) {
-        this.wallpaperSlugCache.set(doc.wallpaperSlug, img.toString("base64"));
+        this.cacheWallpaper(doc.wallpaperSlug, img);
         return { ...doc, wallpaper: img };
       }
     }
     return doc;
   }
 
-  /** Ensure ThemeDoc has iOS wallpaper slug if only image bytes are known */
+  /**
+   * Ensure ThemeDoc has cloud wallpaper slug if only image bytes are known.
+   * Used for BOTH iOS (defaultWallpaper) and TGX (wallpaper: slug).
+   */
   private async ensureIosWallpaperSlug(
     client: Awaited<ReturnType<typeof getGlobalClient>>,
     doc: ThemeDoc,
@@ -2965,13 +2941,12 @@ ${converted.map((c) => {
     if (doc.wallpaperSlug) return doc;
     const wp = normalizeWallpaper(doc.wallpaper || null);
     if (!wp) return doc;
-    // Check reverse cache: already uploaded this image?
-    for (const [slug, b64] of this.wallpaperSlugCache) {
-      if (Buffer.from(b64, "base64").equals(wp)) return { ...doc, wallpaperSlug: slug };
-    }
+    // O(1) reverse cache by content hash
+    const hit = this.wallpaperHashToSlug.get(wallpaperContentHash(wp));
+    if (hit) return { ...doc, wallpaperSlug: hit };
     const slug = await this.uploadWallpaperForIos(client, wp);
     if (slug) {
-      this.wallpaperSlugCache.set(slug, wp.toString("base64"));
+      this.cacheWallpaper(slug, wp);
       return { ...doc, wallpaperSlug: slug };
     }
     return doc;
@@ -3803,11 +3778,12 @@ ${statLine ? `<br/>📈 ${statLine}` : ""}
 
       // Resolve / package wallpaper for target
       if (doc.wallpaperSlug && !normalizeWallpaper(doc.wallpaper || null)) {
-        await msg.edit({ text: html`⏳ 下载 iOS 云壁纸...` });
+        await msg.edit({ text: html`⏳ 下载云壁纸...` });
         doc = await this.resolveWallpaperBytes(client, doc);
       }
-      if (target === "ios-theme" && !doc.wallpaperSlug && normalizeWallpaper(doc.wallpaper || null)) {
-        await msg.edit({ text: html`⏳ 上传聊天背景到云壁纸（iOS 打包）...` });
+      // iOS + TGX both need cloud wallpaper slug when only image bytes exist
+      if ((target === "ios-theme" || target === "tgx-theme") && !doc.wallpaperSlug && normalizeWallpaper(doc.wallpaper || null)) {
+        await msg.edit({ text: html`⏳ 上传聊天背景到云壁纸（${target === "ios-theme" ? "iOS" : "TGX"} 打包）...` });
         doc = await this.ensureIosWallpaperSlug(client, doc);
       }
 
@@ -3816,7 +3792,7 @@ ${statLine ? `<br/>📈 ${statLine}` : ""}
       const cc = Object.keys(doc.colors).length;
       const wp = normalizeWallpaper(doc.wallpaper || null);
       const emb = !!(wp && (target === "attheme" || target === "tdesktop-theme"));
-      const iosPacked = !!(target === "ios-theme" && doc.wallpaperSlug);
+      const slugPacked = !!((target === "ios-theme" || target === "tgx-theme") && doc.wallpaperSlug);
       await msg.delete();
       await client.sendMedia(msg.chat.id, {
         type: "document",
@@ -3826,11 +3802,11 @@ ${statLine ? `<br/>📈 ${statLine}` : ""}
       } as any, {
         caption: html`
 ✅ <b>转换完成</b> ${TARGET_CLIENT_LABELS[target]}
-📊 ${cc} 个颜色变量${emb ? "<br/>🖼️ 壁纸已嵌入" : iosPacked ? `<br/>🖼️ 壁纸已打包（slug: <code>${doc.wallpaperSlug}</code>）` : wp ? "<br/>🖼️ 壁纸见附图" : ""}
+📊 ${cc} 个颜色变量${emb ? "<br/>🖼️ 壁纸已嵌入" : slugPacked ? `<br/>🖼️ 壁纸已打包（slug: <code>${doc.wallpaperSlug}</code>）` : wp ? "<br/>🖼️ 壁纸见附图" : ""}
         `,
         replyTo: msg.id,
       });
-      if (wp && !emb && !iosPacked) {
+      if (wp && !emb && !slugPacked) {
         const ext = detectImageExt(wp) === "png" ? "png" : "jpg";
         await client.sendMedia(msg.chat.id, {
           type: "document",
@@ -3841,7 +3817,7 @@ ${statLine ? `<br/>📈 ${statLine}` : ""}
           caption: html`🖼️ <b>聊天背景</b>`,
           replyTo: msg.id,
         });
-      } else if (wp && iosPacked) {
+      } else if (wp && slugPacked) {
         // still send image copy for convenience / other clients
         const ext = detectImageExt(wp) === "png" ? "png" : "jpg";
         await client.sendMedia(msg.chat.id, {
@@ -3850,7 +3826,7 @@ ${statLine ? `<br/>📈 ${statLine}` : ""}
           fileName: `theme-chat-background.${ext}`,
           fileMime: ext === "png" ? "image/png" : "image/jpeg",
         } as any, {
-          caption: html`🖼️ <b>聊天背景原图</b>（已写入 iOS defaultWallpaper）`,
+          caption: html`🖼️ <b>聊天背景原图</b>（已写入 ${target === "ios-theme" ? "iOS defaultWallpaper" : "TGX wallpaper"} slug）`,
           replyTo: msg.id,
         });
       }
