@@ -442,6 +442,62 @@ function expandColorAliases(colors: Record<string, string>): Record<string, stri
  * Pass through ALL source color keys when converting, remapping known names
  * so we don't drop palette entries that generators don't explicitly list.
  */
+/**
+ * Merge multiple ThemeDocs into one lossless palette.
+ * Later docs fill missing keys only (first-writer-wins for conflicts),
+ * so platform-native keys are preserved when that platform is listed first.
+ */
+function mergeThemeDocs(docs: ThemeDoc[], preferredOrder: ThemeFormat[] = ["attheme", "ios-theme", "tgx-theme", "tdesktop-theme"]): ThemeDoc | null {
+  if (!docs.length) return null;
+  const ordered = [...docs].sort((a, b) => {
+    const ia = preferredOrder.indexOf(a.format);
+    const ib = preferredOrder.indexOf(b.format);
+    return (ia < 0 ? 99 : ia) - (ib < 0 ? 99 : ib);
+  });
+  const colors: Record<string, string> = {};
+  let wallpaper: Buffer | null = null;
+  let wallpaperSlug: string | null = null;
+  let wallpaperTiled = false;
+  let wallpaperBlur: number | undefined;
+  let wallpaperMotion: boolean | undefined;
+  let wallpaperIntensity: number | undefined;
+  let wallpaperColor: string | null | undefined;
+  let wallpaperPattern: string | null | undefined;
+  let basedOn: string | null | undefined;
+  let format: ThemeFormat = ordered[0].format;
+
+  for (const d of ordered) {
+    for (const [k, v] of Object.entries(d.colors || {})) {
+      if (v && !colors[k]) colors[k] = v;
+    }
+    if (!wallpaper) wallpaper = normalizeWallpaper(d.wallpaper || null);
+    if (!wallpaperSlug && d.wallpaperSlug) wallpaperSlug = d.wallpaperSlug;
+    if (d.wallpaperTiled) wallpaperTiled = true;
+    if (wallpaperBlur == null && d.wallpaperBlur != null) wallpaperBlur = d.wallpaperBlur;
+    if (wallpaperMotion == null && d.wallpaperMotion != null) wallpaperMotion = d.wallpaperMotion;
+    if (wallpaperIntensity == null && d.wallpaperIntensity != null) wallpaperIntensity = d.wallpaperIntensity;
+    if (!wallpaperColor && d.wallpaperColor) wallpaperColor = d.wallpaperColor;
+    if (!wallpaperPattern && d.wallpaperPattern) wallpaperPattern = d.wallpaperPattern;
+    if (!basedOn && d.basedOn) basedOn = d.basedOn;
+  }
+
+  // Expand cross-platform aliases AFTER merge so every native key gets siblings
+  const expanded = expandColorAliases(colors);
+  return {
+    format,
+    colors: expanded,
+    wallpaper,
+    wallpaperSlug,
+    wallpaperTiled,
+    wallpaperBlur,
+    wallpaperMotion,
+    wallpaperIntensity,
+    wallpaperColor: wallpaperColor || null,
+    wallpaperPattern: wallpaperPattern || null,
+    basedOn: basedOn || null,
+  };
+}
+
 function remapAllColors(
   colors: Record<string, string>,
   direction: "to-android" | "to-desktop" | "to-tgx" | "to-ios",
@@ -2118,16 +2174,28 @@ function parseTgx(buf: Buffer): ThemeDoc | null {
     if (text.trimStart().startsWith("!") || /^#\s*$/m.test(text) || text.includes("\nbubbleIn_background") || text.includes("filling:")) {
       const colors: Record<string, string> = {};
       let wallpaperSlug: string | null = null;
+      let basedOn: string | null = null;
       let section = "";
       for (const rawLine of text.split("\n")) {
         const line = rawLine.trim();
         if (!line || line.startsWith("//")) continue;
         if (line === "!" || line === "@" || line === "#") { section = line; continue; }
-        // In ! section: metadata — check for wallpaper: <slug>
+        // In ! section: metadata — wallpaper / name
         if (section === "!") {
           if (line.startsWith("wallpaper:")) {
-            const slug = line.slice("wallpaper:".length).trim().replace(/^["\']|["\']$/g, "");
+            const slug = line.slice("wallpaper:".length).trim().replace(/^["']|["']$/g, "");
             if (slug && slug.length > 8) wallpaperSlug = slug;
+          }
+          continue;
+        }
+        // In @ section: dark / parentTheme
+        if (section === "@") {
+          if (line.startsWith("dark:")) {
+            const v = line.slice(5).trim();
+            basedOn = (v === "1" || v === "true") ? "night" : "day";
+          } else if (line.startsWith("parentTheme:")) {
+            const v = line.slice("parentTheme:".length).trim();
+            if (!basedOn) basedOn = (v === "1" || v === "true") ? "night" : "day";
           }
           continue;
         }
@@ -2148,7 +2216,7 @@ function parseTgx(buf: Buffer): ThemeDoc | null {
         }
       }
       if (Object.keys(colors).length || wallpaperSlug) {
-        return { format: "tgx-theme", colors, wallpaperSlug };
+        return { format: "tgx-theme", colors, wallpaperSlug, basedOn };
       }
     }
     // Legacy JSON fallback
@@ -2745,8 +2813,7 @@ ${converted.map((c) => {
     if (doc.wallpaperSlug) return doc;
     const wp = normalizeWallpaper(doc.wallpaper || null);
     if (!wp) return doc;
-    // Check reverse cache by hash of bytes
-    const wpHash = wp.length + ":" + wp[0] + ":" + wp[Math.min(wp.length - 1, 1024)];
+    // Check reverse cache: already uploaded this image?
     for (const [slug, b64] of this.wallpaperSlugCache) {
       if (Buffer.from(b64, "base64").equals(wp)) return { ...doc, wallpaperSlug: slug };
     }
@@ -3073,67 +3140,89 @@ ${webPage.description ? `<br/>${webPage.description}` : ""}
       if (doc) parsedByFmt.set(fmt, doc);
     }
 
-    // Colors: still pick richest palette, but wallpaper is chosen independently
-    let bestDoc: ThemeDoc | null = null;
-    let bestFmt: ThemeFormat | null = null;
-    let bestCount = 0;
-    // Prefer Android as color base when palette sizes are close (mobile-first)
+    // LOSSLESS: merge ALL source formats' colors + wallpaper metadata into one doc.
+    // Previously we only picked the "richest" single format, dropping unique keys
+    // from other platforms (e.g. Desktop-only vars when Android was chosen).
     const colorPickOrder: ThemeFormat[] = ["attheme", "ios-theme", "tgx-theme", "tdesktop-theme"];
-    for (const fmt of colorPickOrder) {
-      const doc = parsedByFmt.get(fmt);
-      if (!doc) continue;
-      const cc = Object.keys(doc.colors).length;
-      // Android wins ties and near-ties (±10%) so mobile palette is preferred
-      const prefer = !bestDoc
-        || (fmt === "attheme" && cc >= bestCount * 0.9)
-        || (cc > bestCount && bestFmt !== "attheme");
-      if (prefer && cc >= bestCount) {
-        bestDoc = doc;
-        bestFmt = fmt;
-        bestCount = cc;
-      } else if (cc > bestCount) {
-        bestDoc = doc;
-        bestFmt = fmt;
-        bestCount = cc;
-      }
-    }
-    // fallback: any format not in order list
+    const allDocs = colorPickOrder
+      .map(f => parsedByFmt.get(f))
+      .filter((d): d is ThemeDoc => !!d);
+    // include any unexpected formats
     for (const [fmt, doc] of parsedByFmt) {
-      const cc = Object.keys(doc.colors).length;
-      if (cc > bestCount) {
-        bestDoc = doc;
-        bestFmt = fmt;
-        bestCount = cc;
+      if (!allDocs.includes(doc)) allDocs.push(doc);
+    }
+
+    let bestDoc: ThemeDoc | null = mergeThemeDocs(allDocs, colorPickOrder);
+    let bestFmt: ThemeFormat | null = bestDoc?.format || null;
+    let bestCount = bestDoc ? Object.keys(bestDoc.colors).length : 0;
+    // Track which sources contributed (for UI)
+    const sourceFmts = allDocs.map(d => d.format);
+
+    // Fallback: if merge empty, pick richest single doc (legacy path)
+    if (!bestDoc || bestCount === 0) {
+      for (const fmt of colorPickOrder) {
+        const doc = parsedByFmt.get(fmt);
+        if (!doc) continue;
+        const cc = Object.keys(doc.colors).length;
+        if (cc > bestCount) {
+          bestDoc = doc;
+          bestFmt = fmt;
+          bestCount = cc;
+        }
+      }
+      for (const [fmt, doc] of parsedByFmt) {
+        const cc = Object.keys(doc.colors).length;
+        if (cc > bestCount) {
+          bestDoc = doc;
+          bestFmt = fmt;
+          bestCount = cc;
+        }
       }
     }
 
-    // Resolve iOS slug → bytes early so it can participate in wallpaper priority
-    for (const fmt of ["ios-theme"] as ThemeFormat[]) {
+    // Resolve iOS/TGX slug → bytes early so it can participate in wallpaper priority
+    for (const fmt of ["ios-theme", "tgx-theme"] as ThemeFormat[]) {
       const d = parsedByFmt.get(fmt);
       if (d?.wallpaperSlug && !normalizeWallpaper(d.wallpaper || null)) {
         const resolved = await this.resolveWallpaperBytes(client, d);
         parsedByFmt.set(fmt, resolved);
-        if (bestFmt === fmt) bestDoc = resolved;
+        // Re-merge after resolving wallpaper bytes
+        if (bestDoc) {
+          bestDoc = mergeThemeDocs(
+            colorPickOrder.map(f => parsedByFmt.get(f)).filter((x): x is ThemeDoc => !!x),
+            colorPickOrder,
+          ) || bestDoc;
+          bestCount = Object.keys(bestDoc.colors).length;
+        }
       }
     }
 
     // Pick wallpaper by mobile-first priority (Android wins over Desktop)
-    let wallpaper: Buffer | null = null;
-    let wallpaperSlug: string | null = null;
+    let wallpaper: Buffer | null = normalizeWallpaper(bestDoc?.wallpaper || null);
+    let wallpaperSlug: string | null = bestDoc?.wallpaperSlug || null;
     let wallpaperSource: string | null = null;
+    let wallpaperTiled = !!bestDoc?.wallpaperTiled;
+    let wallpaperBlur = bestDoc?.wallpaperBlur;
+    let wallpaperMotion = bestDoc?.wallpaperMotion;
 
     for (const fmt of wallpaperPriority) {
       const d = parsedByFmt.get(fmt);
       if (!d) continue;
       if (!wallpaperSlug && d.wallpaperSlug) {
         wallpaperSlug = d.wallpaperSlug;
+        if (!wallpaperSource) wallpaperSource = fmt;
       }
       const w = normalizeWallpaper(d.wallpaper || null);
       if (w && !wallpaper) {
         wallpaper = w;
         wallpaperSource = fmt;
+        if (d.wallpaperTiled) wallpaperTiled = true;
+        if (d.wallpaperBlur != null) wallpaperBlur = d.wallpaperBlur;
+        if (d.wallpaperMotion != null) wallpaperMotion = d.wallpaperMotion;
         // Android found — stop; never let later Desktop override
         if (fmt === "attheme") break;
+      } else if (w && !wallpaperSource) {
+        wallpaperSource = fmt;
       }
     }
 
@@ -3143,7 +3232,7 @@ ${webPage.description ? `<br/>${webPage.description}` : ""}
         || normalizeWallpaper((fmtMap as any).__wallpaper || null);
       if (wallpaper) wallpaperSource = wallpaperSource || "settings";
     }
-    // last chance: resolve remaining iOS slug
+    // last chance: resolve remaining iOS/TGX slug
     if (!wallpaper && wallpaperSlug) {
       const img = await this.downloadWallpaperBySlug(client, wallpaperSlug);
       if (img) {
@@ -3153,15 +3242,22 @@ ${webPage.description ? `<br/>${webPage.description}` : ""}
     }
 
     if (bestDoc) {
-      bestDoc = { ...bestDoc, wallpaper, wallpaperSlug };
-      // Upload image → iOS cloud slug so .tgios-theme packages wallpaper
-      // Prefer Android image for the slug (already in `wallpaper`)
+      bestDoc = {
+        ...bestDoc,
+        wallpaper,
+        wallpaperSlug,
+        wallpaperTiled,
+        wallpaperBlur,
+        wallpaperMotion,
+      };
+      // Upload image → iOS/TGX cloud slug so packages can reference wallpaper
       if (!bestDoc.wallpaperSlug && normalizeWallpaper(bestDoc.wallpaper || null)) {
         bestDoc = await this.ensureIosWallpaperSlug(client, bestDoc);
         wallpaperSlug = bestDoc.wallpaperSlug || null;
       }
       wallpaper = normalizeWallpaper(bestDoc.wallpaper || null) || wallpaper;
       wallpaperSlug = bestDoc.wallpaperSlug || wallpaperSlug;
+      bestCount = Object.keys(bestDoc.colors).length;
     }
 
     // If originals failed parse but we have buffers that are already rendered, still send them
@@ -3172,7 +3268,7 @@ ${webPage.description ? `<br/>${webPage.description}` : ""}
         const parser = det === "attheme" ? parseAttheme : det === "tdesktop-theme" ? parseDesktop : det === "tgx-theme" ? parseTgx : parseIos;
         const doc = parser(buf);
         if (doc && Object.keys(doc.colors).length > bestCount) {
-          bestDoc = { ...doc, wallpaper: normalizeWallpaper(doc.wallpaper) || wallpaper };
+          bestDoc = { ...doc, wallpaper: normalizeWallpaper(doc.wallpaper) || wallpaper, wallpaperSlug };
           bestFmt = det;
           bestCount = Object.keys(doc.colors).length;
         }
@@ -3207,58 +3303,77 @@ ${webPage.description ? `<br/>${webPage.description}` : ""}
       return;
     }
 
-    // Wallpaper attach rules:
-    // - Mobile targets (Android/TGX/iOS): prefer Android wallpaper, then iOS/TGX, Desktop last
-    // - Desktop: keep its OWN original wallpaper if present; only fall back to mobile wallpaper when missing
+    // LOSSLESS output strategy:
+    // - Same-format original: keep native file when it already has wallpaper/colors,
+    //   but re-render from merged palette when original is missing keys/wallpaper.
+    // - Missing format: always render from merged bestDoc (all platforms' colors).
+    // - Desktop: keep OWN wallpaper if present; else fall back to mobile-priority.
     const ensureWallpaper = (target: ThemeFormat, buf: Buffer): Buffer => {
-      const preferred = wallpaper; // mobile-first pick (Android > iOS > TGX > Desktop)
+      const preferred = wallpaper;
       const preferredSlug = wallpaperSlug || bestDoc?.wallpaperSlug || null;
+      const mergedBase: ThemeDoc = {
+        ...bestDoc!,
+        wallpaper: preferred,
+        wallpaperSlug: preferredSlug,
+        wallpaperTiled: target === "tdesktop-theme" ? wallpaperTiled : bestDoc!.wallpaperTiled,
+        wallpaperBlur,
+        wallpaperMotion,
+      };
 
       if (target === "attheme") {
         const parsed = parseAttheme(buf);
         const existing = normalizeWallpaper(parsed?.wallpaper || null);
-        // Keep original Android wallpaper when present
-        if (existing) return buf;
-        // Missing → attach preferred mobile wallpaper if any
-        if (!preferred) return buf;
-        return renderDoc({ ...bestDoc!, wallpaper: preferred, wallpaperSlug: preferredSlug }, "attheme", title) || buf;
+        // If original Android has wallpaper AND its color count is near merged, keep original
+        // Otherwise re-render from merged palette (fills missing keys from other platforms)
+        const origCount = parsed ? Object.keys(parsed.colors).length : 0;
+        if (existing && origCount >= bestCount * 0.95) return buf;
+        return renderDoc({
+          ...mergedBase,
+          wallpaper: existing || preferred,
+          // Prefer Android-native colors first, then fill from merged
+          colors: expandColorAliases({ ...(parsed?.colors || {}), ...mergedBase.colors }),
+        }, "attheme", title) || buf;
       }
 
       if (target === "tdesktop-theme") {
-        // Prefer Desktop's own original wallpaper when the source package already has one
         const parsed = parseDesktop(buf);
         const ownWp = normalizeWallpaper(parsed?.wallpaper || null);
-        if (ownWp) {
-          // Keep original Desktop package (colors + its own background)
-          return buf;
-        }
-        // No Desktop wallpaper → fall back to mobile-priority wallpaper (Android first)
-        if (!preferred) {
-          // still may need to normalize plain palette → keep as-is
-          return buf;
-        }
+        const origCount = parsed ? Object.keys(parsed.colors).length : 0;
+        // Keep own wallpaper; still re-render colors if merged has more keys
+        if (ownWp && origCount >= bestCount * 0.95) return buf;
         return renderDoc({
-          ...bestDoc!,
-          // Use Desktop colors if parse succeeded, else bestDoc colors
-          colors: parsed?.colors && Object.keys(parsed.colors).length ? parsed.colors : bestDoc!.colors,
-          wallpaper: preferred,
-          wallpaperSlug: preferredSlug,
-          wallpaperTiled: !!parsed?.wallpaperTiled,
+          ...mergedBase,
+          colors: expandColorAliases({ ...(parsed?.colors || {}), ...mergedBase.colors }),
+          wallpaper: ownWp || preferred,
+          wallpaperTiled: !!parsed?.wallpaperTiled || wallpaperTiled,
         }, "tdesktop-theme", title) || buf;
       }
 
       if (target === "ios-theme") {
-        if (preferredSlug) {
-          const parsed = parseIos(buf);
-          if (!parsed?.wallpaperSlug || parsed.wallpaperSlug !== preferredSlug) {
-            return renderDoc({
-              ...bestDoc!,
-              wallpaper: preferred,
-              wallpaperSlug: preferredSlug,
-            }, "ios-theme", title) || buf;
-          }
-        }
-        return buf;
+        const parsed = parseIos(buf);
+        const origCount = parsed ? Object.keys(parsed.colors).length : 0;
+        const slugOk = !!parsed?.wallpaperSlug && (!preferredSlug || parsed.wallpaperSlug === preferredSlug);
+        if (slugOk && origCount >= bestCount * 0.95) return buf;
+        return renderDoc({
+          ...mergedBase,
+          colors: expandColorAliases({ ...(parsed?.colors || {}), ...mergedBase.colors }),
+          wallpaperSlug: preferredSlug || parsed?.wallpaperSlug || null,
+          wallpaperBlur: wallpaperBlur ?? parsed?.wallpaperBlur,
+          wallpaperMotion: wallpaperMotion ?? parsed?.wallpaperMotion,
+          basedOn: parsed?.basedOn || mergedBase.basedOn,
+        }, "ios-theme", title) || buf;
+      }
+
+      if (target === "tgx-theme") {
+        const parsed = parseTgx(buf);
+        const origCount = parsed ? Object.keys(parsed.colors).length : 0;
+        const slugOk = !preferredSlug || parsed?.wallpaperSlug === preferredSlug;
+        if (slugOk && origCount >= bestCount * 0.95) return buf;
+        return renderDoc({
+          ...mergedBase,
+          colors: expandColorAliases({ ...(parsed?.colors || {}), ...mergedBase.colors }),
+          wallpaperSlug: preferredSlug || parsed?.wallpaperSlug || null,
+        }, "tgx-theme", title) || buf;
       }
 
       return buf;
@@ -3273,10 +3388,12 @@ ${webPage.description ? `<br/>${webPage.description}` : ""}
       let fromLabel: string;
       if (byFormat.has(target)) {
         out = ensureWallpaper(target, byFormat.get(target)!);
-        fromLabel = synthesized ? "设置合成" : "原始";
+        fromLabel = synthesized ? "设置合成" : (sourceFmts.length > 1 ? "多源合并" : "原始");
       } else {
         out = renderDoc(bestDoc, target, title);
-        fromLabel = FORMAT_LABELS[bestFmt];
+        fromLabel = sourceFmts.length > 1
+          ? `合并(${sourceFmts.map(f => FORMAT_LABELS[f].split(" ")[0]).join("+")})`
+          : FORMAT_LABELS[bestFmt];
       }
       if (!out) continue;
 
@@ -3301,6 +3418,8 @@ ${webPage.description ? `<br/>${webPage.description}` : ""}
         }
       } else if (target === "ios-theme" && (wallpaperSlug || bestDoc?.wallpaperSlug)) {
         wpNote = " · 🖼️ defaultWallpaper slug 已打包";
+      } else if (target === "tgx-theme" && (wallpaperSlug || bestDoc?.wallpaperSlug)) {
+        wpNote = " · 🖼️ wallpaper slug 已打包";
       }
 
       await client.sendMedia(msg.chat.id, {
@@ -3309,7 +3428,7 @@ ${webPage.description ? `<br/>${webPage.description}` : ""}
         fileName: `${slug || "theme"}${FORMAT_EXT[target]}`,
         fileMime: API_MIME[target],
       } as any, {
-        caption: html`✅ <b>${FORMAT_LABELS[target]}</b>${fromLabel !== "原始" && fromLabel !== "设置合成" ? ` ← ${fromLabel}` : fromLabel === "设置合成" ? "（从云端颜色设置生成）" : "（原始）"} 📊 ${bestCount} 色${wpNote}`,
+        caption: html`✅ <b>${FORMAT_LABELS[target]}</b>${fromLabel === "设置合成" ? "（从云端颜色设置生成）" : fromLabel === "原始" ? "（原始）" : fromLabel === "多源合并" ? "（多源无损合并）" : ` ← ${fromLabel}`} 📊 ${bestCount} 色${wpNote}`,
         replyTo: msg.id,
       });
       sent.push(FORMAT_LABELS[target]);
@@ -3345,11 +3464,11 @@ ${webPage.description ? `<br/>${webPage.description}` : ""}
       text: html`
 🎨 <b>${title}</b>
 🔗 <code>t.me/addtheme/${slug}</code>
-📊 源: ${synthesized ? "云端颜色设置" : `${FORMAT_LABELS[bestFmt]}（${bestCount} 色）`}
-${wallpaper || wallpaperSlug ? `<br/>🖼️ 移动端壁纸: ${wallpaperSource === "attheme" ? "Android" : wallpaperSource || "已保留"}${wallpaperSlug ? ` · iOS slug <code>${wallpaperSlug}</code>` : ""}` : ""}
+📊 源: ${synthesized ? "云端颜色设置" : `${sourceFmts.map(f => FORMAT_LABELS[f]).join(" + ") || FORMAT_LABELS[bestFmt]}（合并 ${bestCount} 色）`}
+${wallpaper || wallpaperSlug ? `<br/>🖼️ 移动端壁纸: ${wallpaperSource === "attheme" ? "Android" : wallpaperSource || "已保留"}${wallpaperSlug ? ` · slug <code>${wallpaperSlug}</code>` : ""}` : ""}
 ${desktopOwn ? "<br/>🖥️ Desktop 使用自带壁纸（有原图则不覆盖）" : wallpaper ? "<br/>🖥️ Desktop 无原图 → 回退移动端壁纸" : ""}
 <br/>✅ 已输出: ${sent.join(" · ") || "无"}
-<br/><i>规则: 移动端优先 Android；Desktop 有原壁纸保留，没有再取 Android</i>
+<br/><i>无损: 多端配色合并 · 移动端优先 Android 壁纸 · Desktop 原壁纸保留</i>
       `,
     });
   }
