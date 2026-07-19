@@ -50,7 +50,6 @@ function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise
 }
 
 const avatarCache = new Map<string, Buffer | undefined>();
-const customEmojiCache = new Map<string, Buffer | undefined>();
 
 function stableEntityKey(entity: any): string | undefined {
   const raw = entity?.id ?? entity?.userId ?? entity?.channelId ?? entity?.chatId ?? entity?.accessHash ?? entity;
@@ -135,23 +134,6 @@ async function normalizeAvatarBuffer(buffer: Buffer): Promise<Buffer> {
     console.warn("yvlu avatar normalize failed", err?.message || err);
     return buffer.length > 0 ? buffer : undefined;
   }
-}
-
-async function downloadCustomEmoji(client: any, doc: any): Promise<Buffer | undefined> {
-  if (!client || !doc) return undefined;
-  const id = String(doc.id ?? doc.documentId ?? doc.document_id ?? "");
-  if (!id) return undefined;
-  if (customEmojiCache.has(id)) return customEmojiCache.get(id);
-
-  const location = new Api.InputDocumentFileLocation({
-    id: doc.id,
-    accessHash: doc.accessHash,
-    fileReference: doc.fileReference,
-    thumbSize: "",
-  });
-  const buffer = await rawDownloadFile(client, location, doc.dcId);
-  if (buffer) customEmojiCache.set(id, buffer);
-  return buffer;
 }
 
 async function rawDownloadFile(client: any, location: any, dcId: number | undefined): Promise<Buffer | undefined> {
@@ -1097,7 +1079,6 @@ class YvluPlugin extends Plugin {
             previousUserIdentifier = currentUserIdentifier;
 
             let photo: { url: string } | undefined = undefined;
-            let emojiStatusPayload: { custom_emoji_id: string; customEmojiBuffer: Buffer } | undefined;
             if (shouldShowAvatar) {
               try {
                 const buffer = await downloadEntityAvatar(client, sender);
@@ -1112,40 +1093,8 @@ class YvluPlugin extends Plugin {
               } catch (e) {
                 console.warn("下载用户头像失败", e);
               }
-
-              // Download custom emoji for status emoji if present
-              if (emojiStatus) {
-                try {
-                  const emojiId = String(emojiStatus);
-                  if (!customEmojiCache.has(emojiId)) {
-                    // Fetch custom emoji document
-                    const docs = await withTimeout(
-                      client.invoke(
-                        new Api.messages.GetCustomEmojiDocuments({
-                          // teleproto expects big-integer, not native BigInt
-                          documentId: [bigInteger(emojiId)],
-                        })
-                      ),
-                      QUOTE_RPC_TIMEOUT_MS,
-                      "GetCustomEmojiDocuments"
-                    );
-                    const doc = docs?.[0];
-                    if (doc) {
-                      const buffer = await downloadCustomEmoji(client, doc);
-                      if (buffer) customEmojiCache.set(emojiId, buffer);
-                    }
-                  }
-                  const emojiBuffer = customEmojiCache.get(emojiId);
-                  if (emojiBuffer) {
-                    emojiStatusPayload = {
-                      custom_emoji_id: emojiId,
-                      customEmojiBuffer: emojiBuffer.toString("base64"),
-                    };
-                  }
-                } catch (e) {
-                  console.warn("下载状态表情失败", e);
-                }
-              }
+              // 远程 quote-api 的 emoji_status 只接受纯字符串 ID，由远端自行拉表情。
+              // 本地无需预下载 customEmojiBuffer。
             }
 
             if (i === 0) {
