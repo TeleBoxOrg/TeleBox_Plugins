@@ -143,10 +143,10 @@ interface ThemeDoc {
 }
 
 const FORMAT_LABELS: Record<ThemeFormat, string> = {
-  attheme: "Android (.attheme)",
-  "tdesktop-theme": "Desktop (.tdesktop-theme)",
-  "tgx-theme": "TGX (.tgx-theme)",
-  "ios-theme": "iOS (.tgios-theme)",
+  attheme: "Android · .attheme",
+  "tdesktop-theme": "Desktop · .tdesktop-theme",
+  "tgx-theme": "TGX · .tgx-theme",
+  "ios-theme": "iOS · .tgios-theme",
 };
 
 const FORMAT_EXT: Record<ThemeFormat, string> = {
@@ -196,7 +196,7 @@ const TARGET_ALIASES: Record<string, ThemeFormat> = {
 const TARGET_CLIENT_LABELS: Record<ThemeFormat, string> = {
   attheme: "📱 Android",
   "tdesktop-theme": "💻 Desktop",
-  "tgx-theme": "📲 TGX / macOS",
+  "tgx-theme": "📲 TGX",
   "ios-theme": "🍎 iOS",
 };
 
@@ -982,6 +982,14 @@ function pickMobileWallpaper(
     const d = parsedByFmt.get("attheme");
     const w = normalizeWallpaper(d?.wallpaper || null);
     if (w) return { wallpaper: w, source: "attheme", slug: slug || d?.wallpaperSlug || null, blur, motion };
+  }
+  // 1b) Android has NO wallpaper (wallpaperFileOffset=-1) — intentional
+  {
+    const d = parsedByFmt.get("attheme");
+    const attCol = d ? Object.keys(d.colors).length : 0;
+    if (attCol > 0 && !normalizeWallpaper(d?.wallpaper || null)) {
+      return { wallpaper: null, source: "attheme-offset=-1", slug: d?.wallpaperSlug || null, blur, motion };
+    }
   }
   // 2) iOS resolved cloud wallpaper bytes
   {
@@ -3244,7 +3252,7 @@ async function downloadMedia(
 
 function buildHelpText(): string {
   return html`
-<b>🎨 主题转换器</b>
+<b>🎨 主题转换</b>
 
 <b>用法</b>
 • 发送主题文件 → 自动转换全部格式 + 云端 settings
@@ -3269,7 +3277,7 @@ function buildHelpText(): string {
 
 class ThemePlugin extends Plugin {
   name = "theme";
-  description = "🎨 主题转换器 | Android↔Desktop↔TGX↔iOS";
+  description = "🎨 主题转换 · 四端 + 云端";
 
   cmdHandlers = {
     theme: this.handleCmd.bind(this),
@@ -3298,7 +3306,7 @@ class ThemePlugin extends Plugin {
         await this.handleAddThemeLink(msg, linkMatch[1]);
         return;
       }
-      await msg.edit({ text: html`❌ 无效链接，格式: <code>t.me/addtheme/xxx</code>`, parseMode: "html" });
+      await msg.edit({ text: html`❌ 链接格式: t.me/addtheme/xxx`, parseMode: "html" });
       return;
     }
 
@@ -3369,7 +3377,7 @@ class ThemePlugin extends Plugin {
       if (size > MAX_FILE_SIZE || size === 0) return;
       if (!name.endsWith(".attheme") && !name.endsWith(".tdesktop-theme") && !name.endsWith(".tgios-theme") && !name.endsWith(".tgx-theme") && !name.endsWith(".json") && !name.endsWith(".tdesktop-palette") && !name.includes("theme") && !name.includes("tgx") && !name.includes("settings")) return;
 
-      await msg.edit({ text: html`⏳ 解析主题文件...`, parseMode: "html" });
+      await msg.edit({ text: html`⏳ 解析中…`, parseMode: "html" });
       const client = await getGlobalClient();
       const buf = await downloadMedia(msg, client);
       if (!buf || buf.length === 0) return;
@@ -3377,7 +3385,7 @@ class ThemePlugin extends Plugin {
       const cloudDoc = parseCloudSettingsJson(buf);
       if (cloudDoc) {
         const baseName = (documentAttributeFileName(docInfo) || "cloud-theme").replace(/\.[^.]+$/, "") || "theme";
-        await msg.edit({ text: html`⏳ 识别为云端 themeSettings JSON，转换四端…`, parseMode: "html" });
+        await msg.edit({ text: html`⏳ 云端 JSON → 四端…`, parseMode: "html" });
         // Materialize as synthetic attheme buffer is unnecessary — feed colors via render path
         // by building a minimal attheme for the pipeline
         const lines = genAndroid(cloudDoc.colors);
@@ -3682,7 +3690,7 @@ class ThemePlugin extends Plugin {
       basedOn,
     };
     const fmtMap: Record<string, { format: ThemeFormat; buf: Buffer }> = {};
-    for (const format of ["attheme", "tdesktop-theme", "tgx-theme", "ios-theme"] as ThemeFormat[]) {
+    for (const format of ["attheme", "ios-theme", "tgx-theme", "tdesktop-theme"] as ThemeFormat[]) {
       const buf = renderDoc(doc, format, title);
       if (buf) fmtMap[format] = { format, buf };
     }
@@ -3701,7 +3709,7 @@ class ThemePlugin extends Plugin {
     const existing = this.inflightLinks.get(key);
     if (existing) {
       try {
-        await msg.edit({ text: html`⏳ 主题 <code>${slug}</code> 已在处理中，请稍候…`, parseMode: "html" });
+        await msg.edit({ text: html`⏳ ${slug} 已在处理中…`, parseMode: "html" });
       } catch { /* */ }
       try { await existing; } catch { /* primary handler reports */ }
       return;
@@ -3716,7 +3724,7 @@ class ThemePlugin extends Plugin {
   private async handleAddThemeLinkInner(msg: Api.Message, slug: string): Promise<void> {
     const client = await getGlobalClient();
     try {
-      await msg.edit({ text: html`⏳ 获取主题 <code>${slug}</code>...`, parseMode: "html" });
+      await msg.edit({ text: html`⏳ ${slug} 处理中…`, parseMode: "html" });
 
       const fmtMap: Record<string, { format: ThemeFormat; buf: Buffer }> = {};
       let themeTitle = slug;
@@ -3917,7 +3925,7 @@ ${webPage.description ? `<br/>${webPage.description}` : ""}
         `, parseMode: "html" });
     } catch (e: any) {
       console.error("[theme] handleAddThemeLink:", e);
-      await msg.edit({ text: html`❌ 获取失败: ${getErrorMessage(e)}`, parseMode: "html" });
+      await msg.edit({ text: html`❌ ${getErrorMessage(e)}`, parseMode: "html" });
     }
   }
 
@@ -3933,7 +3941,7 @@ ${webPage.description ? `<br/>${webPage.description}` : ""}
     const client = await getGlobalClient();
     const t0 = Date.now();
     try {
-      await msg.edit({ text: html`⏳ <b>${title}</b>\n🔗 <code>t.me/addtheme/${slug}</code>\n解析并合并配色…`, parseMode: "html" });
+      await msg.edit({ text: html`⏳ <b>${title}</b>\n🔗 <code>t.me/addtheme/${slug}</code>\n合并配色…`, parseMode: "html" });
     } catch { /* */ }
 
     const byFormat = new Map<ThemeFormat, Buffer>();
@@ -4077,15 +4085,17 @@ ${webPage.description ? `<br/>${webPage.description}` : ""}
     }
 
     if (!bestDoc || !bestFmt) {
-      for (const [fmt, buf] of byFormat) {
-        const det = detectFmt(buf);
-        if (!det) continue;
+      // prefer mobile formats for bestFmt fallback
+      const mobilePreferred = ["attheme", "ios-theme", "tgx-theme", "tdesktop-theme"] as ThemeFormat[];
+      for (const fmt of mobilePreferred) {
+        const buf = byFormat.get(fmt);
+        if (!buf) continue;
+        const det = detectFmt(buf) || fmt;
         const parser = det === "attheme" ? parseAttheme : det === "tdesktop-theme" ? parseDesktop : det === "tgx-theme" ? parseTgx : parseIos;
         const doc = parser(buf);
         if (doc && Object.keys(doc.colors).length > bestCount) {
-          // strip any wallpaper from this fallback; use mobile pick only
           bestDoc = { ...doc, wallpaper, wallpaperSlug };
-          bestFmt = det;
+          bestFmt = fmt;
           bestCount = Object.keys(doc.colors).length;
         }
       }
@@ -4106,7 +4116,7 @@ ${webPage.description ? `<br/>${webPage.description}` : ""}
           `, parseMode: "html" });
         return;
       }
-      await msg.edit({ text: html`❌ 主题文件解析失败（无颜色变量）`, parseMode: "html" });
+      await msg.edit({ text: html`❌ 无颜色变量`, parseMode: "html" });
       return;
     }
 
@@ -4194,7 +4204,7 @@ ${webPage.description ? `<br/>${webPage.description}` : ""}
       return buf;
     };
 
-    const allTargets = (["attheme", "tdesktop-theme", "tgx-theme", "ios-theme"] as ThemeFormat[]);
+    const allTargets = (["attheme", "ios-theme", "tgx-theme", "tdesktop-theme"] as ThemeFormat[]);
     const sent: string[] = [];
     const stats: Array<{ target: ThemeFormat; colors: number; bytes: number; wp: boolean; note: string }> = [];
     let wpSidecarSent = false;
@@ -4205,7 +4215,7 @@ ${webPage.description ? `<br/>${webPage.description}` : ""}
 🔗 <code>t.me/addtheme/${slug}</code>
 📊 合并 ${bestCount} 色 · 源 ${sourceFmts.map(f => FORMAT_LABELS[f].split(" ")[0]).join("+") || "?"}
 🖼️ 移动端壁纸: ${wallpaperSource === "attheme" ? "Android" : wallpaperSource || "无"}
-生成四端文件…`, parseMode: "html" });
+生成四端…`, parseMode: "html" });
     } catch { /* */ }
 
     /** Validate output buffer: must parse + retain colors; for attheme check offset/WPS consistency */
@@ -4229,6 +4239,13 @@ ${webPage.description ? `<br/>${webPage.description}` : ""}
           if (wallpaper && !hasWps && target === "attheme" && !byFormat.has("attheme")) {
             // synthesized android should embed
             return { ok: false, colors: cc, wp: hasWp, detail: "expected WPS embed" };
+          }
+        }
+        if ((target === "tgx-theme" || target === "ios-theme") && (wallpaperSlug || bestDoc?.wallpaperSlug)) {
+          const text = out.toString("utf8");
+          const expectedSlug = wallpaperSlug || bestDoc?.wallpaperSlug;
+          if (expectedSlug && !text.includes(expectedSlug)) {
+            return { ok: false, colors: cc, wp: hasWp, detail: "wallpaper slug missing" };
           }
         }
         if (target === "tdesktop-theme" && (desktopWallpaper || wallpaper)) {
@@ -4302,7 +4319,7 @@ ${webPage.description ? `<br/>${webPage.description}` : ""}
       }
 
       const sizeKb = Math.max(1, Math.round(out.length / 1024));
-      await sendThemeDocument(client, msg.peerId, Buffer.isBuffer(out) ? out : Buffer.from(out as any), `${slug || "theme"}${FORMAT_EXT[target]}`, API_MIME[target], html`✅ <b>${FORMAT_LABELS[target]}</b>${fromLabel === "设置合成" ? "（云端设置）" : fromLabel === "原始" ? "（原始）" : fromLabel === "多源合并" ? "（多源合并）" : fromLabel.startsWith("原始") ? `（${fromLabel}）` : ` ← ${fromLabel}`} · ${v.colors || bestCount} 色 · ${sizeKb}KB${wpNote}`, msg.id);
+      await sendThemeDocument(client, msg.peerId, Buffer.isBuffer(out) ? out : Buffer.from(out as any), `${slug || "theme"}${FORMAT_EXT[target]}`, API_MIME[target], html`✅ <b>${FORMAT_LABELS[target]}</b>${fromLabel === "设置合成" ? "（云端）" : fromLabel === "原始" ? "" : fromLabel === "多源合并" ? "" : fromLabel.startsWith("原始") ? `（${fromLabel}）` : ` ← ${fromLabel}`} · ${v.colors || bestCount} 色 · ${sizeKb}KB${wpNote}`, msg.id);
       sent.push(FORMAT_LABELS[target]);
       stats.push({ target, colors: v.colors || bestCount, bytes: out.length, wp: v.wp, note: fromLabel });
     }
@@ -4313,8 +4330,8 @@ ${webPage.description ? `<br/>${webPage.description}` : ""}
       const srcLabel = wallpaperSource === "attheme" ? "Android"
         : wallpaperSource === "ios-theme" || wallpaperSource === "ios-slug" ? "iOS"
         : wallpaperSource === "tgx-theme" ? "TGX"
-        : wallpaperSource === "settings" ? "云端设置"
-        : wallpaperSource || "unknown";
+        : wallpaperSource === "settings" ? "云端"
+        : wallpaperSource || "?";
       const dim = formatImageDim(readImageDimensions(wallpaper));
       await sendThemeDocument(client, msg.peerId, Buffer.isBuffer(wallpaper) ? wallpaper : Buffer.from(wallpaper as any), `${slug || "theme"}-chat-background.${ext}`, ext === "png" ? "image/png" : "image/jpeg", html`🖼️ <b>移动端聊天背景</b>（来源: ${srcLabel}${dim ? ` · ${dim}` : ""}${wallpaperSlug ? ` · slug: <code>${wallpaperSlug}</code>` : ""}；仅 Android/iOS/TGX/settings，绝不使用 Desktop）`, msg.id);
       wpSidecarSent = true;
@@ -4331,8 +4348,8 @@ ${webPage.description ? `<br/>${webPage.description}` : ""}
     const mobileSrcLabel = wallpaperSource === "attheme" ? "Android"
       : wallpaperSource === "ios-theme" || wallpaperSource === "ios-slug" ? "iOS"
       : wallpaperSource === "tgx-theme" ? "TGX"
-      : wallpaperSource === "settings" ? "云端设置"
-      : "无（Android 未嵌入，不回退 Desktop）";
+      : wallpaperSource === "settings" ? "云端"
+      : "无";
 
     const ms = Date.now() - t0;
     const statLine = stats.map(s => {
@@ -4384,27 +4401,27 @@ ${statLine ? `<br/>📈 ${statLine}` : ""}
     try {
       const reply = await safeGetReplyMessage(msg);
       if (!reply || !(reply as any).document) {
-        await msg.edit({ text: html`❌ 回复的消息不是文件`, parseMode: "html" }); return;
+        await msg.edit({ text: html`❌ 请回复主题文件`, parseMode: "html" }); return;
       }
-      await msg.edit({ text: html`⏳ 下载并解析主题...`, parseMode: "html" });
+      await msg.edit({ text: html`⏳ 下载主题…`, parseMode: "html" });
       const buf = await downloadMedia(reply, client);
       if (!buf || buf.length === 0) { await msg.edit({ text: html`❌ 下载失败`, parseMode: "html" }); return; }
       const format = detectFmt(buf);
       let doc = parseThemeBuffer(buf, format);
-      if (!doc || !Object.keys(doc.colors).length) { await msg.edit({ text: html`❌ 无法识别或解析主题格式`, parseMode: "html" }); return; }
+      if (!doc || !Object.keys(doc.colors).length) { await msg.edit({ text: html`❌ 解析失败`, parseMode: "html" }); return; }
       const fmt: ThemeFormat = (doc.format || format || "attheme") as ThemeFormat;
 
       // Resolve slug→bytes; upload image→slug so iOS/TGX cloud themes keep wallpaper
       if (doc.wallpaperSlug && !normalizeWallpaper(doc.wallpaper || null)) {
-        await msg.edit({ text: html`⏳ 下载云壁纸...`, parseMode: "html" });
+        await msg.edit({ text: html`⏳ 获取壁纸…`, parseMode: "html" });
         doc = await this.resolveWallpaperBytes(client, doc);
       }
       if (!doc.wallpaperSlug && normalizeWallpaper(doc.wallpaper || null) && (fmt === "ios-theme" || fmt === "tgx-theme")) {
-        await msg.edit({ text: html`⏳ 上传聊天背景到云壁纸...`, parseMode: "html" });
+        await msg.edit({ text: html`⏳ 上传壁纸…`, parseMode: "html" });
         doc = await this.ensureIosWallpaperSlug(client, doc);
       }
 
-      await msg.edit({ text: html`⏳ 上传到 Telegram 云端...`, parseMode: "html" });
+      await msg.edit({ text: html`⏳ 上传中…`, parseMode: "html" });
       const slug = genSlug();
       // Prefer original buffer when it already has native wallpaper/slug; else re-render
       const origHasWp =
@@ -4460,7 +4477,7 @@ ${statLine ? `<br/>📈 ${statLine}` : ""}
         }
       }
       if (!inputDoc) {
-        await msg.edit({ text: html`❌ 云端上传失败: 无法构造 inputDocument`, parseMode: "html" });
+        await msg.edit({ text: html`❌ 上传失败`, parseMode: "html" });
         return;
       }
 
@@ -4484,7 +4501,7 @@ ${statLine ? `<br/>📈 ${statLine}` : ""}
 📊 ${Object.keys(doc.colors).length} 个颜色变量 · ${FORMAT_LABELS[outFmt]}${wpNote}
         `, parseMode: "html" });
     } catch (e: any) {
-      await msg.edit({ text: html`❌ 云端上传失败: ${getErrorMessage(e)}`, parseMode: "html" });
+      await msg.edit({ text: html`❌ ${getErrorMessage(e)}`, parseMode: "html" });
     }
   }
 
@@ -4501,9 +4518,9 @@ ${statLine ? `<br/>📈 ${statLine}` : ""}
     try {
       const reply = await safeGetReplyMessage(msg);
       if (!reply || !(reply as any).document) {
-        await msg.edit({ text: html`❌ 回复不是文件`, parseMode: "html" }); return;
+        await msg.edit({ text: html`❌ 请回复主题文件`, parseMode: "html" }); return;
       }
-      await msg.edit({ text: html`⏳ 解析并生成云端 themeSettings...`, parseMode: "html" });
+      await msg.edit({ text: html`⏳ 生成 settings…`, parseMode: "html" });
       const buf = await downloadMedia(reply, client);
       if (!buf || buf.length === 0) { await msg.edit({ text: html`❌ 下载失败`, parseMode: "html" }); return; }
       let doc = parseThemeBuffer(buf, detectFmt(buf));
@@ -4513,7 +4530,7 @@ ${statLine ? `<br/>📈 ${statLine}` : ""}
         doc = await this.resolveWallpaperBytes(client, doc);
       }
       if (!doc.wallpaperSlug && normalizeWallpaper(doc.wallpaper || null)) {
-        await msg.edit({ text: html`⏳ 上传壁纸到云端...`, parseMode: "html" });
+        await msg.edit({ text: html`⏳ 上传壁纸到云端…`, parseMode: "html" });
         doc = await this.ensureIosWallpaperSlug(client, doc);
       }
 
@@ -4544,7 +4561,7 @@ ${statLine ? `<br/>📈 ${statLine}` : ""}
           : undefined,
       });
 
-      await msg.edit({ text: html`⏳ 创建云端 accent 主题（Unigram/Web）...`, parseMode: "html" });
+      await msg.edit({ text: html`⏳ 创建中…`, parseMode: "html" });
       const slug = genSlug();
       const created: any = await client.invoke(new Api.account.CreateTheme({
         slug,
@@ -4570,7 +4587,7 @@ ${doc.wallpaperSlug ? `<br/>🖼️ wallpaper slug <code>${doc.wallpaperSlug}</c
 <br/><i>此类客户端无 .attheme 等文件，靠 themeSettings 同步配色</i>
         `, parseMode: "html" });
     } catch (e) {
-      await msg.edit({ text: html`❌ cloud-settings 失败: ${getErrorMessage(e)}`, parseMode: "html" });
+      await msg.edit({ text: html`❌ ${getErrorMessage(e)}`, parseMode: "html" });
     }
   }
 
@@ -4585,24 +4602,24 @@ ${doc.wallpaperSlug ? `<br/>🖼️ wallpaper slug <code>${doc.wallpaperSlug}</c
     try {
       const reply = await safeGetReplyMessage(msg);
       if (!reply || !(reply as any).document) {
-        await msg.edit({ text: html`❌ 回复不是文件`, parseMode: "html" }); return;
+        await msg.edit({ text: html`❌ 请回复主题文件`, parseMode: "html" }); return;
       }
-      await msg.edit({ text: html`⏳ 转换为 ${TARGET_CLIENT_LABELS[target]}...`, parseMode: "html" });
+      await msg.edit({ text: html`⏳ 转换 ${TARGET_CLIENT_LABELS[target]}...`, parseMode: "html" });
       const buf = await downloadMedia(reply, client);
       if (!buf || buf.length === 0) { await msg.edit({ text: html`❌ 下载失败`, parseMode: "html" }); return; }
       const format = detectFmt(buf);
-      if (!format && !parseCloudSettingsJson(buf)) { await msg.edit({ text: html`❌ 无法识别文件格式`, parseMode: "html" }); return; }
+      if (!format && !parseCloudSettingsJson(buf)) { await msg.edit({ text: html`❌ 不认识的文件格式`, parseMode: "html" }); return; }
       let doc = parseThemeBuffer(buf, format);
       if (!doc || !Object.keys(doc.colors).length) { await msg.edit({ text: html`❌ 解析失败`, parseMode: "html" }); return; }
       const srcFmt = doc.format || format!;
       const sameFmt = srcFmt === target;
       if (sameFmt) {
-        await msg.edit({ text: html`⏳ 同格式重规范化（补齐壁纸/offset/slug）...`, parseMode: "html" });
+        await msg.edit({ text: html`⏳ 重规范化…`, parseMode: "html" });
       }
 
       // Resolve / package wallpaper for target
       if (doc.wallpaperSlug && !normalizeWallpaper(doc.wallpaper || null)) {
-        await msg.edit({ text: html`⏳ 下载云壁纸...`, parseMode: "html" });
+        await msg.edit({ text: html`⏳ 获取壁纸…`, parseMode: "html" });
         doc = await this.resolveWallpaperBytes(client, doc);
       }
       // iOS + TGX both need cloud wallpaper slug when only image bytes exist
@@ -4620,7 +4637,7 @@ ${doc.wallpaperSlug ? `<br/>🖼️ wallpaper slug <code>${doc.wallpaperSlug}</c
       const dim = formatImageDim(readImageDimensions(wp));
       await msg.delete();
       await sendThemeDocument(client, msg.peerId, Buffer.isBuffer(out) ? out : Buffer.from(out as any), `theme${FORMAT_EXT[target]}`, API_MIME[target], html`
-✅ <b>${sameFmt ? "重规范化完成" : "转换完成"}</b> ${TARGET_CLIENT_LABELS[target]}
+✅ <b>${sameFmt ? "已重规范化" : "已转换"}</b> ${TARGET_CLIENT_LABELS[target]}
 📊 ${cc} 个颜色变量${emb ? "<br/>🖼️ 壁纸已嵌入" : slugPacked ? `<br/>🖼️ 壁纸已打包（slug: <code>${doc.wallpaperSlug}</code>）` : wp ? "<br/>🖼️ 壁纸见附图" : ""}${dim ? `<br/>📐 ${dim}` : ""}
 ${sameFmt ? "<br/><i>源格式相同：已按生产级规范重写（offset/signed int/slug）</i>" : ""}
         `, msg.id);
@@ -4632,7 +4649,7 @@ ${sameFmt ? "<br/><i>源格式相同：已按生产级规范重写（offset/sign
         await sendThemeDocument(client, msg.peerId, Buffer.isBuffer(wp) ? wp : Buffer.from(wp as any), `theme-chat-background.${ext}`, ext === "png" ? "image/png" : "image/jpeg", cap, msg.id);
       }
     } catch (e) {
-      await msg.edit({ text: html`❌ 转换失败: ${getErrorMessage(e)}`, parseMode: "html" });
+      await msg.edit({ text: html`❌ ${getErrorMessage(e)}`, parseMode: "html" });
     }
   }
 }
