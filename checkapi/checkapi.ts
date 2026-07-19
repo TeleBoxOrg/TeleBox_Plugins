@@ -32,6 +32,26 @@ function parseEnv(s: string): { key?: string } | null {
   return null;
 }
 
+// ── Smart input parser v2: any-order URL+key detection ──
+function parseSmart(raw:string):{sub?:string;key?:string;url?:string;label?:string}{
+  const tokens=raw.split(/\s+/).filter(Boolean);
+  if(!tokens.length)return{};
+  const r:{sub?:string;key?:string;url?:string;label?:string}={};
+  const subs=new Set(["models","ask","speed","compare","save","list","del","check","help","delete"]);
+  for(let i=0;i<tokens.length;i++){
+    const t=tokens[i];const tl=t.toLowerCase();
+    if(subs.has(tl)&&!r.sub){r.sub=tl;continue;}
+    if(/^(https?:\/\/|.+\.[a-z]{2,}(?:\/|$|:\d+)|.+\/v\d)/i.test(t)||t.includes("://")){r.url=t;continue;}
+    if(/^sk-(?:ant-|or-v1-)?|^gsk_|^tgp_|^pplx-|^r8_|^fw_|^xai-|^AIza|^co-|^hf_|^nvapi-/i.test(t)){r.key=t;continue;}
+    if(/^[a-zA-Z0-9_-]{20,}$/.test(t)&&!r.sub){r.key=t;continue;}
+  }
+  for(let i=0;i<tokens.length;i++){
+    const t=tokens[i];
+    if(/^[a-zA-Z0-9][-a-zA-Z0-9]*\.[a-zA-Z]{2,}(?:\/\S*)?$/.test(t)&&!r.url&&!r.key){r.url=t;break;}
+  }
+  return r;
+}
+
 // ── Provider detection (enhanced) ──
 function dp(key: string, baseUrl?: string): PI {
   const t = key.trim();
@@ -83,6 +103,34 @@ function dp(key: string, baseUrl?: string): PI {
 
   if (t.length>20) return {provider:"openai",displayName:"OpenAI（推测）",baseUrl:"https://api.openai.com",chatUrl:"https://api.openai.com/v1/chat/completions",modelsUrl:"https://api.openai.com/v1/models",confidence:"low",headers:{},authHeader:`Bearer ${t}`};
   return {provider:"unknown",displayName:"未知",baseUrl:"",chatUrl:"",confidence:"low",headers:{},authHeader:""};
+}
+
+// ── API probing: call endpoints to detect provider type ──
+async function probeApi(baseUrl:string,key:string): Promise<PI>{
+  const u=baseUrl.replace(/\/+$/,"");const t=key.trim();
+  const r:PI={provider:"custom",displayName:`API (${(()=>{try{return new URL(u).hostname}catch{return u}})()})`,baseUrl:u,chatUrl:`${u}/chat/completions`,modelsUrl:`${u}/models`,confidence:"low",headers:{},authHeader:`Bearer ${t}`};
+  const probes:Array<{label:string;url:string;hdrs:Record<string,string>;fn?:(d:unknown)=>Partial<PI>|null}>=[
+    {label:"openai",url:`${u}/v1/models`,hdrs:{Authorization:`Bearer ${t}`},fn:(d:any)=>{const arr=Array.isArray(d)?d:d?.data;if(!arr?.length)return null;const ids=arr.map((m:any)=>String(m.id||""));if(ids.some((s:string)=>s.includes("gpt")||s.includes("o1")||s.includes("o3")||s.includes("o4")))return{provider:"openai",displayName:"OpenAI",confidence:"high"};if(ids.some((s:string)=>s.includes("claude")))return{provider:"custom",displayName:"Anthropic 代理",confidence:"medium"};if(ids.some((s:string)=>s.includes("gemini")))return{provider:"custom",displayName:"Gemini 代理",confidence:"medium"};return{provider:"custom",displayName:`OpenAI兼容 (${ids.length}模型)`,confidence:"medium"};}},
+    {label:"gemini",url:`${u}/v1beta/models?key=${t}`,hdrs:{},fn:(d:any)=>{if(d?.models?.length){const names=d.models.map((m:any)=>String(m.name||""));if(names.some((s:string)=>s.includes("gemini")))return{provider:"gemini",displayName:"Google Gemini",confidence:"high",chatUrl:`${u}/v1beta/models/gemini-2.5-flash:generateContent`,modelsUrl:`${u}/v1beta/models`,authHeader:""};}return null;}},
+    {label:"anthropic",url:`${u}/v1/models`,hdrs:{"x-api-key":t,"anthropic-version":"2023-06-01"},fn:(d:any)=>{const arr=Array.isArray(d)?d:d?.data;if(!arr?.length)return null;const ids=arr.map((m:any)=>String(m.id||""));if(ids.every((s:string)=>s.startsWith("claude-")))return{provider:"anthropic",displayName:"Anthropic",confidence:"high",chatUrl:`${u}/v1/messages`,headers:{"x-api-key":t,"anthropic-version":"2023-06-01","content-type":"application/json"},authHeader:""};return null;}},
+    {label:"openrouter",url:`${u.replace(/\/api\/v1.*$/,"")}/api/v1/auth/key`,hdrs:{Authorization:`Bearer ${t}`,"HTTP-Referer":"https://t.me/telebox_next"},fn:(d:any)=>{if(d?.data?.label||d?.label||d?.data?.credits!==undefined)return{provider:"openrouter",displayName:"OpenRouter",confidence:"high",balanceUrl:`${u.replace(/\/api\/v1.*$/,"")}/api/v1/auth/key`,headers:{"HTTP-Referer":"https://t.me/telebox_next"}};return null;}},
+  ];
+  const results=await Promise.allSettled(probes.map(p=>ag(p.url,p.hdrs,8000,0).then(ar=>({...p,ar}))));
+  for(const pr of results){
+    if(pr.status!=="fulfilled")continue;
+    const{label,fn,ar}=pr.value;
+    if(!ar.ok)continue;
+    if(fn){const extra=fn(ar.data);if(extra){Object.assign(r,extra);if(r.confidence==="high")break;}}
+    else{r.confidence="medium";}
+  }
+  if(r.confidence==="low"){
+    const gen=results.find(pr=>pr.status==="fulfilled"&&pr.value.label==="openai");
+    if(gen&&gen.status==="fulfilled"&&gen.value.ar.ok){
+      const d=gen.value.ar.data as any;const arr=Array.isArray(d)?d:d?.data;
+      if(arr?.length)r.displayName=`OpenAI兼容 (${arr.length}模型)`;
+    }
+  }
+  return r;
 }
 
 // ── HTTP (with retry) ──
@@ -219,24 +267,18 @@ async function speedTest(provider:string,key:string,baseUrl:string): Promise<str
 
 // ── Plugin ──
 class CheckApiPlugin extends Plugin{name="checkapi";description=
-`🔍 API Key 全功能检测 v5\n\n支持 24+ Provider: OpenAI/Anthropic/Gemini/DeepSeek/OpenRouter/xAI/Groq/Together/Mistral/Perplexity/Fireworks/Replicate/Cohere/Ollama/HuggingFace/SiliconFlow/DeepInfra/NVIDIA/Novita/Cerebras/Azure/Vercel/自定义\n\n用法:\n<blockquote expandable><code>${mp}checkapi &lt;key&gt; [baseUrl]</code> — 一键全检\n<code>${mp}checkapi &lt;URL&gt; &lt;key&gt;</code> — URL 自动识别 API\n<code>${mp}checkapi ask &lt;k&gt; &lt;q&gt;</code> — 真实对话\n<code>${mp}checkapi models &lt;k&gt;</code> — 模型列表\n<code>${mp}checkapi speed &lt;k&gt;</code> — 速度基准测试\n<code>${mp}checkapi compare &lt;k1&gt; &lt;k2&gt;</code> — 多 Key 对比\n<code>${mp}checkapi save/list/del/check</code> — 管理</blockquote>\n支持智能输入: 直接粘贴 curl 命令 / ENV 变量 / JSON config\nURL 域名识别: api.groq.com→Groq | api.together.xyz→Together | api.mistral.ai→Mistral | integrate.api.nvidia.com→NVIDIA | api.novita.ai→Novita | api.cerebras.ai→Cerebras | *.openai.azure.com→Azure | gateway.ai.vercel.com→Vercel | ...`;
+`🔍 API Key 全功能检测 v6\n\n支持 24+ Provider: OpenAI/Anthropic/Gemini/DeepSeek/OpenRouter/xAI/Groq/Together/Mistral/Perplexity/Fireworks/Replicate/Cohere/Ollama/HuggingFace/SiliconFlow/DeepInfra/NVIDIA/Novita/Cerebras/Azure/Vercel/自定义\n\n用法:\n<blockquote expandable><code>${mp}checkapi &lt;URL&gt; &lt;key&gt;</code> — URL+Key 任意顺序全检\n<code>${mp}checkapi &lt;URL&gt; &lt;key&gt;</code> — URL 自动识别 API\n<code>${mp}checkapi ask &lt;k&gt; &lt;q&gt;</code> — 真实对话\n<code>${mp}checkapi models &lt;k&gt;</code> — 模型列表\n<code>${mp}checkapi speed &lt;k&gt;</code> — 速度基准测试\n<code>${mp}checkapi compare &lt;k1&gt; &lt;k2&gt;</code> — 多 Key 对比\n<code>${mp}checkapi save/list/del/check</code> — 管理</blockquote>\n支持智能输入: 直接粘贴 curl 命令 / ENV 变量 / JSON config\nURL 域名识别: api.groq.com→Groq | api.together.xyz→Together | api.mistral.ai→Mistral | integrate.api.nvidia.com→NVIDIA | api.novita.ai→Novita | api.cerebras.ai→Cerebras | *.openai.azure.com→Azure | gateway.ai.vercel.com→Vercel | 任意 OpenAI 兼容端点自动探测 | ...`;
 
 cmdHandlers:Record<string,(msg:Api.Message)=>Promise<void>>={checkapi:async(msg)=>{
   const raw=msg.message.slice(mp.length).trim();
-  let text=raw;
-
-  // ── Smart input parsing ──
-  let extracedKey:string|undefined,extracedUrl:string|undefined;
-  // Try curl command
-  const curlParsed=parseCurl(raw);
-  if(curlParsed){extracedKey=curlParsed.key;extracedUrl=curlParsed.url;text="";}
-  // Try ENV var
-  const envParsed=parseEnv(raw);
-  if(!extracedKey&&envParsed){extracedKey=envParsed.key;text="";}
-  // Try JSON config
+  const smart=parseSmart(raw);
+  let extracedKey=smart.key;let extracedUrl=smart.url;
+  let text=smart.sub?"":raw;
+  // ── Curl/ENV/JSON fallbacks ──
+  if(!extracedKey){const cp=parseCurl(raw);if(cp){extracedKey=cp.key;extracedUrl=cp.url;text="";}}
+  if(!extracedKey){const ep=parseEnv(raw);if(ep){extracedKey=ep.key;text="";}}
   if(!extracedKey&&(raw.includes('"api_key"')||raw.includes('"apiKey"')||raw.includes('"key"'))){
-    try{const j=JSON.parse(raw.replace(/^`+|`+$/g,""));extracedKey=j.api_key||j.apiKey||j.key||j.token;extracedUrl=j.base_url||j.baseUrl||j.endpoint;}catch{/* not JSON */}
-  }
+    try{const j=JSON.parse(raw.replace(/^`+|`+$/g,""));extracedKey=j.api_key||j.apiKey||j.key||j.token;extracedUrl=j.base_url||j.baseUrl||j.endpoint;}catch{}}
 
   const parts=text.split(/\s+/).filter(Boolean);
   if(extracedKey){parts.unshift(extracedKey);if(extracedUrl)parts.unshift(extracedUrl);}
@@ -251,7 +293,7 @@ cmdHandlers:Record<string,(msg:Api.Message)=>Promise<void>>={checkapi:async(msg)
   if(sub==="check"){const target=parts[1]||"all";if(target==="all"){const keys=await lk();if(!keys.length){await msg.edit({text:`📭 未保存`, parseMode: "html" });return;}await msg.edit({text:`🔍 检测 ${keys.length} 个...`, parseMode: "html" });const results:string[]=[];const promises=keys.map(async(k)=>{const info=dp(k.key,k.baseUrl);try{return[`\n━━━ <b>${k.name}</b> ━━━`,...(await fcv2(info.provider,k.key,k.baseUrl||info.baseUrl))]as string[]}catch(e:unknown){return[`\n━━━ <b>${k.name}</b> ━━━`,`⚠️ ${ge(e)}`]as string[]}});const batches=await Promise.all(promises);for(const row of batches)results.push(...row);await msg.edit({text:`${results.join("\n")}`, parseMode: "html" });return;}const keys=await lk();const found=keys.find(k=>k.name===target);if(!found){await msg.edit({text:`❌ 未找到 <b>${target}</b>`, parseMode: "html" });return;}await msg.edit({text:`🔍 <b>${target}</b>...`, parseMode: "html" });const info=dp(found.key,found.baseUrl);const results=await fcv2(info.provider,found.key,found.baseUrl||info.baseUrl);await msg.edit({text:`${results.join("\n")}`, parseMode: "html" });return;}
 
   // ── models / ask / speed ──
-  if(sub==="models"){const input=parts[1];if(!input){await msg.edit({text:`❌ <code>${mp}checkapi models &lt;key|name&gt;</code>`, parseMode: "html" });return;}const keys=await lk();const found=keys.find(k=>k.name===input);const key=found?found.key:input;const info=dp(key,found?.baseUrl);await msg.edit({text:`🔍 ${info.displayName} 模型列表...`, parseMode: "html" });const result=await lmf(info.provider,key,info.baseUrl);await msg.edit({text:`${result}`, parseMode: "html" });return;}
+  if(sub==="models"){const input=parts[1];if(!input){await msg.edit({text:`❌ <code>${mp}checkapi models &lt;key|name&gt;</code>`, parseMode: "html" });return;}const keys=await lk();const found=keys.find(k=>k.name===input);const key=found?found.key:input;const info=found?.baseUrl?await probeApi(found.baseUrl,key):dp(key);await msg.edit({text:`🔍 ${info.displayName} 模型列表...`, parseMode: "html" });const result=await lmf(info.provider,key,info.baseUrl);await msg.edit({text:`${result}`, parseMode: "html" });return;}
   if(sub==="ask"){const input=parts[1];const question=parts.slice(2).join(" ");if(!input){await msg.edit({text:`❌ <code>${mp}checkapi ask &lt;key|name&gt; &lt;问题&gt;</code>`, parseMode: "html" });return;}const keys=await lk();const found=keys.find(k=>k.name===input);const key=found?found.key:input;const info=dp(key,found?.baseUrl);const prompt=question||"say hello";await msg.edit({text:`💬 ${info.displayName}: "${prompt}" ...`, parseMode: "html" });const chat=await ct(info.provider,key,info.baseUrl,prompt);if(chat.ok){const l=[`💬 <b>${info.displayName}</b>`,`🤖 <code>${chat.model}</code> | 🕐 ${chat.elapsedMs}ms`,`📝 ${chat.text}`];if(chat.usage)l.push(`📊 Tok: 入${chat.usage.prompt} 出${chat.usage.completion} 计${chat.usage.total}`);if(chat.headers)l.push(fh(chat.headers));await msg.edit({text:`${l.join("\n")}`, parseMode: "html" });}else{await msg.edit({text:`❌ (${chat.elapsedMs||"?"}ms): ${chat.error}`, parseMode: "html" });}return;}
   if(sub==="speed"){const input=parts[1];if(!input){await msg.edit({text:`❌ <code>${mp}checkapi speed &lt;key|name&gt;</code>`, parseMode: "html" });return;}const keys=await lk();const found=keys.find(k=>k.name===input);const key=found?found.key:input;const info=dp(key,found?.baseUrl);await msg.edit({text:`⚡ ${info.displayName} 基准测试中...`, parseMode: "html" });const results=await speedTest(info.provider,key,info.baseUrl);await msg.edit({text:`${results.join("\n")}`, parseMode: "html" });return;}
 
@@ -263,7 +305,7 @@ cmdHandlers:Record<string,(msg:Api.Message)=>Promise<void>>={checkapi:async(msg)
   if(parts.length>=2&&isUrl(parts[0])){baseUrl=nu(parts[0]);key=parts[1];label=mk(key);}
   else if(parts.length>=2&&isUrl(parts[1])){key=parts[0];baseUrl=nu(parts[1]);const found=keys.find(k=>k.name===key);label=found?found.name:mk(key);key=found?found.key:key;}
   else{const input=parts[0];const found=keys.find(k=>k.name===input);key=found?found.key:input;baseUrl=found?.baseUrl;label=found?found.name:mk(key);}
-  const info=dp(key,baseUrl);
+  let info:PI;if(baseUrl){await msg.edit({text:`🔍 探测 API 类型...`, parseMode: "html" });info=await probeApi(baseUrl,key);}else{info=dp(key,baseUrl);}
   await msg.edit({text:`🔍 <b>${label}</b> (${info.displayName}) 全检中...`, parseMode: "html" });
   const results=await fcv2(info.provider,key,info.baseUrl);
   results.unshift(`🔍 <b>${label}</b>`);
