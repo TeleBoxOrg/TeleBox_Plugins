@@ -12,8 +12,9 @@ import { htmlEscape } from "@utils/htmlEscape";
 
 const BOT_USERNAME = "ParseHubot";
 const POLL_INTERVAL_MS = 2000;
-const MAX_WAIT_MS = 3 * 60 * 1000;
+const MAX_WAIT_MS = 10 * 60 * 1000; // large media upload can exceed 3min
 const RESULT_IDLE_MS = 5000;
+const PROGRESS_EXTEND_MS = 2 * 60 * 1000; // keep waiting while bot still reports progress
 const FETCH_LIMIT = 50;
 
 const PROGRESS_PREFIXES = [
@@ -93,6 +94,23 @@ const isProgressText = (text?: string | null): boolean => {
   const trimmed = text.trim();
   return PROGRESS_PREFIXES.some((prefix) => trimmed.startsWith(prefix));
 };
+
+/** True when message carries real media. */
+function hasMediaPayload(msg: Api.Message): boolean {
+  const media = (msg as any).media;
+  if (!media) return false;
+  const cn = media.className || media._ || "";
+  if (!cn || cn === "MessageMediaEmpty") return false;
+  return true;
+}
+
+function isFinalBotMessage(msg: Api.Message): boolean {
+  // Media always wins — bot may edit progress text in place while attaching file
+  if (hasMediaPayload(msg)) return true;
+  const text = msg.message?.trim() || "";
+  if (isProgressText(text)) return false;
+  return Boolean(text);
+}
 
 function extractLinks(text: string): string[] {
   if (!text) return [];
@@ -250,12 +268,15 @@ async function relayParseResult(
     };
   }
 
-  const processedIds = new Set<number>();
+  // Progress msgs (解析中/下载中/上传中) often keep the SAME id and are later
+  // edited into the final media. Never permanently skip them via processedIds.
+  const progressIds = new Set<number>();
   const finalMessages = new Map<number, Api.Message>();
 
-  const deadline = Date.now() + MAX_WAIT_MS;
+  let deadline = Date.now() + MAX_WAIT_MS;
   let lastId = baselineId;
   let lastFinalActivity = 0;
+  let lastProgressActivity = Date.now();
   let firstRunIgnore = shouldIgnoreNextBotMessage;
 
   while (Date.now() < deadline) {
@@ -278,19 +299,38 @@ async function relayParseResult(
     for (const botMsg of messages) {
       if (!botMsg || (botMsg as any).className === "MessageService") continue;
       if (botMsg.out) continue;
-      if (botMsg.id <= lastId) continue;
-      if (processedIds.has(botMsg.id)) continue;
+      if (botMsg.id <= baselineId) continue;
 
-      processedIds.add(botMsg.id);
-      lastId = Math.max(lastId, botMsg.id);
+      const text = botMsg.message?.trim() || "";
 
-      const text = botMsg.message?.trim();
-      if (isProgressText(text)) {
+      if (isProgressText(text) && !hasMediaPayload(botMsg)) {
+        // Stale progress left behind after a newer final result must not block forwarding
+        const maxFinalId = finalMessages.size
+          ? Math.max(...Array.from(finalMessages.keys()))
+          : 0;
+        if (maxFinalId > botMsg.id) {
+          progressIds.delete(botMsg.id);
+          continue;
+        }
+        progressIds.add(botMsg.id);
+        lastId = Math.max(lastId, botMsg.id);
+        lastProgressActivity = Date.now();
+        // Only extend while we do not yet have a final result
+        if (finalMessages.size === 0) {
+          const extended = Date.now() + PROGRESS_EXTEND_MS;
+          if (extended > deadline) deadline = extended;
+          const hardCap = Date.now() + 30 * 60 * 1000;
+          if (deadline > hardCap) deadline = hardCap;
+        }
         continue;
       }
 
-      if (firstRunIgnore) {
-        // Ignore the first non-progress incoming message after initial /start
+      if (!isFinalBotMessage(botMsg)) {
+        lastId = Math.max(lastId, botMsg.id);
+        continue;
+      }
+
+      if (firstRunIgnore && !hasMediaPayload(botMsg)) {
         firstRunIgnore = false;
         shouldIgnoreNextBotMessage = false;
         ignoredUpToId = botMsg.id;
@@ -298,15 +338,34 @@ async function relayParseResult(
         initState.ignoredUpToId = botMsg.id;
         writeState(initState);
         lastId = Math.max(lastId, botMsg.id);
+        progressIds.delete(botMsg.id);
         continue;
       }
 
+      const isNew = botMsg.id > lastId || progressIds.has(botMsg.id) || !finalMessages.has(botMsg.id);
+      if (!isNew && finalMessages.has(botMsg.id)) {
+        finalMessages.set(botMsg.id, botMsg);
+        continue;
+      }
+
+      progressIds.delete(botMsg.id);
       finalMessages.set(botMsg.id, botMsg);
+      lastId = Math.max(lastId, botMsg.id);
       lastFinalActivity = Date.now();
     }
 
     if (
       finalMessages.size > 0 &&
+      progressIds.size === 0 &&
+      Date.now() - lastFinalActivity >= RESULT_IDLE_MS
+    ) {
+      break;
+    }
+
+    if (
+      finalMessages.size > 0 &&
+      progressIds.size > 0 &&
+      Date.now() - lastProgressActivity >= RESULT_IDLE_MS * 3 &&
       Date.now() - lastFinalActivity >= RESULT_IDLE_MS
     ) {
       break;
