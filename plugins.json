@@ -493,7 +493,7 @@
   },
   "checkapi": {
     "name": "checkapi",
-    "desc": "🔍 API Key 检测 — 支持 OpenAI/Anthropic/Gemini/DeepSeek/OpenRouter/xAI/自定义，智能识别、余额查询、模型列表、连通性测试",
+    "desc": "🔍 API Key 全功能检测 — 支持 OpenAI/Anthropic/Gemini/DeepSeek/OpenRouter/xAI/自定义 URL，智能识别 provider，一键查余额+模型列表+对话实测，支持保存多 Key 管理",
     "file": "checkapi/checkapi.ts"
   }
 }
