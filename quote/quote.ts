@@ -1626,18 +1626,15 @@ async function toQuoteMessage(msg: Api.Message, args: QuoteArgs): Promise<any> {
     replyPreview(msg, args.reply, args),
     Promise.resolve(undefined),
   ]);
+  // Buffer is filled later by hydrateCustomEmojiBuffers — only attach the id here.
   const emojiId = emojiStatusIdFromEntity(effectiveEntity);
-  let emojiBuffer: Buffer | undefined;
-  if (emojiId) {
-    emojiBuffer = customEmojiCache.get(emojiId);
-    console.warn("quote sender emoji status", emojiId, emojiBuffer ? emojiBuffer.length : 0);
-  }
+  if (emojiId) console.warn("quote sender emoji status id", emojiId);
   const user: QuoteUser = {
     id: fwd?.peer ? peerIdNumber(fwd.peer) : senderIdNumber(msg),
     name: args.hidden ? false : effectiveName,
     first_name: args.hidden ? false : effectiveName,
     photo: {},
-    emoji_status: args.hidden || fwd?.anonymous ? undefined : emojiStatusPayload(effectiveEntity, emojiBuffer),
+    emoji_status: args.hidden || fwd?.anonymous ? undefined : emojiStatusPayload(effectiveEntity),
   };
   return {
     chatId: fwd?.peer ? peerIdNumber(fwd.peer) : senderIdNumber(msg),
@@ -1662,7 +1659,7 @@ async function toQuoteMessage(msg: Api.Message, args: QuoteArgs): Promise<any> {
     voice: media.voice,
     document: media.document,
     audio: media.audio,
-    emoji_status: args.hidden || fwd?.anonymous ? undefined : emojiStatusPayload(effectiveEntity, emojiBuffer),
+    emoji_status: args.hidden || fwd?.anonymous ? undefined : emojiStatusPayload(effectiveEntity),
     date: messageDate(msg),
     via_bot: (msg as any).viaBotId ?? (msg as any).via_bot_id,
     senderTag: fwd ? undefined : await senderRankInChat(msg, entity),

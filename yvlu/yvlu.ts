@@ -1077,8 +1077,12 @@ class YvluPlugin extends Plugin {
               (sender as any).firstName || (sender as any).title || "";
             const lastName = (sender as any).lastName || "";
             const username = (sender as any).username || "";
+            // teleproto may expose emojiStatus.documentId as big-int-like; also try nested raw
             const emojiStatus =
-              (sender as any).emojiStatus?.documentId?.toString() || null;
+              emojiStatusIdFromEntity(sender) ||
+              (sender as any).emojiStatus?.documentId?.toString?.() ||
+              (sender as any).emoji_status?.documentId?.toString?.() ||
+              null;
 
             // 生成用户唯一标识符：优先使用 userId，如果没有则使用名称的 hashCode
             const currentUserIdentifier =
@@ -1118,7 +1122,8 @@ class YvluPlugin extends Plugin {
                     const docs = await withTimeout(
                       client.invoke(
                         new Api.messages.GetCustomEmojiDocuments({
-                          documentId: [BigInt(emojiId)],
+                          // teleproto expects big-integer, not native BigInt
+                          documentId: [bigInteger(emojiId)],
                         })
                       ),
                       QUOTE_RPC_TIMEOUT_MS,
