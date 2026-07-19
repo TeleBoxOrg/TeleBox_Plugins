@@ -493,7 +493,7 @@
   },
   "checkapi": {
     "name": "checkapi",
-    "desc": "🔍 API Key 全功能检测 — 支持 OpenAI/Anthropic/Gemini/DeepSeek/OpenRouter/xAI/自定义 URL，智能识别 provider，一键查余额+模型列表+对话实测，支持保存多 Key 管理",
+    "desc": "🔍 API Key 全功能检测 v3 — 18+ Provider (OpenAI/Anthropic/Gemini/Groq/Mistral/Perplexity/Fireworks/etc)，智能识别+余额+模型列表+对话测试+速度基准+多Key对比，支持 curl/ENV/JSON 输入，URL 域名自动推断",
     "file": "checkapi/checkapi.ts"
   }
 }
