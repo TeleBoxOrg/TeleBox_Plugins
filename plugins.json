@@ -490,5 +490,10 @@
   "theme": {
     "url": "https://github.com/TeleBoxOrg/TeleBox-Plugins/blob/main/theme/theme.ts?raw=true",
     "desc": "🎨 Telegram 主题转换器 Android↔Desktop↔TGX↔iOS"
+  },
+  "checkapi": {
+    "name": "checkapi",
+    "desc": "🔍 API Key 检测 — 支持 OpenAI/Anthropic/Gemini/DeepSeek/OpenRouter/xAI/自定义，智能识别、余额查询、模型列表、连通性测试",
+    "file": "checkapi/checkapi.ts"
   }
 }
