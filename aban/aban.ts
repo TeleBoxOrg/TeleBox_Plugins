@@ -68,9 +68,9 @@ const HELP_TEXT = `<b>封禁管理</b>
 <code>${mainPrefix}unban</code> 解封
 <code>${mainPrefix}mute [time]</code> 禁言 (如 60s/5m/1h/1d，不填则永久)
 <code>${mainPrefix}unmute</code> 解禁言
-<code>${mainPrefix}sb</code> 批量封禁
-<code>${mainPrefix}unsb</code> 批量解封
-<code>${mainPrefix}refresh</code> 刷新
+<code>${mainPrefix}sb</code> 批量封禁（仅有管理权的群）
+<code>${mainPrefix}unsb</code> 批量解封（仅有管理权的群）
+<code>${mainPrefix}refresh</code> 刷新管理群缓存
 
 回复消息或@用户名`;
 
@@ -630,45 +630,54 @@ class GroupManager {
   static async getManagedGroups(
     client: TelegramClient
   ): Promise<ManagedGroup[]> {
-    const cached = await this.cache.get("managed_groups_v3");
-    if (cached) return cached;
+    // v4: 仅缓存「自己有 ban/delete 管理权」的群；旧 v3 含全部会话，必须作废
+    const cached = await this.cache.get("managed_groups_v4");
+    if (cached && Array.isArray(cached)) return cached;
 
     const groups: ManagedGroup[] = [];
     
     try {
       const dialogs = await this.getAllManageableDialogs(client);
-      
-      const checkPromises = dialogs.map(async (dialog: any) => {
-        if (dialog.isChannel || dialog.isGroup) {
-          // 不再预检查管理员权限，统一纳入所有群组/频道。
-          // 批量操作（sb/unsb）会由各群组的实际 API 调用返回权限错误，
-          // 避免了 checkAdminPermission 因 peerId 格式或边缘情况导致的误判。
-          const isChannel = !(dialog.isGroup && !dialog.isChannel);
-          // 仅 channel 需要 accessHash，basic group 用裸 chatId
-          const rawHash = isChannel ? dialog.entity?.accessHash : undefined;
-          const accessHash = rawHash != null ? String(rawHash) : undefined;
-          // ⚠️ dialog.id 是 marked id（channel: -100xxxx，basic group: -xxx），
-          // 而 Api.InputChannel.channelId / Api.messages.DeleteChatUser.chatId 需要 raw 正数 id。
-          // 这里必须用 dialog.entity.id（Channel/Chat 实体上的原始正数 id），否则服务端会
-          // 直接 CHANNEL_INVALID / PEER_ID_INVALID，导致批量 sb 全部失败。
-          const rawId = Number(dialog.entity?.id ?? dialog.id);
-          return {
-            id: rawId,
-            title: dialog.title || "Unknown",
-            kind: isChannel ? 'channel' as const : 'chat' as const,
-            accessHash,
-          };
-        }
-        return null;
-      });
-      
+
+      // 先构造带 accessHash 的 ManagedGroup，再用 resolvePermissionTarget 做权限探测，
+      // 避免直接塞 dialog.entity/peerId 导致 GetParticipant 假阴性。
+      const candidates: ManagedGroup[] = [];
+      for (const dialog of dialogs || []) {
+        if (!(dialog.isChannel || dialog.isGroup)) continue;
+        const isChannel = !(dialog.isGroup && !dialog.isChannel);
+        const rawHash = isChannel ? dialog.entity?.accessHash : undefined;
+        const accessHash = rawHash != null ? String(rawHash) : undefined;
+        // ⚠️ dialog.id 是 marked id；API 需要 entity 上的 raw 正数 id
+        const rawId = Number(dialog.entity?.id ?? dialog.id);
+        if (!Number.isFinite(rawId) || rawId === 0) continue;
+        candidates.push({
+          id: rawId,
+          title: dialog.title || "Unknown",
+          kind: isChannel ? 'channel' as const : 'chat' as const,
+          accessHash,
+        });
+      }
+
+      const limit = (await ensurePLimit())(6);
+      const checkPromises = candidates.map((group) =>
+        limit(async () => {
+          try {
+            const target = await resolvePermissionTarget(client, group);
+            const ok = await PermissionManager.checkAdminPermission(client, target);
+            return ok ? group : null;
+          } catch {
+            return null;
+          }
+        })
+      );
+
       const results = await Promise.all(checkPromises);
       for (const g of results) {
-        if (g !== null) groups.push(g as ManagedGroup);
+        if (g) groups.push(g);
       }
       
       try {
-        await this.cache.set("managed_groups_v3", groups);
+        await this.cache.set("managed_groups_v4", groups);
       } catch (cacheError) {
         console.error(`[GroupManager] 缓存群组失败: ${cacheError}`);
       }
@@ -1589,7 +1598,7 @@ class AbanPlugin extends Plugin {
       try {
         GroupManager.clearCache();
         const groups = await GroupManager.getManagedGroups(client);
-        await MessageManager.smartEdit(status, `✅ 已刷新 ${groups.length}个群组`);
+        await MessageManager.smartEdit(status, `✅ 已刷新 ${groups.length} 个有管理权的群组`);
       } catch (error: any) {
         await MessageManager.smartEdit(status, `❌ 刷新失败`);
       }
