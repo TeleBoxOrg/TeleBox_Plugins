@@ -793,7 +793,7 @@ const QUOTE_API_HEADERS = {
   "User-Agent": "TeleBox/0.2.1",
 };
 
-function detectQuoteImageExt(buffer: Buffer): "webp" | "png" {
+function detectQuoteImageExt(buffer: Buffer): "webp" | "png" | "webm" {
   if (
     buffer.length >= 12 &&
     buffer.subarray(0, 4).toString("ascii") === "RIFF" &&
@@ -803,8 +803,16 @@ function detectQuoteImageExt(buffer: Buffer): "webp" | "png" {
     buffer.length >= 8 &&
     buffer.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))
   ) return "png";
+  // WebM (EBML header)
+  if (
+    buffer.length >= 4 &&
+    buffer[0] === 0x1a &&
+    buffer[1] === 0x45 &&
+    buffer[2] === 0xdf &&
+    buffer[3] === 0xa3
+  ) return "webm";
   const preview = buffer.subarray(0, 120).toString("utf8").replace(/\s+/g, " ").trim();
-  throw new Error(`quote-api 返回了非图片数据${preview ? `：${preview.slice(0, 100)}` : ""}`);
+  throw new Error(`quote-api 返回了非图片/视频数据${preview ? `：${preview.slice(0, 100)}` : ""}`);
 }
 
 // 调用quote-api生成语录
@@ -830,7 +838,7 @@ async function generateQuote(
       throw new Error(`quote-api HTTP ${response.status}${detail ? `：${detail.slice(0, 120)}` : ""}`);
     }
     const contentType = String(response.headers["content-type"] || "").toLowerCase();
-    if (!contentType.startsWith("image/") && contentType !== "application/octet-stream") {
+    if (!contentType.startsWith("image/") && !contentType.startsWith("video/") && contentType !== "application/octet-stream") {
       throw new Error(`quote-api 返回类型异常：${contentType || "unknown"}`);
     }
     return { buffer: imageBuffer, ext: detectQuoteImageExt(imageBuffer) };
