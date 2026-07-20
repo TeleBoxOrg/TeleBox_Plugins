@@ -91,6 +91,10 @@
     "url": "https://github.com/TeleBoxOrg/TeleBox-Plugins/blob/main/calc/calc.ts?raw=true",
     "desc": "计算器"
   },
+  "checkapi": {
+    "url": "https://github.com/TeleBoxOrg/TeleBox-Plugins/blob/main/checkapi/checkapi.ts?raw=true",
+    "desc": "API Key 全功能检测"
+  },
   "checkin": {
     "url": "https://github.com/TeleBoxOrg/TeleBox-Plugins/blob/main/checkin/checkin.ts?raw=true",
     "desc": "自动签到插件"
@@ -435,6 +439,10 @@
     "url": "https://github.com/TeleBoxOrg/TeleBox-Plugins/blob/main/teletype/teletype.ts?raw=true",
     "desc": "打字机效果"
   },
+  "theme": {
+    "url": "https://github.com/TeleBoxOrg/TeleBox-Plugins/blob/main/theme/theme.ts?raw=true",
+    "desc": "Telegram 主题转换"
+  },
   "tmp_admin": {
     "url": "https://github.com/TeleBoxOrg/TeleBox-Plugins/blob/main/tmp_admin/tmp_admin.ts?raw=true",
     "desc": "临时管理员"
@@ -486,13 +494,5 @@
   "zpr": {
     "url": "https://github.com/TeleBoxOrg/TeleBox-Plugins/blob/main/zpr/zpr.ts?raw=true",
     "desc": "二次元图片"
-  },
-  "theme": {
-    "url": "https://github.com/TeleBoxOrg/TeleBox-Plugins/blob/main/theme/theme.ts?raw=true",
-    "desc": "Telegram 主题转换"
-  },
-  "checkapi": {
-    "url": "https://github.com/TeleBoxOrg/TeleBox-Plugins/blob/main/checkapi/checkapi.ts?raw=true",
-    "desc": "API Key 全功能检测"
   }
 }
