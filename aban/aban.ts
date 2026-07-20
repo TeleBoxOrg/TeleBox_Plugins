@@ -784,57 +784,65 @@ class GroupManager {
     return Array.from(dialogMap.values());
   }
 
+  /**
+   * teleproto Dialog.entity（Channel/Chat）自带 creator/adminRights，
+   * 比逐群 GetParticipant 更稳：无 RPC、无 accessHash 假阴性。
+   */
+  private static dialogHasManageRights(dialog: any): boolean {
+    const entity = dialog?.entity;
+    if (!entity) return false;
+    if (entity.creator) return true;
+    const rights = entity.adminRights;
+    if (!rights) return false;
+    return !!(rights.banUsers || rights.deleteMessages);
+  }
+
   static async getManagedGroups(
     client: TelegramClient
   ): Promise<ManagedGroup[]> {
-    // v4: 仅缓存「自己有 ban/delete 管理权」的群；旧 v3 含全部会话，必须作废
-    const cached = await this.cache.get("managed_groups_v4");
-    if (cached && Array.isArray(cached)) return cached;
+    // v5: 用 dialog.entity.creator/adminRights 本地过滤（零 RPC）。
+    // v4 对每群 GetParticipant，易假阴性 → refresh 统计为 0；空数组也会被当成有效缓存。
+    const cached = await this.cache.get("managed_groups_v5");
+    if (cached && Array.isArray(cached) && cached.length > 0) return cached;
 
     const groups: ManagedGroup[] = [];
     
     try {
       const dialogs = await this.getAllManageableDialogs(client);
 
-      // 先构造带 accessHash 的 ManagedGroup，再用 resolvePermissionTarget 做权限探测，
-      // 避免直接塞 dialog.entity/peerId 导致 GetParticipant 假阴性。
-      const candidates: ManagedGroup[] = [];
+      let skippedNoRights = 0;
       for (const dialog of dialogs || []) {
         if (!(dialog.isChannel || dialog.isGroup)) continue;
+        if (!this.dialogHasManageRights(dialog)) {
+          skippedNoRights++;
+          continue;
+        }
         const isChannel = !(dialog.isGroup && !dialog.isChannel);
         const rawHash = isChannel ? dialog.entity?.accessHash : undefined;
         const accessHash = rawHash != null ? String(rawHash) : undefined;
         // ⚠️ dialog.id 是 marked id；API 需要 entity 上的 raw 正数 id
         const rawId = Number(dialog.entity?.id ?? dialog.id);
         if (!Number.isFinite(rawId) || rawId === 0) continue;
-        candidates.push({
+        groups.push({
           id: rawId,
           title: dialog.title || "Unknown",
           kind: isChannel ? 'channel' as const : 'chat' as const,
           accessHash,
         });
       }
-
-      const limit = (await ensurePLimit())(6);
-      const checkPromises = candidates.map((group) =>
-        limit(async () => {
-          try {
-            const target = await resolvePermissionTarget(client, group);
-            const ok = await PermissionManager.checkAdminPermission(client, target);
-            return ok ? group : null;
-          } catch {
-            return null;
-          }
-        })
+      console.log(
+        `[GroupManager] 有管理权群组 ${groups.length}/${(dialogs || []).length}（本地 adminRights 过滤，跳过无权限 ${skippedNoRights}）`
       );
-
-      const results = await Promise.all(checkPromises);
-      for (const g of results) {
-        if (g) groups.push(g);
-      }
       
       try {
-        await this.cache.set("managed_groups_v4", groups);
+        await this.cache.set("managed_groups_v5", groups);
+        // 作废可能被假阴性写空的 v4
+        try {
+          await this.cache.set("managed_groups_v4", []);
+        } catch {}
+        try {
+          await this.cache.set("managed_groups_v3", []);
+        } catch {}
       } catch (cacheError) {
         console.error(`[GroupManager] 缓存群组失败: ${cacheError}`);
       }
@@ -1764,7 +1772,7 @@ class AbanPlugin extends Plugin {
       const status = await MessageManager.smartEdit(msg, "🔄 刷新中...", 0);
       
       try {
-        GroupManager.clearCache();
+        await GroupManager.clearCache();
         const groups = await GroupManager.getManagedGroups(client);
         await MessageManager.smartEdit(status, `✅ 已刷新 ${groups.length} 个有管理权的群组`);
       } catch (error: any) {
