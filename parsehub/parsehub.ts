@@ -89,10 +89,14 @@ function writeState(state: InitState) {
 let initState: InitState = readState();
 let ignoredUpToId = Number(initState.ignoredUpToId || 0) || 0;
 
+// Common progress prefix decoration characters (blocks, emoji, zero-width)
+const PROGRESS_DECO_RE = /^[\s\u2580-\u259F\u25A0-\u25FF\u2000-\u200F\uFEFF\u3000]+/u;
+
 const isProgressText = (text?: string | null): boolean => {
   if (!text) return false;
-  const trimmed = text.trim();
-  return PROGRESS_PREFIXES.some((prefix) => trimmed.startsWith(prefix));
+  // Strip common decorative prefix chars first (blocks, emoji, zero-width, ideographic space)
+  const stripped = text.replace(PROGRESS_DECO_RE, "").trim();
+  return PROGRESS_PREFIXES.some((prefix) => stripped.startsWith(prefix));
 };
 
 /** True when message carries real media. */
