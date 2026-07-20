@@ -15,6 +15,17 @@ async function sk(k: SK[]): Promise<void> { await fs.mkdir(DD,{recursive:true});
 function mk(k: string): string { return k.length<=8?"***":k.slice(0,7)+"..."+k.slice(-4); }
 function isUrl(s: string): boolean { return /^(https?:\/\/|.+\.[a-z]{2,}(?:\/|$|:\d+)|.+\/v\d)/i.test(s)||s.includes("://"); }
 function nu(s: string): string { let u=s.trim(); if(!/^https?:\/\//i.test(u))u="https://"+u; return u.replace(/\/+$/,""); }
+/** Join OpenAI-compatible base + path; auto-insert /v1 when base is host root. */
+function jp(base:string, pathSeg:string):string{
+  let b=base.replace(/\/+$/,"");
+  let seg=pathSeg.startsWith("/")?pathSeg:"/"+pathSeg;
+  if(/\/v1$/i.test(b) && /^\/v1(\/|$)/i.test(seg)) b=b.replace(/\/v1$/i,"");
+  const needsV1=/^\/(chat\/completions|models)(\/|$|\?)/.test(seg);
+  const hasVer=/\/(v1beta|v\d+|openai|inference|v2)(\/|$)/i.test(b);
+  if(needsV1 && !hasVer) return b+"/v1"+seg;
+  return b+seg;
+}
+
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function ge(e:unknown):string{const o=e as any; return String(o?.message||o?.stderr||e||"未知错误");}
 function fh(h?:Record<string,string>):string{if(!h||!Object.keys(h).length)return"";const l:string[]=[];for(const[k,v]of Object.entries(h)){l.push(`  ⚡ ${k.replace(/-/g," ")}: ${v}`);}return l.join("\n");}
@@ -33,22 +44,25 @@ function parseEnv(s: string): { key?: string } | null {
 }
 
 // ── Smart input parser v2: any-order URL+key detection ──
-function parseSmart(raw:string):{sub?:string;key?:string;url?:string;label?:string}{
+function parseSmart(raw:string):{sub?:string;key?:string;url?:string;label?:string;rest:string[]}{
   const tokens=raw.split(/\s+/).filter(Boolean);
-  if(!tokens.length)return{};
-  const r:{sub?:string;key?:string;url?:string;label?:string}={};
+  if(!tokens.length)return{rest:[]};
+  const r:{sub?:string;key?:string;url?:string;label?:string;rest:string[]}={rest:[]};
   const subs=new Set(["models","ask","speed","compare","save","list","del","check","help","delete"]);
+  const used=new Set<number>();
   for(let i=0;i<tokens.length;i++){
     const t=tokens[i];const tl=t.toLowerCase();
-    if(subs.has(tl)&&!r.sub){r.sub=tl;continue;}
-    if(/^(https?:\/\/|.+\.[a-z]{2,}(?:\/|$|:\d+)|.+\/v\d)/i.test(t)||t.includes("://")){r.url=t;continue;}
-    if(/^sk-(?:ant-|or-v1-)?|^gsk_|^tgp_|^pplx-|^r8_|^fw_|^xai-|^AIza|^co-|^hf_|^nvapi-/i.test(t)){r.key=t;continue;}
-    if(/^[a-zA-Z0-9_-]{20,}$/.test(t)&&!r.sub){r.key=t;continue;}
+    if(subs.has(tl)&&!r.sub){r.sub=tl;used.add(i);continue;}
+    if(/^(https?:\/\/|.+\.[a-z]{2,}(?:\/|$|:\d+)|.+\/v\d)/i.test(t)||t.includes("://")){if(!r.url){r.url=t;used.add(i);}continue;}
+    if(/^sk-(?:ant-|or-v1-)?|^gsk_|^tgp_|^pplx-|^r8_|^fw_|^xai-|^AIza|^co-|^hf_|^nvapi-/i.test(t)){if(!r.key){r.key=t;used.add(i);}continue;}
+    if(/^[a-zA-Z0-9_.\-]{24,}$/.test(t)&&!r.key){r.key=t;used.add(i);continue;}
   }
   for(let i=0;i<tokens.length;i++){
+    if(used.has(i))continue;
     const t=tokens[i];
-    if(/^[a-zA-Z0-9][-a-zA-Z0-9]*\.[a-zA-Z]{2,}(?:\/\S*)?$/.test(t)&&!r.url&&!r.key){r.url=t;break;}
+    if(/^[a-zA-Z0-9][-a-zA-Z0-9]*\.[a-zA-Z]{2,}(?:\/\S*)?$/.test(t)&&!r.url){r.url=t;used.add(i);break;}
   }
+  for(let i=0;i<tokens.length;i++){if(!used.has(i))r.rest.push(tokens[i]);}
   return r;
 }
 
@@ -64,24 +78,24 @@ function dp(key: string, baseUrl?: string): PI {
     // Smart provider detection from hostname
     if (host.includes("openrouter")) {
       h["HTTP-Referer"] = "https://t.me/telebox_next";
-      return {provider:"openrouter",displayName:`OpenRouter (${host})`,baseUrl:u,chatUrl:`${u}/chat/completions`,modelsUrl:`${u}/models`,balanceUrl:`${u.replace(/\/api\/v1.*$/,"")}/api/v1/auth/key`,confidence:"high",headers:h,authHeader:`Bearer ${t}`};
+      return {provider:"openrouter",displayName:`OpenRouter (${host})`,baseUrl:u,chatUrl:jp(u,"/chat/completions"),modelsUrl:jp(u,"/models"),balanceUrl:`${u.replace(/\/api\/v1.*$/,"")}/api/v1/auth/key`,confidence:"high",headers:h,authHeader:`Bearer ${t}`};
     }
-    if (host.includes("groq")) return {provider:"groq",displayName:`Groq (${host})`,baseUrl:u,chatUrl:`${u}/chat/completions`,modelsUrl:`${u}/models`,confidence:"high",headers:{},authHeader:`Bearer ${t}`};
-    if (host.includes("together")) return {provider:"together",displayName:`Together AI (${host})`,baseUrl:u,chatUrl:`${u}/chat/completions`,modelsUrl:`${u}/models`,confidence:"high",headers:{},authHeader:`Bearer ${t}`};
-    if (host.includes("mistral")) return {provider:"mistral",displayName:`Mistral (${host})`,baseUrl:u,chatUrl:`${u}/chat/completions`,modelsUrl:`${u}/models`,confidence:"high",headers:{},authHeader:`Bearer ${t}`};
+    if (host.includes("groq")) return {provider:"groq",displayName:`Groq (${host})`,baseUrl:u,chatUrl:jp(u,"/chat/completions"),modelsUrl:jp(u,"/models"),confidence:"high",headers:{},authHeader:`Bearer ${t}`};
+    if (host.includes("together")) return {provider:"together",displayName:`Together AI (${host})`,baseUrl:u,chatUrl:jp(u,"/chat/completions"),modelsUrl:jp(u,"/models"),confidence:"high",headers:{},authHeader:`Bearer ${t}`};
+    if (host.includes("mistral")) return {provider:"mistral",displayName:`Mistral (${host})`,baseUrl:u,chatUrl:jp(u,"/chat/completions"),modelsUrl:jp(u,"/models"),confidence:"high",headers:{},authHeader:`Bearer ${t}`};
     if (host.includes("cohere")) return {provider:"cohere",displayName:`Cohere (${host})`,baseUrl:u,chatUrl:u.includes("/v2")?`${u}/chat`:`${u}/v2/chat`,confidence:"medium",headers:{},authHeader:`Bearer ${t}`};
-    if (host.includes("perplexity")) return {provider:"perplexity",displayName:`Perplexity (${host})`,baseUrl:u,chatUrl:`${u}/chat/completions`,modelsUrl:`${u}/models`,confidence:"high",headers:{},authHeader:`Bearer ${t}`};
-    if (host.includes("fireworks")) return {provider:"fireworks",displayName:`Fireworks (${host})`,baseUrl:u,chatUrl:`${u}/chat/completions`,modelsUrl:`${u}/models`,confidence:"high",headers:{},authHeader:`Bearer ${t}`};
-    if (host.includes("replicate")) return {provider:"replicate",displayName:`Replicate (${host})`,baseUrl:u,chatUrl:`${u}/v1/chat/completions`,modelsUrl:`${u}/v1/models`,confidence:"medium",headers:{},authHeader:`Bearer ${t}`};
-    if (host.includes("siliconflow")) return {provider:"siliconflow",displayName:`SiliconFlow (${host})`,baseUrl:u,chatUrl:`${u}/chat/completions`,modelsUrl:`${u}/models`,confidence:"medium",headers:{},authHeader:`Bearer ${t}`};if (host.includes("nvidia")||host.includes("nim")) return {provider:"nvidia",displayName:`NVIDIA NIM (${host})`,baseUrl:u,chatUrl:`${u}/chat/completions`,modelsUrl:`${u}/models`,confidence:"medium",headers:{},authHeader:`Bearer ${t}`};if (host.includes("novita")) return {provider:"novita",displayName:`Novita (${host})`,baseUrl:u,chatUrl:`${u}/chat/completions`,modelsUrl:`${u}/models`,confidence:"medium",headers:{},authHeader:`Bearer ${t}`};if (host.includes("cerebras")) return {provider:"cerebras",displayName:`Cerebras (${host})`,baseUrl:u,chatUrl:`${u}/chat/completions`,modelsUrl:`${u}/models`,confidence:"high",headers:{},authHeader:`Bearer ${t}`};if (host.includes("azure")||host.includes("openai.azure")) return {provider:"azure",displayName:`Azure OpenAI (${host})`,baseUrl:u,chatUrl:`${u}/chat/completions?api-version=2024-10-21`,modelsUrl:`${u}/models?api-version=2024-10-21`,confidence:"high",headers:{"api-key":t},authHeader:""};if (host.includes("vercel")) return {provider:"vercel",displayName:`Vercel AI Gateway (${host})`,baseUrl:u,chatUrl:`${u}/chat/completions`,modelsUrl:`${u}/models`,confidence:"medium",headers:{},authHeader:`Bearer ${t}`};
-    if (host.includes("deepinfra")) return {provider:"deepinfra",displayName:`DeepInfra (${host})`,baseUrl:u,chatUrl:`${u}/chat/completions`,modelsUrl:`${u}/models`,confidence:"medium",headers:{},authHeader:`Bearer ${t}`};
+    if (host.includes("perplexity")) return {provider:"perplexity",displayName:`Perplexity (${host})`,baseUrl:u,chatUrl:jp(u,"/chat/completions"),modelsUrl:jp(u,"/models"),confidence:"high",headers:{},authHeader:`Bearer ${t}`};
+    if (host.includes("fireworks")) return {provider:"fireworks",displayName:`Fireworks (${host})`,baseUrl:u,chatUrl:jp(u,"/chat/completions"),modelsUrl:jp(u,"/models"),confidence:"high",headers:{},authHeader:`Bearer ${t}`};
+    if (host.includes("replicate")) return {provider:"replicate",displayName:`Replicate (${host})`,baseUrl:u,chatUrl:jp(u,"/chat/completions"),modelsUrl:jp(u,"/models"),confidence:"medium",headers:{},authHeader:`Bearer ${t}`};
+    if (host.includes("siliconflow")) return {provider:"siliconflow",displayName:`SiliconFlow (${host})`,baseUrl:u,chatUrl:jp(u,"/chat/completions"),modelsUrl:jp(u,"/models"),confidence:"medium",headers:{},authHeader:`Bearer ${t}`};if (host.includes("nvidia")||host.includes("nim")) return {provider:"nvidia",displayName:`NVIDIA NIM (${host})`,baseUrl:u,chatUrl:jp(u,"/chat/completions"),modelsUrl:jp(u,"/models"),confidence:"medium",headers:{},authHeader:`Bearer ${t}`};if (host.includes("novita")) return {provider:"novita",displayName:`Novita (${host})`,baseUrl:u,chatUrl:jp(u,"/chat/completions"),modelsUrl:jp(u,"/models"),confidence:"medium",headers:{},authHeader:`Bearer ${t}`};if (host.includes("cerebras")) return {provider:"cerebras",displayName:`Cerebras (${host})`,baseUrl:u,chatUrl:jp(u,"/chat/completions"),modelsUrl:jp(u,"/models"),confidence:"high",headers:{},authHeader:`Bearer ${t}`};if (host.includes("azure")||host.includes("openai.azure")) return {provider:"azure",displayName:`Azure OpenAI (${host})`,baseUrl:u,chatUrl:`${u}/chat/completions?api-version=2024-10-21`,modelsUrl:`${u}/models?api-version=2024-10-21`,confidence:"high",headers:{"api-key":t},authHeader:""};if (host.includes("vercel")) return {provider:"vercel",displayName:`Vercel AI Gateway (${host})`,baseUrl:u,chatUrl:jp(u,"/chat/completions"),modelsUrl:jp(u,"/models"),confidence:"medium",headers:{},authHeader:`Bearer ${t}`};
+    if (host.includes("deepinfra")) return {provider:"deepinfra",displayName:`DeepInfra (${host})`,baseUrl:u,chatUrl:jp(u,"/chat/completions"),modelsUrl:jp(u,"/models"),confidence:"medium",headers:{},authHeader:`Bearer ${t}`};
     if (host.includes("localhost")||host.includes("127.0.0.1")||host.includes("ollama")) return {provider:"ollama",displayName:`Ollama (${host})`,baseUrl:u,chatUrl:`${u}/chat/completions`,modelsUrl:`${u}/tags`,confidence:"high",headers:{},authHeader:""};
     if (host.includes("generativelanguage")||host.includes("googleapis")) return {provider:"gemini",displayName:`Gemini (${host})`,baseUrl:u,chatUrl:`${u}/v1beta/models/gemini-2.5-flash:generateContent`,modelsUrl:`${u}/v1beta/models`,confidence:"high",headers:{},authHeader:""};
     if (host.includes("anthropic")) return {provider:"anthropic",displayName:`Anthropic (${host})`,baseUrl:u,chatUrl:`${u}/v1/messages`,modelsUrl:`${u}/v1/models`,confidence:"high",headers:{"x-api-key":t,"anthropic-version":"2023-06-01","content-type":"application/json"},authHeader:""};
-    if (host.includes("deepseek")) return {provider:"deepseek",displayName:`DeepSeek (${host})`,baseUrl:u,chatUrl:`${u}/chat/completions`,modelsUrl:`${u}/models`,balanceUrl:`${u.replace(/\/v\d.*$/,"")}/user/balance`,confidence:"high",headers:{},authHeader:`Bearer ${t}`};
-    if (host.includes("x.ai")) return {provider:"xai",displayName:`xAI (${host})`,baseUrl:u,chatUrl:`${u}/chat/completions`,modelsUrl:`${u}/models`,confidence:"high",headers:{},authHeader:`Bearer ${t}`};
+    if (host.includes("deepseek")) return {provider:"deepseek",displayName:`DeepSeek (${host})`,baseUrl:u,chatUrl:jp(u,"/chat/completions"),modelsUrl:jp(u,"/models"),balanceUrl:`${u.replace(/\/v\d.*$/,"")}/user/balance`,confidence:"high",headers:{},authHeader:`Bearer ${t}`};
+    if (host.includes("x.ai")) return {provider:"xai",displayName:`xAI (${host})`,baseUrl:u,chatUrl:jp(u,"/chat/completions"),modelsUrl:jp(u,"/models"),confidence:"high",headers:{},authHeader:`Bearer ${t}`};
     // Generic OpenAI-compatible fallback
-    return {provider:"custom",displayName:`自定义 (${host})`,baseUrl:u,chatUrl:`${u}/chat/completions`,modelsUrl:`${u}/models`,confidence:"medium",headers:h,authHeader:`Bearer ${t}`};
+    return {provider:"custom",displayName:`自定义 (${host})`,baseUrl:u,chatUrl:jp(u,"/chat/completions"),modelsUrl:jp(u,"/models"),confidence:"medium",headers:h,authHeader:`Bearer ${t}`};
   }
 
   // ── Key prefix detection ──
@@ -108,11 +122,11 @@ function dp(key: string, baseUrl?: string): PI {
 // ── API probing: call endpoints to detect provider type ──
 async function probeApi(baseUrl:string,key:string): Promise<PI>{
   const u=baseUrl.replace(/\/+$/,"");const t=key.trim();
-  const r:PI={provider:"custom",displayName:`API (${(()=>{try{return new URL(u).hostname}catch{return u}})()})`,baseUrl:u,chatUrl:`${u}/chat/completions`,modelsUrl:`${u}/models`,confidence:"low",headers:{},authHeader:`Bearer ${t}`};
+  const r:PI={provider:"custom",displayName:`API (${(()=>{try{return new URL(u).hostname}catch{return u}})()})`,baseUrl:u,chatUrl:jp(u,"/chat/completions"),modelsUrl:jp(u,"/models"),confidence:"low",headers:{},authHeader:`Bearer ${t}`};
   const probes:Array<{label:string;url:string;hdrs:Record<string,string>;fn?:(d:unknown)=>Partial<PI>|null}>=[
-    {label:"openai",url:`${u}/v1/models`,hdrs:{Authorization:`Bearer ${t}`},fn:(d:any)=>{const arr=Array.isArray(d)?d:d?.data;if(!arr?.length)return null;const ids=arr.map((m:any)=>String(m.id||""));if(ids.some((s:string)=>s.includes("gpt")||s.includes("o1")||s.includes("o3")||s.includes("o4")))return{provider:"openai",displayName:"OpenAI",confidence:"high"};if(ids.some((s:string)=>s.includes("claude")))return{provider:"custom",displayName:"Anthropic 代理",confidence:"medium"};if(ids.some((s:string)=>s.includes("gemini")))return{provider:"custom",displayName:"Gemini 代理",confidence:"medium"};return{provider:"custom",displayName:`OpenAI兼容 (${ids.length}模型)`,confidence:"medium"};}},
+    {label:"openai",url:jp(u,"/models"),hdrs:{Authorization:`Bearer ${t}`},fn:(d:any)=>{const arr=Array.isArray(d)?d:d?.data;if(!arr?.length)return null;const ids=arr.map((m:any)=>String(m.id||""));if(ids.some((s:string)=>s.includes("gpt")||s.includes("o1")||s.includes("o3")||s.includes("o4")))return{provider:"openai",displayName:"OpenAI",confidence:"high"};if(ids.some((s:string)=>s.includes("claude")))return{provider:"custom",displayName:"Anthropic 代理",confidence:"medium"};if(ids.some((s:string)=>s.includes("gemini")))return{provider:"custom",displayName:"Gemini 代理",confidence:"medium"};return{provider:"custom",displayName:`OpenAI兼容 (${ids.length}模型)`,confidence:"medium"};}},
     {label:"gemini",url:`${u}/v1beta/models?key=${t}`,hdrs:{},fn:(d:any)=>{if(d?.models?.length){const names=d.models.map((m:any)=>String(m.name||""));if(names.some((s:string)=>s.includes("gemini")))return{provider:"gemini",displayName:"Google Gemini",confidence:"high",chatUrl:`${u}/v1beta/models/gemini-2.5-flash:generateContent`,modelsUrl:`${u}/v1beta/models`,authHeader:""};}return null;}},
-    {label:"anthropic",url:`${u}/v1/models`,hdrs:{"x-api-key":t,"anthropic-version":"2023-06-01"},fn:(d:any)=>{const arr=Array.isArray(d)?d:d?.data;if(!arr?.length)return null;const ids=arr.map((m:any)=>String(m.id||""));if(ids.every((s:string)=>s.startsWith("claude-")))return{provider:"anthropic",displayName:"Anthropic",confidence:"high",chatUrl:`${u}/v1/messages`,headers:{"x-api-key":t,"anthropic-version":"2023-06-01","content-type":"application/json"},authHeader:""};return null;}},
+    {label:"anthropic",url:jp(u,"/models"),hdrs:{"x-api-key":t,"anthropic-version":"2023-06-01"},fn:(d:any)=>{const arr=Array.isArray(d)?d:d?.data;if(!arr?.length)return null;const ids=arr.map((m:any)=>String(m.id||""));if(ids.every((s:string)=>s.startsWith("claude-")))return{provider:"anthropic",displayName:"Anthropic",confidence:"high",chatUrl:`${u}/v1/messages`,headers:{"x-api-key":t,"anthropic-version":"2023-06-01","content-type":"application/json"},authHeader:""};return null;}},
     {label:"openrouter",url:`${u.replace(/\/api\/v1.*$/,"")}/api/v1/auth/key`,hdrs:{Authorization:`Bearer ${t}`,"HTTP-Referer":"https://t.me/telebox_next"},fn:(d:any)=>{if(d?.data?.label||d?.label||d?.data?.credits!==undefined)return{provider:"openrouter",displayName:"OpenRouter",confidence:"high",balanceUrl:`${u.replace(/\/api\/v1.*$/,"")}/api/v1/auth/key`,headers:{"HTTP-Referer":"https://t.me/telebox_next"}};return null;}},
   ];
   const results=await Promise.allSettled(probes.map(p=>ag(p.url,p.hdrs,8000,0).then(ar=>({...p,ar}))));
@@ -270,18 +284,20 @@ class CheckApiPlugin extends Plugin{name="checkapi";description=
 `🔍 API 检测 v6\n\n传入 URL + Key 即可自动识别、查余额、测速。\n所有子命令均支持直接传入网址和密钥，无需预先保存。\n\n用法：\n<blockquote expandable><code>${mp}checkapi &lt;URL&gt; &lt;key&gt;</code> — 一键检测全部\n<code>${mp}checkapi models &lt;URL&gt; &lt;key&gt;</code> — 查看模型列表\n<code>${mp}checkapi speed &lt;URL&gt; &lt;key&gt;</code> — 测试响应速度\n<code>${mp}checkapi ask &lt;URL&gt; &lt;key&gt; &lt;问题&gt;</code> — 发送对话\n<code>${mp}checkapi compare &lt;k1&gt; &lt;k2&gt;</code> — 对比两个 API\n<code>${mp}checkapi save/list/del/check</code> — 管理已保存的密钥</blockquote>\n支持 curl 命令 / 环境变量 / JSON 配置直接粘贴`;
 
 cmdHandlers:Record<string,(msg:Api.Message)=>Promise<void>>={checkapi:async(msg)=>{
-  const raw=msg.message.slice(mp.length).trim();
+  const rawFull=msg.message.slice(mp.length).trim();
+  const raw=rawFull.replace(/^checkapi\s*/i,"").trim();
   const smart=parseSmart(raw);
   let extracedKey=smart.key;let extracedUrl=smart.url;
-  let text=smart.sub?"":raw;
-  // ── Curl/ENV/JSON fallbacks ──
-  if(!extracedKey){const cp=parseCurl(raw);if(cp){extracedKey=cp.key;extracedUrl=cp.url;text="";}}
-  if(!extracedKey){const ep=parseEnv(raw);if(ep){extracedKey=ep.key;text="";}}
-  if(!extracedKey&&(raw.includes('"api_key"')||raw.includes('"apiKey"')||raw.includes('"key"'))){
-    try{const j=JSON.parse(raw.replace(/^`+|`+$/g,""));extracedKey=j.api_key||j.apiKey||j.key||j.token;extracedUrl=j.base_url||j.baseUrl||j.endpoint;}catch{}}
+  if(!extracedKey){const cp=parseCurl(rawFull);if(cp){extracedKey=cp.key;extracedUrl=cp.url||extracedUrl;}}
+  if(!extracedKey){const ep=parseEnv(rawFull);if(ep){extracedKey=ep.key;}}
+  if(!extracedKey&&(rawFull.includes('"api_key"')||rawFull.includes('"apiKey"')||rawFull.includes('"key"'))){
+    try{const j=JSON.parse(rawFull.replace(/^`+|`+$/g,""));extracedKey=j.api_key||j.apiKey||j.key||j.token;extracedUrl=j.base_url||j.baseUrl||j.endpoint||extracedUrl;}catch{}}
 
-  const parts=text.split(/\s+/).filter(Boolean);
-  if(extracedKey){parts.unshift(extracedKey);if(extracedUrl)parts.unshift(extracedUrl);}
+  let parts=raw.split(/\s+/).filter(Boolean);
+  if(!parts.length && extracedKey){if(extracedUrl)parts.push(extracedUrl);parts.push(extracedKey);}
+  if(!smart.sub && extracedKey && extracedUrl && !(parts.length>=2 && (isUrl(parts[0])||isUrl(parts[1])))){
+    parts=[extracedUrl, extracedKey];
+  }
 
   if(parts.length===0||parts[0]==="help"){await msg.edit({text:`${this.description}`, parseMode: "html" });return;}
   const sub=parts[0]?.toLowerCase();
@@ -289,13 +305,13 @@ cmdHandlers:Record<string,(msg:Api.Message)=>Promise<void>>={checkapi:async(msg)
   // ── list / del / save / check ──
   if(sub==="list"){const keys=await lk();if(!keys.length){await msg.edit({text:`📭 还没有保存密钥\n<code>${mp}checkapi save &lt;name&gt; &lt;key&gt;</code>`, parseMode: "html" });return;}const lines=[`🔑 已保存 ${keys.length} 个:`];for(const k of keys)lines.push(`  • <b>${k.name}</b>: ${mk(k.key)} (${k.provider||"auto"})${k.baseUrl?` [${(()=>{try{return new URL(k.baseUrl).hostname}catch{return k.baseUrl}})()}]`:""}`);await msg.edit({text:`${lines.join("\n")}`, parseMode: "html" });return;}
   if(sub==="del"||sub==="delete"){const name=parts[1];if(!name){await msg.edit({text:`❌ 用法：<code>${mp}checkapi del &lt;名称&gt;</code>`, parseMode: "html" });return;}const keys=await lk();const idx=keys.findIndex(k=>k.name===name);if(idx===-1){await msg.edit({text:`❌ <b>${name}</b> 不存在`, parseMode: "html" });return;}keys.splice(idx,1);await sk(keys);await msg.edit({text:`✅ 已删 <b>${name}</b>`, parseMode: "html" });return;}
-  if(sub==="save"){let name:string|undefined,key:string|undefined,baseUrl:string|undefined;if(parts.length>=4&&isUrl(parts[2])){name=parts[1];baseUrl=nu(parts[2]);key=parts[3];}else{name=parts[1];key=parts[2];baseUrl=parts[3];}if(!name||!key){await msg.edit({text:`❌ 用法：<code>${mp}checkapi save &lt;名称&gt; &lt;key&gt; [url]</code>`, parseMode: "html" });return;}const keys=await lk();const info=dp(key,baseUrl);const entry:SK={name,key,baseUrl,provider:info.provider,addedAt:Date.now()};const idx=keys.findIndex(k=>k.name===name);if(idx>=0)keys[idx]=entry;else keys.push(entry);await sk(keys);await msg.edit({text:`✅ ${idx>=0?"已更新":"已保存"} <b>${name}</b> → <code>${mp}checkapi ${name}</code>`, parseMode: "html" });return;}
+  if(sub==="save"){let name:string|undefined,key:string|undefined,baseUrl:string|undefined;const args=parts.slice(1);for(const a of args){if(isUrl(a)&&!baseUrl){baseUrl=nu(a);continue;}if(!key&&(/^sk-|gsk_|tgp_|pplx-|r8_|fw_|xai-|AIza|co-|hf_|nvapi-/i.test(a)||a.length>=24)){key=a;continue;}if(!name){name=a;continue;}if(!key){key=a;continue;}if(!baseUrl){baseUrl=nu(a);continue;}}if(!key&&extracedKey)key=extracedKey;if(!baseUrl&&extracedUrl)baseUrl=nu(extracedUrl);if(!name||!key){await msg.edit({text:`❌ 用法：<code>${mp}checkapi save &lt;名称&gt; &lt;key&gt; [url]</code>`, parseMode: "html" });return;}const keys=await lk();const info=dp(key,baseUrl);const entry:SK={name,key,baseUrl,provider:info.provider,addedAt:Date.now()};const idx=keys.findIndex(k=>k.name===name);if(idx>=0)keys[idx]=entry;else keys.push(entry);await sk(keys);await msg.edit({text:`✅ ${idx>=0?"已更新":"已保存"} <b>${name}</b> → <code>${mp}checkapi ${name}</code>`, parseMode: "html" });return;}
   if(sub==="check"){const target=parts[1]||"all";if(target==="all"){const keys=await lk();if(!keys.length){await msg.edit({text:`📭 还没有保存密钥`, parseMode: "html" });return;}await msg.edit({text:`正在检测 ${keys.length} 个密钥...`, parseMode: "html" });const results:string[]=[];const promises=keys.map(async(k)=>{const info=dp(k.key,k.baseUrl);try{return[`\n━━━ <b>${k.name}</b> ━━━`,...(await fcv2(info.provider,k.key,k.baseUrl||info.baseUrl))]as string[]}catch(e:unknown){return[`\n━━━ <b>${k.name}</b> ━━━`,`⚠️ ${ge(e)}`]as string[]}});const batches=await Promise.all(promises);for(const row of batches)results.push(...row);await msg.edit({text:`${results.join("\n")}`, parseMode: "html" });return;}const keys=await lk();const found=keys.find(k=>k.name===target);if(!found){await msg.edit({text:`❌ <b>${target}</b> 不存在`, parseMode: "html" });return;}await msg.edit({text:`🔍 正在检测 <b>${target}</b>...`, parseMode: "html" });const info=dp(found.key,found.baseUrl);const results=await fcv2(info.provider,found.key,found.baseUrl||info.baseUrl);await msg.edit({text:`${results.join("\n")}`, parseMode: "html" });return;}
 
   // ── models / ask / speed ──
-  if(sub==="models"){const input=parts[1];if(!input){await msg.edit({text:`❌ <code>${mp}checkapi models &lt;key|name&gt;</code>`, parseMode: "html" });return;}const keys=await lk();const found=keys.find(k=>k.name===input);const key=found?found.key:input;const info=found?.baseUrl?await probeApi(found.baseUrl,key):dp(key);await msg.edit({text:`🔍 ${info.displayName} 模型列表...`, parseMode: "html" });const result=await lmf(info.provider,key,info.baseUrl);await msg.edit({text:`${result}`, parseMode: "html" });return;}
-  if(sub==="ask"){const input=parts[1];const question=parts.slice(2).join(" ");if(!input){await msg.edit({text:`❌ <code>${mp}checkapi ask &lt;key|name&gt; &lt;问题&gt;</code>`, parseMode: "html" });return;}const keys=await lk();const found=keys.find(k=>k.name===input);const key=found?found.key:input;const info=dp(key,found?.baseUrl);const prompt=question||"say hello";await msg.edit({text:`💬 ${info.displayName}: "${prompt}" ...`, parseMode: "html" });const chat=await ct(info.provider,key,info.baseUrl,prompt);if(chat.ok){const l=[`💬 <b>${info.displayName}</b>`,`🤖 <code>${chat.model}</code> | 🕐 ${chat.elapsedMs}ms`,`📝 ${chat.text}`];if(chat.usage)l.push(`📊 入${chat.usage.prompt} 出${chat.usage.completion} 计${chat.usage.total}`);if(chat.headers)l.push(fh(chat.headers));await msg.edit({text:`${l.join("\n")}`, parseMode: "html" });}else{await msg.edit({text:`❌ (${chat.elapsedMs||"?"}ms): ${chat.error}`, parseMode: "html" });}return;}
-  if(sub==="speed"){const input=parts[1];if(!input){await msg.edit({text:`❌ <code>${mp}checkapi speed &lt;key|name&gt;</code>`, parseMode: "html" });return;}const keys=await lk();const found=keys.find(k=>k.name===input);const key=found?found.key:input;const info=dp(key,found?.baseUrl);await msg.edit({text:`⚡ ${info.displayName} 速度测试中...`, parseMode: "html" });const results=await speedTest(info.provider,key,info.baseUrl);await msg.edit({text:`${results.join("\n")}`, parseMode: "html" });return;}
+  if(sub==="models"){const keys=await lk();let key:string|undefined;let baseUrl:string|undefined;const args=parts.slice(1);for(const a of args){if(isUrl(a)&&!baseUrl){baseUrl=nu(a);continue;}const found=keys.find(k=>k.name===a);if(found&&!key){key=found.key;baseUrl=baseUrl||found.baseUrl;continue;}if(!key)key=a;}if(!key&&extracedKey)key=extracedKey;if(!baseUrl&&extracedUrl)baseUrl=nu(extracedUrl);if(!key){await msg.edit({text:`❌ <code>${mp}checkapi models &lt;key|name&gt;</code>`, parseMode: "html" });return;}const info=baseUrl?await probeApi(baseUrl,key):dp(key);await msg.edit({text:`🔍 ${info.displayName} 模型列表...`, parseMode: "html" });const result=await lmf(info.provider,key,info.baseUrl);await msg.edit({text:`${result}`, parseMode: "html" });return;}
+  if(sub==="ask"){const keys=await lk();let key:string|undefined;let baseUrl:string|undefined;const args=parts.slice(1);const qParts:string[]=[];for(const a of args){if(isUrl(a)&&!baseUrl){baseUrl=nu(a);continue;}const found=keys.find(k=>k.name===a);if(found&&!key){key=found.key;baseUrl=baseUrl||found.baseUrl;continue;}if(!key&&(/^sk-|gsk_|tgp_|pplx-|r8_|fw_|xai-|AIza|co-|hf_|nvapi-/i.test(a)||a.length>=24)){key=a;continue;}if(!key){key=a;continue;}qParts.push(a);}if(!key&&extracedKey)key=extracedKey;if(!baseUrl&&extracedUrl)baseUrl=nu(extracedUrl);const prompt=qParts.join(" ")||"say hello";if(!key){await msg.edit({text:`❌ <code>${mp}checkapi ask &lt;key|name&gt; &lt;问题&gt;</code>`, parseMode: "html" });return;}const info=baseUrl?await probeApi(baseUrl,key):dp(key,baseUrl);await msg.edit({text:`💬 ${info.displayName}: "${prompt}" ...`, parseMode: "html" });const chat=await ct(info.provider,key,info.baseUrl,prompt);if(chat.ok){const l=[`💬 <b>${info.displayName}</b>`,`🤖 <code>${chat.model}</code> | 🕐 ${chat.elapsedMs}ms`,`📝 ${chat.text}`];if(chat.usage)l.push(`📊 入${chat.usage.prompt} 出${chat.usage.completion} 计${chat.usage.total}`);if(chat.headers)l.push(fh(chat.headers));await msg.edit({text:`${l.join("\n")}`, parseMode: "html" });}else{await msg.edit({text:`❌ (${chat.elapsedMs||"?"}ms): ${chat.error}`, parseMode: "html" });}return;}
+  if(sub==="speed"){const keys=await lk();let key:string|undefined;let baseUrl:string|undefined;const args=parts.slice(1);for(const a of args){if(isUrl(a)&&!baseUrl){baseUrl=nu(a);continue;}const found=keys.find(k=>k.name===a);if(found&&!key){key=found.key;baseUrl=baseUrl||found.baseUrl;continue;}if(!key)key=a;}if(!key&&extracedKey)key=extracedKey;if(!baseUrl&&extracedUrl)baseUrl=nu(extracedUrl);if(!key){await msg.edit({text:`❌ <code>${mp}checkapi speed &lt;key|name&gt;</code>`, parseMode: "html" });return;}const info=baseUrl?await probeApi(baseUrl,key):dp(key,baseUrl);await msg.edit({text:`⚡ ${info.displayName} 速度测试中...`, parseMode: "html" });const results=await speedTest(info.provider,key,info.baseUrl);await msg.edit({text:`${results.join("\n")}`, parseMode: "html" });return;}
 
   // ── compare: two keys side by side ──
   if(sub==="compare"){const [a,b]=[parts[1],parts[2]];if(!a||!b){await msg.edit({text:`❌ <code>${mp}checkapi compare &lt;key1|name1&gt; &lt;key2|name2&gt;</code>`, parseMode: "html" });return;};const keys=await lk();const resolve=(input:string)=>{const f=keys.find(k=>k.name===input);return f?{key:f.key,baseUrl:f.baseUrl,label:f.name}:{key:input,baseUrl:undefined,label:mk(input)};};const r1=resolve(a),r2=resolve(b);const p1=dp(r1.key,r1.baseUrl),p2=dp(r2.key,r2.baseUrl);await msg.edit({text:`🔍 正在对比 <b>${r1.label}</b> vs <b>${r2.label}</b>...`, parseMode: "html" });const [s1,s2]=await Promise.all([fcv2(p1.provider,r1.key,p1.baseUrl),fcv2(p2.provider,r2.key,p2.baseUrl)]);const m=[`⚖️ <b>${p1.displayName}</b> (${r1.label})`,...s1,`\n━━━━━━━━━━━━━━━━`,...s2];await msg.edit({text:`${m.join("\n")}`, parseMode: "html" });return;}
