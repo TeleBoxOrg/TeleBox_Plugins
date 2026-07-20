@@ -489,7 +489,7 @@
   },
   "theme": {
     "url": "https://github.com/TeleBoxOrg/TeleBox-Plugins/blob/main/theme/theme.ts?raw=true",
-    "desc": "🎨 Telegram 主题转换器 Android↔Desktop↔TGX↔iOS"
+    "desc": "Telegram 主题转换"
   },
   "checkapi": {
     "url": "https://github.com/TeleBoxOrg/TeleBox-Plugins/blob/main/checkapi/checkapi.ts?raw=true",
