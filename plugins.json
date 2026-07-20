@@ -492,8 +492,7 @@
     "desc": "🎨 Telegram 主题转换器 Android↔Desktop↔TGX↔iOS"
   },
   "checkapi": {
-    "name": "checkapi",
-    "desc": "🔍 API Key 全功能检测 v3 — 18+ Provider (OpenAI/Anthropic/Gemini/Groq/Mistral/Perplexity/Fireworks/etc)，智能识别+余额+模型列表+对话测试+速度基准+多Key对比，支持 curl/ENV/JSON 输入，URL 域名自动推断",
-    "file": "checkapi/checkapi.ts"
+    "url": "https://github.com/TeleBoxOrg/TeleBox-Plugins/blob/main/checkapi/checkapi.ts?raw=true",
+    "desc": "API Key 全功能检测"
   }
 }
