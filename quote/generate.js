@@ -219,6 +219,37 @@ function collectCustomEmojiBuffers(messages) {
   return map;
 }
 
+// ── Buffer format detection (safety net, mirrors yvlu's detectQuoteImageExt) ─
+function detectBufferExt(buffer) {
+  if (!buffer || buffer.length < 4) return null;
+  // WebP: RIFF header + WEBP signature
+  if (
+    buffer.length >= 12 &&
+    buffer.subarray(0, 4).toString("ascii") === "RIFF" &&
+    buffer.subarray(8, 12).toString("ascii") === "WEBP"
+  ) return "webp";
+  // PNG: 0x89 0x50 0x4e 0x47 0x0d 0x0a 0x1a 0x0a
+  if (
+    buffer.length >= 8 &&
+    buffer[0] === 0x89 &&
+    buffer[1] === 0x50 &&
+    buffer[2] === 0x4e &&
+    buffer[3] === 0x47 &&
+    buffer[4] === 0x0d &&
+    buffer[5] === 0x0a &&
+    buffer[6] === 0x1a &&
+    buffer[7] === 0x0a
+  ) return "png";
+  // WebM (EBML header): 0x1A 0x45 0xDF 0xA3
+  if (
+    buffer[0] === 0x1a &&
+    buffer[1] === 0x45 &&
+    buffer[2] === 0xdf &&
+    buffer[3] === 0xa3
+  ) return "webm";
+  return null;
+}
+
 // ── Main generate entry point ──────────────────────────────────────────
 async function generateQuote(parm) {
   if (!parm) return { error: "query_empty" };
@@ -456,6 +487,13 @@ async function generateQuote(parm) {
   } else {
     quoteImage = canvasQuote.toBuffer();
     ext = "png";
+  }
+
+  // Buffer-based format validation (safety net against ext mismatch)
+  const detected = detectBufferExt(quoteImage);
+  if (detected && detected !== ext) {
+    console.warn(`quote generate: ext mismatch (declared=${ext}, actual=${detected}), correcting`);
+    ext = detected;
   }
 
   // Always report dimensions from the final encoded image.
