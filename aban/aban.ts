@@ -72,7 +72,8 @@ const HELP_TEXT = `<b>封禁管理</b>
 <code>${mainPrefix}unsb</code> 批量解封（仅有管理权的群）
 <code>${mainPrefix}refresh</code> 刷新管理群缓存
 
-回复消息或@用户名`;
+目标：回复消息 / <code>@用户名</code> / <code>用户ID</code>
+<code>用户ID</code> 不要求对方在当前群；会从会话缓存与管理群解析`;
 
 // ==================== 工具函数 ====================
 // 解析时间字符串
@@ -222,20 +223,16 @@ class UserResolver {
         };
       }
       
-      // 纯数字 ID
+      // 纯数字 ID（不要求目标在当前聊天）
       if (/^-?\d+$/.test(target)) {
         const userId = parseInt(target, 10);
-        const entity = await this.safeGetEntity(client, userId);
-        const participant = entity
-          ? await this.safeGetInputEntity(client, entity)
-          : await this.resolveParticipantFromContext(client, message, userId);
-
+        const resolved = await this.resolveNumericUser(client, message, userId);
         return {
-          user: entity,
+          user: resolved.user,
           uid: userId,
-          participant,
+          participant: resolved.participant,
           source: "numeric",
-          resolutionError: participant ? undefined : "TARGET_ENTITY_UNRESOLVABLE",
+          resolutionError: resolved.participant ? undefined : "TARGET_ENTITY_UNRESOLVABLE",
           chatType: this.getChatType(message),
         };
       }
@@ -295,6 +292,10 @@ class UserResolver {
 
     if ((message as any).isChannel) {
       try {
+        // 优先 getParticipant(accessHash=0)：目标是成员/可解析时一次成功，且不要求“当前页”
+        const viaPart = await this.resolveUserViaGetParticipant(client, chat, userId);
+        if (viaPart) return viaPart;
+
         let offset = 0;
         const limit = 200;
         for (let i = 0; i < 5; i++) {
@@ -356,6 +357,162 @@ class UserResolver {
     }
 
     return undefined;
+  }
+
+  /**
+   * 按用户数字 ID 解析 InputPeer。
+   * 目标不必在当前聊天：本地缓存 → 当前群 → 跨管理群 getParticipant → 频道 accessHash=0 试探。
+   */
+  private static async resolveNumericUser(
+    client: TelegramClient,
+    message: Api.Message,
+    userId: number,
+  ): Promise<{ user: any; participant?: any }> {
+    let entity = await this.safeGetEntity(client, userId);
+    let participant = entity
+      ? await this.safeGetInputEntity(client, entity)
+      : await this.safeGetInputEntity(client, userId);
+
+    if (!participant) {
+      participant = await this.resolveParticipantFromContext(client, message, userId, entity);
+    }
+
+    // 当前频道/超群：getParticipant(accessHash=0) 可回填实体（即使目标已不在群，有时仍可）
+    if (!participant && (message as any).isChannel) {
+      participant = await this.resolveUserViaGetParticipant(client, (message as any).peerId, userId);
+      if (!entity && participant) {
+        entity = await this.safeGetEntity(client, userId);
+      }
+    }
+
+    if (!participant) {
+      const cross = await this.resolveUserAcrossManagedGroups(client, userId, (message as any).peerId);
+      if (cross.participant) {
+        participant = cross.participant;
+        if (!entity && cross.entity) entity = cross.entity;
+      }
+    }
+
+    // 频道/超群：仍无 hash 时用 accessHash=0 试探（预封禁场景）
+    if (!participant && (message as any).isChannel) {
+      try {
+        participant = new Api.InputPeerUser({
+          userId: bigInt(userId),
+          accessHash: bigInt(0),
+        });
+      } catch {
+        participant = undefined;
+      }
+    }
+
+    return { user: entity, participant };
+  }
+
+  /** 频道内用裸 userId + accessHash 0 解析成员 */
+  private static async resolveUserViaGetParticipant(
+    client: TelegramClient,
+    chat: any,
+    userId: number,
+  ): Promise<any | undefined> {
+    if (!chat || !userId) return undefined;
+    try {
+      const res: any = await client.invoke(
+        new Api.channels.GetParticipant({
+          channel: chat,
+          participant: new Api.InputPeerUser({
+            userId: bigInt(userId),
+            accessHash: bigInt(0),
+          }),
+        })
+      );
+      const matched = (res?.users || []).find((u: any) => Number(u?.id) === userId);
+      if (matched) {
+        return await this.safeGetInputEntity(client, matched);
+      }
+    } catch {
+      return undefined;
+    }
+    return undefined;
+  }
+
+  /**
+   * 在管理群中按 userId 解析实体；目标不必与命令同群。
+   */
+  private static async resolveUserAcrossManagedGroups(
+    client: TelegramClient,
+    userId: number,
+    excludePeer?: any,
+  ): Promise<{ participant?: any; entity?: any }> {
+    if (!userId) return {};
+    let groups: ManagedGroup[] = [];
+    try {
+      groups = await GroupManager.getManagedGroups(client);
+    } catch {
+      return {};
+    }
+    if (!groups.length) return {};
+
+    const excludeId = excludePeer
+      ? Number(
+          excludePeer?.channelId ??
+            excludePeer?.chatId ??
+            excludePeer?.userId ??
+            excludePeer?.id ??
+            0,
+        )
+      : 0;
+
+    const ordered = [
+      ...groups.filter((g) => g.kind === "channel"),
+      ...groups.filter((g) => g.kind === "chat"),
+    ];
+
+    const limit = (await ensurePLimit())(6);
+    let found: { participant?: any; entity?: any } = {};
+
+    await Promise.all(
+      ordered.map((group) =>
+        limit(async () => {
+          if (found.participant) return;
+          if (excludeId && Number(group.id) === excludeId) return;
+          try {
+            if (group.kind === "channel") {
+              const channel = await resolveChannelInput(client, group);
+              const res: any = await client.invoke(
+                new Api.channels.GetParticipant({
+                  channel: channel as any,
+                  participant: new Api.InputPeerUser({
+                    userId: bigInt(userId),
+                    accessHash: bigInt(0),
+                  }),
+                })
+              );
+              const matched = (res?.users || []).find((u: any) => Number(u?.id) === userId);
+              if (matched && !found.participant) {
+                const input = await this.safeGetInputEntity(client, matched);
+                if (input) found = { participant: input, entity: matched };
+              }
+              return;
+            }
+
+            const full: any = await client.invoke(
+              new Api.messages.GetFullChat({
+                chatId: bigInt(Math.abs(Number(group.id))),
+              })
+            );
+            const matched = (full?.users || []).find((u: any) => Number(u?.id) === userId);
+            if (matched && !found.participant) {
+              const input = await this.safeGetInputEntity(client, matched);
+              if (input) found = { participant: input, entity: matched };
+            }
+          } catch {
+            // skip
+          }
+        }),
+      ),
+    );
+
+    return found;
   }
 
   static formatUser(user: any, userId: number): string {
@@ -1168,7 +1325,7 @@ class CommandHandlers {
       const basicGroupActionAllowedWithoutParticipant = chatType === 'chat' && ['ban', 'kick'].includes(action);
       if (!participant && ['ban', 'unban', 'mute', 'unmute', 'kick'].includes(action) && !basicGroupActionAllowedWithoutParticipant) {
         const errorText = resolutionError === 'TARGET_ENTITY_UNRESOLVABLE'
-          ? '❌ 无法解析该目标的 Telegram 实体，请使用回复消息或 @用户名 后再试'
+          ? '❌ 无法解析该用户ID（会话未见过且不在管理群中）。可先回复其一则消息，或确认 ID 正确'
           : '❌ 获取用户失败';
         await MessageManager.smartEdit(message, errorText);
         return;
@@ -1271,7 +1428,7 @@ class CommandHandlers {
 
       if (!participant) {
         const errorText = resolutionError === 'TARGET_ENTITY_UNRESOLVABLE'
-          ? '❌ 无法解析该目标的 Telegram 实体，请先通过回复消息、@用户名或让该目标在当前会话中可见后再试'
+          ? '❌ 无法解析该用户ID（会话未见过且不在任一管理群中）。可先 `.refresh` 后重试，或回复其一则消息'
           : '❌ 获取用户失败';
         await MessageManager.smartEdit(message, errorText);
         return;
@@ -1420,7 +1577,7 @@ class CommandHandlers {
 
       if (!participant) {
         const errorText = resolutionError === 'TARGET_ENTITY_UNRESOLVABLE'
-          ? '❌ 无法解析该目标的 Telegram 实体，请先通过回复消息、@用户名或让该目标在当前会话中可见后再试'
+          ? '❌ 无法解析该用户ID（会话未见过且不在任一管理群中）。可先 `.refresh` 后重试，或回复其一则消息'
           : '❌ 获取用户失败';
         await MessageManager.smartEdit(message, errorText);
         return;
