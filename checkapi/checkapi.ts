@@ -28,7 +28,8 @@ function jp(base:string, pathSeg:string):string{
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function ge(e:unknown):string{const o=e as any; return String(o?.message||o?.stderr||e||"未知错误");}
-function fh(h?:Record<string,string>):string{if(!h||!Object.keys(h).length)return"";const l:string[]=[];for(const[k,v]of Object.entries(h)){l.push(`  ⚡ ${k.replace(/-/g," ")}: ${v}`);}return l.join("\n");}
+function htmlEscape(s:string):string{return s.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;").replace(/'/g,"&#39;");}
+function fh(h?:Record<string,string>):string{if(!h||!Object.keys(h).length)return "";const l:string[]=[];for(const[k,v]of Object.entries(h)){l.push(`  ⚡ ${htmlEscape(k.replace(/-/g," "))}: ${htmlEscape(v)}`);}return l.join("\n");}
 
 // ── Smart input parser: curl / env / json ──
 function parseCurl(s: string): { key?: string; url?: string } | null {
@@ -38,7 +39,7 @@ function parseCurl(s: string): { key?: string; url?: string } | null {
   return null;
 }
 function parseEnv(s: string): { key?: string } | null {
-  const m = s.match(/^(?:export\s+)?(\w*API[_\s]*(?:KEY|TOKEN|SECRET)\w*)\s*=\s*['"]?([^\s'"]+)['"]?$/im);
+  const m = s.match(/^(?:export\s+)?(\w*API[\s_]*(?:KEY|TOKEN|SECRET)\w*)\s*=\s*['"]?([^\s'"]+)['"]?$/im);
   if (m) return { key: m[2] };
   return null;
 }
@@ -151,12 +152,36 @@ async function probeApi(baseUrl:string,key:string): Promise<PI>{
 async function ag(url:string,hdrs:Record<string,string>,tms=15000,retries=2): Promise<AR>{for(let i=0;i<=retries;i++){const s=Date.now();try{const r=await axios.get(url,{headers:hdrs,timeout:tms,validateStatus:()=>true,httpAgent:new (require("http").Agent)({keepAlive:true})});const e=Date.now()-s;const a:AR={ok:r.status>=200&&r.status<300,data:r.data,status:r.status,elapsedMs:e};const h:Record<string,string>={};for(const[k,v]of Object.entries(r.headers as Record<string,string>||{})){if(/rate.?limit|retry.?after|x-ratelimit|ratelimit|quota/i.test(k))h[k]=String(v);}if(Object.keys(h).length)a.headers=h;if(!a.ok)a.error=`HTTP ${r.status}: ${JSON.stringify(r.data).slice(0,200)}`;return a;}catch(e:unknown){if(i===retries)return{ok:false,error:ge(e),elapsedMs:Date.now()-s};await new Promise(r=>setTimeout(r,1000*(i+1)));}}return{ok:false,error:"retry exhausted"};}
 async function ap(url:string,hdrs:Record<string,string>,body:unknown,tms=30000,retries=1): Promise<AR>{for(let i=0;i<=retries;i++){const s=Date.now();try{const r=await axios.post(url,body,{headers:hdrs,timeout:tms,validateStatus:()=>true});const e=Date.now()-s;const a:AR={ok:r.status>=200&&r.status<300,data:r.data,status:r.status,elapsedMs:e};const h:Record<string,string>={};for(const[k,v]of Object.entries(r.headers as Record<string,string>||{})){if(/rate.?limit|retry.?after|x-ratelimit|ratelimit|quota/i.test(k))h[k]=String(v);}if(Object.keys(h).length)a.headers=h;if(!a.ok){const d=r.data as Record<string,unknown>|undefined;a.error=d?.error&&typeof d.error==="object"?String((d.error as Record<string,unknown>).message||JSON.stringify(d.error)):`HTTP ${r.status}: ${JSON.stringify(r.data).slice(0,200)}`;}return a;}catch(e:unknown){if(i===retries)return{ok:false,error:ge(e),elapsedMs:Date.now()-s};await new Promise(r=>setTimeout(r,1000*(i+1)));}}return{ok:false,error:"retry exhausted"};}
 
+// ── Fetch models from API to pick a test model ──
+async function pickTestModel(provider:string,key:string,baseUrl:string): Promise<string>{
+  const info=dp(key,baseUrl);
+  const hdrs:Record<string,string>=info.authHeader?{Authorization:info.authHeader}:{};
+  const url=provider==="gemini"?`https://generativelanguage.googleapis.com/v1beta/models?key=${key}`
+    :provider==="ollama"?`${info.baseUrl}/api/tags`
+    :info.modelsUrl||`${info.baseUrl}/v1/models`;
+  try{
+    const r=await ag(url,provider==="anthropic"?info.headers:hdrs,8000);
+    if(r.ok){
+      let models:Array<Record<string,unknown>>=[];
+      if(provider==="gemini"){models=(r.data as Record<string,unknown>|undefined)?.models as Array<Record<string,unknown>>||[];}
+      else if(provider==="ollama"){models=((r.data as Record<string,unknown>|undefined)?.models as Array<Record<string,unknown>>||[]).map((m:Record<string,unknown>)=>({id:String(m.name||"").replace(/:latest$/,"")}));}
+      else{const d=r.data as Record<string,unknown>|undefined;models=(Array.isArray(r.data)?r.data:d?.data as Array<Record<string,unknown>>)||[];}
+      if(models.length){
+        const names=models.map((m:any)=>String(m.id||m.name||"").replace("models/","").replace(":latest","")).filter(Boolean);
+        if(names.length)return names[0];
+      }
+    }
+  }catch{/* fallback */}
+  // Fallback to hardcoded
+  const mm:Record<string,string>={openai:"gpt-4.1-mini",deepseek:"deepseek-chat",openrouter:"openai/gpt-4.1-mini",xai:"grok-3-mini",groq:"llama-3.3-70b-versatile",together:"meta-llama/Llama-4-Maverick-17B-128E-Instruct-FP8",mistral:"mistral-small-2506",perplexity:"sonar-reasoning",cohere:"command-r7b-12-2024",fireworks:"accounts/fireworks/models/llama-v3p3-70b-instruct",replicate:"meta/llama-3.3-70b-instruct",ollama:"llama3.2",siliconflow:"Qwen/Qwen3-8B",deepinfra:"meta-llama/Llama-4-Maverick-17B-128E-Instruct",huggingface:"Qwen/Qwen2.5-7B-Instruct",custom:"gpt-4.1-mini",nvidia:"nvidia/llama-3.1-nemotron-ultra-253b-v1",novita:"deepseek/deepseek-v3-0324",cerebras:"llama3.1-8b",azure:"gpt-4o-mini",vercel:"gpt-4o-mini"};
+  return mm[provider]||"gpt-4o-mini";
+}
+
 // ── Chat test ──
 async function ct(provider:string,key:string,baseUrl:string,askText?:string): Promise<CTR>{const q=askText||"say ok";const info=dp(key,baseUrl);
   if(provider==="gemini"){const gemBase=info.baseUrl||"https://generativelanguage.googleapis.com";const url=gemBase.includes("v1beta")?`${gemBase}/models/gemini-2.5-flash:generateContent`:`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent`;const params=gemBase.includes("generativelanguage")?`?key=${key}`:"";const r=await ap(`${url}${params}`,{"content-type":"application/json"},{contents:[{parts:[{text:q}]}],generationConfig:{maxOutputTokens:50,temperature:0}},20000);if(r.ok){const d=r.data as Record<string,unknown>|undefined;const cs=d?.candidates as Array<Record<string,unknown>>|undefined;const ct=cs?.[0]?.content as Record<string,unknown>|undefined;const ps=ct?.parts as Array<Record<string,string>>|undefined;const tx=ps?.map(p=>p.text||"").join("")||"";const u=d?.usageMetadata as Record<string,number>|undefined;return{ok:true,text:tx,model:"gemini-2.5-flash",usage:u?{prompt:u.promptTokenCount||0,completion:u.candidatesTokenCount||0,total:u.totalTokenCount||0}:undefined,elapsedMs:r.elapsedMs,headers:r.headers};}return{ok:false,error:r.error,elapsedMs:r.elapsedMs};}
   if(provider==="anthropic"){const r=await ap(info.chatUrl,info.headers,{model:"claude-3.5-haiku-20241022",max_tokens:50,messages:[{role:"user",content:q}]},20000);if(r.ok){const d=r.data as Record<string,unknown>|undefined;const ct=(d?.content as Array<Record<string,unknown>>|undefined)?.[0];const tx=String(ct?.text||"");const u=d?.usage as Record<string,number>|undefined;return{ok:true,text:tx,model:String(d?.model||"claude"),usage:u?{prompt:u.input_tokens||0,completion:u.output_tokens||0,total:(u.input_tokens||0)+(u.output_tokens||0)}:undefined,elapsedMs:r.elapsedMs,headers:r.headers};}return{ok:false,error:r.error,elapsedMs:r.elapsedMs};}
-  const mm:Record<string,string>={openai:"gpt-4.1-mini",deepseek:"deepseek-chat",openrouter:"openai/gpt-4.1-mini",xai:"grok-3-mini",groq:"llama-3.3-70b-versatile",together:"meta-llama/Llama-4-Maverick-17B-128E-Instruct-FP8",mistral:"mistral-small-2506",perplexity:"sonar-reasoning",cohere:"command-r7b-12-2024",fireworks:"accounts/fireworks/models/llama-v3p3-70b-instruct",replicate:"meta/llama-3.3-70b-instruct",ollama:"llama3.2",siliconflow:"Qwen/Qwen3-8B",deepinfra:"meta-llama/Llama-4-Maverick-17B-128E-Instruct",huggingface:"Qwen/Qwen2.5-7B-Instruct",custom:"gpt-4.1-mini",nvidia:"nvidia/llama-3.1-nemotron-ultra-253b-v1",novita:"deepseek/deepseek-v3-0324",cerebras:"llama3.1-8b",azure:"gpt-4o-mini",vercel:"gpt-4o-mini"};
-  const model=mm[provider]||"gpt-4o-mini";
+  const model=await pickTestModel(provider,key,baseUrl);
   const hdrs:Record<string,string>={"content-type":"application/json"};
   if (info.authHeader) hdrs["Authorization"]=info.authHeader;
   if (provider==="cohere") delete hdrs["Authorization"];
@@ -186,7 +211,7 @@ async function cb(provider:string,key:string,baseUrl:string): Promise<string>{co
   }
   if(provider==="deepseek"){const r=await ag(`${info.baseUrl.replace(/\/v\d.*$/,"")}/user/balance`,hdrs,10000);if(r.ok){const d=r.data as Record<string,unknown>|undefined;lines.push(`✅ 可用: ${d?.is_available?"是":"否"}`);const infos=d?.balance_infos as Array<Record<string,unknown>>|undefined;if(infos)for(const bi of infos)lines.push(`💰 ${bi.currency||"余额"}: ${bi.total_balance||"?"} (已用: ${bi.topped_up_balance||"?"})`);}else if(r.status===401)return"❌ Key 无效";else return`⚠️ ${r.error||"查询失败"}`;return lines.join("\n");}
   if(provider==="anthropic"){const r=await ap("https://api.anthropic.com/v1/messages",{"x-api-key":key,"anthropic-version":"2023-06-01","content-type":"application/json"},{model:"claude-3.5-haiku-20241022",max_tokens:1,messages:[{role:"user",content:"hi"}]},15000);if(r.status===401||r.status===403)return"❌ Key 无效";if(r.ok||r.status===429)return`✅ Key 有效 (${r.status===429?"限流":"正常"})\n💰 请前往官网查看余额`;return`⚠️ HTTP ${r.status}: ${r.error||""}`;}
-  if(provider==="gemini"){const r=await ag(`https://generativelanguage.googleapis.com/v1beta/models?key=${key}`,{},10000);if(r.ok){const ms=(r.data as Record<string,unknown>|undefined)?.models as Array<unknown>|undefined;return`✅ Key 有效 | 📋 ${ms?.length??0} 个模型\n💰 请在控制台查看额度`;}if(r.status===400&&JSON.stringify(r.data||"").includes("API_KEY_INVALID"))return"❌ Key 无效";return`⚠️ HTTP ${r.status}: ${r.error||"可能有效"}`;}
+  if(provider==="gemini"){const r=await ag(`https://generativelanguage.googleapis.com/v1beta/models?key=${key}`,{},10000);if(r.ok){const ms=(r.data as Record<string,unknown>|undefined)?.models as Array<unknown>|undefined;return`✅ Key 有效 | 📋 ${ms?.length??0} 个模型\n💰 请在控制台查看额度`;}if(r.status===400&&JSON.stringify(r.data||"").includes("API_KEY_INVALID"))return"❌ Key 无效";return`⚠️ HTTP ${r.status}: ${htmlEscape(r.error||"可能有效")}`;}
   if(provider==="xai"){const r=await ag(`${info.baseUrl}/v1/models`,hdrs,10000);if(r.ok){const arr=Array.isArray(r.data)?r.data:(r.data as Record<string,unknown>|undefined)?.data as Array<unknown>|undefined;return`✅ Key 有效 | 📋 ${arr?.length??0} 个模型\n💰 请前往官网查看余额`;}if(r.status===401)return"❌ Key 无效";return`⚠️ HTTP ${r.status}`;}
 
   if(provider==="nvidia"){const r=await ag(`${info.baseUrl}/v1/models`,hdrs,10000);if(r.ok){const arr=Array.isArray(r.data)?r.data:(r.data as Record<string,unknown>|undefined)?.data as Array<unknown>|undefined;return`✅ Key 有效 | 📋 ${arr?.length??0} 个模型\n💰 请前往官网查看余额`;}if(r.status===401)return"❌ Key 无效";return`⚠️ HTTP ${r.status}`;}if(provider==="novita"){const r=await ag(`${info.baseUrl}/v1/models`,hdrs,10000);if(r.ok){const arr=Array.isArray(r.data)?r.data:(r.data as Record<string,unknown>|undefined)?.data as Array<unknown>|undefined;return`✅ Key 有效 | 📋 ${arr?.length??0} 个模型`;}if(r.status===401)return"❌ Key 无效";return`⚠️ HTTP ${r.status}`;}if(provider==="cerebras"){const r=await ag(`${info.baseUrl}/v1/models`,hdrs,10000);if(r.ok){const arr=Array.isArray(r.data)?r.data:(r.data as Record<string,unknown>|undefined)?.data as Array<unknown>|undefined;return`✅ Key 有效 | 📋 ${arr?.length??0} 个模型\n💰 请前往官网查看余额`;}if(r.status===401)return"❌ Key 无效";return`⚠️ HTTP ${r.status}`;} // Generic models endpoint test for unrecognized providers
@@ -207,7 +232,7 @@ async function cb(provider:string,key:string,baseUrl:string): Promise<string>{co
   return `❌ 均无法连接，请检查 URL 和 Key`;
 }
 
-// ── Model list ──
+// ── Model list (all models in one blockquote) ──
 async function lmf(provider:string,key:string,baseUrl:string): Promise<string>{
   const info=dp(key,baseUrl);
   const hdrs:Record<string,string>=info.authHeader?{Authorization:info.authHeader}:{};
@@ -216,45 +241,38 @@ async function lmf(provider:string,key:string,baseUrl:string): Promise<string>{
     :info.modelsUrl||`${info.baseUrl}/v1/models`;
 
   const r=await ag(url,provider==="anthropic"?info.headers:hdrs,12000);
-  if(!r.ok)return`❌ 获取失败：${r.error}`;
+  if(!r.ok)return`❌ 获取失败：${htmlEscape(r.error)}`;
   let models:Array<Record<string,unknown>>=[];
   if(provider==="gemini"){models=(r.data as Record<string,unknown>|undefined)?.models as Array<Record<string,unknown>>||[];}
   else if(provider==="ollama"){models=((r.data as Record<string,unknown>|undefined)?.models as Array<Record<string,unknown>>||[]).map((m:Record<string,unknown>)=>({id:String(m.name||"").replace(/:latest$/,""),owned_by:"ollama"}));}
   else{const d=r.data as Record<string,unknown>|undefined;models=(Array.isArray(r.data)?r.data:d?.data as Array<Record<string,unknown>>)||[];}
   if(!models.length)return"❌ 未找到可用模型";
 
-  const cats:Record<string,string[]>={};let total=0;
+  const names:string[]=[];
   for(const m of models){
     const name=String(m.id||m.name||"").replace("models/","").replace(":latest","");
-    if(!name)continue;
-    const owner=String(m.owned_by||"");
-    let cat="其他";
-    if(provider==="gemini"){cat=name.includes("gemini")?"Gemini":name.includes("embedding")?"Embedding":name.includes("imagen")?"Imagen":"其他";}
-    else{if(/gpt|o1|o3|o4|o5/i.test(name))cat="GPT / o-series";else if(/claude/i.test(name))cat="Claude";else if(/gemini/i.test(name))cat="Gemini";else if(/deepseek/i.test(name))cat="DeepSeek";else if(/nemotron/i.test(name))cat="Nemotron";else if(/nvidia/i.test(name))cat="NVIDIA";else if(/grok/i.test(name))cat="Grok";else if(/llama|mistral|mixtral|qwen/i.test(name))cat="开源模型";else if(/embed|text-embed/i.test(name))cat="Embedding";else if(/dall-e|imagen|flux|stable|sdxl/i.test(name))cat="图像生成";else if(/tts|whisper|audio|speech/i.test(name))cat="语音";else if(/moderation/i.test(name))cat="审核";else if(/rerank|reranker/i.test(name))cat="Rerank";else if(owner)cat=owner.split("/")[0];}
-    (cats[cat]||=[]).push(name);total++;
+    if(name)names.push(name);
   }
-  const lines:string[]=[`🤖 共 ${total} 个`];
-  const cn=Object.keys(cats).sort((a,b)=>(cats[b].length-cats[a].length)||a.localeCompare(b));
-  for(const cat of cn){
-    const ms=cats[cat];if(cn.length>1&&ms.length<3)continue;
-    lines.push(`\n<b>${cat}</b> (${ms.length}):`);
-    lines.push(`<blockquote expandable>${ms.slice(0,15).map(m=>`<code>${m}</code>`).join(" | ")}${ms.length>15?` | ... +${ms.length-15}`:""}</blockquote>`);
-  }
-  if(r.headers&&Object.keys(r.headers).length){lines.push(`\n⚡ 速率限制：`);for(const[k,v]of Object.entries(r.headers)){lines.push(`  <code>${k}</code>: ${v}`);}}
+  if(!names.length)return"❌ 未找到可用模型";
+
+  // All models in one expandable blockquote
+  const lines:string[]=[`🤖 共 ${names.length} 个`];
+  lines.push(`<blockquote expandable>${names.slice(0,30).map(n=>`<code>${htmlEscape(n)}</code>`).join(" | ")}${names.length>30?` | ... +${names.length-30}`:""}</blockquote>`);
+  if(r.headers&&Object.keys(r.headers).length){lines.push(`\n⚡ 速率限制：`);for(const[k,v]of Object.entries(r.headers)){lines.push(`  <code>${htmlEscape(k)}</code>: ${htmlEscape(v)}`);}}
   return lines.join("\n");
 }
 
 // ── Full check ──
 async function fcv2(provider:string,key:string,baseUrl:string): Promise<string[]>{
   const rs:string[]=[];const info=dp(key,baseUrl);
-  rs.push(`🔍 <b>${info.displayName}</b> (${info.provider}, ${info.confidence})`);
+  rs.push(`🔍 <b>${htmlEscape(info.displayName)}</b> (${info.provider}, ${info.confidence})`);
   rs.push(`🔑 ${mk(key)}`);
   rs.push(`\n💰 <b>账户余额</b>：`);
-  try{rs.push(await cb(provider,key,baseUrl));}catch(e:unknown){rs.push(`⚠️ ${ge(e)}`);}
+  try{rs.push(await cb(provider,key,baseUrl));}catch(e:unknown){rs.push(`⚠️ ${htmlEscape(ge(e))}`);}
   rs.push(`\n💬 <b>对话测试</b>：`);
-  try{const chat=await ct(provider,key,baseUrl);if(chat.ok){rs.push(`✅ 响应: "${chat.text}" (${chat.elapsedMs}ms) | 🤖 <code>${chat.model}</code>`);if(chat.usage)rs.push(`📊 Token: 入${chat.usage.prompt} 出${chat.usage.completion} 计${chat.usage.total}`);if(chat.headers)rs.push(fh(chat.headers));}else{rs.push(`❌ 失败: ${chat.error||"无响应"}`);}}catch(e:unknown){rs.push(`⚠️ ${ge(e)}`);}
+  try{const chat=await ct(provider,key,baseUrl);if(chat.ok){rs.push(`✅ 响应: "${htmlEscape(chat.text)}" (${chat.elapsedMs}ms) | 🤖 <code>${htmlEscape(chat.model)}</code>`);if(chat.usage)rs.push(`📊 Token: 入${chat.usage.prompt} 出${chat.usage.completion} 计${chat.usage.total}`);if(chat.headers)rs.push(fh(chat.headers));}else{rs.push(`❌ 失败: ${htmlEscape(chat.error||"无响应")}`);}}catch(e:unknown){rs.push(`⚠️ ${htmlEscape(ge(e))}`);}
   rs.push(`\n📋 <b>可用模型</b>：`);
-  try{rs.push(await lmf(provider,key,baseUrl));}catch(e:unknown){rs.push(`⚠️ ${ge(e)}`);}
+  try{rs.push(await lmf(provider,key,baseUrl));}catch(e:unknown){rs.push(`⚠️ ${htmlEscape(ge(e))}`);}
   return rs;
 }
 
@@ -266,17 +284,35 @@ async function speedTest(provider:string,key:string,baseUrl:string): Promise<str
   const hdrs:Record<string,string>={"content-type":"application/json"};
   if(info.authHeader)hdrs["Authorization"]=info.authHeader;
 
-  const rs:string[]=[`⚡ <b>${info.displayName}</b> 速度测试 (最多 50 token)：`];
+  const rs:string[]=[`⚡ <b>${htmlEscape(info.displayName)}</b> 速度测试 (最多 50 token)：`];
   for(const m of testModels){
     try{
       const start=Date.now();
       const r=await ap(info.chatUrl,hdrs,{model:m,messages:[{role:"user",content:"ok"}],max_tokens:50,temperature:0},30000);
       const elapsed=Date.now()-start;
       if(r.ok){const d=r.data as Record<string,unknown>|undefined;const tps=r.data?(((d?.usage as Record<string,number>|undefined)?.total_tokens||0)/(elapsed/1000)).toFixed(1):"?";rs.push(`  ✅ <code>${m}</code>: ${elapsed}ms (${tps} tok/s)`);}
-      else rs.push(`  ❌ <code>${m}</code>: ${r.error?.slice(0,60)||"失败"}`);
-    }catch(e:unknown){rs.push(`  ❌ <code>${m}</code>: ${ge(e).slice(0,60)}`);}
+      else rs.push(`  ❌ <code>${m}</code>: ${htmlEscape((r.error||"失败").slice(0,60))}`);
+    }catch(e:unknown){rs.push(`  ❌ <code>${m}</code>: ${htmlEscape(ge(e).slice(0,60))}`);}
   }
   return rs;
+}
+
+// ── Quick API key validation (for save) ──
+async function validateKey(provider:string,key:string,baseUrl:string): Promise<string>{
+  const info=dp(key,baseUrl);
+  const hdrs:Record<string,string>=info.authHeader?{Authorization:info.authHeader}:{};
+  const testUrls = provider==="gemini"?[`${info.baseUrl}/v1beta/models?key=${key}`]
+    :provider==="anthropic"?[info.chatUrl]
+    :[`${info.baseUrl}/v1/models`, `${info.baseUrl}/models`];
+  for (const u of testUrls) {
+    const r=await ag(u,provider==="anthropic"?info.headers:hdrs,10000);
+    if(r.ok)return"✅";
+    if(r.status===401)return"❌ Key 无效 — 401 Unauthorized";
+    if(r.status===403)return"❌ Key 无效 — 403 Forbidden";
+    if(r.status===404||r.status===405)continue;
+    return `⚠️ HTTP ${r.status}`;
+  }
+  return `❌ 无法连接 — 请检查 URL 和 Key`;
 }
 
 // ── Plugin ──
@@ -303,18 +339,18 @@ cmdHandlers:Record<string,(msg:Api.Message)=>Promise<void>>={checkapi:async(msg)
   const sub=parts[0]?.toLowerCase();
 
   // ── list / del / save / check ──
-  if(sub==="list"){const keys=await lk();if(!keys.length){await msg.edit({text:`📭 还没有保存密钥\n<code>${mp}checkapi save &lt;name&gt; &lt;key&gt;</code>`, parseMode: "html" });return;}const lines=[`🔑 已保存 ${keys.length} 个:`];for(const k of keys)lines.push(`  • <b>${k.name}</b>: ${mk(k.key)} (${k.provider||"auto"})${k.baseUrl?` [${(()=>{try{return new URL(k.baseUrl).hostname}catch{return k.baseUrl}})()}]`:""}`);await msg.edit({text:`${lines.join("\n")}`, parseMode: "html" });return;}
-  if(sub==="del"||sub==="delete"){const name=parts[1];if(!name){await msg.edit({text:`❌ 用法：<code>${mp}checkapi del &lt;名称&gt;</code>`, parseMode: "html" });return;}const keys=await lk();const idx=keys.findIndex(k=>k.name===name);if(idx===-1){await msg.edit({text:`❌ <b>${name}</b> 不存在`, parseMode: "html" });return;}keys.splice(idx,1);await sk(keys);await msg.edit({text:`✅ 已删 <b>${name}</b>`, parseMode: "html" });return;}
-  if(sub==="save"){let name:string|undefined,key:string|undefined,baseUrl:string|undefined;const args=parts.slice(1);for(const a of args){if(isUrl(a)&&!baseUrl){baseUrl=nu(a);continue;}if(!key&&(/^sk-|gsk_|tgp_|pplx-|r8_|fw_|xai-|AIza|co-|hf_|nvapi-/i.test(a)||a.length>=24)){key=a;continue;}if(!name){name=a;continue;}if(!key){key=a;continue;}if(!baseUrl){baseUrl=nu(a);continue;}}if(!key&&extracedKey)key=extracedKey;if(!baseUrl&&extracedUrl)baseUrl=nu(extracedUrl);if(!name||!key){await msg.edit({text:`❌ 用法：<code>${mp}checkapi save &lt;名称&gt; &lt;key&gt; [url]</code>`, parseMode: "html" });return;}const keys=await lk();const info=dp(key,baseUrl);const entry:SK={name,key,baseUrl,provider:info.provider,addedAt:Date.now()};const idx=keys.findIndex(k=>k.name===name);if(idx>=0)keys[idx]=entry;else keys.push(entry);await sk(keys);await msg.edit({text:`✅ ${idx>=0?"已更新":"已保存"} <b>${name}</b> → <code>${mp}checkapi ${name}</code>`, parseMode: "html" });return;}
-  if(sub==="check"){const target=parts[1]||"all";if(target==="all"){const keys=await lk();if(!keys.length){await msg.edit({text:`📭 还没有保存密钥`, parseMode: "html" });return;}await msg.edit({text:`正在检测 ${keys.length} 个密钥...`, parseMode: "html" });const results:string[]=[];const promises=keys.map(async(k)=>{const info=dp(k.key,k.baseUrl);try{return[`\n━━━ <b>${k.name}</b> ━━━`,...(await fcv2(info.provider,k.key,k.baseUrl||info.baseUrl))]as string[]}catch(e:unknown){return[`\n━━━ <b>${k.name}</b> ━━━`,`⚠️ ${ge(e)}`]as string[]}});const batches=await Promise.all(promises);for(const row of batches)results.push(...row);await msg.edit({text:`${results.join("\n")}`, parseMode: "html" });return;}const keys=await lk();const found=keys.find(k=>k.name===target);if(!found){await msg.edit({text:`❌ <b>${target}</b> 不存在`, parseMode: "html" });return;}await msg.edit({text:`🔍 正在检测 <b>${target}</b>...`, parseMode: "html" });const info=dp(found.key,found.baseUrl);const results=await fcv2(info.provider,found.key,found.baseUrl||info.baseUrl);await msg.edit({text:`${results.join("\n")}`, parseMode: "html" });return;}
+  if(sub==="list"){const keys=await lk();if(!keys.length){await msg.edit({text:`📭 还没有保存密钥\n<code>${mp}checkapi save &lt;name&gt; &lt;key&gt;</code>`, parseMode: "html" });return;}const lines=[`🔑 已保存 ${keys.length} 个:`];for(const k of keys)lines.push(`  • <b>${htmlEscape(k.name)}</b>: ${mk(k.key)} (${k.provider||"auto"})${k.baseUrl?` [${(()=>{try{return new URL(k.baseUrl).hostname}catch{return k.baseUrl}})()}]`:""}`);await msg.edit({text:`${lines.join("\n")}`, parseMode: "html" });return;}
+  if(sub==="del"||sub==="delete"){const name=parts[1];if(!name){await msg.edit({text:`❌ 用法：<code>${mp}checkapi del &lt;名称&gt;</code>`, parseMode: "html" });return;}const keys=await lk();const idx=keys.findIndex(k=>k.name===name);if(idx===-1){await msg.edit({text:`❌ <b>${htmlEscape(name)}</b> 不存在`, parseMode: "html" });return;}keys.splice(idx,1);await sk(keys);await msg.edit({text:`✅ 已删 <b>${htmlEscape(name)}</b>`, parseMode: "html" });return;}
+  if(sub==="save"){let name:string|undefined,key:string|undefined,baseUrl:string|undefined;const args=parts.slice(1);for(const a of args){if(isUrl(a)&&!baseUrl){baseUrl=nu(a);continue;}if(!key&&(/^sk-|gsk_|tgp_|pplx-|r8_|fw_|xai-|AIza|co-|hf_|nvapi-/i.test(a)||a.length>=24)){key=a;continue;}if(!name){name=a;continue;}if(!key){key=a;continue;}if(!baseUrl){baseUrl=nu(a);continue;}}if(!key&&extracedKey)key=extracedKey;if(!baseUrl&&extracedUrl)baseUrl=nu(extracedUrl);if(!name||!key){await msg.edit({text:`❌ 用法：<code>${mp}checkapi save &lt;名称&gt; &lt;key&gt; [url]</code>`, parseMode: "html" });return;}const keys=await lk();const info=dp(key,baseUrl);const entry:SK={name,key,baseUrl,provider:info.provider,addedAt:Date.now()};const idx=keys.findIndex(k=>k.name===name);if(idx>=0)keys[idx]=entry;else keys.push(entry);await sk(keys);await msg.edit({text:`🔍 正在验证 <b>${htmlEscape(name)}</b>...`, parseMode: "html" });const valid=await validateKey(info.provider,key,info.baseUrl);await msg.edit({text:`✅ ${idx>=0?"已更新":"已保存"} <b>${htmlEscape(name)}</b> → <code>${mp}checkapi ${name}</code>\n${valid}`, parseMode: "html" });return;}
+  if(sub==="check"){const target=parts[1]||"all";if(target==="all"){const keys=await lk();if(!keys.length){await msg.edit({text:`📭 还没有保存密钥`, parseMode: "html" });return;}await msg.edit({text:`正在检测 ${keys.length} 个密钥...`, parseMode: "html" });const results:string[]=[];const promises=keys.map(async(k)=>{const info=dp(k.key,k.baseUrl);try{return[`\n━━━ <b>${htmlEscape(k.name)}</b> ━━━`,...(await fcv2(info.provider,k.key,k.baseUrl||info.baseUrl))]as string[]}catch(e:unknown){return[`\n━━━ <b>${htmlEscape(k.name)}</b> ━━━`,`⚠️ ${htmlEscape(ge(e))}`]as string[]}});const batches=await Promise.all(promises);for(const row of batches)results.push(...row);await msg.edit({text:`${results.join("\n")}`, parseMode: "html" });return;}const keys=await lk();const found=keys.find(k=>k.name===target);if(!found){await msg.edit({text:`❌ <b>${htmlEscape(target)}</b> 不存在`, parseMode: "html" });return;}await msg.edit({text:`🔍 正在检测 <b>${htmlEscape(target)}</b>...`, parseMode: "html" });const info=dp(found.key,found.baseUrl);const results=await fcv2(info.provider,found.key,found.baseUrl||info.baseUrl);await msg.edit({text:`${results.join("\n")}`, parseMode: "html" });return;}
 
   // ── models / ask / speed ──
-  if(sub==="models"){const keys=await lk();let key:string|undefined;let baseUrl:string|undefined;const args=parts.slice(1);for(const a of args){if(isUrl(a)&&!baseUrl){baseUrl=nu(a);continue;}const found=keys.find(k=>k.name===a);if(found&&!key){key=found.key;baseUrl=baseUrl||found.baseUrl;continue;}if(!key)key=a;}if(!key&&extracedKey)key=extracedKey;if(!baseUrl&&extracedUrl)baseUrl=nu(extracedUrl);if(!key){await msg.edit({text:`❌ <code>${mp}checkapi models &lt;key|name&gt;</code>`, parseMode: "html" });return;}const info=baseUrl?await probeApi(baseUrl,key):dp(key);await msg.edit({text:`🔍 ${info.displayName} 模型列表...`, parseMode: "html" });const result=await lmf(info.provider,key,info.baseUrl);await msg.edit({text:`${result}`, parseMode: "html" });return;}
-  if(sub==="ask"){const keys=await lk();let key:string|undefined;let baseUrl:string|undefined;const args=parts.slice(1);const qParts:string[]=[];for(const a of args){if(isUrl(a)&&!baseUrl){baseUrl=nu(a);continue;}const found=keys.find(k=>k.name===a);if(found&&!key){key=found.key;baseUrl=baseUrl||found.baseUrl;continue;}if(!key&&(/^sk-|gsk_|tgp_|pplx-|r8_|fw_|xai-|AIza|co-|hf_|nvapi-/i.test(a)||a.length>=24)){key=a;continue;}if(!key){key=a;continue;}qParts.push(a);}if(!key&&extracedKey)key=extracedKey;if(!baseUrl&&extracedUrl)baseUrl=nu(extracedUrl);const prompt=qParts.join(" ")||"say hello";if(!key){await msg.edit({text:`❌ <code>${mp}checkapi ask &lt;key|name&gt; &lt;问题&gt;</code>`, parseMode: "html" });return;}const info=baseUrl?await probeApi(baseUrl,key):dp(key,baseUrl);await msg.edit({text:`💬 ${info.displayName}: "${prompt}" ...`, parseMode: "html" });const chat=await ct(info.provider,key,info.baseUrl,prompt);if(chat.ok){const l=[`💬 <b>${info.displayName}</b>`,`🤖 <code>${chat.model}</code> | 🕐 ${chat.elapsedMs}ms`,`📝 ${chat.text}`];if(chat.usage)l.push(`📊 入${chat.usage.prompt} 出${chat.usage.completion} 计${chat.usage.total}`);if(chat.headers)l.push(fh(chat.headers));await msg.edit({text:`${l.join("\n")}`, parseMode: "html" });}else{await msg.edit({text:`❌ (${chat.elapsedMs||"?"}ms): ${chat.error}`, parseMode: "html" });}return;}
-  if(sub==="speed"){const keys=await lk();let key:string|undefined;let baseUrl:string|undefined;const args=parts.slice(1);for(const a of args){if(isUrl(a)&&!baseUrl){baseUrl=nu(a);continue;}const found=keys.find(k=>k.name===a);if(found&&!key){key=found.key;baseUrl=baseUrl||found.baseUrl;continue;}if(!key)key=a;}if(!key&&extracedKey)key=extracedKey;if(!baseUrl&&extracedUrl)baseUrl=nu(extracedUrl);if(!key){await msg.edit({text:`❌ <code>${mp}checkapi speed &lt;key|name&gt;</code>`, parseMode: "html" });return;}const info=baseUrl?await probeApi(baseUrl,key):dp(key,baseUrl);await msg.edit({text:`⚡ ${info.displayName} 速度测试中...`, parseMode: "html" });const results=await speedTest(info.provider,key,info.baseUrl);await msg.edit({text:`${results.join("\n")}`, parseMode: "html" });return;}
+  if(sub==="models"){const keys=await lk();let key:string|undefined;let baseUrl:string|undefined;const args=parts.slice(1);for(const a of args){if(isUrl(a)&&!baseUrl){baseUrl=nu(a);continue;}const found=keys.find(k=>k.name===a);if(found&&!key){key=found.key;baseUrl=baseUrl||found.baseUrl;continue;}if(!key)key=a;}if(!key&&extracedKey)key=extracedKey;if(!baseUrl&&extracedUrl)baseUrl=nu(extracedUrl);if(!key){await msg.edit({text:`❌ <code>${mp}checkapi models &lt;key|name&gt;</code>`, parseMode: "html" });return;}const info=baseUrl?await probeApi(baseUrl,key):dp(key);await msg.edit({text:`🔍 ${htmlEscape(info.displayName)} 模型列表...`, parseMode: "html" });const result=await lmf(info.provider,key,info.baseUrl);await msg.edit({text:`${result}`, parseMode: "html" });return;}
+  if(sub==="ask"){const keys=await lk();let key:string|undefined;let baseUrl:string|undefined;const args=parts.slice(1);const qParts:string[]=[];for(const a of args){if(isUrl(a)&&!baseUrl){baseUrl=nu(a);continue;}const found=keys.find(k=>k.name===a);if(found&&!key){key=found.key;baseUrl=baseUrl||found.baseUrl;continue;}if(!key&&(/^sk-|gsk_|tgp_|pplx-|r8_|fw_|xai-|AIza|co-|hf_|nvapi-/i.test(a)||a.length>=24)){key=a;continue;}if(!key){key=a;continue;}qParts.push(a);}if(!key&&extracedKey)key=extracedKey;if(!baseUrl&&extracedUrl)baseUrl=nu(extracedUrl);const prompt=qParts.join(" ")||"say hello";if(!key){await msg.edit({text:`❌ <code>${mp}checkapi ask &lt;key|name&gt; &lt;问题&gt;</code>`, parseMode: "html" });return;}const info=baseUrl?await probeApi(baseUrl,key):dp(key,baseUrl);await msg.edit({text:`💬 ${htmlEscape(info.displayName)}: "${htmlEscape(prompt)}" ...`, parseMode: "html" });const chat=await ct(info.provider,key,info.baseUrl,prompt);if(chat.ok){const l=[`💬 <b>${htmlEscape(info.displayName)}</b>`,`🤖 <code>${htmlEscape(chat.model)}</code> | 🕐 ${chat.elapsedMs}ms`,`📝 ${htmlEscape(chat.text)}`];if(chat.usage)l.push(`📊 入${chat.usage.prompt} 出${chat.usage.completion} 计${chat.usage.total}`);if(chat.headers)l.push(fh(chat.headers));await msg.edit({text:`${l.join("\n")}`, parseMode: "html" });}else{await msg.edit({text:`❌ (${chat.elapsedMs||"?"}ms): ${htmlEscape(chat.error)}`, parseMode: "html" });}return;}
+  if(sub==="speed"){const keys=await lk();let key:string|undefined;let baseUrl:string|undefined;const args=parts.slice(1);for(const a of args){if(isUrl(a)&&!baseUrl){baseUrl=nu(a);continue;}const found=keys.find(k=>k.name===a);if(found&&!key){key=found.key;baseUrl=baseUrl||found.baseUrl;continue;}if(!key)key=a;}if(!key&&extracedKey)key=extracedKey;if(!baseUrl&&extracedUrl)baseUrl=nu(extracedUrl);if(!key){await msg.edit({text:`❌ <code>${mp}checkapi speed &lt;key|name&gt;</code>`, parseMode: "html" });return;}const info=baseUrl?await probeApi(baseUrl,key):dp(key,baseUrl);await msg.edit({text:`⚡ ${htmlEscape(info.displayName)} 速度测试中...`, parseMode: "html" });const results=await speedTest(info.provider,key,info.baseUrl);await msg.edit({text:`${results.join("\n")}`, parseMode: "html" });return;}
 
   // ── compare: two keys side by side ──
-  if(sub==="compare"){const [a,b]=[parts[1],parts[2]];if(!a||!b){await msg.edit({text:`❌ <code>${mp}checkapi compare &lt;key1|name1&gt; &lt;key2|name2&gt;</code>`, parseMode: "html" });return;};const keys=await lk();const resolve=(input:string)=>{const f=keys.find(k=>k.name===input);return f?{key:f.key,baseUrl:f.baseUrl,label:f.name}:{key:input,baseUrl:undefined,label:mk(input)};};const r1=resolve(a),r2=resolve(b);const p1=dp(r1.key,r1.baseUrl),p2=dp(r2.key,r2.baseUrl);await msg.edit({text:`🔍 正在对比 <b>${r1.label}</b> vs <b>${r2.label}</b>...`, parseMode: "html" });const [s1,s2]=await Promise.all([fcv2(p1.provider,r1.key,p1.baseUrl),fcv2(p2.provider,r2.key,p2.baseUrl)]);const m=[`⚖️ <b>${p1.displayName}</b> (${r1.label})`,...s1,`\n━━━━━━━━━━━━━━━━`,...s2];await msg.edit({text:`${m.join("\n")}`, parseMode: "html" });return;}
+  if(sub==="compare"){const [a,b]=[parts[1],parts[2]];if(!a||!b){await msg.edit({text:`❌ <code>${mp}checkapi compare &lt;key1|name1&gt; &lt;key2|name2&gt;</code>`, parseMode: "html" });return;};const keys=await lk();const resolve=(input:string)=>{const f=keys.find(k=>k.name===input);return f?{key:f.key,baseUrl:f.baseUrl,label:f.name}:{key:input,baseUrl:undefined,label:mk(input)};};const r1=resolve(a),r2=resolve(b);const p1=dp(r1.key,r1.baseUrl),p2=dp(r2.key,r2.baseUrl);await msg.edit({text:`🔍 正在对比 <b>${htmlEscape(r1.label)}</b> vs <b>${htmlEscape(r2.label)}</b>...`, parseMode: "html" });const [s1,s2]=await Promise.all([fcv2(p1.provider,r1.key,p1.baseUrl),fcv2(p2.provider,r2.key,r2.baseUrl)]);const m=[`⚖️ <b>${htmlEscape(p1.displayName)}</b> (${r1.label})`,...s1,`\n━━━━━━━━━━━━━━━━`,...s2];await msg.edit({text:`${m.join("\n")}`, parseMode: "html" });return;}
 
   // ── Inline key: auto-detect + full check ──
   let key:string,baseUrl:string|undefined;let label:string;const keys=await lk();
@@ -322,9 +358,9 @@ cmdHandlers:Record<string,(msg:Api.Message)=>Promise<void>>={checkapi:async(msg)
   else if(parts.length>=2&&isUrl(parts[1])){key=parts[0];baseUrl=nu(parts[1]);const found=keys.find(k=>k.name===key);label=found?found.name:mk(key);key=found?found.key:key;}
   else{const input=parts[0];const found=keys.find(k=>k.name===input);key=found?found.key:input;baseUrl=found?.baseUrl;label=found?found.name:mk(key);}
   let info:PI;if(baseUrl){await msg.edit({text:`🔍 正在识别 API 类型...`, parseMode: "html" });info=await probeApi(baseUrl,key);}else{info=dp(key,baseUrl);}
-  await msg.edit({text:`🔍 正在检测 <b>${label}</b> (${info.displayName})...`, parseMode: "html" });
+  await msg.edit({text:`🔍 正在检测 <b>${htmlEscape(label)}</b> (${htmlEscape(info.displayName)})...`, parseMode: "html" });
   const results=await fcv2(info.provider,key,info.baseUrl);
-  results.unshift(`🔍 <b>${label}</b>`);
+  results.unshift(`🔍 <b>${htmlEscape(label)}</b>`);
   await msg.edit({text:`${results.join("\n")}`, parseMode: "html" });
 },};}
 
