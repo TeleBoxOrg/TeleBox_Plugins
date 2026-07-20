@@ -1313,7 +1313,8 @@ const dme = async (msg: Api.Message) => {
       if (!me) return;
     const myId = BigInt(me.id.toString());
     const chatId = msg.chatId?.toString() || msg.peerId?.toString() || "";
-    const chatEntity = await getEntityWithHash(client, chatId);
+    // 优先走多策略 resolveChatEntity（含 getEntityWithHash），避免裸 resolve 失败直接中断。
+    const chatEntity = await resolveChatEntity(client, chatId);
     const topicRootId = getTopicRootIdFromMessage(msg);
 
     if (typeof topicRootId === "number") {
