@@ -83,13 +83,10 @@ class CacheManager {
   }
 
   private async initDb(): Promise<void> {
+    // aban 与 autorepeat 无关；禁止把 aban 当 legacy（会把 aban_cache 合并进 autorepeat）
     const dbPath = resolvePluginAssetFile({
       plugin: "autorepeat",
       fileName: CONFIG.CACHE_DB_NAME,
-      legacyDirs: ["aban"],
-      legacyFiles: [{ dir: "aban", fileName: CONFIG.CACHE_DB_NAME }],
-      // keep aban dir: shared historical path; only copy into autorepeat
-      removeLegacy: false,
     });
     const adapter = new JSONFile<CacheData>(dbPath);
     this.db = new Low(adapter, { cache: {} });

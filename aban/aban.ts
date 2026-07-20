@@ -724,8 +724,19 @@ class BanManager {
 
   private static getErrorReason(error: unknown): string {
     const message = error instanceof Error ? error.message : String(error || "UNKNOWN_ERROR");
-    const match = message.match(/[A-Z_]{3,}/);
-    return match?.[0] || message;
+    // 优先取 Telegram RPC 错误码；勿用 /[A-Z_]{3,}/ 以免命中 "Telegram API error" 里的 API
+    const rpcCodes = message.match(/\b[A-Z][A-Z0-9_]{4,}\b/g) || [];
+    const skip = new Set(["TELEGRAM", "ERROR", "UNKNOWN", "UNKNOWN_ERROR"]);
+    for (const code of rpcCodes) {
+      if (skip.has(code)) continue;
+      if (code === "API") continue;
+      return code;
+    }
+    const textField = (error as any)?.text;
+    if (typeof textField === "string" && /^[A-Z][A-Z0-9_]{3,}$/.test(textField)) {
+      return textField;
+    }
+    return message.slice(0, 80) || "UNKNOWN_ERROR";
   }
 
   private static getChatKind(chatId: any): ChatKind {
