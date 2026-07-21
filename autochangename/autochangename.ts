@@ -1156,7 +1156,14 @@ class AutoChangeNamePlugin extends Plugin {
         await nameManager.updateUserProfile(userId, true);
         await msg.edit({ text: `✅ <b>动态昵称已启用</b>\n\n🕐 当前时区: <code>${settings.timezone}</code>\n📝 显示模式: <code>${settings.mode}</code>\n⏰ 更新频率: 每分钟`, parseMode: "html" });
       } else {
-        await msg.edit({ text: `✅ <b>动态昵称已禁用</b>`, parseMode: "html" });
+        // 关闭自动更新：停止调度器、恢复原始昵称
+        const stillEnabled = await DataManager.getAllEnabledUsers();
+        if (stillEnabled.length === 0) nameManager.stopAutoUpdate();
+        try {
+          const client = await getGlobalClient();
+          if (client) await client.invoke(new Api.account.UpdateProfile({ firstName: settings.original_first_name || "", lastName: settings.original_last_name || undefined }));
+        } catch {}
+        await msg.edit({ text: `✅ <b>动态昵称已禁用</b>\n已恢复原始昵称`, parseMode: "html" });
       }
     } else {
       await msg.edit({ text: "❌ 设置保存失败", parseMode: "html" });
@@ -1639,6 +1646,8 @@ America/New_York
       if (client) await client.invoke(new Api.account.UpdateProfile({ firstName: settings.original_first_name || "", lastName: settings.original_last_name || undefined }));
       settings.is_enabled = false;
       await DataManager.saveUserSettings(settings);
+      const stillEnabled = await DataManager.getAllEnabledUsers();
+      if (stillEnabled.length === 0) nameManager.stopAutoUpdate();
       await msg.edit({ text: "✅ <b>已恢复原始昵称并禁用自动更新</b>", parseMode: "html" });
     } catch {
       await msg.edit({ text: "❌ 重置失败", parseMode: "html" });

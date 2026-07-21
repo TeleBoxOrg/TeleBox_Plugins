@@ -901,14 +901,14 @@ async function waitForStableFile(filePath: string, timeoutMs = 8000): Promise<Bu
         }
       }
     } catch (err) {
-    console.debug("[quote] getSender failed:", err?.message || err);
+    console.debug("[quote] waitForStableFile loop error:", err?.message || err);
   }
     await sleepMs(120);
   }
   try {
     if (fs.existsSync(filePath) && fs.statSync(filePath).size > 0) return fs.readFileSync(filePath);
   } catch (err) {
-    console.debug("[quote] getSender failed:", err?.message || err);
+    console.debug("[quote] waitForStableFile loop error:", err?.message || err);
   }
   return undefined;
 }
@@ -928,7 +928,7 @@ async function downloadMediaToBuffer(client: any, target: any): Promise<Buffer |
     return undefined;
   } finally {
     try { if (fs.existsSync(mediaPath)) fs.unlinkSync(mediaPath); } catch (err) {
-    console.debug("[quote] getSender failed:", err?.message || err);
+    console.debug("[quote] waitForStableFile loop error:", err?.message || err);
   }
   }
 }
@@ -1112,7 +1112,7 @@ async function probeAnimatedInfo(buffer: Buffer): Promise<{ fps: number; duratio
     return { fps: 12, duration: 2 };
   } finally {
     try { if (fs.existsSync(input)) fs.unlinkSync(input); } catch (err) {
-    console.debug("[quote] getSender failed:", err?.message || err);
+    console.debug("[quote] waitForStableFile loop error:", err?.message || err);
   }
   }
 }
@@ -1155,10 +1155,10 @@ async function convertAnimatedEmojiToPng(buffer: Buffer): Promise<Buffer | undef
     // keep fallback quiet; normal static buffers and unsupported tgs land here
   } finally {
     try { if (fs.existsSync(input)) fs.unlinkSync(input); } catch (err) {
-    console.debug("[quote] getSender failed:", err?.message || err);
+    console.debug("[quote] waitForStableFile loop error:", err?.message || err);
   }
     try { if (fs.existsSync(output)) fs.unlinkSync(output); } catch (err) {
-    console.debug("[quote] getSender failed:", err?.message || err);
+    console.debug("[quote] waitForStableFile loop error:", err?.message || err);
   }
   }
 
@@ -1194,10 +1194,10 @@ async function extractAnimatedFrames(buffer: Buffer, size: number, frameCount: n
     return [];
   } finally {
     try { if (fs.existsSync(input)) fs.unlinkSync(input); } catch (err) {
-    console.debug("[quote] getSender failed:", err?.message || err);
+    console.debug("[quote] waitForStableFile loop error:", err?.message || err);
   }
     try { if (fs.existsSync(dir)) fs.rmSync(dir, { recursive: true, force: true }); } catch (err) {
-    console.debug("[quote] getSender failed:", err?.message || err);
+    console.debug("[quote] waitForStableFile loop error:", err?.message || err);
   }
   }
 }
@@ -1293,7 +1293,7 @@ async function probeWebmAlpha(buffer: Buffer): Promise<string> {
     return `probe-failed:${err?.message || err}`;
   } finally {
     try { if (fs.existsSync(input)) fs.unlinkSync(input); } catch (err) {
-    console.debug("[quote] getSender failed:", err?.message || err);
+    console.debug("[quote] waitForStableFile loop error:", err?.message || err);
   }
   }
 }
@@ -1370,10 +1370,10 @@ async function encodeFramesToWebm(frames: Buffer[], fps = TG_STICKER_FPS): Promi
     return best || Buffer.alloc(0);
   } finally {
     for (const output of outputs) try { if (fs.existsSync(output)) fs.unlinkSync(output); } catch (err) {
-    console.debug("[quote] getSender failed:", err?.message || err);
+    console.debug("[quote] waitForStableFile loop error:", err?.message || err);
   }
     try { if (fs.existsSync(dir)) fs.rmSync(dir, { recursive: true, force: true }); } catch (err) {
-    console.debug("[quote] getSender failed:", err?.message || err);
+    console.debug("[quote] waitForStableFile loop error:", err?.message || err);
   }
   }
 }
@@ -1467,7 +1467,7 @@ async function generateAnimatedQuoteWebm(quoteMessages: any[], args: QuoteArgs):
     width = probe.width;
     height = probe.height;
   } catch (err) {
-    console.debug("[quote] getSender failed:", err?.message || err);
+    console.debug("[quote] waitForStableFile loop error:", err?.message || err);
   }
   const encoded = await encodeFramesToWebm(rendered, fps);
   const tprobe = Date.now();
@@ -1776,7 +1776,7 @@ async function editProgress(msg: Api.Message, text: string, parseMode?: "html" |
         "editProgress.reply",
       );
     } catch (err) {
-    console.debug("[quote] getSender failed:", err?.message || err);
+    console.debug("[quote] waitForStableFile loop error:", err?.message || err);
   }
   }
 }

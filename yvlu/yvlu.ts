@@ -182,7 +182,9 @@ async function downloadMediaBuffer(client: any, target: any): Promise<Buffer | u
         if (rawBuffer) return rawBuffer;
       }
     }
-  } catch (_) {}
+  } catch (err) {
+    console.debug("[yvlu] raw download failed, fallback to downloadMedia:", err?.message || err);
+  }
   // Fallback to downloadMedia with timeout
   try {
     const downloaded = await withTimeout(client.downloadMedia(target, { outputFile: path.join(os.tmpdir(), `yvlu_media_${Date.now()}_${Math.random().toString(16).slice(2)}`) }), QUOTE_RPC_TIMEOUT_MS, "downloadMediaBuffer.downloadMedia");
@@ -288,7 +290,9 @@ async function senderEntity(msg: any): Promise<any | undefined> {
       if (key) { /* cache if needed */ }
       return sender;
     }
-  } catch (_) {}
+  } catch (err) {
+    console.debug("[yvlu] getSender failed:", err?.message || err);
+  }
   const entity = await getPeerEntity((msg as any).client, peer);
   return entity;
 }
@@ -766,7 +770,9 @@ async function forwardedSource(msg: Api.Message): Promise<{ peer?: any; entity?:
       const entity = await withTimeout(client.getEntity(peer), QUOTE_RPC_TIMEOUT_MS, "forwardedSource.getEntity");
       const name = (entity as any)?.firstName || (entity as any)?.title || (entity as any)?.name || headerName || "Forwarded";
       return { peer, entity, name, anonymous: false };
-    } catch (_) {}
+    } catch (err) {
+    console.debug("[yvlu] forwardedSource getEntity failed:", err?.message || err);
+  }
   }
   if (headerName) return { name: headerName, anonymous: true };
   return { anonymous: true };
