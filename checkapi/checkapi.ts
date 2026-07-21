@@ -172,16 +172,26 @@ async function pickTestModel(provider:string,key:string,baseUrl:string): Promise
       }
     }
   }catch{/* fallback */}
-  // Fallback to hardcoded
-  const mm:Record<string,string>={openai:"gpt-4.1-mini",deepseek:"deepseek-chat",openrouter:"openai/gpt-4.1-mini",xai:"grok-3-mini",groq:"llama-3.3-70b-versatile",together:"meta-llama/Llama-4-Maverick-17B-128E-Instruct-FP8",mistral:"mistral-small-2506",perplexity:"sonar-reasoning",cohere:"command-r7b-12-2024",fireworks:"accounts/fireworks/models/llama-v3p3-70b-instruct",replicate:"meta/llama-3.3-70b-instruct",ollama:"llama3.2",siliconflow:"Qwen/Qwen3-8B",deepinfra:"meta-llama/Llama-4-Maverick-17B-128E-Instruct",huggingface:"Qwen/Qwen2.5-7B-Instruct",custom:"gpt-4.1-mini",nvidia:"nvidia/llama-3.1-nemotron-ultra-253b-v1",novita:"deepseek/deepseek-v3-0324",cerebras:"llama3.1-8b",azure:"gpt-4o-mini",vercel:"gpt-4o-mini"};
-  return mm[provider]||"gpt-4o-mini";
+  return "";
 }
-
-// ── Chat test ──
 async function ct(provider:string,key:string,baseUrl:string,askText?:string): Promise<CTR>{const q=askText||"say ok";const info=dp(key,baseUrl);
   if(provider==="gemini"){const gemBase=info.baseUrl||"https://generativelanguage.googleapis.com";const url=gemBase.includes("v1beta")?`${gemBase}/models/gemini-2.5-flash:generateContent`:`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent`;const params=gemBase.includes("generativelanguage")?`?key=${key}`:"";const r=await ap(`${url}${params}`,{"content-type":"application/json"},{contents:[{parts:[{text:q}]}],generationConfig:{maxOutputTokens:50,temperature:0}},20000);if(r.ok){const d=r.data as Record<string,unknown>|undefined;const cs=d?.candidates as Array<Record<string,unknown>>|undefined;const ct=cs?.[0]?.content as Record<string,unknown>|undefined;const ps=ct?.parts as Array<Record<string,string>>|undefined;const tx=ps?.map(p=>p.text||"").join("")||"";const u=d?.usageMetadata as Record<string,number>|undefined;return{ok:true,text:tx,model:"gemini-2.5-flash",usage:u?{prompt:u.promptTokenCount||0,completion:u.candidatesTokenCount||0,total:u.totalTokenCount||0}:undefined,elapsedMs:r.elapsedMs,headers:r.headers};}return{ok:false,error:r.error,elapsedMs:r.elapsedMs};}
   if(provider==="anthropic"){const r=await ap(info.chatUrl,info.headers,{model:"claude-3.5-haiku-20241022",max_tokens:50,messages:[{role:"user",content:q}]},20000);if(r.ok){const d=r.data as Record<string,unknown>|undefined;const ct=(d?.content as Array<Record<string,unknown>>|undefined)?.[0];const tx=String(ct?.text||"");const u=d?.usage as Record<string,number>|undefined;return{ok:true,text:tx,model:String(d?.model||"claude"),usage:u?{prompt:u.input_tokens||0,completion:u.output_tokens||0,total:(u.input_tokens||0)+(u.output_tokens||0)}:undefined,elapsedMs:r.elapsedMs,headers:r.headers};}return{ok:false,error:r.error,elapsedMs:r.elapsedMs};}
-  const model=await pickTestModel(provider,key,baseUrl);
+  let model=await pickTestModel(provider,key,baseUrl);
+  if(!model){
+    const hdrs2:Record<string,string>={Authorization:info.authHeader||`Bearer ${key}`};
+    const modelsUrl=info.modelsUrl||`${info.baseUrl}/v1/models`;
+    const r2=await ag(modelsUrl,hdrs2,8000);
+    if(r2.ok){
+      const d=r2.data as Record<string,unknown>|undefined;
+      const arr=(Array.isArray(r2.data)?r2.data:d?.data as Array<Record<string,unknown>>)||[];
+      if(arr.length){
+        const ids=arr.map((m:any)=>String(m.id||m.name||"").replace("models/","")).filter(Boolean);
+        if(ids.length)model=ids[0];
+      }
+    }
+  }
+  if(!model)return{ok:false,error:"无法获取可用模型",elapsedMs:0};
   const hdrs:Record<string,string>={"content-type":"application/json"};
   if (info.authHeader) hdrs["Authorization"]=info.authHeader;
   if (provider==="cohere") delete hdrs["Authorization"];
@@ -232,7 +242,7 @@ async function cb(provider:string,key:string,baseUrl:string): Promise<string>{co
   return `❌ 均无法连接，请检查 URL 和 Key`;
 }
 
-// ── Model list (all models in one blockquote) ──
+// ── Model list (all models in one blockquote with pagination) ──
 async function lmf(provider:string,key:string,baseUrl:string): Promise<string>{
   const info=dp(key,baseUrl);
   const hdrs:Record<string,string>=info.authHeader?{Authorization:info.authHeader}:{};
@@ -255,11 +265,28 @@ async function lmf(provider:string,key:string,baseUrl:string): Promise<string>{
   }
   if(!names.length)return"❌ 未找到可用模型";
 
-  // All models in one expandable blockquote
-  const lines:string[]=[`🤖 共 ${names.length} 个`];
-  lines.push(`<blockquote expandable>${names.slice(0,30).map(n=>`<code>${htmlEscape(n)}</code>`).join(" | ")}${names.length>30?` | ... +${names.length-30}`:""}</blockquote>`);
-  if(r.headers&&Object.keys(r.headers).length){lines.push(`\n⚡ 速率限制：`);for(const[k,v]of Object.entries(r.headers)){lines.push(`  <code>${htmlEscape(k)}</code>: ${htmlEscape(v)}`);}}
-  return lines.join("\n");
+  // Single blockquote with all models, truncated for single message
+  const allModels = names.map(n=>`<code>${htmlEscape(n)}</code>`).join(" | ");
+  const content = `<blockquote expandable>${allModels}</blockquote>`;
+  const header = `🤖 共 ${names.length} 个`;
+  
+  if(content.length > 3500){
+    // Split into multiple blockquotes if too long
+    const chunks: string[] = [];
+    let current = "";
+    for(const n of names){
+      const part = `<code>${htmlEscape(n)}</code> | `;
+      if(current.length + part.length > 3500){
+        chunks.push(`<blockquote expandable>${current.slice(0, -3)}</blockquote>`);
+        current = "";
+      }
+      current += part;
+    }
+    if(current) chunks.push(`<blockquote expandable>${current.slice(0, -3)}</blockquote>`);
+    return `${header}\n${chunks.join("\n")}`;
+  }
+  
+  return `${header}\n${content}`;
 }
 
 // ── Full check ──
