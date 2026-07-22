@@ -19,14 +19,14 @@ jobs:
     
     steps:
     - name: Checkout TeleBox-Plugins repository
-      uses: actions/checkout@v4
+      uses: actions/checkout@v7
       with:
         path: TeleBox-Plugins
         fetch-depth: 0
         
     - name: Checkout TeleBox repository
       id: checkout-telebox
-      uses: actions/checkout@v4
+      uses: actions/checkout@v7
       with:
         repository: TeleBoxOrg/TeleBox
         path: TeleBox
