@@ -16,7 +16,7 @@ import { safeGetMessages } from "@utils/safeGetMessages";
 import { safeGetMe } from "@utils/authGuards";
 import { htmlEscape } from "@utils/htmlEscape";
 
-const PLUGIN_VERSION = "5.0.6";
+const PLUGIN_VERSION = "5.0.7";
 
 function codeTag(value: any): string {
   return `<code>${htmlEscape(value)}</code>`;
@@ -333,8 +333,9 @@ const rec = {
 
 // ─── 用户信息缓存 ─────────────────────────────────────────────────────────────
 
-const nameCache     = new Map<number, string>();
-const usernameCache = new Map<number, string>();
+const nameCache      = new Map<number, string>();
+const usernameCache  = new Map<number, string>();
+const inputPeerCache = new Map<number, Api.TypeInputPeer>();
 let _selfId: number | null = null;
 
 async function getSelfId(client: TelegramClient): Promise<number> {
@@ -351,6 +352,45 @@ function cacheUserFromSender(sender: any): void {
   const username = sender.username as string | undefined;
   nameCache.set(id, name);
   if (username) usernameCache.set(id, username);
+
+  // A new private sender may not be in teleproto's entity cache yet. Preserve the
+  // access hash carried by the update so replies/actions can address that user.
+  if (sender.accessHash !== undefined && sender.accessHash !== null) {
+    inputPeerCache.set(id, new Api.InputPeerUser({
+      userId: sender.id,
+      accessHash: sender.accessHash,
+    }));
+  }
+}
+
+function cacheInputPeer(userId: number, peer: any): void {
+  if (userId > 0 && peer instanceof Api.InputPeerUser) {
+    inputPeerCache.set(userId, peer);
+  }
+}
+
+async function resolveInputPeer(client: TelegramClient, userId: number): Promise<Api.TypeInputPeer> {
+  const cached = inputPeerCache.get(userId);
+  if (cached) return cached;
+
+  const peer = await client.getInputEntity(bigInt(userId));
+  cacheInputPeer(userId, peer);
+  return peer;
+}
+
+function peerTarget(userId: number): Api.TypeInputPeer | number {
+  return inputPeerCache.get(userId) ?? userId;
+}
+
+async function cachePeerFromMessage(message: Api.Message, userId: number): Promise<void> {
+  const directPeer = (message as any).inputChat;
+  if (directPeer) cacheInputPeer(userId, directPeer);
+  if (inputPeerCache.has(userId)) return;
+
+  try {
+    const peer = await (message as any).getInputChat?.();
+    cacheInputPeer(userId, peer);
+  } catch {}
 }
 
 async function fetchUserInfo(client: TelegramClient, userId: number): Promise<any | null> {
@@ -404,7 +444,7 @@ async function isBot(client: TelegramClient, userId: number): Promise<boolean> {
 
 async function archiveChat(client: TelegramClient, userId: number) {
   try {
-    const peer = await client.getInputEntity(userId);
+    const peer = await resolveInputPeer(client, userId);
     await client.invoke(new Api.folders.EditPeerFolders({
       folderPeers: [new Api.InputFolderPeer({ peer, folderId: 1 })]
     }));
@@ -413,7 +453,7 @@ async function archiveChat(client: TelegramClient, userId: number) {
 
 async function muteChat(client: TelegramClient, userId: number) {
   try {
-    const peer = await client.getInputEntity(userId);
+    const peer = await resolveInputPeer(client, userId);
     await client.invoke(new Api.account.UpdateNotifySettings({
       peer: new Api.InputNotifyPeer({ peer }),
       settings: new Api.InputPeerNotifySettings({ muteUntil: 2147483647, showPreviews: false, silent: true })
@@ -423,7 +463,7 @@ async function muteChat(client: TelegramClient, userId: number) {
 
 async function blockUser(client: TelegramClient, userId: number) {
   try {
-    const peer = await client.getInputEntity(userId);
+    const peer = await resolveInputPeer(client, userId);
     await client.invoke(new Api.contacts.Block({ id: peer }));
     log(LogLevel.INFO, `Blocked ${userId}`);
   } catch (e) { log(LogLevel.ERROR, `block failed ${userId}`, e); }
@@ -431,7 +471,7 @@ async function blockUser(client: TelegramClient, userId: number) {
 
 async function deleteHistory(client: TelegramClient, userId: number) {
   try {
-    const peer = await client.getInputEntity(userId);
+    const peer = await resolveInputPeer(client, userId);
     await client.invoke(new Api.messages.DeleteHistory({ peer, revoke: false, maxId: 0 }));
     log(LogLevel.INFO, `Deleted history ${userId}`);
   } catch (e) { log(LogLevel.ERROR, `delete history failed ${userId}`, e); }
@@ -439,7 +479,7 @@ async function deleteHistory(client: TelegramClient, userId: number) {
 
 async function reportSpam(client: TelegramClient, userId: number) {
   try {
-    const peer = await client.getInputEntity(userId);
+    const peer = await resolveInputPeer(client, userId);
     await client.invoke(new Api.account.ReportPeer({
       peer, reason: new Api.InputReportReasonSpam(), message: "spam"
     }));
@@ -449,7 +489,7 @@ async function reportSpam(client: TelegramClient, userId: number) {
 
 async function unmuteChat(client: TelegramClient, userId: number) {
   try {
-    const peer = await client.getInputEntity(userId);
+    const peer = await resolveInputPeer(client, userId);
     await client.invoke(new Api.account.UpdateNotifySettings({
       peer: new Api.InputNotifyPeer({ peer }),
       settings: new Api.InputPeerNotifySettings({ muteUntil: 0, showPreviews: true, silent: false })
@@ -459,7 +499,7 @@ async function unmuteChat(client: TelegramClient, userId: number) {
 
 async function unarchiveChat(client: TelegramClient, userId: number) {
   try {
-    const peer = await client.getInputEntity(userId);
+    const peer = await resolveInputPeer(client, userId);
     await client.invoke(new Api.folders.EditPeerFolders({
       folderPeers: [new Api.InputFolderPeer({ peer, folderId: 0 })]
     }));
@@ -474,7 +514,7 @@ async function runFailActions(client: TelegramClient, userId: number) {
     if (a === FailAction.BLOCK)  await blockUser(client, userId);
     if (a === FailAction.DELETE) {
       try {
-        const peer = await client.getInputEntity(userId);
+        const peer = await resolveInputPeer(client, userId);
         await client.invoke(new Api.messages.DeleteHistory({ peer, revoke: true, maxId: 0 }));
         log(LogLevel.INFO, `Deleted history (revoke both sides) ${userId}`);
       } catch (e) { log(LogLevel.ERROR, `delete failed ${userId}`, e); }
@@ -707,7 +747,7 @@ async function cleanupCaptchaMessages(client: TelegramClient, userId: number, st
   if (!isStateCurrent(state)) return;
   for (const id of state.msgIds) {
     if (!isStateCurrent(state)) return;
-    try { await client.deleteMessages(userId, [id], { revoke: false }); } catch {}
+    try { await client.deleteMessages(peerTarget(userId), [id], { revoke: false }); } catch {}
   }
 }
 
@@ -785,11 +825,11 @@ async function refreshActiveCaptchas(client: TelegramClient): Promise<void> {
       const isImg = state.mode === CaptchaMode.IMG_DIGIT || state.mode === CaptchaMode.IMG_MIXED;
       if (isImg) {
         const newCaption = rebuildImgCaption(state);
-        await client.editMessage(userId, { message: promptMsgId, text: newCaption });
+        await client.editMessage(peerTarget(userId), { message: promptMsgId, text: newCaption });
       } else {
         const newText = rebuildCaptchaText(state);
         if (newText) {
-          await client.editMessage(userId, { message: promptMsgId, text: newText, parseMode: "html" });
+          await client.editMessage(peerTarget(userId), { message: promptMsgId, text: newText, parseMode: "html" });
         }
       }
     } catch (e) {
@@ -903,7 +943,7 @@ async function sendCaptcha(client: TelegramClient, userId: number): Promise<void
         const text = custom
           ? htmlEscape(custom).replace("{question}", htmlEscape(q))
           : `🔒 <b>人机验证</b>\n\n请回复以下算式的答案：\n\n${codeTag(`${q} = ?`)}${footer}`;
-        const m = await client.sendMessage(userId, { message: text, parseMode: "html" });
+        const m = await client.sendMessage(peerTarget(userId), { message: text, parseMode: "html" });
         msgIds.push(m.id);
         break;
       }
@@ -917,7 +957,7 @@ async function sendCaptcha(client: TelegramClient, userId: number): Promise<void
           question = qa.question;
           isQA     = true;
           const text = `🔒 <b>人机验证</b>\n\n请回答以下问题：\n\n<b>${htmlEscape(qa.question)}</b>${footer}`;
-          const m = await client.sendMessage(userId, { message: text, parseMode: "html" });
+          const m = await client.sendMessage(peerTarget(userId), { message: text, parseMode: "html" });
           msgIds.push(m.id);
         } else {
           answer   = kw;
@@ -926,7 +966,7 @@ async function sendCaptcha(client: TelegramClient, userId: number): Promise<void
           const text = custom
             ? htmlEscape(custom).replace("{keyword}", htmlEscape(kw))
             : `🔒 <b>人机验证</b>\n\n请回复以下关键词以证明你不是机器人：\n\n${codeTag(kw)}${footer}`;
-          const m = await client.sendMessage(userId, { message: text, parseMode: "html" });
+          const m = await client.sendMessage(peerTarget(userId), { message: text, parseMode: "html" });
           msgIds.push(m.id);
         }
         break;
@@ -940,7 +980,7 @@ async function sendCaptcha(client: TelegramClient, userId: number): Promise<void
         if (!img) {
           log(LogLevel.WARN, `canvas unavailable for user ${userId}`);
           try {
-            await client.sendMessage(userId, { message: "❌ 验证服务暂时不可用，请稍后再试。" });
+            await client.sendMessage(peerTarget(userId), { message: "❌ 验证服务暂时不可用，请稍后再试。" });
           } catch {}
           return;
         }
@@ -958,7 +998,7 @@ async function sendCaptcha(client: TelegramClient, userId: number): Promise<void
         }
 
         const caption = custom ? htmlEscape(custom) : buildImgCaption();
-        const photoMsg = await client.sendMessage(userId, {
+        const photoMsg = await client.sendMessage(peerTarget(userId), {
           message: caption,
           file: new CustomFile("captcha.png", img.buffer.length, "", img.buffer)
         });
@@ -972,7 +1012,7 @@ async function sendCaptcha(client: TelegramClient, userId: number): Promise<void
       const { question: q, answer: ans } = mathQuestion();
       answer   = ans;
       question = q;
-      const m = await client.sendMessage(userId, {
+      const m = await client.sendMessage(peerTarget(userId), {
           message: `🔒 <b>人机验证</b>（降级）\n\n请回复以下算式的答案：\n\n${codeTag(`${q} = ?`)}`,
         parseMode: "html"
       });
@@ -998,7 +1038,7 @@ async function sendCaptcha(client: TelegramClient, userId: number): Promise<void
           await cleanupCaptchaMessages(client, userId, st);
           if (!isStateCurrent(state)) return;
           try {
-            await client.sendMessage(userId, { message: "⏰ 验证超时，对话已被限制。", parseMode: "html" });
+            await client.sendMessage(peerTarget(userId), { message: "⏰ 验证超时，对话已被限制。", parseMode: "html" });
           } catch {}
           if (!isStateCurrent(state)) return;
           await runFailActions(client, userId);
@@ -1044,7 +1084,7 @@ async function handleReply(client: TelegramClient, userId: number, input: string
     log(LogLevel.WARN, `handleReply: empty answer for user ${userId}`);
     removeCaptchaState(userId);
     await cleanupCaptchaMessages(client, userId, state);
-    try { await client.sendMessage(userId, { message: "❌ 验证状态异常，请联系对方重置。", parseMode: "html" }); } catch {}
+    try { await client.sendMessage(peerTarget(userId), { message: "❌ 验证状态异常，请联系对方重置。", parseMode: "html" }); } catch {}
     return;
   }
 
@@ -1067,7 +1107,7 @@ async function handleReply(client: TelegramClient, userId: number, input: string
     await runPassActions(client, userId);
     if (!isStateCurrent(state)) return;
     try {
-      await client.sendMessage(userId, { message: "✅ 验证通过！欢迎与我对话。", parseMode: "html" });
+      await client.sendMessage(peerTarget(userId), { message: "✅ 验证通过！欢迎与我对话。", parseMode: "html" });
     } catch {}
     return;
   }
@@ -1085,14 +1125,14 @@ async function handleReply(client: TelegramClient, userId: number, input: string
     rec.delVerified(userId);
     log(LogLevel.INFO, `User ${userId} failed captcha (max tries)`);
     try {
-      await client.sendMessage(userId, { message: "❌ 验证失败次数过多，对话已被限制。", parseMode: "html" });
+      await client.sendMessage(peerTarget(userId), { message: "❌ 验证失败次数过多，对话已被限制。", parseMode: "html" });
     } catch {}
     if (!isStateCurrent(state)) return;
     await runFailActions(client, userId);
   } else {
     const hint = remaining === Infinity ? "请重试。" : `请重试（剩余次数：${remaining}）`;
     try {
-      const hintMsg = await client.sendMessage(userId, { message: `❌ 答案错误，${htmlEscape(hint)}`, parseMode: "html" });
+      const hintMsg = await client.sendMessage(peerTarget(userId), { message: `❌ 答案错误，${htmlEscape(hint)}`, parseMode: "html" });
       if (!isStateCurrent(state)) return;
       state.msgIds.push(hintMsg.id);
     } catch {}
@@ -1121,7 +1161,7 @@ async function checkChatHistory(client: TelegramClient, userId: number, currentM
 
   try {
     // 获取与该用户的聊天记录（排除当前消息）
-    const messages = await client.getMessages(userId, { limit: threshold + 1 });
+    const messages = await client.getMessages(peerTarget(userId), { limit: threshold + 1 });
     let count = 0;
     for (const msg of messages) {
       if (msg.id !== currentMsgId) count++;
@@ -1147,7 +1187,7 @@ async function checkGroupsInCommon(client: TelegramClient, userId: number): Prom
 
   try {
     const result = await client.invoke(
-      new Api.users.GetFullUser({ id: userId })
+      new Api.users.GetFullUser({ id: peerTarget(userId) })
     ) as any;
     const commonChatsCount = result?.fullUser?.commonChatsCount ?? 0;
     if (commonChatsCount >= threshold) {
@@ -1215,7 +1255,7 @@ async function checkPremium(client: TelegramClient, userId: number, message: Api
   } else {
     try {
       const result = await client.invoke(
-        new Api.users.GetFullUser({ id: userId })
+        new Api.users.GetFullUser({ id: peerTarget(userId) })
       ) as any;
       isPremium = !!(result?.users?.[0]?.premium);
     } catch (e) {
@@ -1309,13 +1349,13 @@ async function executeBlockActions(client: TelegramClient, userId: number) {
     for (const action of actions) {
       switch (action) {
         case FailAction.BLOCK:
-          try { await client.invoke(new Api.contacts.Block({ id: userId })); } catch {}
+          try { await client.invoke(new Api.contacts.Block({ id: peerTarget(userId) })); } catch {}
           break;
         case FailAction.REPORT:
-          try { await client.invoke(new Api.account.ReportPeer({ peer: userId, reason: new Api.InputReportReasonSpam(), message: "" })); } catch {}
+          try { await client.invoke(new Api.account.ReportPeer({ peer: peerTarget(userId), reason: new Api.InputReportReasonSpam(), message: "" })); } catch {}
           break;
         case FailAction.DELETE:
-          try { await client.invoke(new Api.messages.DeleteHistory({ peer: userId, maxId: 0, justClear: false, revoke: true })); } catch {}
+          try { await client.invoke(new Api.messages.DeleteHistory({ peer: peerTarget(userId), maxId: 0, justClear: false, revoke: true })); } catch {}
           break;
       }
     }
@@ -1381,8 +1421,12 @@ async function messageListener(message: Api.Message) {
     // 再次检查官方 ID（覆盖可能遗漏的场景）
     if (TELEGRAM_OFFICIAL_IDS.includes(userId)) return;
 
-    const sender = (message as any).sender ?? (message as any)._sender;
+    let sender = (message as any).sender ?? (message as any)._sender;
+    if (!sender) {
+      try { sender = await (message as any).getSender?.(); } catch {}
+    }
     if (sender) cacheUserFromSender(sender);
+    await cachePeerFromMessage(message, userId);
 
     const botFlag = sender ? isBotFromSender(sender) : await isBot(client, userId);
     if (botFlag) return;
@@ -2396,6 +2440,7 @@ class PMCaptchaPlugin extends Plugin {
     drainCaptchaStates();
     runtimeLifecycle = null;
     runtimeGeneration = 0;
+    inputPeerCache.clear();
   }
 
   name        = "pmcaptcha";
