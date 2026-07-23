@@ -1,2316 +1,1528 @@
-/**
- * Music Plugin for TeleBox
- * Professional YouTube audio downloader with AI-enhanced search
- * @version 3.0.0
- * @author TeleBox Team
- */
-
-import { Plugin } from "@utils/pluginBase";
-import { getGlobalClient, tryGetCurrentGenerationContext } from "@utils/runtimeManager";
+import axios from "axios";
+import { Plugin, type PanelSettingsAdapter, type PanelSettingField } from "@utils/pluginBase";
+import { getGlobalClient } from "@utils/runtimeManager";
 import { getPrefixes } from "@utils/pluginManager";
-import {
-  createDirectoryInAssets,
-  createDirectoryInTemp,
-} from "@utils/pathHelpers";
-import { Api } from "teleproto";
+import { createDirectoryInAssets, createDirectoryInTemp } from "@utils/pathHelpers";
+import type { MessageContext } from "@mtcute/dispatcher";
+import type { MtcuteMessageContext } from "@utils/mtcuteTypes";
+import type { Message } from "@mtcute/core";
+import { thtml as html } from "@mtcute/html-parser";
+import { JSONFilePreset } from "lowdb/node";
 import * as fs from "fs";
 import * as path from "path";
-import { execFile, spawn } from "child_process";
-import { promisify } from "util";
-import * as https from "https";
-import * as http from "http";
-import { JSONFilePreset } from "lowdb/node";
+import { logger } from "@utils/logger";
 
-import { htmlEscape } from "@utils/htmlEscape";
-
-const execFileAsync = promisify(execFile);
-
-async function lifecycleDelay(ms: number, label: string): Promise<void> {
-  const lifecycle = tryGetCurrentGenerationContext();
-  if (lifecycle) {
-    await lifecycle.delay(ms, { label });
-    return;
-  }
-  await new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-type SpawnResult = string;
-
-function runTrackedProcess(command: string, args: string[], label: string): Promise<SpawnResult> {
-  const lifecycle = tryGetCurrentGenerationContext();
-
-  return new Promise((resolve, reject) => {
-    if (lifecycle?.signal.aborted) {
-      reject(new Error("Generation aborted"));
-      return;
-    }
-
-    const child = spawn(command, args);
-    lifecycle?.trackChildProcess(child, { label });
-
-    let data = '';
-    let errorData = '';
-
-    child.stdout.on('data', (chunk) => {
-      data += chunk.toString();
-    });
-
-    child.stderr.on('data', (chunk) => {
-      errorData += chunk.toString();
-    });
-
-    child.on('close', (code) => {
-      if (code === 0 && data) {
-        resolve(data.trim());
-      } else {
-        const idMatch = errorData.match(/\[youtube\]\s+([a-zA-Z0-9_-]{11}):/);
-        if (idMatch && idMatch[1]) {
-          console.log(`[Music] Extracted video ID from error log: ${idMatch[1]}`);
-          resolve(idMatch[1]);
-        } else {
-          reject(new Error(errorData || `Process exited with code ${code}`));
-        }
-      }
-    });
-
-    child.on('error', (err) => {
-      reject(err);
-    });
-  });
-}
-
-
-// 消息长度限制
-const MAX_MESSAGE_LENGTH = 4096;
-
-// 获取命令前缀，参考 kitt.ts
 const prefixes = getPrefixes();
 const mainPrefix = prefixes[0];
-const pluginName = "music";
-const commandName = `${mainPrefix}${pluginName}`;
-const pendingCleanupTimers = new Set<ReturnType<typeof setTimeout>>();
 
-// ==================== Configuration ====================
-const CONFIG = {
-  PATHS: {
-    CONFIG: path.join(
-      createDirectoryInAssets(`${pluginName}`),
-      `${pluginName}_config.json`
-    ),
-    TEMP: createDirectoryInTemp("music"),
-    // 移除缓存目录，禁用缓存功能
-  },
-  DEFAULTS: {
-    API_URL: "https://generativelanguage.googleapis.com",
-    MODEL: "gemini-2.0-flash",
-    TIMEOUT: 60000,  // Increased timeout to 60 seconds
-    MAX_RETRIES: 3,   // Add retry mechanism
-  },
-  KEYS: {
-    API: "music_gemini_api_key",
-    COOKIE: "music_ytdlp_cookie",
-    PROXY: "music_ytdlp_proxy",
-    BASE_URL: "music_gemini_base_url",
-    MODEL: "music_gemini_model",
-    AUDIO_QUALITY: "music_audio_quality",
-    TEMPERATURE: "music_gemini_temperature",
-    TOP_P: "music_gemini_top_p",
-    TOP_K: "music_gemini_top_k",
-    COOKIE_BROWSER: "music_ytdlp_cookie_browser",
-  },
+const PLUGIN_NAME = "music_hub";
+const COMMAND = "mh";
+const commandName = `${mainPrefix}${COMMAND}`;
+const API_BASE_URL = "https://music-api.gdstudio.xyz/api.php";
+const PAGE_SIZE = 5;
+const SEARCH_TIMEOUT_MS = 15000;
+const DOWNLOAD_TIMEOUT_MS = 120000;
+const PROGRESS_UPDATE_INTERVAL_MS = 2000;
+const PROGRESS_BAR_WIDTH = 12;
+const CHECK_TIMEOUT_MS = 10000;
+const SESSION_TTL_MS = 30 * 60 * 1000;
+const HEALTH_KEYWORD = "test";
+
+const MUSIC_SOURCES = [
+  { key: "netease", name: "网易云音乐", stable: true },
+  { key: "tencent", name: "QQ 音乐", stable: false },
+  { key: "kuwo", name: "酷我音乐", stable: true },
+  { key: "tidal", name: "TIDAL", stable: false },
+  { key: "qobuz", name: "Qobuz", stable: false },
+  { key: "joox", name: "JOOX", stable: true },
+  { key: "bilibili", name: "Bilibili", stable: false },
+  { key: "apple", name: "Apple Music", stable: false },
+  { key: "ytmusic", name: "YouTube Music", stable: false },
+  { key: "spotify", name: "Spotify", stable: false },
+] as const;
+
+const SOURCE_ALIASES: Record<string, SourceKey | "auto"> = {
+  auto: "auto",
+  a: "auto",
+  wy: "netease",
+  wangyi: "netease",
+  "163": "netease",
+  qq: "tencent",
+  tx: "tencent",
+  tc: "tencent",
+  kw: "kuwo",
+  bili: "bilibili",
+  youtube: "ytmusic",
+  yt: "ytmusic",
+  apple_music: "apple",
+  am: "apple",
+  spot: "spotify",
 };
 
-// 默认配置（包含所有配置键）
-const DEFAULT_CONFIG: Record<string, string> = {
-  [CONFIG.KEYS.BASE_URL]: "https://generativelanguage.googleapis.com",
-  [CONFIG.KEYS.MODEL]: "gemini-2.0-flash",
-  [CONFIG.KEYS.COOKIE]: "",
-  [CONFIG.KEYS.API]: "",
-  [CONFIG.KEYS.PROXY]: "",
-  [CONFIG.KEYS.AUDIO_QUALITY]: "", // 空则不指定，保持最佳可用
-  [CONFIG.KEYS.TEMPERATURE]: "0.0", // 低温度提高准确性
-  [CONFIG.KEYS.TOP_P]: "0.6", // 适中的核采样
-  [CONFIG.KEYS.TOP_K]: "20", // 限制候选词提高准确性
-  [CONFIG.KEYS.COOKIE_BROWSER]: "",
+const QUALITY_BR_VALUES = {
+  low: "128",
+  medium: "320",
+  high: "999",
+} as const;
+
+type SourceKey = (typeof MUSIC_SOURCES)[number]["key"];
+type SourceMode = SourceKey | "auto";
+type QualityLabel = keyof typeof QUALITY_BR_VALUES;
+
+const QUALITY_LABEL_BY_BR: Record<string, QualityLabel> = {
+  "128": "low",
+  "320": "medium",
+  "999": "high",
 };
 
-// ==================== Types ====================
-// 历史版本存储为分组字段，这里保留兼容；新版本统一为顶级键存储
-type LegacyConfigData = {
-  apiKeys?: Record<string, string>;
-  cookies?: Record<string, string>;
-  settings?: Record<string, any>;
-} & Record<string, any>;
+interface MusicHubConfig {
+  defaultSource: SourceMode;
+  br: string;
+  maxResults: number;
+  maxUploadBytes: number;
+}
 
-interface SongInfo {
-  title: string;
-  artist: string;
+interface ApiSong {
+  id: string;
+  name: string;
+  artist: string[];
   album?: string;
-  thumbnail?: string;
-  duration?: number; // 单位：秒
+  pic_id?: string;
+  url_id?: string;
+  lyric_id?: string;
+  source: SourceKey;
+  from?: string;
 }
 
-// ==================== Dependency Manager ====================
-class DependencyManager {
-  // 依赖通过项目 package.json 管理，避免运行时安装
-  private static requiredPackages: string[] = [];
-
-  static async checkAndInstallDependencies(): Promise<boolean> {
-    for (const pkg of this.requiredPackages) {
-      if (!this.isPackageInstalled(pkg)) {
-        console.log(`[music] Installing ${pkg}...`);
-        try {
-          await execFileAsync('npm', ['install', pkg]);
-          console.log(`[music] ${pkg} installed successfully`);
-        } catch (error) {
-          console.error(`[music] Failed to install ${pkg}:`, error);
-          return false;
-        }
-      }
-    }
-    return true;
-  }
-
-  private static async isPackageInstalled(
-    packageName: string
-  ): Promise<boolean> {
-    try {
-      const packagePath = path.join(process.cwd(), "node_modules", packageName);
-      await fs.promises.access(packagePath, fs.constants.F_OK);
-      return true;
-    } catch {
-      return false;
-    }
-  }
-
-  static async checkYtDlp(): Promise<boolean> {
-    const commands: [string, string[]][] = [
-      ["yt-dlp", ["--version"]],
-      ["python3", ["-m", "yt_dlp", "--version"]],
-    ];
-
-    for (const [bin, args] of commands) {
-      try {
-        await execFileAsync(bin, args);
-        console.log(`[music] yt-dlp found: ${bin}`);
-        return true;
-      } catch {
-        continue;
-      }
-    }
-    return false;
-  }
-
-  static async checkFfmpeg(): Promise<boolean> {
-    try {
-      await execFileAsync('ffmpeg', ['-version']);
-      console.log("[Music] FFmpeg 已就绪");
-      return true;
-    } catch {
-      console.log("[Music] FFmpeg 未找到");
-      return false;
-    }
-  }
+interface SongUrlInfo {
+  url: string;
+  br?: number;
+  size?: number;
+  from?: string;
 }
 
-// ==================== Utilities ====================
-class Utils {
-  static escape(text: string): string {
-    return text.replace(
-      /[&<>"']/g,
-      (m) =>
-        ({
-          "&": "&amp;",
-          "<": "&lt;",
-          ">": "&gt;",
-          '"': "&quot;",
-          "'": "&#x27;",
-        }[m] || m)
+interface SearchSession {
+  query: string;
+  requestedSource: SourceMode;
+  resolvedSource: SourceKey;
+  results: ApiSong[];
+  page: number;
+  createdAt: number;
+  message?: MessageContext;
+  messageId?: number;
+}
+
+interface SourceCheckResult {
+  key: SourceKey;
+  ok: boolean;
+  elapsedMs: number;
+  sample?: string;
+  error?: string;
+}
+
+interface TransferProgressUpdate {
+  stage: "download" | "upload";
+  loadedBytes?: number;
+  totalBytes?: number;
+  fraction?: number;
+  detail?: string;
+  force?: boolean;
+}
+
+type TransferProgressReporter = (
+  update: TransferProgressUpdate
+) => void | Promise<void>;
+
+interface TransferProgressController {
+  report: TransferProgressReporter;
+  stop: () => Promise<void>;
+}
+
+const CONFIG_PATH = path.join(
+  createDirectoryInAssets(PLUGIN_NAME),
+  "config.json"
+);
+const TEMP_DIR = createDirectoryInTemp(PLUGIN_NAME);
+
+const DEFAULT_CONFIG: MusicHubConfig = {
+  defaultSource: "auto",
+  br: "999",
+  maxResults: 30,
+  maxUploadBytes: 100 * 1024 * 1024,
+};
+
+function htmlEscape(text: unknown): string {
+  return String(text ?? "").replace(/[&<>"']/g, (m) => ({
+    "&": "&amp;",
+    "<": "&lt;",
+    ">": "&gt;",
+    '"': "&quot;",
+    "'": "&#x27;",
+  }[m] || m));
+}
+
+function codeTag(text: unknown): string {
+  return `<code>${htmlEscape(text)}</code>`;
+}
+
+function displayBitrate(br?: string | number): string {
+  const value = String(br ?? DEFAULT_CONFIG.br).trim();
+  return QUALITY_LABEL_BY_BR[value] || value;
+}
+
+function parseBitrateSetting(input?: string): string | null {
+  const value = String(input ?? "").trim().toLowerCase();
+  if (!value) return null;
+  const mapped = (QUALITY_BR_VALUES as Record<string, string>)[value];
+  if (mapped) return mapped;
+  if (QUALITY_LABEL_BY_BR[value]) return value;
+  return /^\d+$/.test(value) ? value : null;
+}
+
+function sourceLabel(key: SourceMode): string {
+  if (key === "auto") return "auto";
+  const source = MUSIC_SOURCES.find((item) => item.key === key);
+  return source ? `${source.name} (${source.key})` : key;
+}
+
+function normalizeSource(input?: string): SourceMode | null {
+  if (!input) return null;
+  const lowered = input.trim().toLowerCase();
+  if (!lowered) return null;
+  if (SOURCE_ALIASES[lowered]) return SOURCE_ALIASES[lowered];
+  return MUSIC_SOURCES.some((item) => item.key === lowered)
+    ? (lowered as SourceKey)
+    : null;
+}
+
+function getSource(key: SourceKey) {
+  return MUSIC_SOURCES.find((item) => item.key === key)!;
+}
+
+function getAutoSourceOrder(): SourceKey[] {
+  const stable = MUSIC_SOURCES.filter((item) => item.stable).map((item) => item.key);
+  const rest = MUSIC_SOURCES.filter((item) => !item.stable).map((item) => item.key);
+  return [...stable, ...rest];
+}
+
+function getArgs(msg: MessageContext): string[] {
+  const text = msg.text || "";
+  return text.trim().split(/\s+/).slice(1);
+}
+
+function idToString(value: any): string {
+  if (value === undefined || value === null) return "";
+  if (typeof value === "bigint") return value.toString();
+  if (typeof value === "string" || typeof value === "number") return String(value);
+  if (value.userId !== undefined) return `user:${idToString(value.userId)}`;
+  if (value.chatId !== undefined) return `chat:${idToString(value.chatId)}`;
+  if (value.channelId !== undefined) return `channel:${idToString(value.channelId)}`;
+  try {
+    return JSON.stringify(value, (_key, item) =>
+      typeof item === "bigint" ? item.toString() : item
     );
-  }
-
-  static sanitizeFilename(name: string): string {
-    return name
-      .replace(/[^\w\s-]/g, "")
-      .replace(/\s+/g, "_")
-      .substring(0, 50);
-  }
-
-  static async fileExists(path: string): Promise<boolean> {
-    try {
-      await fs.promises.access(path);
-      return true;
-    } catch {
-      return false;
-    }
-  }
-
-  static formatSize(bytes: number): string {
-    const units = ["B", "KB", "MB", "GB"];
-    let size = bytes;
-    let unitIndex = 0;
-    while (size >= 1024 && unitIndex < units.length - 1) {
-      size /= 1024;
-      unitIndex++;
-    }
-    return `${size.toFixed(2)} ${units[unitIndex]}`;
-  }
-
-  static formatDuration(seconds: number): string {
-    const mins = Math.floor(seconds / 60);
-    const secs = seconds % 60;
-    return `${mins}:${secs.toString().padStart(2, "0")}`;
-  }
-
-  // 解析多种时长表示："mm:ss"、"hh:mm:ss"、"225"、"225s"、"3分45秒"
-  static parseDuration(input: string): number | undefined {
-    if (!input) return undefined;
-    const txt = String(input).trim();
-
-    // 纯数字（秒）或带 s 后缀
-    const secNum = /^\d+(?:\.\d+)?s?$/i;
-    if (secNum.test(txt)) {
-      const v = parseFloat(txt.replace(/s$/i, ""));
-      return Number.isFinite(v) ? Math.round(v) : undefined;
-    }
-
-    // 中文格式：3分45秒 / 1小时2分3秒
-    const zh = /(?:(\d+)\s*小时)?\s*(?:(\d+)\s*分)?\s*(?:(\d+)\s*秒)?/;
-    const zhMatch = txt.match(zh);
-    if (zhMatch && (zhMatch[1] || zhMatch[2] || zhMatch[3])) {
-      const h = parseInt(zhMatch[1] || "0", 10);
-      const m = parseInt(zhMatch[2] || "0", 10);
-      const s = parseInt(zhMatch[3] || "0", 10);
-      return h * 3600 + m * 60 + s;
-    }
-
-    // 冒号分隔：hh:mm:ss 或 mm:ss
-    const parts = txt
-      .split(":")
-      .map((p) => p.trim())
-      .filter(Boolean);
-    if (parts.length === 2 || parts.length === 3) {
-      const nums = parts.map((p) => parseInt(p, 10));
-      if (nums.every((n) => Number.isFinite(n))) {
-        let h = 0,
-          m = 0,
-          s = 0;
-        if (nums.length === 3) {
-          [h, m, s] = nums as [number, number, number];
-        } else {
-          [m, s] = nums as [number, number];
-        }
-        return h * 3600 + m * 60 + s;
-      }
-    }
-
-    return undefined;
+  } catch (_e: unknown) {
+    return String(value);
   }
 }
 
-// ==================== Configuration Manager ====================
-class ConfigManager {
-  private static db: any = null;
-  private static initialized = false;
-
-  private static async init(): Promise<void> {
-    if (this.initialized) return;
-
-    try {
-      // 确保目录存在
-      const configDir = path.dirname(CONFIG.PATHS.CONFIG);
-      if (!fs.existsSync(configDir)) {
-        fs.mkdirSync(configDir, { recursive: true });
-      }
-
-      // 文件不存在时以扁平结构初始化
-      const defaultData: Record<string, any> = { ...DEFAULT_CONFIG };
-
-      this.db = await JSONFilePreset<LegacyConfigData>(
-        CONFIG.PATHS.CONFIG,
-        defaultData
-      );
-      this.initialized = true;
-      // console.log("[music] 配置管理器初始化成功 (lowdb)");
-    } catch (error) {
-      console.error("[music] 初始化配置失败:", error);
-    }
-  }
-
-  static async get(key: string, defaultValue?: string): Promise<string> {
-    await this.init();
-    if (!this.db) {
-      return defaultValue || DEFAULT_CONFIG[key] || "";
-    }
-
-    // 优先读取顶级键
-    if (
-      Object.prototype.hasOwnProperty.call(this.db.data, key) &&
-      typeof this.db.data[key] !== "undefined"
-    ) {
-      return this.db.data[key] ?? defaultValue ?? DEFAULT_CONFIG[key] ?? "";
-    }
-
-    // 兼容历史结构
-    try {
-      const legacy = this.db.data as LegacyConfigData;
-      if (legacy.settings && typeof legacy.settings[key] !== "undefined") {
-        return (
-          legacy.settings[key] ?? defaultValue ?? DEFAULT_CONFIG[key] ?? ""
-        );
-      }
-      if (key === CONFIG.KEYS.API && legacy.apiKeys) {
-        return legacy.apiKeys[key] ?? defaultValue ?? "";
-      }
-      if (key === CONFIG.KEYS.COOKIE && legacy.cookies) {
-        return legacy.cookies[key] ?? defaultValue ?? "";
-      }
-      // 历史遗留别名
-      if (key === CONFIG.KEYS.API && legacy.settings?.apikey) {
-        return legacy.settings.apikey ?? defaultValue ?? "";
-      }
-    } catch {}
-
-    return defaultValue || DEFAULT_CONFIG[key] || "";
-  }
-
-  static async set(key: string, value: string): Promise<boolean> {
-    await this.init();
-    if (!this.db) return false;
-
-    try {
-      // 统一以顶级键存储（不迁移历史数据，仅写入新键）
-      this.db.data[key] = value;
-
-      await this.db.write(); // 自动保存
-      return true;
-    } catch (error) {
-      console.error(`[music] 设置配置失败 ${key}:`, error);
-      return false;
-    }
-  }
-
-  static async remove(key: string): Promise<boolean> {
-    await this.init();
-    if (!this.db) return false;
-
-    try {
-      if (Object.prototype.hasOwnProperty.call(this.db.data, key)) {
-        delete this.db.data[key];
-      }
-      await this.db.write();
-      return true;
-    } catch (error) {
-      console.error(`[Music] Failed to remove ${key}:`, error);
-      return false;
-    }
-  }
-
-  static async getAll(): Promise<Record<string, any>> {
-    await this.init();
-    if (!this.db) return {};
-    // 导出所有配置键，优先顶级，其次兼容历史结构
-    const keys = [
-      CONFIG.KEYS.BASE_URL,
-      CONFIG.KEYS.MODEL,
-      CONFIG.KEYS.COOKIE,
-      CONFIG.KEYS.API,
-      CONFIG.KEYS.PROXY,
-      CONFIG.KEYS.AUDIO_QUALITY,
-      CONFIG.KEYS.TEMPERATURE,
-      CONFIG.KEYS.TOP_P,
-      CONFIG.KEYS.TOP_K,
-      CONFIG.KEYS.COOKIE_BROWSER,
-    ];
-    const result: Record<string, any> = {};
-    for (const k of keys) {
-      result[k] = await this.get(k, DEFAULT_CONFIG[k] ?? "");
-    }
-    return result;
-  }
-
-  static async delete(key: string): Promise<boolean> {
-    await this.init();
-    if (!this.db) return false;
-
-    try {
-      if (Object.prototype.hasOwnProperty.call(this.db.data, key)) {
-        delete this.db.data[key];
-      }
-
-      await this.db.write(); // 自动保存
-      return true;
-    } catch (error) {
-      console.error(`[music] 删除配置失败 ${key}:`, error);
-      return false;
-    }
-  }
-
-  static cleanup(): void {
-    this.db = null;
-    this.initialized = false;
-  }
+function getSessionKey(msg: MessageContext): string {
+  const peerKey = idToString(msg.chat?.id) || "unknown-peer";
+  const userKey = idToString(msg.sender?.id) || "unknown-user";
+  return `${peerKey}:${userKey}`;
 }
 
-// ==================== HTTP Client ====================
-class HttpClient {
-  static cleanResponseText(text: string): string {
-    if (!text) return text;
-    return text
-      .replace(/^\uFEFF/, "")
-      .replace(/\uFFFD/g, "")
-      .replace(/[\uFFFC\uFFFF\uFFFE]/g, "")
-      .replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, "")
-      .replace(/[\uDC00-\uDFFF]/g, "")
-      .replace(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/g, "")
-      .normalize("NFKC");
-  }
-
-  static async makeRequest(url: string, options: any = {}): Promise<any> {
-    return new Promise((resolve, reject) => {
-      const { method = "GET", headers = {}, data, timeout = 60000 } = options;  // Increased default timeout
-      const isHttps = url.startsWith("https:");
-      const client = isHttps ? https : http;
-
-      const req = client.request(
-        url,
-        {
-          method,
-          headers: {
-            "Content-Type": "application/json",
-            "User-Agent": "TeleBox/1.0",
-            ...headers,
-          },
-          timeout,
-        },
-        (res: any) => {
-          res.setEncoding("utf8");
-          let body = "";
-          let dataLength = 0;
-          const maxResponseSize = 10 * 1024 * 1024;
-
-          res.on("data", (chunk: string) => {
-            dataLength += chunk.length;
-            if (dataLength > maxResponseSize) {
-              req.destroy();
-              reject(new Error("响应数据过大"));
-              return;
-            }
-            body += chunk;
-          });
-
-          res.on("end", () => {
-            try {
-              const cleanBody = HttpClient.cleanResponseText(body);
-              const parsedData = cleanBody ? JSON.parse(cleanBody) : {};
-              resolve({
-                status: res.statusCode || 0,
-                data: parsedData,
-                headers: res.headers,
-              });
-            } catch (error) {
-              resolve({
-                status: res.statusCode || 0,
-                data: HttpClient.cleanResponseText(body),
-                headers: res.headers,
-              });
-            }
-          });
-        }
-      );
-
-      req.on("error", (error: any) => {
-        reject(new Error(`网络请求失败: ${error.message}`));
-      });
-
-      req.on("timeout", () => {
-        req.destroy();
-        reject(new Error("请求超时"));
-      });
-
-      if (data) {
-        if (typeof data === "object") {
-          const jsonData = JSON.stringify(data);
-          req.write(jsonData);
-        } else if (typeof data === "string") {
-          req.write(data);
-        }
-      }
-
-      req.end();
-    });
-  }
+function parseIndex(text?: string): number | null {
+  if (!text || !/^\d+$/.test(text)) return null;
+  const index = Number.parseInt(text, 10);
+  return index >= 1 ? index : null;
 }
 
-// ==================== Gemini Client ====================
-class GeminiClient {
-  private apiKey: string;
-  private baseUrl: string;
-
-  constructor(apiKey: string, baseUrl?: string | null) {
-    this.apiKey = apiKey;
-    this.baseUrl = baseUrl ?? DEFAULT_CONFIG[CONFIG.KEYS.BASE_URL];
-  }
-
-  async searchMusic(query: string, retryCount: number = 0): Promise<string> {
-    const model = await ConfigManager.get(CONFIG.KEYS.MODEL);
-    const url = `${this.baseUrl}/v1beta/models/${model}:generateContent`;
-    
-    // 获取准确率调节参数
-    const temperature = parseFloat(await ConfigManager.get(CONFIG.KEYS.TEMPERATURE, "0.1"));
-    const topP = parseFloat(await ConfigManager.get(CONFIG.KEYS.TOP_P, "0.5"));
-    const topK = parseInt(await ConfigManager.get(CONFIG.KEYS.TOP_K, "5"), 10);
-    
-    console.log(`[Music] Gemini参数: temperature=${temperature}, topP=${topP}, topK=${topK}`);
-
-    const systemPrompt = `只输出以下3行，且不要任何其他内容。若未知则留空：
-
-歌曲名: 
-歌手: 
-专辑: `;
-
-    const userPrompt = `精准识别这个查询的歌曲信息："${query}"
-要求：
-1. 自动纠正拼写错误和识别拼音繁体
-2. 返回最广为人知的版本
-3. 歌手必须是最准确的演唱者，不能有任何错误
-4. 只填写确定的信息，如果没有找到歌曲则用用户输入作为歌曲名
-5. 歌手名和歌曲名必须转换为繁体中文输出`;
-
-    const headers: Record<string, string> = {
-      "x-goog-api-key": this.apiKey,
-    };
-
-    const requestData = {
-      contents: [
-        {
-          role: "user",
-          parts: [{ text: userPrompt }],
-        },
-      ],
-      systemInstruction: { parts: [{ text: systemPrompt }] },
-      generationConfig: {
-        temperature: temperature,
-        topP: topP,
-        topK: topK,
-        maxOutputTokens: 200,
-      },
-      tools: [{ googleSearch: {} }],
-      safetySettings: [
-        "HARM_CATEGORY_HATE_SPEECH",
-        "HARM_CATEGORY_DANGEROUS_CONTENT",
-        "HARM_CATEGORY_HARASSMENT",
-        "HARM_CATEGORY_SEXUALLY_EXPLICIT",
-        "HARM_CATEGORY_CIVIC_INTEGRITY",
-      ].map((category) => ({ category, threshold: "BLOCK_NONE" })),
-    };
-
-    try {
-      const response = await HttpClient.makeRequest(url, {
-        method: "POST",
-        headers,
-        data: requestData,
-        timeout: CONFIG.DEFAULTS.TIMEOUT,
-      });
-
-      if (response.status !== 200 || response.data?.error) {
-        const errorMessage =
-          response.data?.error?.message ||
-          response.data?.error ||
-          `HTTP错误: ${response.status}`;
-        throw new Error(errorMessage);
-      }
-
-      const rawText =
-        response.data?.candidates?.[0]?.content?.parts?.[0]?.text || "";
-      return HttpClient.cleanResponseText(rawText);
-    } catch (error: any) {
-      // Retry mechanism for timeout and network errors
-      if (retryCount < CONFIG.DEFAULTS.MAX_RETRIES && 
-          (error.message.includes('超时') || error.message.includes('timeout') || 
-           error.message.includes('网络') || error.message.includes('ECONNRESET'))) {
-        console.log(`[music] AI请求失败，重试 ${retryCount + 1}/${CONFIG.DEFAULTS.MAX_RETRIES}: ${error.message}`);
-        await lifecycleDelay(2000 * (retryCount + 1), "music:gemini-retry"); // Exponential backoff
-        return this.searchMusic(query, retryCount + 1);
-      }
-      throw error;
-    }
-
-  }
+function clampPage(page: number, totalPages: number): number {
+  return Math.min(Math.max(page, 1), Math.max(totalPages, 1));
 }
 
-// ==================== Cookie Converter ====================
-class CookieConverter {
-  // 检测并转换各种格式的 Cookie 为 Netscape 格式
-  static convertToNetscape(input: string): string {
-    // 清理输入
-    input = input.trim();
-
-    // 1. 如果已经是 Netscape 格式（包含制表符分隔的7个字段）
-    if (this.isNetscapeFormat(input)) {
-      return input;
-    }
-
-    // 2. JSON 格式的 Cookie（从浏览器开发者工具导出）
-    if (this.isJsonFormat(input)) {
-      return this.convertJsonToNetscape(input);
-    }
-
-    // 3. 浏览器 Cookie 字符串格式（key=value; key2=value2）
-    if (this.isBrowserStringFormat(input)) {
-      return this.convertBrowserStringToNetscape(input);
-    }
-
-    // 4. EditThisCookie 扩展格式
-    if (this.isEditThisCookieFormat(input)) {
-      return this.convertEditThisCookieToNetscape(input);
-    }
-
-    // 5. 简单的 key=value 对（每行一个）
-    if (this.isSimpleKeyValueFormat(input)) {
-      return this.convertSimpleKeyValueToNetscape(input);
-    }
-
-    // 如果无法识别格式，尝试作为 Netscape 格式返回
-    return input;
-  }
-
-  private static isNetscapeFormat(input: string): boolean {
-    const lines = input
-      .split("\n")
-      .filter((line) => line.trim() && !line.startsWith("#"));
-    if (lines.length === 0) return false;
-
-    // Netscape 格式每行应该有 7 个制表符分隔的字段
-    return lines.every((line) => {
-      const fields = line.split("\t");
-      return fields.length === 7;
-    });
-  }
-
-  private static isJsonFormat(input: string): boolean {
-    try {
-      const parsed = JSON.parse(input);
-      return (
-        Array.isArray(parsed) &&
-        parsed.length > 0 &&
-        parsed[0].hasOwnProperty("name") &&
-        parsed[0].hasOwnProperty("value")
-      );
-    } catch {
-      return false;
-    }
-  }
-
-  private static convertJsonToNetscape(input: string): string {
-    try {
-      const cookies = JSON.parse(input);
-      const netscapeLines: string[] = [
-        "# Netscape HTTP Cookie File",
-        "# This file was generated by TeleBox Music Plugin",
-        "",
-      ];
-
-      for (const cookie of cookies) {
-        const domain = cookie.domain || ".youtube.com";
-        const flag = domain.startsWith(".") ? "TRUE" : "FALSE";
-        const path = cookie.path || "/";
-        const secure = cookie.secure ? "TRUE" : "FALSE";
-        const expiry =
-          cookie.expirationDate ||
-          cookie.expires ||
-          Math.floor(Date.now() / 1000) + 31536000; // 1 year from now
-        const name = cookie.name || "";
-        const value = cookie.value || "";
-
-        if (name && value) {
-          netscapeLines.push(
-            `${domain}\t${flag}\t${path}\t${secure}\t${expiry}\t${name}\t${value}`
-          );
-        }
-      }
-
-      return netscapeLines.join("\n");
-    } catch (error) {
-      console.error("Failed to convert JSON to Netscape:", error);
-      return input;
-    }
-  }
-
-  private static isBrowserStringFormat(input: string): boolean {
-    // 检查是否包含 key=value; 格式
-    return input.includes("=") && (input.includes(";") || input.includes("="));
-  }
-
-  private static convertBrowserStringToNetscape(input: string): string {
-    const netscapeLines: string[] = [
-      "# Netscape HTTP Cookie File",
-      "# This file was generated by TeleBox Music Plugin",
-      "",
-    ];
-
-    // 分割 cookie 字符串
-    const cookies = input.split(/;\s*/).filter((c) => c.includes("="));
-
-    for (const cookie of cookies) {
-      const [name, ...valueParts] = cookie.split("=");
-      const value = valueParts.join("="); // 处理值中包含 = 的情况
-
-      if (name && value) {
-        // YouTube cookies 默认设置
-        const domain = ".youtube.com";
-        const flag = "TRUE";
-        const path = "/";
-        const secure = "TRUE";
-        const expiry = Math.floor(Date.now() / 1000) + 31536000; // 1 year
-
-        netscapeLines.push(
-          `${domain}\t${flag}\t${path}\t${secure}\t${expiry}\t${name.trim()}\t${value.trim()}`
-        );
-      }
-    }
-
-    return netscapeLines.join("\n");
-  }
-
-  private static isEditThisCookieFormat(input: string): boolean {
-    // EditThisCookie 通常导出为带特定字段的 JSON
-    try {
-      const parsed = JSON.parse(input);
-      return (
-        Array.isArray(parsed) &&
-        parsed.length > 0 &&
-        (parsed[0].hasOwnProperty("storeId") ||
-          parsed[0].hasOwnProperty("sameSite"))
-      );
-    } catch {
-      return false;
-    }
-  }
-
-  private static convertEditThisCookieToNetscape(input: string): string {
-    // 使用相同的 JSON 转换逻辑
-    return this.convertJsonToNetscape(input);
-  }
-
-  private static isSimpleKeyValueFormat(input: string): boolean {
-    const lines = input.split("\n").filter((line) => line.trim());
-    return (
-      lines.length > 0 &&
-      lines.every((line) => {
-        return line.includes("=") && !line.includes("\t");
-      })
-    );
-  }
-
-  private static convertSimpleKeyValueToNetscape(input: string): string {
-    const netscapeLines: string[] = [
-      "# Netscape HTTP Cookie File",
-      "# This file was generated by TeleBox Music Plugin",
-      "",
-    ];
-
-    const lines = input.split("\n").filter((line) => line.trim());
-
-    for (const line of lines) {
-      const [name, ...valueParts] = line.split("=");
-      const value = valueParts.join("=");
-
-      if (name && value) {
-        const domain = ".youtube.com";
-        const flag = "TRUE";
-        const path = "/";
-        const secure = "TRUE";
-        const expiry = Math.floor(Date.now() / 1000) + 31536000;
-
-        netscapeLines.push(
-          `${domain}\t${flag}\t${path}\t${secure}\t${expiry}\t${name.trim()}\t${value.trim()}`
-        );
-      }
-    }
-
-    return netscapeLines.join("\n");
-  }
+function formatArtists(artist: string[]): string {
+  return artist.filter(Boolean).join(" / ") || "未知歌手";
 }
 
-// ==================== Helper Functions ====================
-async function extractSongInfo(
-  geminiResponse: string,
-  userInput: string
-): Promise<{
-  title: string;
-  artist: string;
-  album?: string;
-  duration?: number;
-}> {
-  const lines = geminiResponse.split("\n").map((line) => line.trim());
-  let title = "";
-  let artist = "";
-  let album = "";
-  let durationSec: number | undefined;
-
-  for (const line of lines) {
-    if (line.startsWith("歌曲名:") || line.startsWith("歌曲名：")) {
-      title = line.replace(/歌曲名[:：]\s*/, "").trim();
-    } else if (line.startsWith("歌手:") || line.startsWith("歌手：")) {
-      artist = line.replace(/歌手[:：]\s*/, "").trim();
-    } else if (line.startsWith("专辑:") || line.startsWith("专辑：")) {
-      album = line.replace(/专辑[:：]\s*/, "").trim();
-    }
+function formatBytes(bytes?: number): string {
+  if (!bytes || bytes <= 0) return "未知大小";
+  const units = ["B", "KB", "MB", "GB"];
+  let value = bytes;
+  let unitIndex = 0;
+  while (value >= 1024 && unitIndex < units.length - 1) {
+    value /= 1024;
+    unitIndex += 1;
   }
+  return `${value.toFixed(value >= 10 || unitIndex === 0 ? 0 : 1)} ${units[unitIndex]}`;
+}
 
-  // 返回结果，空值不返回
+function formatProgressBytes(bytes?: number): string {
+  if (bytes === undefined) return "未知大小";
+  if (bytes <= 0) return "0 B";
+  return formatBytes(bytes);
+}
+
+function clampFraction(value?: number): number | undefined {
+  if (value === undefined || !Number.isFinite(value)) return undefined;
+  return Math.min(Math.max(value, 0), 1);
+}
+
+function progressFraction(update: TransferProgressUpdate): number | undefined {
+  const explicit = clampFraction(update.fraction);
+  if (explicit !== undefined) return explicit;
+  if (update.loadedBytes && update.totalBytes && update.totalBytes > 0) {
+    return clampFraction(update.loadedBytes / update.totalBytes);
+  }
+  return undefined;
+}
+
+function formatPercent(fraction?: number): string {
+  if (fraction === undefined) return "--%";
+  return `${Math.floor(fraction * 100)}%`;
+}
+
+function renderProgressBar(fraction?: number): string {
+  const safeFraction = clampFraction(fraction) ?? 0;
+  const filled = Math.round(safeFraction * PROGRESS_BAR_WIDTH);
+  return `${"█".repeat(filled)}${"░".repeat(PROGRESS_BAR_WIDTH - filled)}`;
+}
+
+function renderTransferProgress(song: ApiSong, update: TransferProgressUpdate): string {
+  const fraction = progressFraction(update);
+  const stageIcon = update.stage === "download" ? "⬇️" : "📤";
+  const stageText = update.stage === "download" ? "本地下载中" : "本地上传中";
+  const sizeText =
+    update.loadedBytes !== undefined && update.totalBytes !== undefined
+      ? `${formatProgressBytes(update.loadedBytes)} / ${formatProgressBytes(update.totalBytes)}`
+      : update.loadedBytes !== undefined
+        ? formatProgressBytes(update.loadedBytes)
+        : "";
+
+  return [
+    `${stageIcon} <b>${stageText}</b>`,
+    `🎵 ${codeTag(song.name)}`,
+    `👤 ${codeTag(formatArtists(song.artist))}`,
+    `${codeTag(renderProgressBar(fraction))} ${codeTag(formatPercent(fraction))}`,
+    sizeText ? `💾 ${codeTag(sizeText)}` : "",
+    update.detail ? `ℹ️ ${htmlEscape(update.detail)}` : "",
+  ].filter(Boolean).join("\n");
+}
+
+function errorText(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function isMessageNotModifiedError(error: unknown): boolean {
+  return /MESSAGE_NOT_MODIFIED|message is not modified/i.test(errorText(error));
+}
+
+function sanitizeFilename(name: string): string {
+  const cleaned = name
+    .replace(/[\\/:*?"<>|]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  return (cleaned || "music").slice(0, 80);
+}
+
+function detectAudioExtension(url: string, contentType?: string): string {
+  const lowerType = (contentType || "").toLowerCase();
+  if (lowerType.includes("flac")) return "flac";
+  if (lowerType.includes("ogg")) return "ogg";
+  if (lowerType.includes("wav")) return "wav";
+  if (lowerType.includes("mp4") || lowerType.includes("m4a")) return "m4a";
+  if (lowerType.includes("mpeg") || lowerType.includes("mp3")) return "mp3";
+
+  try {
+    const pathname = new URL(url).pathname.toLowerCase();
+    const match = pathname.match(/\.([a-z0-9]{2,5})$/);
+    if (match && ["mp3", "flac", "m4a", "aac", "ogg", "wav"].includes(match[1])) {
+      return match[1];
+    }
+  } catch (e: unknown) { logger.warn('[music_hub] parse URL failed:', e) }
+
+  return "mp3";
+}
+
+function normalizeSong(raw: any, fallbackSource: SourceKey): ApiSong | null {
+  const name = String(raw?.name ?? raw?.title ?? "").trim();
+  const id = String(raw?.id ?? raw?.song_id ?? raw?.url_id ?? "").trim();
+  const normalizedSource = normalizeSource(String(raw?.source ?? fallbackSource));
+  if (!name || !id || !normalizedSource || normalizedSource === "auto") return null;
+  const source = normalizedSource;
+
+  const artistValue = raw?.artist ?? raw?.artists ?? raw?.singer ?? [];
+  const artist = Array.isArray(artistValue)
+    ? artistValue.map((item) => String(item))
+    : String(artistValue || "")
+        .split(/[\/,，]/)
+        .map((item) => item.trim())
+        .filter(Boolean);
+
   return {
-    title: title || userInput, // 如果没有识别到歌曲名，使用用户输入
-    artist: artist || "Youtube Music", // 如果没有识别到歌手，使用 Youtube Music
-    album: album || undefined,
-    duration: durationSec,
+    id,
+    name,
+    artist,
+    album: raw?.album ? String(raw.album) : undefined,
+    pic_id: raw?.pic_id ? String(raw.pic_id) : undefined,
+    url_id: raw?.url_id ? String(raw.url_id) : id,
+    lyric_id: raw?.lyric_id ? String(raw.lyric_id) : id,
+    source,
+    from: raw?.from ? String(raw.from) : undefined,
   };
 }
 
-// ==================== Downloader ====================
-class Downloader {
-  private tempDir: string;
+function normalizeSearchResults(data: any, fallbackSource: SourceKey): ApiSong[] {
+  const rawItems: any[] = Array.isArray(data)
+    ? data
+    : Array.isArray(data?.data)
+      ? data.data
+      : Array.isArray(data?.result)
+        ? data.result
+        : Array.isArray(data?.songs)
+          ? data.songs
+          : [];
 
-  constructor() {
-    this.tempDir = CONFIG.PATHS.TEMP;
-    this.ensureDirectories();
-  }
+  return rawItems
+    .map((item: any) => normalizeSong(item, fallbackSource))
+    .filter((item: ApiSong | null): item is ApiSong => Boolean(item));
+}
 
-  private ensureDirectories(): void {
-    if (!fs.existsSync(this.tempDir)) {
-      fs.mkdirSync(this.tempDir, { recursive: true });
+async function mapWithConcurrency<T, R>(
+  items: T[],
+  limit: number,
+  worker: (item: T, index: number) => Promise<R>
+): Promise<R[]> {
+  const results = new Array<R>(items.length);
+  let nextIndex = 0;
+
+  async function run() {
+    while (nextIndex < items.length) {
+      const current = nextIndex++;
+      results[current] = await worker(items[current], current);
     }
   }
 
-  async checkDependencies(): Promise<{ ytdlp: boolean; ffmpeg: boolean }> {
-    const result = { ytdlp: false, ffmpeg: false };
+  await Promise.all(
+    Array.from({ length: Math.min(limit, items.length) }, () => run())
+  );
+  return results;
+}
 
-    // Check yt-dlp with multiple methods
-    const ytdlpCommands: [string, string[]][] = [
-      ["yt-dlp", ["--version"]],
-      ["python3", ["-m", "yt_dlp", "--version"]],
-      ["python", ["-m", "yt_dlp", "--version"]],
-    ];
+const helpText = `🎵 <b>Music Hub</b>
 
-    for (const [bin, args] of ytdlpCommands) {
-      try {
-        const { stdout } = await execFileAsync(bin, args);
-        result.ytdlp = true;
-        // 检查版本并提示更新
-        const versionMatch = stdout.match(/(\d{4}\.\d{2}\.\d{2})/);  
-        if (versionMatch) {
-          const version = versionMatch[1];
-          const versionDate = new Date(version.replace(/\./g, '-'));
-          const thirtyDaysAgo = new Date();
-          thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
-          if (versionDate < thirtyDaysAgo) {
-            console.log(`[Music] yt-dlp版本较旧 (${version})，建议更新: yt-dlp -U 或 pip install -U yt-dlp`);
-          }
-        }
-        console.log(`[Music] Found yt-dlp via: ${bin}`);
-        break;
-      } catch {}
+🔍 <b>搜索和选择</b>
+${codeTag(`${commandName} 关键词`)} - 使用默认源搜索
+${codeTag(`${commandName} auto 关键词`)} - 自动选择可用源
+${codeTag(`${commandName} netease 关键词`)} - 指定源搜索
+
+⚙️ <b>源和配置</b>
+${codeTag(`${commandName} sources`)} - 查看全部音乐源
+${codeTag(`${commandName} default auto`)} - 设置默认源，可换成任意源
+${codeTag(`${commandName} br medium`)} - 设置码率，常用 low/medium/high
+${codeTag(`${commandName} check`)} - 一键测活所有音乐源`;
+
+class MusicHubPlugin extends Plugin {
+  description: string = `Music Hub 多音源音乐搜索和下载\n\n${helpText}`;
+  private db?: Awaited<ReturnType<typeof JSONFilePreset<MusicHubConfig>>>;
+  private sessions = new Map<string, SearchSession>();
+  // 活跃传输进度定时器，cleanup() 时统一清空，防止插件重载时泄漏 setInterval
+  private activeTransferTimers = new Set<ReturnType<typeof setInterval>>();
+
+  cmdHandlers = {
+    mh: this.handleCommand.bind(this),
+    music_hub: this.handleCommand.bind(this),
+  };
+
+  cleanup(): void {
+    for (const timer of this.activeTransferTimers) {
+      clearInterval(timer);
     }
-
-    // Check FFmpeg
-    try {
-      await execFileAsync('ffmpeg', ['-version']);
-      result.ffmpeg = true;
-      // 静默检查，不输出日志
-    } catch {
-      console.log("[Music] FFmpeg 未找到，音频处理功能受限");
-    }
-
-    return result;
+    this.activeTransferTimers.clear();
+    this.sessions.clear();
+    this.db = undefined;
   }
 
-  async search(query: string, minDurationSec?: number): Promise<string | null> {
-    try {
-      const cookie = await ConfigManager.get(CONFIG.KEYS.COOKIE);
-      const proxy = await ConfigManager.get(CONFIG.KEYS.PROXY);
-      const cookieBrowser = await ConfigManager.get(CONFIG.KEYS.COOKIE_BROWSER);
-
-      // 使用AI识别歌手和歌曲名，构建最终搜索词
-      let finalQuery = query;
-      try {
-        const apiKey = await ConfigManager.get(CONFIG.KEYS.API);
-        if (apiKey && apiKey.trim()) {
-          const baseUrl = await ConfigManager.get(CONFIG.KEYS.BASE_URL);
-          const gemini = new GeminiClient(apiKey, baseUrl);
-          const aiResponse = await gemini.searchMusic(query);
-          const songInfo = await extractSongInfo(aiResponse, query);
-          
-          // 构建搜索词：歌手 + 歌曲名 + Lyrics
-          if (songInfo.artist && songInfo.title) {
-            finalQuery = `${songInfo.artist} ${songInfo.title} Lyrics`;
-            console.log(`[Music] AI构建搜索词: ${finalQuery}`);
-          }
-        }
-      } catch (error) {
-        console.log(`[Music] AI识别失败，使用原始搜索词: ${error}`);
-      }
-
-      // The query will be passed as an argument, so no shell escaping is needed.
-      const safeQuery = finalQuery;
-
-      // 构建命令选项 - 添加更多兼容性参数和客户端选择
-      const commandConfigs: { command: string; args: string[] }[] = [];
-      const baseSearchArg = `ytsearch1:${safeQuery}`;
-      const commonArgs = [
-        '--no-warnings', 
-        '--no-check-certificates', 
-        '--geo-bypass',
-        '--ignore-errors',  // Continue on download errors
-        '--no-playlist',    // Download only single video
-      ];
-      
-      // 添加Android客户端参数以避开SABR限制
-      const clientArgs = ['--extractor-args', 'youtube:player_client=android,ios'];
-
-      const getIdArgs = [baseSearchArg, '--get-id', ...commonArgs, ...clientArgs];
-      const getInfoArgs = [baseSearchArg, '--dump-single-json', '--skip-download', ...commonArgs, ...clientArgs];
-
-      const authArgs: string[] = [];
-      if (cookieBrowser && cookieBrowser.trim()) {
-        authArgs.push('--cookies-from-browser', cookieBrowser);
-      } else if (cookie && cookie.trim()) {
-        const cookieFile = path.join(this.tempDir, "cookies.txt");
-        await fs.promises.writeFile(cookieFile, this.convertCookie(cookie));
-        authArgs.push('--cookies', cookieFile);
-      }
-
-      const proxyArgs: string[] = [];
-      if (proxy) {
-        proxyArgs.push('--proxy', proxy);
-      }
-
-      // 策略1: 无认证
-      commandConfigs.push({ command: 'yt-dlp', args: getIdArgs });
-      commandConfigs.push({ command: 'yt-dlp', args: getInfoArgs });
-
-      // 策略2: 仅Cookie
-      if (authArgs.length > 0) {
-        commandConfigs.push({ command: 'yt-dlp', args: [...getIdArgs, ...authArgs] });
-        commandConfigs.push({ command: 'yt-dlp', args: [...getInfoArgs, ...authArgs] });
-      }
-
-      // 策略3: 仅Proxy
-      if (proxyArgs.length > 0) {
-        commandConfigs.push({ command: 'yt-dlp', args: [...getIdArgs, ...proxyArgs] });
-        commandConfigs.push({ command: 'yt-dlp', args: [...getInfoArgs, ...proxyArgs] });
-      }
-
-      // 策略4: Cookie + Proxy
-      if (authArgs.length > 0 && proxyArgs.length > 0) {
-        commandConfigs.push({ command: 'yt-dlp', args: [...getInfoArgs, ...authArgs, ...proxyArgs] });
-      }
-
-      // Python 备用
-      commandConfigs.push({ command: 'python3', args: ['-m', 'yt_dlp', ...getIdArgs] });
-      commandConfigs.push({ command: 'python3', args: ['-m', 'yt_dlp', ...getInfoArgs] });
-
-      let stdout = "";
-
-      for (const config of commandConfigs) {
-        try {
-          stdout = await runTrackedProcess(
-            config.command,
-            config.args,
-            "music:yt-dlp-search"
-          );
-
-          if (stdout) {
-            console.log(`[Music] Search successful with: ${config.command}`);
-            break;
-          }
-        } catch (error) {
-          console.log(`[Music] Search failed with: ${config.command}. Error:`, error);
-        }
-      }
-
-      if (!stdout.trim()) return null;
-
-      // 检查是否是纯ID
-      if (!stdout.includes('{')) {
-        const firstId = stdout.split('\n')[0].trim();
-        if (firstId) {
-          console.log(`[Music] 选中第一个结果 (ID): ${firstId}`);
-          return `https://www.youtube.com/watch?v=${firstId}`;
-        }
-      }
-
-      // 尝试解析JSON
-      try {
-        const result = JSON.parse(stdout);
-        const firstEntry = result.entries ? result.entries[0] : result;
-
-        if (firstEntry && firstEntry.id) {
-          console.log(`[Music] 选中第一个结果 (JSON): ${firstEntry.title}`);
-          return `https://www.youtube.com/watch?v=${firstEntry.id}`;
-        }
-      } catch (e) {
-        console.error('[Music] Failed to parse JSON, returning null.', e);
-      }
-
-      return null;
-    } catch (error) {
-      console.error("[Music] Search error:", error);
-      return null;
+  private async getConfig(): Promise<MusicHubConfig> {
+    if (!this.db) {
+      this.db = await JSONFilePreset<MusicHubConfig>(CONFIG_PATH, {
+        ...DEFAULT_CONFIG,
+      });
+      await this.normalizeConfig();
     }
+    return this.db.data;
   }
 
-  private convertCookie(cookie: string): string {
-    // 1. 如果已经包含制表符，直接返回（格式正确）
-    if (cookie.includes("\t")) {
-      return cookie;
+  private async normalizeConfig(): Promise<void> {
+    if (!this.db) return;
+    const config = this.db.data;
+    let changed = false;
+
+    const defaultSource = normalizeSource(config.defaultSource);
+    if (!defaultSource) {
+      config.defaultSource = DEFAULT_CONFIG.defaultSource;
+      changed = true;
     }
 
-    // 2. 检测并修复空格分隔的 Netscape 格式 cookie
-    const lines = cookie.split("\n").filter((line) => line.trim());
-    const fixedLines: string[] = ["# Netscape HTTP Cookie File", ""];
-
-    for (const line of lines) {
-      // 跳过注释行
-      if (line.startsWith("#")) continue;
-
-      // 检测是否是 Netscape 格式（包含多个空格分隔的字段）
-      const fields = line.split(/\s+/);
-      if (fields.length === 7) {
-        // 这是空格分隔的 Netscape 格式，转换为制表符分隔
-        fixedLines.push(fields.join("\t"));
-        continue;
-      }
+    const normalizedBr = parseBitrateSetting(config.br);
+    if (!normalizedBr) {
+      config.br = DEFAULT_CONFIG.br;
+      changed = true;
+    } else if (config.br !== normalizedBr) {
+      config.br = normalizedBr;
+      changed = true;
     }
 
-    // 如果成功转换了至少一个 cookie 条目，返回修复后的结果
-    if (fixedLines.length > 2) {
-      return fixedLines.join("\n");
+    if (!Number.isFinite(config.maxResults) || config.maxResults < PAGE_SIZE) {
+      config.maxResults = DEFAULT_CONFIG.maxResults;
+      changed = true;
     }
 
-    // 3. 否则，尝试从 key=value 格式转换
-    const resultLines = ["# Netscape HTTP Cookie File", ""];
-    const pairs = cookie.split(/;\s*/).filter((p) => p.includes("="));
-
-    for (const pair of pairs) {
-      const [name, value] = pair.split("=");
-      if (name && value) {
-        // YouTube cookie defaults
-        resultLines.push(
-          `.youtube.com\tTRUE\t/\tTRUE\t${
-            Math.floor(Date.now() / 1000) + 31536000
-          }\t${name.trim()}\t${value.trim()}`
-        );
-      }
+    if (!Number.isFinite(config.maxUploadBytes) || config.maxUploadBytes < 1024 * 1024) {
+      config.maxUploadBytes = DEFAULT_CONFIG.maxUploadBytes;
+      changed = true;
     }
 
-    return resultLines.join("\n");
+    if (changed) await this.db.write();
   }
 
-  // 使用 gdstudio 音乐 API 获取专辑封面，保存到 destPath
-  // 元数据优先使用 AI 解析结果（artist/title/album）
-  private async fetchAlbumCoverUsingAPI(
-    metadata: SongInfo | undefined,
-    destPath: string
-  ): Promise<boolean> {
-    try {
-      if (!metadata || !metadata.title) return false;
-      const COVER_SOURCES = [
-        "tencent",
-        "kuwo",
-        "kugou",
-        "migu",
-        "netease",
-        "ytmusic",
-      ];
-      const BASE = "https://music-api.gdstudio.xyz/api.php";
-
-      const hasArtist = !!metadata.artist && metadata.artist !== "Unknown Artist";
-      const query = hasArtist
-        ? `${metadata.artist} ${metadata.title}`
-        : `${metadata.title}`;
-
-      for (const source of COVER_SOURCES) {
-        try {
-          const searchUrl = `${BASE}?types=search&source=${source}&name=${encodeURIComponent(
-            query
-          )}&count=10&pages=1`;
-          const res = await HttpClient.makeRequest(searchUrl, { method: "GET" });
-          if (res.status !== 200 || !res.data) continue;
-
-          let list: any[] = [];
-          if (Array.isArray(res.data)) list = res.data;
-          else if (Array.isArray(res.data.result)) list = res.data.result;
-          else if (Array.isArray(res.data.data)) list = res.data.data;
-          if (!list.length) continue;
-
-          const lowerTitle = String(metadata.title).toLowerCase();
-          const lowerArtist = String(metadata.artist || "").toLowerCase();
-          let best: any = null;
-          if (hasArtist) {
-            best = list.find(
-              (it: any) =>
-                String(it?.name || "").toLowerCase().includes(lowerTitle) &&
-                String(it?.artist || "").toLowerCase().includes(lowerArtist)
-            );
-          } else {
-            best = list.find((it: any) =>
-              String(it?.name || "").toLowerCase().includes(lowerTitle)
-            );
-          }
-          best = best || list[0];
-          const picId = String(best?.pic_id || "");
-          if (!picId) continue;
-
-          // 获取封面URL
-          const picUrlApi = `${BASE}?types=pic&source=${encodeURIComponent(
-            source
-          )}&id=${encodeURIComponent(picId)}&size=500`;
-          const picRes = await HttpClient.makeRequest(picUrlApi, { method: "GET" });
-          if (picRes.status !== 200 || !picRes.data) continue;
-          let picUrl = "";
-          if (typeof picRes.data === "string") {
-            picUrl = picRes.data;
-          } else if (
-            picRes.data &&
-            (picRes.data.url || picRes.data.pic || picRes.data.image)
-          ) {
-            picUrl = picRes.data.url || picRes.data.pic || picRes.data.image;
-          }
-          if (!picUrl) continue;
-
-          const ok = await this.downloadImageToFile(picUrl, destPath);
-          if (ok) {
-            console.log(`[Music] 已从API获取专辑封面: ${source}`);
-            return true;
-          }
-        } catch (e) {
-          // 尝试下一个源
-          continue;
-        }
-      }
-      return false;
-    } catch {
-      return false;
-    }
+  private async updateConfig(updater: (config: MusicHubConfig) => void): Promise<MusicHubConfig> {
+    const config = await this.getConfig();
+    updater(config);
+    await this.db!.write();
+    return config;
   }
 
-  private async downloadImageToFile(url: string, destPath: string): Promise<boolean> {
-    return new Promise((resolve) => {
-      try {
-        const isHttps = url.startsWith("https:");
-        const client = isHttps ? https : http;
-        const req = client.get(url, (res: any) => {
-          if ((res.statusCode || 0) >= 300 && res.headers.location) {
-            // 处理重定向
-            this.downloadImageToFile(res.headers.location as string, destPath)
-              .then(resolve)
-              .catch(() => resolve(false));
-            return;
-          }
-          const chunks: Buffer[] = [];
-          res.on("data", (c: Buffer) => chunks.push(c));
-          res.on("end", async () => {
-            try {
-              const buf = Buffer.concat(chunks);
-              if (!buf || buf.length === 0) return resolve(false);
-              await fs.promises.writeFile(destPath, buf);
-              resolve(true);
-            } catch {
-              resolve(false);
-            }
-          });
-        });
-        req.on("error", () => resolve(false));
-        req.end();
-      } catch {
-        resolve(false);
-      }
+  private async requestApi<T>(params: Record<string, string | number>, timeout = SEARCH_TIMEOUT_MS): Promise<T> {
+    const response = await axios.get<T>(API_BASE_URL, {
+      params,
+      timeout,
+      responseType: "json",
+      headers: {
+        "User-Agent": "TeleBox-MusicHub/1.0",
+      },
+      validateStatus: (status: number) => status >= 200 && status < 500,
     });
+
+    if (response.status >= 400) {
+      throw new Error(`HTTP ${response.status}`);
+    }
+
+    const data: any = response.data;
+    if (data?.error) throw new Error(String(data.error));
+    if (data?.message && data?.code && Number(data.code) >= 400) {
+      throw new Error(String(data.message));
+    }
+    return response.data;
   }
 
-  async download(
-    url: string,
-    metadata?: SongInfo
-  ): Promise<{ audioPath: string | null; thumbnailPath?: string }> {
-    try {
-      const filename = metadata
-        ? `${Utils.sanitizeFilename(metadata.artist)}_${Utils.sanitizeFilename(
-            metadata.title
-          )}`
-        : `download_${Date.now()}`;
+  private async searchSource(source: SourceKey, keyword: string, count: number): Promise<ApiSong[]> {
+    const data = await this.requestApi<any>(
+      {
+        types: "search",
+        source,
+        name: keyword,
+        count,
+        pages: 1,
+      },
+      SEARCH_TIMEOUT_MS
+    );
+    return normalizeSearchResults(data, source).slice(0, count);
+  }
 
-      // 每次下载到临时目录，确保全新下载
-      const timestamp = Date.now();
-      const outputPath = path.join(
-        this.tempDir,
-        `${filename}_${timestamp}.%(ext)s`
-      );
-      const thumbnailPath = path.join(
-        this.tempDir,
-        `${filename}_${timestamp}_thumb.jpg`
-      );
-      const cookie = await ConfigManager.get(CONFIG.KEYS.COOKIE);
-      const proxy = await ConfigManager.get(CONFIG.KEYS.PROXY);
+  private async searchMusic(sourceMode: SourceMode, keyword: string): Promise<SearchSession> {
+    const config = await this.getConfig();
+    const sourceOrder = sourceMode === "auto" ? getAutoSourceOrder() : [sourceMode];
+    const errors: string[] = [];
 
-      // Prepare authentication
-      let cookieFile: string | null = null;
-      if (cookie && cookie.trim()) {
-        cookieFile = path.join(this.tempDir, "cookies.txt");
-        await fs.promises.writeFile(cookieFile, this.convertCookie(cookie));
-      }
-
-      // 先尝试通过 API 获取专辑封面；失败再回退到视频缩略图
-      let hasThumbnail = false;
-      let videoInfo: any = null;
-
+    for (const source of sourceOrder) {
       try {
-        const ok = await this.fetchAlbumCoverUsingAPI(metadata, thumbnailPath);
-        if (ok) hasThumbnail = true;
-      } catch {}
-
-      // 获取视频元数据
-      try {
-        const infoArgs = ['--dump-json', '--no-warnings'];
-        if (cookie && cookie.trim() && cookieFile) infoArgs.push('--cookies', cookieFile);
-        if (proxy) infoArgs.push('--proxy', proxy);
-        infoArgs.push(url);
-        const { stdout } = await execFileAsync('yt-dlp', infoArgs);
-        videoInfo = JSON.parse(stdout);
-
-        // 从视频信息中补充元数据（不覆盖已有的）
-        if (videoInfo) {
-          // 如果没有传入元数据，从视频信息创建
-          if (!metadata) {
-            metadata = {
-              title: videoInfo.title || videoInfo.track || "Unknown",
-              artist:
-                videoInfo.artist ||
-                videoInfo.uploader ||
-                videoInfo.channel ||
-                "Unknown Artist",
-              album: videoInfo.album || undefined,
-            };
-          } else {
-            // 如果已有元数据（比如从AI获取的），只补充缺失的字段
-            if (!metadata.title && videoInfo.title) {
-              metadata.title = videoInfo.title;
-            }
-            if (metadata.artist === "Unknown Artist" && videoInfo.artist) {
-              metadata.artist = videoInfo.artist;
-            }
-            if (!metadata.album && videoInfo.album) {
-              metadata.album = videoInfo.album;
-            }
-          }
-          console.log(
-            `[music] 元数据: ${metadata.artist} - ${metadata.title}${
-              metadata.album ? " - " + metadata.album : ""
-            }`
-          );
-        }
-      } catch (error) {
-        console.log("[music] 无法获取视频信息，使用已有元数据");
-      }
-
-      // 若 API 未获取到封面，则回退到视频缩略图
-      if (!hasThumbnail) {
-        try {
-          const thumbArgs = ['--write-thumbnail', '--skip-download', '-o', thumbnailPath.replace(".jpg", "")];
-          if (cookie && cookie.trim() && cookieFile) thumbArgs.push('--cookies', cookieFile);
-          if (proxy) thumbArgs.push('--proxy', proxy);
-          thumbArgs.push(url);
-          await execFileAsync('yt-dlp', thumbArgs);
-
-          // 检查各种可能的缩略图格式
-          const possibleExts = [".jpg", ".jpeg", ".png", ".webp"];
-          for (const ext of possibleExts) {
-            const possiblePath = thumbnailPath.replace(".jpg", ext);
-            if (fs.existsSync(possiblePath)) {
-              // 如果不是jpg，转换为jpg
-              if (ext !== ".jpg") {
-                await execFileAsync('ffmpeg', ['-i', possiblePath, '-vf', 'scale=500:500:force_original_aspect_ratio=increase,crop=500:500', thumbnailPath, '-y']);
-                fs.unlinkSync(possiblePath);
-              } else {
-                // 调整大小为正方形
-                await execFileAsync('ffmpeg', ['-i', possiblePath, '-vf', 'scale=500:500:force_original_aspect_ratio=increase,crop=500:500', `${thumbnailPath}_temp.jpg`, '-y']);
-                fs.renameSync(`${thumbnailPath}_temp.jpg`, thumbnailPath);
-              }
-              hasThumbnail = true;
-              console.log(`[music] 缩略图已下载: ${thumbnailPath}`);
-              break;
-            }
-          }
-        } catch (error) {
-          console.log("[music] 缩略图下载失败，继续下载音频");
-        }
-      }
-
-      // 读取用户配置的音频质量（可为空）
-      const configuredQuality = await ConfigManager.get(
-        CONFIG.KEYS.AUDIO_QUALITY
-      );
-      // 用户显式设置音质时，使用 mp3 以确保质量参数生效；否则保持最佳可用格式
-      const audioFormat = configuredQuality ? "mp3" : "best";
-
-      // Build command list with fallbacks - 优化音频格式选择和兼容性
-      const buildDownloadArgs = (extraArgs: string[]): [string, string[]] => {
-        const args = ['--extractor-args', 'youtube:player_client=android,ios', '-x', '--audio-format', audioFormat];
-        if (configuredQuality) args.push('--audio-quality', configuredQuality);
-        args.push('--extract-audio', '--embed-metadata', '--add-metadata', '-o', outputPath, '--no-check-certificates', '--ignore-errors', ...extraArgs);
-        if (cookie && cookie.trim() && cookieFile) args.push('--cookies', cookieFile);
-        if (proxy) args.push('--proxy', proxy);
-        args.push(url);
-        return ['yt-dlp', args];
-      };
-
-      const commands: [string, string[]][] = [
-        buildDownloadArgs(['--no-playlist']),
-        buildDownloadArgs(['--no-playlist']),
-        buildDownloadArgs(['--no-playlist']),
-        buildDownloadArgs([]),
-        buildDownloadArgs(['--no-playlist', '--geo-bypass']),
-        ['python3', ['-m', 'yt_dlp', '--extractor-args', 'youtube:player_client=android', '-x', '--audio-format', audioFormat, ...(configuredQuality ? ['--audio-quality', configuredQuality] : []), '--extract-audio', '--embed-metadata', '--add-metadata', '-o', outputPath, '--no-check-certificates', '--ignore-errors', ...(cookie && cookie.trim() && cookieFile ? ['--cookies', cookieFile] : []), ...(proxy ? ['--proxy', proxy] : []), url]],
-      ];
-
-      // 尝试多种下载策略
-      let success = false;
-      let lastError: any = null;
-
-      for (const [bin, args] of commands) {
-        try {
-          console.log(`[music] 尝试下载命令: ${bin}`);
-          const { stdout, stderr } = await execFileAsync(bin, args);
-          console.log(`[music] 下载成功`);
-          success = true;
-          break;
-        } catch (error: any) {
-          lastError = error;
-          console.log(`[music] 下载失败: ${error.message}`);
-          continue;
-        }
-      }
-
-      if (!success) {
-        console.error("[music] 所有下载策略失败:", lastError?.message);
-        return { audioPath: null };
-      }
-
-      // 查找下载的文件（按音质优先级排序）
-      const files = await fs.promises.readdir(this.tempDir);
-      const audioExtensions = [
-        ".flac",
-        ".wav",
-        ".m4a",
-        ".opus",
-        ".aac",
-        ".mp3",
-        ".ogg",
-        ".webm",
-      ];
-
-      // 按优先级查找文件
-      for (const ext of audioExtensions) {
-        const audioFile = files.find((f) => {
-          const hasFilename = f.startsWith(filename);
-          const hasExt = f.toLowerCase().endsWith(ext);
-          return hasFilename && hasExt;
-        });
-
-        if (audioFile) {
-          const filePath = path.join(this.tempDir, audioFile);
-          const stats = await fs.promises.stat(filePath);
-          const formatInfo = this.getFormatInfo(ext);
-          console.log(
-            `[music] 下载完成: ${audioFile} (${Utils.formatSize(
-              stats.size
-            )}, ${formatInfo})`
-          );
-
-          // 嵌入元数据和封面
-          const finalPath = await this.embedMetadata(
-            filePath,
-            metadata,
-            hasThumbnail ? thumbnailPath : undefined
-          );
-
+        const results = await this.searchSource(source, keyword, config.maxResults);
+        if (results.length > 0) {
           return {
-            audioPath: finalPath,
-            thumbnailPath: hasThumbnail ? thumbnailPath : undefined,
+            query: keyword,
+            requestedSource: sourceMode,
+            resolvedSource: source,
+            results,
+            page: 1,
+            createdAt: Date.now(),
           };
         }
+        errors.push(`${source}: 无结果`);
+      } catch (error: unknown) {
+        errors.push(`${source}: ${error instanceof Error ? error.message : String(error)}`);
       }
-
-      return { audioPath: null };
-    } catch (error) {
-      console.error("[music] 下载失败:", error);
-      return { audioPath: null };
     }
+
+    throw new Error(errors.slice(0, 5).join("; ") || "没有搜索结果");
   }
 
-  private getFormatInfo(ext: string): string {
-    const formatMap: Record<string, string> = {
-      ".flac": "FLAC无损",
-      ".wav": "WAV无损",
-      ".m4a": "M4A高质量",
-      ".opus": "OPUS高效",
-      ".aac": "AAC高质量",
-      ".mp3": "MP3兼容",
-      ".ogg": "OGG开源",
-      ".webm": "WebM",
-    };
-    return formatMap[ext] || ext.toUpperCase();
-  }
+  private async getSongUrl(song: ApiSong, br: string): Promise<SongUrlInfo> {
+    const data = await this.requestApi<any>(
+      {
+        types: "url",
+        source: song.source,
+        id: song.url_id || song.id,
+        br,
+      },
+      SEARCH_TIMEOUT_MS
+    );
+
+    const url = String(data?.url ?? data?.data?.url ?? "").trim();
+    if (!url) throw new Error("API 未返回播放链接");
 
-  private async embedMetadata(
-    audioPath: string,
-    metadata?: SongInfo,
-    thumbnailPath?: string
-  ): Promise<string> {
-    // 如果没有元数据和封面，直接返回原文件
-    if (!metadata && !thumbnailPath) {
-      console.log("[music] 没有元数据和封面，跳过嵌入");
-      return audioPath;
-    }
-
-    // 打印要嵌入的元数据
-    if (metadata) {
-      console.log("[music] 准备嵌入元数据:");
-      console.log(`  - 标题: ${metadata.title || "无"}`);
-      console.log(`  - 艺术家: ${metadata.artist || "无"}`);
-      console.log(`  - 专辑: ${metadata.album || "无"}`);
-    }
-
-    // OPUS 格式特殊处理 - 转换为 MP3 以确保兼容性
-    const ext = path.extname(audioPath).toLowerCase();
-    if (ext === ".opus") {
-      console.log("[music] OPUS 格式：转换为 MP3 以确保 Telegram 兼容性");
-      const mp3Path = await this.embedMetadataOnly(audioPath, metadata);
-
-      // 如果有缩略图，为 MP3 嵌入封面
-      if (
-        thumbnailPath &&
-        fs.existsSync(thumbnailPath) &&
-        mp3Path.endsWith(".mp3")
-      ) {
-        return this.embedCoverToMp3(mp3Path, metadata, thumbnailPath);
-      }
-      return mp3Path;
-    }
-
-    try {
-      const ext = path.extname(audioPath).toLowerCase();
-      const outputPath = audioPath.replace(ext, `_tagged${ext}`);
-
-      // 构建FFmpeg命令 - 添加静默模式
-      const ffmpegArgs: string[] = ['-loglevel', 'error', '-i', audioPath];
-
-      // 添加封面（如果有）
-      if (thumbnailPath && fs.existsSync(thumbnailPath)) {
-        ffmpegArgs.push('-i', thumbnailPath);
-      }
-
-      // 复制音频流 - 保持原始编码
-      ffmpegArgs.push('-c:a', 'copy');
-
-      // 添加元数据
-      if (metadata) {
-        if (metadata.title && metadata.title !== "Unknown") {
-          ffmpegArgs.push('-metadata', `title=${metadata.title}`);
-          console.log(`[music] 添加标题: ${metadata.title}`);
-        }
-        if (metadata.artist && metadata.artist !== "Unknown Artist") {
-          ffmpegArgs.push('-metadata', `artist=${metadata.artist}`);
-          console.log(`[music] 添加艺术家: ${metadata.artist}`);
-        }
-        if (metadata.album) {
-          ffmpegArgs.push('-metadata', `album=${metadata.album}`);
-          console.log(`[music] 添加专辑: ${metadata.album}`);
-        }
-        // 添加更多元数据
-        ffmpegArgs.push('-metadata', 'comment=Downloaded by TeleBox Music Plugin');
-        ffmpegArgs.push('-metadata', `date=${new Date().getFullYear()}`);
-      }
-
-      // 嵌入封面
-      if (thumbnailPath && fs.existsSync(thumbnailPath)) {
-        // 对于不同格式使用不同的封面嵌入方法
-        if (ext === ".mp3") {
-          ffmpegArgs.push('-map', '0:a', '-map', '1:v', '-c:v', 'mjpeg', '-disposition:v', 'attached_pic');
-        } else if (ext === ".m4a" || ext === ".mp4" || ext === ".aac") {
-          ffmpegArgs.push('-map', '0:a', '-map', '1:v', '-c:v', 'copy', '-disposition:v', 'attached_pic');
-        } else if (ext === ".flac") {
-          ffmpegArgs.push('-map', '0:a', '-map', '1:v', '-c:v', 'png', '-disposition:v', 'attached_pic');
-        } else if (ext === ".opus") {
-          // OPUS 格式保持原始格式，不嵌入封面避免格式转换
-          ffmpegArgs.push('-map', '0:a', '-c:a', 'copy');
-          // OPUS 格式的封面需要特殊处理，暂时跳过
-          console.log("[music] OPUS 格式暂不支持封面嵌入，保持原始格式");
-        } else if (ext === ".ogg") {
-          // OGG Vorbis 格式
-          ffmpegArgs.push('-map', '0:a');
-        } else {
-          // 其他格式尝试标准方法
-          ffmpegArgs.push('-map', '0:a');
-          if (thumbnailPath) {
-            ffmpegArgs.push('-map', '1:v', '-c:v', 'copy', '-disposition:v', 'attached_pic');
-          }
-        }
-      } else {
-        // 没有封面时只映射音频流
-        ffmpegArgs.push('-map', '0:a');
-      }
-
-      // 输出文件 - 让 FFmpeg 根据扩展名自动选择容器
-      // 这里不再强制使用 `-f auto`（无效），仅在特殊需要时才指定格式。
-      ffmpegArgs.push('-y', outputPath);
-
-      console.log("[music] 正在嵌入元数据和封面...");
-      const { stderr } = await execFileAsync('ffmpeg', ffmpegArgs);
-
-      // 检查输出文件是否创建成功
-      if (!fs.existsSync(outputPath)) {
-        console.error("[music] FFmpeg 输出文件未创建");
-        if (stderr) console.error("[music] FFmpeg 错误:", stderr);
-        return audioPath;
-      }
-
-      // 检查新文件大小
-      const newSize = fs.statSync(outputPath).size;
-      if (newSize === 0) {
-        console.error("[music] FFmpeg 输出文件为空");
-        fs.unlinkSync(outputPath);
-        return audioPath;
-      }
-
-      // 删除原文件，重命名新文件
-      fs.unlinkSync(audioPath);
-      fs.renameSync(outputPath, audioPath);
-
-      console.log("[music] 元数据和封面嵌入成功");
-      return audioPath;
-    } catch (error) {
-      console.error("[music] 元数据嵌入失败:", error);
-      // 如果失败，返回原文件
-      return audioPath;
-    }
-  }
-
-  private async embedMetadataOnly(
-    audioPath: string,
-    metadata?: SongInfo
-  ): Promise<string> {
-    // OPUS 格式转换为 MP3 以确保 Telegram 兼容性
-    if (!metadata) {
-      console.log("[music] OPUS: 没有元数据，跳过嵌入");
-      return audioPath;
-    }
-
-    console.log("[music] OPUS 转换为 MP3 并嵌入元数据...");
-
-    try {
-      const ext = path.extname(audioPath).toLowerCase();
-      // 转换为 MP3 格式
-      const outputPath = audioPath.replace(ext, "_converted.mp3");
-
-      // 使用 FFmpeg 转换为 MP3 并嵌入元数据
-      const ffmpegArgs: string[] = ['-loglevel', 'error', '-i', audioPath];
-
-      // 设置 MP3 编码参数 - 高质量
-      ffmpegArgs.push('-c:a', 'libmp3lame', '-b:a', '320k');
-
-      // 添加元数据
-      if (metadata.title && metadata.title !== "Unknown") {
-        ffmpegArgs.push('-metadata', `title=${metadata.title}`);
-        console.log(`[music] 添加标题: ${metadata.title}`);
-      }
-      if (metadata.artist && metadata.artist !== "Unknown Artist") {
-        ffmpegArgs.push('-metadata', `artist=${metadata.artist}`);
-        console.log(`[music] 添加艺术家: ${metadata.artist}`);
-      }
-      if (metadata.album) {
-        ffmpegArgs.push('-metadata', `album=${metadata.album}`);
-        console.log(`[music] 添加专辑: ${metadata.album}`);
-      }
-
-      // 添加 ID3v2 标签版本
-      ffmpegArgs.push('-id3v2_version', '3');
-
-      // 输出文件
-      ffmpegArgs.push('-y', outputPath);
-
-      console.log("[music] 执行 FFmpeg 转换命令...");
-      const { stderr } = await execFileAsync('ffmpeg', ffmpegArgs);
-      if (stderr) {
-        console.log("[music] FFmpeg 输出:", stderr);
-      }
-
-      // 验证输出文件
-      if (!fs.existsSync(outputPath) || fs.statSync(outputPath).size === 0) {
-        console.error("[music] 转换失败");
-        return audioPath;
-      }
-
-      // 删除原 OPUS 文件
-      fs.unlinkSync(audioPath);
-
-      const newSize = fs.statSync(outputPath).size;
-      console.log(`[music] OPUS 转 MP3 成功 (${Utils.formatSize(newSize)})`);
-      return outputPath;
-    } catch (error) {
-      console.error("[music] OPUS 转换错误:", error);
-      return audioPath;
-    }
-  }
-
-  private async embedCoverToMp3(
-    mp3Path: string,
-    metadata?: SongInfo,
-    thumbnailPath?: string
-  ): Promise<string> {
-    // 为 MP3 文件嵌入封面
-    if (!thumbnailPath || !fs.existsSync(thumbnailPath)) {
-      return mp3Path;
-    }
-
-    try {
-      const outputPath = mp3Path.replace(".mp3", "_final.mp3");
-
-      // 使用 FFmpeg 嵌入封面
-      const ffmpegArgs: string[] = ['-loglevel', 'error', '-i', mp3Path, '-i', thumbnailPath];
-      ffmpegArgs.push('-map', '0:a', '-map', '1:v');
-      ffmpegArgs.push('-c:a', 'copy', '-c:v', 'mjpeg');
-      ffmpegArgs.push('-disposition:v', 'attached_pic');
-
-      // 保留元数据
-      if (metadata) {
-        if (metadata.title) {
-          ffmpegArgs.push('-metadata', `title=${metadata.title}`);
-        }
-        if (metadata.artist) {
-          ffmpegArgs.push('-metadata', `artist=${metadata.artist}`);
-        }
-        if (metadata.album) {
-          ffmpegArgs.push('-metadata', `album=${metadata.album}`);
-        }
-      }
-
-      ffmpegArgs.push('-id3v2_version', '3');
-      ffmpegArgs.push('-y', outputPath);
-
-      console.log("[music] 嵌入封面到 MP3...");
-      await execFileAsync('ffmpeg', ffmpegArgs);
-
-      if (fs.existsSync(outputPath)) {
-        fs.unlinkSync(mp3Path);
-        console.log("[music] MP3 封面嵌入成功");
-        return outputPath;
-      }
-
-      return mp3Path;
-    } catch (error) {
-      console.error("[music] MP3 封面嵌入失败:", error);
-      return mp3Path;
-    }
-  }
-
-  async cleanCache(hours: number = 24): Promise<void> {
-    // 清理临时文件，而不是缓存
-    const now = Date.now();
-    const maxAge = hours * 60 * 60 * 1000;
-
-    try {
-      const files = await fs.promises.readdir(this.tempDir);
-      for (const file of files) {
-        const filePath = path.join(this.tempDir, file);
-        const stats = await fs.promises.stat(filePath);
-        if (now - stats.mtimeMs > maxAge) {
-          await fs.promises.unlink(filePath);
-          console.log(`[music] Cleaned old temp file: ${file}`);
-        }
-      }
-    } catch (error) {
-      console.error("[music] Clean temp files error:", error);
-    }
-  }
-}
-
-// ==================== Main Plugin ====================
-class MusicPlugin extends Plugin {
-  cleanup(): void {
-    for (const timer of pendingCleanupTimers) {
-      clearTimeout(timer);
-    }
-    pendingCleanupTimers.clear();
-    ConfigManager.cleanup();
-    MusicPlugin.initialized = false;
-  }
-
-  async setup(): Promise<void> {
-    await this.initialize();
-  }
-
-  private static initialized = false;
-  private downloader: Downloader;
-
-  async initialize(): Promise<void> {
-    if (MusicPlugin.initialized) return;
-
-    console.log("[music] 初始化 Music Plugin...");
-
-    // 检查并安装依赖
-    const depsInstalled = await DependencyManager.checkAndInstallDependencies();
-    if (!depsInstalled) {
-      console.error("[music] 依赖安装失败");
-    }
-
-    // 检查 yt-dlp
-    const ytdlpAvailable = await DependencyManager.checkYtDlp();
-    if (!ytdlpAvailable) {
-      console.warn("[music] yt-dlp 未安装，请手动安装: sudo pip install --upgrade --force-reinstall yt-dlp --break-system-packages");
-    } else {
-      // 尝试自动更新yt-dlp到最新版本
-      try {
-        console.log("[music] 正在检查yt-dlp更新...");
-        const { stdout } = await execFileAsync('yt-dlp', ['-U']);
-        if (stdout.includes("up to date")) {
-          console.log("[music] yt-dlp已是最新版本");
-        } else if (stdout.includes("Updated")) {
-          console.log("[music] yt-dlp已更新到最新版本");
-        }
-      } catch (error) {
-        console.log("[music] 无法自动更新yt-dlp，请手动更新: yt-dlp -U");
-      }
-    }
-
-    const ffmpegInstalled = await DependencyManager.checkFfmpeg();
-    if (!ffmpegInstalled) {
-      console.warn("[music] ffmpeg 未安装，音频转换功能受限");
-    }
-
-    MusicPlugin.initialized = true;
-  }
-
-  public name = "music";
-  public description: string;
-  public cmdHandlers: Record<string, (msg: Api.Message) => Promise<void>>;
-
-  constructor() {
-    super();
-    this.description = `🎵 <b>音乐下载助手</b>
-
-<b>使用方法：</b>
-<code>${commandName} 周杰伦 晴天</code> - 搜索下载
-<code>${commandName} https://...</code> - 链接下载
-
-<b>配置管理：</b>
-<code>${commandName} config</code> - 查看当前配置
-<code>${commandName} set cookie [值]</code> - 设置YouTube Cookie
-<code>${commandName} set proxy [地址]</code> - 设置代理服务器
-<code>${commandName} set api_key [密钥]</code> - 设置Gemini API Key
-<code>${commandName} set base_url [地址]</code> - 设置Gemini Base URL
-<code>${commandName} set model [模型]</code> - 设置Gemini模型
-<code>${commandName} set quality [音质]</code> - 自定义音频质量 (如: 320k / 192k / 0..10)
-<code>${commandName} clear</code> - 清理临时文件
-
-<b>配置说明：</b>
-• <code>cookie</code> - 绕过地区限制，提升下载成功率
-• <code>proxy</code> - 网络代理地址 (如: socks5://127.0.0.1:1080)
-• <code>quality</code> - 音质：支持 <code>320k/256k/192k/128k</code> 等比特率，或 <code>0..10</code> (VBR，数字越小越好)
-
-<b>解决YouTube访问问题：</b>
-
-🚀 <b>方案1 - WARP+ (推荐)：</b>
-<pre>wget -N https://gitlab.com/fscarmen/warp/-/raw/main/menu.sh && bash menu.sh e</pre>
-
-🔧 <b>方案2 - WireProxy：</b>
-<pre># 安装 WireProxy
-wget -N https://gitlab.com/fscarmen/warp/-/raw/main/menu.sh && bash menu.sh w
-
-# 配置代理（WireProxy 默认端口 40000）
-${commandName} set proxy socks5://127.0.0.1:40000</pre>
-
-💡 <i>直接输入歌名即可快速搜索下载</i>`;
-
-    this.downloader = new Downloader();
-    this.downloader.cleanCache().catch(() => {});
-
-    // 注册命令处理器
-    this.cmdHandlers = {
-      music: this.execute.bind(this),
-    };
-  }
-
-  async execute(msg: Api.Message): Promise<void> {
-    const args = msg.text?.split(" ").slice(1) || [];
-
-    if (!args.length || args[0] === "help") {
-      // 编辑原消息而不是回复
-      await msg.edit({ text: this.description, parseMode: "html" });
-      return;
-    }
-
-    const command = args[0].toLowerCase();
-
-    switch (command) {
-      case "config":
-        await this.handleConfig(msg);
-        break;
-
-      case "set":
-        await this.handleSet(msg, args.slice(1));
-        break;
-
-      case "clear":
-        await this.handleClear(msg);
-        break;
-
-      default:
-        await this.handleDownload(msg, args.join(" "));
-    }
-  }
-
-  private async handleConfig(msg: Api.Message): Promise<void> {
-    const cookie = await ConfigManager.get(CONFIG.KEYS.COOKIE);
-    const proxy = await ConfigManager.get(CONFIG.KEYS.PROXY);
-    const apiKey = await ConfigManager.get(CONFIG.KEYS.API);
-    const baseUrl = await ConfigManager.get(CONFIG.KEYS.BASE_URL);
-    const model = await ConfigManager.get(CONFIG.KEYS.MODEL);
-    const quality = await ConfigManager.get(CONFIG.KEYS.AUDIO_QUALITY);
-
-    const status = `⚙️ <b>当前配置</b>
-
-${cookie ? "✅" : "⚪"} <b>Cookie:</b> ${cookie ? "已设置" : "未设置"}
-${proxy ? "✅" : "⚪"} <b>代理:</b> ${proxy ? Utils.escape(proxy) : "未配置"}
-${apiKey ? "✅" : "⚪"} <b>AI搜索:</b> ${apiKey ? "已启用" : "未配置"}
-🎚️ <b>音频质量:</b> <code>${Utils.escape(quality || "自动(最佳可用)")}</code>
-🔧 <b>Gemini Base URL:</b> <code>${Utils.escape(baseUrl || "")}</code>
-🧠 <b>Gemini Model:</b> <code>${Utils.escape(model || "")}</code>
-
-💡 <i>使用 <code>${commandName} set [配置项] [值]</code> 修改配置</i>`;
-
-    // 编辑原消息而不是回复
-    await msg.edit({ text: status, parseMode: "html" });
-  }
-
-  private async handleSet(msg: Api.Message, args: string[]): Promise<void> {
-    if (args.length < 2) {
-      // 编辑原消息而不是回复
-      await msg.edit({
-        text: `❌ <b>参数不足</b>
-
-<b>正确格式：</b>
-<code>${commandName} set cookie [YouTube Cookie]</code>
-<code>${commandName} set proxy [代理地址]</code>
-<code>${commandName} set api_key [Gemini API密钥]</code>
-<code>${commandName} set base_url [Gemini Base URL]</code>
-<code>${commandName} set model [Gemini 模型]</code>
-<code>${commandName} set quality [音质]</code>
-
-<b>代理配置示例：</b>
-<code>${commandName} set proxy socks5://127.0.0.1:1080</code>
-<code>${commandName} set proxy http://127.0.0.1:8080</code>
-<code>${commandName} set proxy socks5://127.0.0.1:40000</code> (WireProxy)
-<code>${commandName} set proxy none</code> (清空代理)
-
-<b>音质示例：</b>
-<code>${commandName} set quality 320k</code>
-<code>${commandName} set quality 192k</code>
-<code>${commandName} set quality 0</code> (VBR 最高质量)`,
-        parseMode: "html",
-      });
-      return;
-    }
-
-    const [rawKey, ...valueParts] = args;
-    let value = valueParts.join(" ");
-
-    // 支持 none/clear/空 来清空配置
-    const clearKeywords = ["none", "clear", "空", "取消"];
-    if (clearKeywords.includes(value.toLowerCase().trim())) {
-      value = "";
-    }
-
-    // 将用户友好键映射为内部存储键
-    const keyMap: Record<string, string> = {
-      cookie: CONFIG.KEYS.COOKIE,
-      proxy: CONFIG.KEYS.PROXY,
-      api_key: CONFIG.KEYS.API,
-      base_url: CONFIG.KEYS.BASE_URL,
-      baseurl: CONFIG.KEYS.BASE_URL,
-      model: CONFIG.KEYS.MODEL,
-      quality: CONFIG.KEYS.AUDIO_QUALITY,
-    };
-    const normalized = keyMap[rawKey.toLowerCase()] || rawKey;
-
-    // 针对音质做输入规范化与校验
-    let finalValue = value;
-    if (normalized === CONFIG.KEYS.AUDIO_QUALITY) {
-      const v = value.trim().toLowerCase();
-      // 接受 0..10 或 Xk / Xkbps / Xkb
-      const vbrMatch = /^(?:[0-9]|10)$/.test(v);
-      const kbpsMatch = /^(\d{2,3})\s*(k|kb|kbps)?$/.exec(v);
-      if (vbrMatch) {
-        finalValue = v; // VBR 等级
-      } else if (kbpsMatch) {
-        // 规范化为 128k 格式
-        const kb = parseInt(kbpsMatch[1], 10);
-        if ([64, 96, 128, 160, 192, 256, 320].includes(kb)) {
-          finalValue = `${kb}k`;
-        } else {
-          await msg.edit({
-            text: `❌ <b>音质无效</b>\n\n支持 <code>0..10</code> 或 <code>128k/192k/256k/320k</code>`,
-            parseMode: "html",
-          });
-          return;
-        }
-      } else if (v === "" || v === "auto" || v === "best") {
-        // 清空 = 自动(最佳可用)
-        finalValue = "";
-      } else {
-        await msg.edit({
-          text: `❌ <b>音质无效</b>\n\n支持 <code>0..10</code> 或 <code>128k/192k/256k/320k</code>`,
-          parseMode: "html",
-        });
-        return;
-      }
-    }
-
-    const success = await ConfigManager.set(normalized, finalValue);
-
-    if (success) {
-      // 根据不同的配置项给出友好提示
-      let successMsg = `✅ <b>配置已更新</b>\n\n`;
-
-      switch (rawKey.toLowerCase()) {
-        case "cookie":
-          successMsg += `🍪 YouTube Cookie 已设置\n现在可以绕过地区限制了`;
-          break;
-        case "proxy":
-          if (finalValue) {
-            successMsg += `🌐 代理服务器已配置\n地址: <code>${Utils.escape(
-              finalValue
-            )}</code>`;
-          } else {
-            successMsg += `🌐 代理已清空\n现在将直连下载`;
-          }
-          break;
-        case "api_key":
-          successMsg += `🤖 AI 搜索功能已启用\n可以更智能地搜索音乐了`;
-          break;
-        case "base_url":
-        case "baseurl":
-          successMsg += `🔧 Gemini Base URL 已设置\n地址: <code>${Utils.escape(
-            value
-          )}</code>`;
-          break;
-        case "model":
-          successMsg += `🧠 Gemini 模型已设置\n模型: <code>${Utils.escape(
-            value
-          )}</code>`;
-          break;
-        case "quality":
-          successMsg += `🎚️ 音质已设置\n当前: <code>${Utils.escape(
-            finalValue || "自动(最佳可用)"
-          )}</code>`;
-          break;
-        default:
-          successMsg += `<code>${Utils.escape(rawKey)}</code> 已成功设置`;
-      }
-
-      await msg.edit({
-        text: successMsg,
-        parseMode: "html",
-      });
-    } else {
-      await msg.edit({
-        text: `❌ <b>配置失败</b>\n\n无法设置 <code>${Utils.escape(
-          rawKey
-        )}</code>`,
-        parseMode: "html",
-      });
-    }
-  }
-
-  private async handleClear(msg: Api.Message): Promise<void> {
-    // 编辑原消息而不是回复
-    await msg.edit({
-      text: "🧹 <b>正在清理...</b>",
-      parseMode: "html",
-    });
-
-    await this.downloader.cleanCache(0);
-
-    await msg.edit({
-      text: "✨ <b>清理完成</b>\n\n临时文件已全部删除",
-      parseMode: "html",
-    });
-  }
-
-  private async handleDownload(msg: Api.Message, query: string): Promise<void> {
-    // 确保插件已初始化
-    await this.initialize();
-
-    const client = await getGlobalClient();
-    if (!client) {
-      // 编辑原消息而不是回复
-      await msg.edit({ text: "❌ <b>客户端未初始化</b>", parseMode: "html" });
-      return;
-    }
-
-    // 检查 yt-dlp 是否可用
-    const ytdlpAvailable = await DependencyManager.checkYtDlp();
-    if (!ytdlpAvailable) {
-      await msg.edit({
-        text: `❌ <b>缺少必要组件</b>
-
-🛠️ <b>解决方案：</b>
-<code>sudo pip install --upgrade --force-reinstall yt-dlp --break-system-packages</code>
-
-🚀 <b>网络问题？试试 WARP：</b>
-<code>wget -N https://gitlab.com/fscarmen/warp/-/raw/main/menu.sh && bash menu.sh e</code>
-
-💡 <b>提示：</b>配置 Gemini API 可提升搜索准确率
-<code>${commandName} set api_key [你的Gemini密钥]</code>`,
-        parseMode: "html",
-      });
-      return;
-    }
-
-    // Check dependencies
-    const deps = await this.downloader.checkDependencies();
-    if (!deps.ytdlp) {
-      await msg.edit({
-        text: `❌ <b>缺少下载器</b>
-
-🛠️ <b>安装 yt-dlp：</b>
-<code>sudo pip install --upgrade --force-reinstall yt-dlp --break-system-packages</code>
-
-🌐 <b>网络受限？配置代理：</b>
-<code>${commandName} set proxy socks5://127.0.0.1:1080</code>
-
-🍪 <b>或设置 Cookie 绕过限制：</b>
-<code>${commandName} set cookie [YouTube Cookie]</code>`,
-        parseMode: "html",
-      });
-      return;
-    }
-
-    // 先编辑原消息显示处理中
-    await msg.edit({
-      text: "🎵 <b>处理中...</b>",
-      parseMode: "html",
-    });
-
-    // 创建一个状态消息用于后续更新
-    const statusMsg = msg;
-
-    try {
-      let url: string | null = null;
-      let metadata: SongInfo | undefined;
-
-      // Check if input is URL
-      if (query.includes("youtube.com") || query.includes("youtu.be")) {
-        url = query;
-      } else {
-        // 解析查询获取元数据（可能使用 AI）
-        metadata = await this.parseQuery(query);
-        console.log(
-          `[music] 查询解析结果: ${metadata.artist} - ${metadata.title}`
-        );
-
-        // 显示AI识别结果
-        const recognitionText = metadata.album
-          ? `${metadata.artist} - ${metadata.title} - ${metadata.album}`
-          : `${metadata.artist} - ${metadata.title}`;
-
-        await statusMsg.edit({
-          text: `🤖 <b>AI 识别结果:</b> ${Utils.escape(recognitionText)}`,
-          parseMode: "html",
-        });
-
-        // 使用 yt-dlp 搜索，加入"動態歌詞"关键词
-        const searchQuery = `${recognitionText} lyrics`;
-        url = await this.downloader.search(searchQuery, metadata.duration);
-      }
-
-      if (!url) {
-        await statusMsg.edit({
-          text: `😔 <b>未找到相关音乐</b>
-
-🔍 <b>建议尝试：</b>
-• 更换搜索关键词
-• 配置 Cookie 绕过地区限制
-• 使用 WARP 改善网络连接
-
-⚙️ <b>快速配置：</b>
-<code>${commandName} set cookie [Cookie]</code>
-<code>${commandName} set api_key [Gemini密钥]</code>`,
-          parseMode: "html",
-        });
-        return;
-      }
-
-      // Download
-      await statusMsg.edit({
-        text: `⬇️ <b>下载中...</b>`,
-        parseMode: "html",
-      });
-
-      // 传递元数据给下载器
-      console.log(
-        `[music] 开始下载，元数据: ${metadata?.artist || "无"} - ${
-          metadata?.title || "无"
-        }`
-      );
-      const downloadResult = await this.downloader.download(url, metadata);
-
-      if (!downloadResult.audioPath) {
-        await statusMsg.edit({
-          text: `❌ <b>下载失败</b>
-
-🛠️ <b>解决方案：</b>
-• 配置 YouTube Cookie 绕过限制
-• 设置网络代理或使用 WARP
-• 检查网络连接状态
-
-⚙️ <b>快速配置：</b>
-<code>${commandName} set cookie [Cookie]</code>
-<code>${commandName} set proxy [代理地址]</code>
-
-🚀 <b>WARP 安装：</b>
-<code>wget -N https://gitlab.com/fscarmen/warp/-/raw/main/menu.sh && bash menu.sh e</code>`,
-          parseMode: "html",
-        });
-        return;
-      }
-
-      // Upload
-      await statusMsg.edit({
-        text: `📤 <b>上传中...</b>`,
-        parseMode: "html",
-      });
-
-      const stats = await fs.promises.stat(downloadResult.audioPath);
-
-      // 准备发送参数
-      const fileName = path.basename(downloadResult.audioPath);
-      const sendParams: any = {
-        file: downloadResult.audioPath,
-        // replyTo 移除：发送为新消息而非回复
-        forceDocument: false, // 作为音频发送而不是文档
-        // 不添加 caption，只发送音频文件
-        attributes: [
-          new Api.DocumentAttributeAudio({
-            voice: false,
-            duration: metadata?.duration
-              ? Math.max(0, Math.floor(metadata.duration))
-              : 0,
-            title: metadata?.title || "Audio",
-            performer: metadata?.artist || "Unknown Artist",
-            waveform: undefined,
-          }),
-          new Api.DocumentAttributeFilename({
-            fileName: fileName,
-          }),
-        ],
-      };
-
-      // 如果有缩略图，添加到发送参数中
-      if (
-        downloadResult.thumbnailPath &&
-        fs.existsSync(downloadResult.thumbnailPath)
-      ) {
-        sendParams.thumb = downloadResult.thumbnailPath;
-      }
-
-      // 发送音频文件，元数据和缩略图已嵌入
-      await client.sendFile(msg.chatId!, sendParams);
-
-      // 删除状态消息
-      await statusMsg.delete();
-
-      const lifecycle = tryGetCurrentGenerationContext();
-      const timer = lifecycle
-        ? lifecycle.setTimeout(cleanupDownloadedFiles, 5000, { label: "music:download-cleanup" })
-        : setTimeout(cleanupDownloadedFiles, 5000);
-      function cleanupDownloadedFiles(): void {
-        pendingCleanupTimers.delete(timer);
-        try {
-          if (
-            downloadResult.audioPath &&
-            fs.existsSync(downloadResult.audioPath)
-          ) {
-            fs.unlinkSync(downloadResult.audioPath);
-          }
-          if (
-            downloadResult.thumbnailPath &&
-            fs.existsSync(downloadResult.thumbnailPath)
-          ) {
-            fs.unlinkSync(downloadResult.thumbnailPath);
-          }
-        } catch (error) {
-          console.log("[music] 清理临时文件失败:", error);
-        }
-      }
-      pendingCleanupTimers.add(timer);
-      if (timer.unref) timer.unref();
-    } catch (error: any) {
-      if (statusMsg) {
-        await statusMsg.edit({
-          text: `❌ <b>Error:</b> ${Utils.escape(
-            error.message || "Unknown error"
-          )}`,
-          parseMode: "html",
-        });
-      }
-    }
-  }
-
-  private async parseQuery(query: string): Promise<SongInfo> {
-    // 改进的查询解析，支持多种格式
-    // 格式1: "歌手 - 歌名"
-    // 格式2: "歌名 歌手"
-    // 格式3: "歌名"
-
-    // 尝试解析 "歌手 - 歌名" 格式
-    if (query.includes(" - ")) {
-      const parts = query.split(" - ");
-      return {
-        artist: parts[0].trim(),
-        title: parts[1].trim(),
-        album: parts[2]?.trim(), // 支持 "歌手 - 歌名 - 专辑" 格式
-      };
-    }
-
-    // 尝试使用 AI 解析（如果配置了 API key）
-    const apiKey = await ConfigManager.get(CONFIG.KEYS.API);
-    if (apiKey) {
-      try {
-        console.log("[music] 使用 AI 解析歌曲信息...");
-        const baseUrl = await ConfigManager.get(CONFIG.KEYS.BASE_URL);
-        const gemini = new GeminiClient(apiKey, baseUrl);
-        const aiResponse = await gemini.searchMusic(query);
-        const songInfo = await extractSongInfo(aiResponse, query);
-        console.log(
-          `[music] AI 识别结果: ${songInfo.artist} - ${songInfo.title}${
-            songInfo.album ? " - " + songInfo.album : ""
-          }`
-        );
-        return songInfo;
-      } catch (error) {
-        console.log("[music] AI 解析失败，使用默认解析:", error);
-      }
-    } else {
-      console.log("[music] 未配置 Gemini API，使用默认解析");
-    }
-
-    // 默认解析
     return {
-      title: query,
-      artist: "Unknown Artist",
+      url,
+      br: data?.br ? Number(data.br) : undefined,
+      size: data?.size ? Number(data.size) : undefined,
+      from: data?.from ? String(data.from) : undefined,
     };
   }
+
+  private renderSearchPage(session: SearchSession): string {
+    const totalPages = Math.ceil(session.results.length / PAGE_SIZE);
+    const page = clampPage(session.page, totalPages);
+    const start = (page - 1) * PAGE_SIZE;
+    const visible = session.results.slice(start, start + PAGE_SIZE);
+    const sourceText =
+      session.requestedSource === "auto"
+        ? `auto -> ${sourceLabel(session.resolvedSource)}`
+        : sourceLabel(session.resolvedSource);
+
+    const lines = visible.map((song, offset) => {
+      const index = start + offset + 1;
+      const album = song.album ? ` / ${htmlEscape(song.album)}` : "";
+      return `🎧 ${codeTag(`${index}.`)} <b>${htmlEscape(song.name)}</b>\n    👤 ${htmlEscape(formatArtists(song.artist))}${album}`;
+    });
+
+    return [
+      `🎵 <b>Music Hub 搜索结果</b>\n`,
+      `🔍 关键词: ${codeTag(session.query)}`,
+      `📡 音源: ${codeTag(sourceText)}`,
+      `📄 页码: ${codeTag(`${page}/${totalPages || 1}`)}，共 ${codeTag(session.results.length)} 首`,
+      "",
+      ...lines,
+      "",
+      `🎯 选择: ${codeTag(`${commandName} 1`)} 或 ${codeTag(`${commandName} play 1`)}`,
+      `↔️ 翻页: ${codeTag(`${commandName} next`)} / ${codeTag(`${commandName} prev`)}`,
+    ].join("\n");
+  }
+
+  private renderSources(config: MusicHubConfig): string {
+    const lines = MUSIC_SOURCES.map((source) => {
+      return `${codeTag(source.key)} - ${htmlEscape(source.name)} - ${source.stable ? "稳定" : "备用"}`;
+    });
+
+    return [
+      "<b>🎵 Music Hub 音乐源</b>\n",
+      `✅ 当前默认源: ${htmlEscape(sourceLabel(config.defaultSource))}`,
+      "━━━━━━━━━━━━━━━━━",
+      `${codeTag("auto")} - 自动模式，优先稳定源再回退其它源`,
+      ...lines,
+      "",
+      `⚙️ 设置默认源: ${codeTag(`${commandName} default netease`)}`,
+    ].join("\n");
+  }
+
+  private getSession(msg: MessageContext): SearchSession | null {
+    const key = getSessionKey(msg);
+    const session = this.sessions.get(key);
+    if (!session) return null;
+    if (Date.now() - session.createdAt > SESSION_TTL_MS) {
+      this.sessions.delete(key);
+      return null;
+    }
+    return session;
+  }
+
+  private saveSession(msg: MessageContext, session: SearchSession): void {
+    this.sessions.set(getSessionKey(msg), session);
+  }
+
+  private rememberSessionMessage(session: SearchSession, message?: Message | MessageContext): void {
+    if (!message) return;
+    // Prefer keeping MessageContext (has .edit). Plain Message from sendText has no .edit.
+    if (typeof (message as MessageContext).edit === "function") {
+      session.message = message as MessageContext;
+    } else if (session.message && Number(session.message.id) === Number(message.id)) {
+      // Keep existing MessageContext handle when the edit returns a plain Message
+    } else {
+      session.message = message as MessageContext;
+    }
+    if (message.id) session.messageId = Number(message.id);
+    const chatId =
+      (message as MessageContext).chat?.id ??
+      (message as any).chatId ??
+      (session.message as MessageContext | undefined)?.chat?.id;
+    if (chatId !== undefined && chatId !== null) {
+      (session as any).chatId = chatId;
+    }
+  }
+
+  private isSameMessage(a?: MessageContext, b?: MessageContext): boolean {
+    return Boolean(a && b && a.id && b.id && Number(a.id) === Number(b.id));
+  }
+
+  private async deleteQuietly(message?: MessageContext | Message): Promise<void> {
+    if (!message) return;
+    // Plain Message 没有 .delete；MessageContext 才有。先探测再调，避免 TypeError 噪音。
+    if (typeof (message as MessageContext).delete === "function") {
+      try {
+        await (message as MessageContext).delete({ revoke: true });
+        return;
+      } catch (e: unknown) {
+        logger.debug("[music_hub] MessageContext.delete failed:", e);
+      }
+    }
+
+    try {
+      const client = await getGlobalClient();
+      const id = Number(message.id);
+      const peer =
+        (message as MessageContext).chat?.id ??
+        (message as Message).chat?.id ??
+        (message as { chatId?: number | string }).chatId;
+      if (client && peer != null && Number.isFinite(id)) {
+        await client.deleteMessagesById(peer, [id], { revoke: true });
+        return;
+      }
+    } catch (e: unknown) {
+      logger.warn("[music_hub] delete message by id failed:", e);
+    }
+  }
+
+  private async sendTextMessage(
+    sourceMsg: MessageContext,
+    text: string,
+  ): Promise<Message | MessageContext | undefined> {
+    // Prefer replyText so the result is MessageContext with .edit (sendText returns plain Message)
+    if (typeof sourceMsg.replyText === "function") {
+      try {
+        return await sourceMsg.replyText(html(text), { disableWebPreview: true });
+      } catch (e: unknown) {
+        logger.debug("[music_hub] replyText failed, fallback sendText:", e);
+      }
+    }
+    const client = await getGlobalClient();
+    if (!client) return undefined;
+    return await client.sendText(sourceMsg.chat.id, html(text), {
+      disableWebPreview: true,
+    } as any);
+  }
+
+  private async editOrReplaceMessage(
+    sourceMsg: MessageContext,
+    targetMsg: MessageContext | Message | undefined,
+    text: string,
+  ): Promise<Message | MessageContext | undefined> {
+    const client = await getGlobalClient();
+    const messageId = targetMsg?.id != null ? Number(targetMsg.id) : undefined;
+    const chatId =
+      (targetMsg as MessageContext | undefined)?.chat?.id ??
+      (targetMsg as any)?.chatId ??
+      sourceMsg.chat?.id;
+
+    // 1) Prefer MessageContext.edit when available
+    if (targetMsg && typeof (targetMsg as MessageContext).edit === "function") {
+      try {
+        const edited = await (targetMsg as MessageContext).edit({
+          text: html(text),
+          disableWebPreview: true,
+        });
+        return edited || targetMsg;
+      } catch (error: unknown) {
+        if (isMessageNotModifiedError(error)) return targetMsg;
+        // fall through to client.editMessage — do NOT delete+resend on transient edit errors
+        logger.debug("[music_hub] MessageContext.edit failed, try editMessage:", error);
+      }
+    }
+
+    // 2) client.editMessage works for plain Message ids (sendText return value)
+    if (client && chatId != null && messageId != null && Number.isFinite(messageId)) {
+      try {
+        const edited = await client.editMessage({
+          chatId,
+          message: messageId,
+          text: html(text),
+          disableWebPreview: true,
+        });
+        // Preserve MessageContext handle if we still have one
+        if (targetMsg && typeof (targetMsg as MessageContext).edit === "function") {
+          return targetMsg;
+        }
+        return edited || targetMsg;
+      } catch (error: unknown) {
+        if (isMessageNotModifiedError(error)) return targetMsg;
+        logger.debug("[music_hub] editMessage failed, will send new:", error);
+        // Only as last resort send a new status message — never delete the old one
+        // (delete+resend floods the chat and loses reply context).
+      }
+    }
+
+    return await this.sendTextMessage(sourceMsg, text);
+  }
+
+  private async editOrReplaceCommandMessage(
+    msg: MessageContext,
+    text: string,
+  ): Promise<Message | undefined> {
+    return await this.editOrReplaceMessage(msg, msg, text);
+  }
+
+  private async editOrReplaceSessionMessage(
+    msg: MessageContext,
+    session: SearchSession,
+    text: string,
+  ): Promise<Message | undefined> {
+    const updated = await this.editOrReplaceMessage(msg, session.message, text);
+    this.rememberSessionMessage(session, updated);
+    return updated;
+  }
+
+  private async deleteCommandIfDifferent(
+    commandMsg: MessageContext,
+    targetMsg?: MessageContext
+  ): Promise<void> {
+    if (this.isSameMessage(commandMsg, targetMsg)) return;
+    await this.deleteQuietly(commandMsg);
+  }
+
+  private async showSessionPage(msg: MessageContext, page: number): Promise<void> {
+    const session = this.getSession(msg);
+    if (!session) {
+      await this.editOrReplaceCommandMessage(
+        msg,
+        `❌ 没有可翻页的搜索结果，请先使用 ${codeTag(`${commandName} 关键词`)} 搜索。`
+      );
+      return;
+    }
+
+    const totalPages = Math.ceil(session.results.length / PAGE_SIZE);
+    session.page = clampPage(page, totalPages);
+    await this.editOrReplaceSessionMessage(msg, session, this.renderSearchPage(session));
+    await this.deleteCommandIfDifferent(msg, session.message);
+  }
+
+  private async selectSong(msg: MessageContext, index: number): Promise<void> {
+    const session = this.getSession(msg);
+    if (!session) {
+      await this.editOrReplaceCommandMessage(
+        msg,
+        `❌ 没有可选择的搜索结果，请先使用 ${codeTag(`${commandName} 关键词`)} 搜索。`
+      );
+      return;
+    }
+
+    const song = session.results[index - 1];
+    if (!song) {
+      await this.editOrReplaceSessionMessage(
+        msg,
+        session,
+        `❌ 序号超出范围。当前结果共有 ${codeTag(session.results.length)} 首。`
+      );
+      await this.deleteCommandIfDifferent(msg, session.message);
+      return;
+    }
+
+    await this.sendSong(msg, song, session);
+  }
+
+  private buildSongCaption(song: ApiSong, urlInfo: SongUrlInfo): string {
+    return [
+      "🎵 Music Hub",
+      `${song.name} - ${formatArtists(song.artist)}`,
+      `📡 source: ${song.source}`,
+      urlInfo.br ? `🎚️ br: ${displayBitrate(urlInfo.br)}` : "",
+    ].filter(Boolean).join("\n");
+  }
+
+  private getReplyTarget(msg: MessageContext, session?: SearchSession): number | undefined {
+    return (
+      session?.messageId ||
+      msg.replyToMessage?.raw?.replyToTopId ||
+      msg.replyToMessage?.raw?.replyToMsgId ||
+      msg.id
+    );
+  }
+
+  private async finishSongSend(msg: MessageContext, session?: SearchSession): Promise<void> {
+    const messageToDelete = session?.message;
+    await this.deleteCommandIfDifferent(msg, messageToDelete);
+    await this.deleteQuietly(messageToDelete);
+    this.sessions.delete(getSessionKey(msg));
+  }
+
+  private async sendTelegramUrl(
+    client: any,
+    msg: MessageContext,
+    urlInfo: SongUrlInfo,
+    caption: string,
+    session?: SearchSession
+  ): Promise<void> {
+    // mtcute 公开 API 是 sendMedia，没有 sendFile
+    await client.sendMedia(
+      msg.chat.id,
+      {
+        type: "audio",
+        file: urlInfo.url,
+      },
+      {
+        caption,
+        replyTo: this.getReplyTarget(msg, session),
+      },
+    );
+  }
+
+  private createTransferProgressReporter(
+    updateStatus: (text: string) => Promise<void>,
+    song: ApiSong
+  ): TransferProgressController {
+    let timer: any;
+    let latestText = "";
+    let sentText = "";
+    let updateQueue = Promise.resolve();
+
+    const enqueue = (text: string): Promise<void> => {
+      sentText = text;
+      updateQueue = updateQueue
+        .catch((e) => logger.debug('[music_hub] updateQueue error:', e))
+        .then(async () => {
+          await updateStatus(text);
+        })
+        .catch((e) => logger.debug('[music_hub] updateStatus error:', e));
+      return updateQueue;
+    };
+
+    const sendLatest = (force = false): Promise<void> => {
+      if (!latestText) return updateQueue.catch((e) => logger.debug('[music_hub] updateQueue error:', e));
+      if (!force && latestText === sentText) {
+        return updateQueue.catch((e) => logger.debug('[music_hub] updateQueue error:', e));
+      }
+      return enqueue(latestText);
+    };
+
+    const startTimer = () => {
+      if (timer) return;
+      timer = setInterval(() => {
+        void sendLatest(false);
+      }, PROGRESS_UPDATE_INTERVAL_MS);
+      this.activeTransferTimers.add(timer);
+    };
+
+    return {
+      report: (update: TransferProgressUpdate) => {
+        latestText = renderTransferProgress(song, update);
+        if (update.force) return sendLatest(true);
+        startTimer();
+      },
+      stop: async () => {
+        if (timer) {
+          clearInterval(timer);
+          this.activeTransferTimers.delete(timer);
+          timer = undefined;
+        }
+        await sendLatest(true);
+        await updateQueue.catch(() => undefined);
+      },
+    };
+  }
+
+  private async sendLocalUpload(
+    client: any,
+    msg: MessageContext,
+    song: ApiSong,
+    urlInfo: SongUrlInfo,
+    config: MusicHubConfig,
+    caption: string,
+    session?: SearchSession,
+    onProgress?: TransferProgressReporter
+  ): Promise<void> {
+    let tempFilePath = "";
+    try {
+      const response = await axios.get<any>(urlInfo.url, {
+        responseType: "stream",
+        timeout: DOWNLOAD_TIMEOUT_MS,
+        maxContentLength: config.maxUploadBytes,
+        maxBodyLength: config.maxUploadBytes,
+        headers: {
+          "User-Agent": "TeleBox-MusicHub/1.0",
+        },
+      });
+
+      const reader = response.data;
+      if (!reader || typeof reader.pipe !== "function") {
+        throw new Error("下载响应不是可读流");
+      }
+
+      const contentLength = Number(response.headers?.["content-length"]);
+      const totalBytes =
+        Number.isFinite(contentLength) && contentLength > 0
+          ? contentLength
+          : urlInfo.size;
+      if (totalBytes && totalBytes > config.maxUploadBytes) {
+        throw new Error(`文件过大 (${formatBytes(totalBytes)})，超过上传限制 ${formatBytes(config.maxUploadBytes)}`);
+      }
+      const extension = detectAudioExtension(
+        urlInfo.url,
+        String(response.headers?.["content-type"] || "")
+      );
+      const filename = `${sanitizeFilename(`${song.name}-${formatArtists(song.artist)}`)}.${extension}`;
+      tempFilePath = path.join(TEMP_DIR, `${Date.now()}_${filename}`);
+      let downloadedBytes = 0;
+
+      await onProgress?.({
+        stage: "download",
+        loadedBytes: 0,
+        totalBytes,
+        force: true,
+      });
+
+      await new Promise<void>((resolve, reject) => {
+        const writer = fs.createWriteStream(tempFilePath);
+        let settled = false;
+
+        const fail = (error: unknown) => {
+          if (settled) return;
+          settled = true;
+          try {
+            if (typeof reader.destroy === "function") reader.destroy();
+          } catch (e: unknown) { logger.warn('[music_hub] reader destroy failed:', e) }
+          try {
+            if (typeof writer.destroy === "function") writer.destroy();
+          } catch (e: unknown) { logger.warn('[music_hub] writer destroy failed:', e) }
+          reject(error instanceof Error ? error : new Error(String(error)));
+        };
+
+        reader.on("data", (chunk: any) => {
+          const chunkSize =
+            typeof chunk === "string"
+              ? Buffer.byteLength(chunk)
+              : Number(chunk?.byteLength ?? chunk?.length ?? 0);
+          downloadedBytes += chunkSize;
+
+          if (downloadedBytes > config.maxUploadBytes) {
+            fail(new Error(`文件超过上传限制 ${formatBytes(config.maxUploadBytes)}`));
+            return;
+          }
+
+          void onProgress?.({
+            stage: "download",
+            loadedBytes: downloadedBytes,
+            totalBytes,
+          });
+        });
+        reader.on("error", fail);
+        writer.on("error", fail);
+        writer.on("finish", () => {
+          if (settled) return;
+          settled = true;
+          resolve();
+        });
+        reader.pipe(writer);
+      });
+
+      if (!downloadedBytes) throw new Error("下载到的音频为空");
+      const fileSize = fs.statSync(tempFilePath).size;
+
+      await onProgress?.({
+        stage: "download",
+        loadedBytes: fileSize,
+        totalBytes: totalBytes || fileSize,
+        fraction: 1,
+        force: true,
+      });
+      await onProgress?.({
+        stage: "upload",
+        loadedBytes: 0,
+        totalBytes: fileSize,
+        fraction: 0,
+        force: true,
+      });
+
+      // mtcute 公开 API 是 sendMedia；progressCallback 签名为 (uploaded, total)
+      await client.sendMedia(
+        msg.chat.id,
+        {
+          type: "audio",
+          file: tempFilePath,
+          title: song.name,
+          performer: formatArtists(song.artist),
+        },
+        {
+          caption,
+          replyTo: this.getReplyTarget(msg, session),
+          progressCallback: (uploaded: number, total: number) => {
+            const totalBytes = total || fileSize;
+            const fraction =
+              clampFraction(totalBytes > 0 ? uploaded / totalBytes : 0) ?? 0;
+            void onProgress?.({
+              stage: "upload",
+              loadedBytes: uploaded,
+              totalBytes,
+              fraction,
+            });
+          },
+        },
+      );
+
+      await onProgress?.({
+        stage: "upload",
+        loadedBytes: fileSize,
+        totalBytes: fileSize,
+        fraction: 1,
+        force: true,
+      });
+    } finally {
+      if (tempFilePath) {
+        try {
+          fs.unlinkSync(tempFilePath);
+        } catch (e: unknown) { logger.warn('[music_hub] cleanup temp file failed:', e) }
+      }
+    }
+  }
+
+  private async sendSong(
+    msg: MessageContext,
+    song: ApiSong,
+    session?: SearchSession
+  ): Promise<void> {
+    const config = await this.getConfig();
+    const client = (await getGlobalClient());
+    if (!client) {
+      if (session) {
+        await this.editOrReplaceSessionMessage(msg, session, "❌ 客户端未初始化，无法发送音乐。");
+        await this.deleteCommandIfDifferent(msg, session.message);
+      } else {
+        await this.editOrReplaceCommandMessage(msg, "❌ 客户端未初始化，无法发送音乐。");
+      }
+      return;
+    }
+
+    const updateStatus = async (text: string) => {
+      if (session) {
+        await this.editOrReplaceSessionMessage(msg, session, text);
+        await this.deleteCommandIfDifferent(msg, session.message);
+        return;
+      }
+      await this.editOrReplaceCommandMessage(msg, text);
+    };
+
+    await updateStatus(
+      `🔍 <b>正在获取播放链接</b>\n🎵 ${codeTag(song.name)}\n👤 ${codeTag(formatArtists(song.artist))}`
+    );
+
+    let urlInfo: SongUrlInfo;
+    try {
+      urlInfo = await this.getSongUrl(song, config.br);
+    } catch (error: unknown) {
+      await updateStatus(
+        `❌ <b>获取播放链接失败</b>\n<code>${htmlEscape(error instanceof Error ? error.message : String(error))}</code>`
+      );
+      if (session) await this.deleteCommandIfDifferent(msg, session.message);
+      return;
+    }
+
+    if (urlInfo.size && urlInfo.size > config.maxUploadBytes) {
+      await updateStatus(
+        `❌ <b>文件过大</b>\n大小: ${codeTag(formatBytes(urlInfo.size))}\n已提供下载链接:\n` +
+          `${codeTag(urlInfo.url)}`
+      );
+      if (session) await this.deleteCommandIfDifferent(msg, session.message);
+      return;
+    }
+
+    await updateStatus(
+      `🌐 <b>正在请求 Telegram 拉取发送</b>\n` +
+        `🎵 ${codeTag(song.name)}\n` +
+        `💾 ${codeTag(formatBytes(urlInfo.size))}，🎚️ ${codeTag(displayBitrate(urlInfo.br || config.br))}`
+    );
+
+    try {
+      const caption = this.buildSongCaption(song, urlInfo);
+      await this.sendTelegramUrl(client, msg, urlInfo, caption, session);
+      await this.finishSongSend(msg, session);
+    } catch (directError: unknown) {
+      const progress = this.createTransferProgressReporter(updateStatus, song);
+      await progress.report({
+        stage: "download",
+        loadedBytes: 0,
+        totalBytes: urlInfo.size,
+        detail: `Telegram 拉取失败，回退本地下载后上传。直拉错误: ${errorText(directError)}`,
+        force: true,
+      });
+
+      try {
+        const caption = this.buildSongCaption(song, urlInfo);
+        await this.sendLocalUpload(
+          client,
+          msg,
+          song,
+          urlInfo,
+          config,
+          caption,
+          session,
+          progress.report
+        );
+        await progress.stop();
+        await this.finishSongSend(msg, session);
+      } catch (fallbackError: unknown) {
+        await progress.stop();
+        await updateStatus(
+          `❌ <b>上传失败，保留下载链接</b>\n${codeTag(urlInfo.url)}\n\n` +
+            `🌐 直拉错误: ${htmlEscape(errorText(directError))}\n` +
+            `📤 上传错误: ${htmlEscape(errorText(fallbackError))}`
+        );
+        if (session) await this.deleteCommandIfDifferent(msg, session.message);
+      }
+    }
+  }
+
+  private async checkSource(source: SourceKey): Promise<SourceCheckResult> {
+    const started = Date.now();
+    try {
+      const songs = await this.searchSource(source, HEALTH_KEYWORD, 1);
+      const first = songs[0];
+      if (!first) {
+        return {
+          key: source,
+          ok: false,
+          elapsedMs: Date.now() - started,
+          error: "无搜索结果",
+        };
+      }
+
+      await this.requestApi<any>(
+        {
+          types: "url",
+          source,
+          id: first.url_id || first.id,
+          br: "128",
+        },
+        CHECK_TIMEOUT_MS
+      );
+
+      return {
+        key: source,
+        ok: true,
+        elapsedMs: Date.now() - started,
+        sample: `${first.name} - ${formatArtists(first.artist)}`,
+      };
+    } catch (error: unknown) {
+      return {
+        key: source,
+        ok: false,
+        elapsedMs: Date.now() - started,
+        error: error instanceof Error ? error.message : String(error),
+      };
+    }
+  }
+
+  private renderCheckResults(results: SourceCheckResult[], done: number): string {
+    const lines = results.map((result) => {
+      const name = sourceLabel(result.key);
+      if (result.ok) {
+        return `✅ ${codeTag(result.key)} ${htmlEscape(name)} ${codeTag(`${result.elapsedMs}ms`)}`;
+      }
+      return `❌ ${codeTag(result.key)} ${htmlEscape(name)} - ${htmlEscape(result.error || "不可用")}`;
+    });
+
+    return [
+      "🔍 <b>Music Hub 音乐源测活</b>\n",
+      `📊 进度: ${codeTag(`${done}/${MUSIC_SOURCES.length}`)}`,
+      "",
+      ...lines,
+    ].join("\n");
+  }
+
+  private async checkAllSources(msg: MessageContext): Promise<void> {
+    let statusMessage: Message | MessageContext | undefined = await this.editOrReplaceCommandMessage(
+      msg,
+      `🔍 <b>开始测活</b> ${codeTag(MUSIC_SOURCES.length)} 个音乐源...`
+    );
+    let statusUpdateQueue = Promise.resolve();
+
+    const queueStatusUpdate = (text: string): Promise<void> => {
+      statusUpdateQueue = statusUpdateQueue
+        .catch((e) => logger.debug('[music_hub] statusUpdateQueue error:', e))
+        .then(async () => {
+          const updated = await this.editOrReplaceMessage(msg, statusMessage, text);
+          if (updated) statusMessage = updated;
+        })
+        .catch((e) => logger.debug('[music_hub] editOrReplaceMessage error:', e));
+      return statusUpdateQueue;
+    };
+
+    const partial: SourceCheckResult[] = [];
+    let done = 0;
+
+    const results = await mapWithConcurrency(
+      MUSIC_SOURCES.map((source) => source.key),
+      3,
+      async (source) => {
+        const result = await this.checkSource(source);
+        partial.push(result);
+        done += 1;
+        await queueStatusUpdate(this.renderCheckResults(partial, done));
+        return result;
+      }
+    );
+
+    await statusUpdateQueue;
+    await queueStatusUpdate(
+      this.renderCheckResults(
+        results.sort((a, b) => MUSIC_SOURCES.findIndex((s) => s.key === a.key) - MUSIC_SOURCES.findIndex((s) => s.key === b.key)),
+        MUSIC_SOURCES.length
+      )
+    );
+    await statusUpdateQueue;
+  }
+
+  private async handleDefault(msg: MessageContext, args: string[]): Promise<void> {
+    const config = await this.getConfig();
+    const next = normalizeSource(args[0]);
+    if (!next) {
+      await this.editOrReplaceCommandMessage(
+        msg,
+        `⚙️ 当前默认源: ${codeTag(sourceLabel(config.defaultSource))}\n\n` +
+          `💡 用法: ${codeTag(`${commandName} default auto`)} 或 ${codeTag(`${commandName} default netease`)}`
+      );
+      return;
+    }
+
+    await this.updateConfig((current) => {
+      current.defaultSource = next;
+    });
+
+    await this.editOrReplaceCommandMessage(
+      msg,
+      `✅ 默认源已设置为 ${codeTag(sourceLabel(next))}`
+    );
+  }
+
+  private async handleBitrate(msg: MessageContext, args: string[]): Promise<void> {
+    const config = await this.getConfig();
+    const br = args[0];
+    if (!br) {
+      await this.editOrReplaceCommandMessage(
+        msg,
+        `🎚️ 当前码率: ${codeTag(displayBitrate(config.br))}\n💡 用法: ${codeTag(`${commandName} br high`)}`
+      );
+      return;
+    }
+
+    const nextBr = parseBitrateSetting(br);
+    if (!nextBr) {
+      await this.editOrReplaceCommandMessage(
+        msg,
+        `❌ 码率必须是 ${codeTag("low")}、${codeTag("medium")} 或 ${codeTag("high")}`
+      );
+      return;
+    }
+
+    await this.updateConfig((current) => {
+      current.br = nextBr;
+    });
+    await this.editOrReplaceCommandMessage(msg, `✅ 码率已设置为 ${codeTag(displayBitrate(nextBr))}`);
+  }
+
+  private async handleSearch(msg: MessageContext, sourceMode: SourceMode, keyword: string): Promise<void> {
+    if (!keyword.trim()) {
+      await this.editOrReplaceCommandMessage(msg, helpText);
+      return;
+    }
+
+    const statusMessage: Message | undefined = await this.editOrReplaceCommandMessage(
+      msg,
+      `🔍 <b>正在搜索</b> ${codeTag(keyword)}\n📡 音源: ${codeTag(sourceLabel(sourceMode))}`
+    );
+
+    try {
+      const session = await this.searchMusic(sourceMode, keyword.trim());
+      this.rememberSessionMessage(session, statusMessage);
+      this.saveSession(msg, session);
+      await this.editOrReplaceSessionMessage(msg, session, this.renderSearchPage(session));
+    } catch (error: unknown) {
+      await this.editOrReplaceMessage(
+        msg,
+        statusMessage as MtcuteMessageContext | undefined,
+        `❌ <b>搜索失败</b>\n<code>${htmlEscape(error instanceof Error ? error.message : String(error))}</code>\n\n` +
+          `💡 可尝试 ${codeTag(`${commandName} check`)} 查看源状态。`
+      );
+    }
+  }
+
+  private async handleCommand(msg: MessageContext): Promise<void> {
+    const args = getArgs(msg);
+    const action = (args[0] || "").toLowerCase();
+    const config = await this.getConfig();
+
+    if (!action || action === "help" || action === "h") {
+      await this.editOrReplaceCommandMessage(msg, helpText);
+      return;
+    }
+
+    if (action === "sources" || action === "source" || action === "list") {
+      if (action === "source" && args[1]) {
+        await this.handleDefault(msg, args.slice(1));
+        return;
+      }
+      await this.editOrReplaceCommandMessage(msg, this.renderSources(config));
+      return;
+    }
+
+    if (action === "default" || action === "set") {
+      await this.handleDefault(msg, args.slice(1));
+      return;
+    }
+
+    if (action === "br" || action === "quality") {
+      await this.handleBitrate(msg, args.slice(1));
+      return;
+    }
+
+    if (action === "check" || action === "health") {
+      await this.checkAllSources(msg);
+      return;
+    }
+
+    if (action === "next" || action === "n") {
+      const session = this.getSession(msg);
+      await this.showSessionPage(msg, (session?.page || 1) + 1);
+      return;
+    }
+
+    if (action === "prev" || action === "p") {
+      const session = this.getSession(msg);
+      await this.showSessionPage(msg, (session?.page || 1) - 1);
+      return;
+    }
+
+    if (action === "page") {
+      const page = parseIndex(args[1]) || 1;
+      await this.showSessionPage(msg, page);
+      return;
+    }
+
+    if (action === "clear") {
+      const session = this.getSession(msg);
+      await this.deleteQuietly(session?.message);
+      this.sessions.delete(getSessionKey(msg));
+      await this.editOrReplaceCommandMessage(msg, "✅ 已清除当前 Music Hub 搜索会话。");
+      return;
+    }
+
+    if (action === "play" || action === "download" || action === "get") {
+      const index = parseIndex(args[1]);
+      if (!index) {
+        await this.editOrReplaceCommandMessage(
+          msg,
+          `🎯 请提供歌曲序号，例如 ${codeTag(`${commandName} play 1`)}`
+        );
+        return;
+      }
+      await this.selectSong(msg, index);
+      return;
+    }
+
+    const directIndex = parseIndex(action);
+    if (directIndex) {
+      await this.selectSong(msg, directIndex);
+      return;
+    }
+
+    if (action === "search" || action === "s") {
+      const explicitSource = normalizeSource(args[1]);
+      const sourceMode = explicitSource || config.defaultSource;
+      const keyword = explicitSource ? args.slice(2).join(" ") : args.slice(1).join(" ");
+      await this.handleSearch(msg, sourceMode, keyword);
+      return;
+    }
+
+    const explicitSource = normalizeSource(action);
+    if (explicitSource) {
+      await this.handleSearch(msg, explicitSource, args.slice(1).join(" "));
+      return;
+    }
+
+    await this.handleSearch(msg, config.defaultSource, args.join(" "));
+  }
+
+  // Panel Settings Adapter
+  panelAdapter: PanelSettingsAdapter = {
+    id: "music_hub",
+    title: "Music Hub 音乐",
+    description: "音乐搜索下载配置：默认音源、音质、结果数量、上传大小限制",
+    category: "插件配置",
+    icon: "🎵",
+    getSchema: (): PanelSettingField[] => [
+      {
+        key: "defaultSource",
+        label: "默认音源",
+        type: "select",
+        options: [
+          { value: "auto", label: "自动 (auto)" },
+          { value: "netease", label: "网易云音乐" },
+          { value: "tencent", label: "QQ 音乐" },
+          { value: "kuwo", label: "酷我音乐" },
+          { value: "tidal", label: "TIDAL" },
+          { value: "qobuz", label: "Qobuz" },
+          { value: "joox", label: "JOOX" },
+          { value: "bilibili", label: "Bilibili" },
+          { value: "apple", label: "Apple Music" },
+          { value: "ytmusic", label: "YouTube Music" },
+          { value: "spotify", label: "Spotify" },
+        ],
+        default: "auto",
+      },
+      {
+        key: "br",
+        label: "默认音质",
+        type: "select",
+        options: [
+          { value: "128", label: "128kbps (低)" },
+          { value: "320", label: "320kbps (标准)" },
+          { value: "999", label: "无损/最高 (999)" },
+        ],
+        default: "999",
+      },
+      {
+        key: "maxResults",
+        label: "最大搜索结果数",
+        type: "number",
+        min: 5,
+        max: 100,
+        default: 30,
+        description: "单次搜索返回的最大结果数",
+      },
+      {
+        key: "maxUploadBytes",
+        label: "最大上传大小 (字节)",
+        type: "number",
+        min: 1024 * 1024,
+        max: 2 * 1024 * 1024 * 1024,
+        default: 100 * 1024 * 1024,
+        description: "Telegram 文件上传限制，默认 100MB",
+      },
+    ],
+    getValues: async () => {
+      const db = await JSONFilePreset<MusicHubConfig>(CONFIG_PATH, DEFAULT_CONFIG);
+      return {
+        defaultSource: db.data.defaultSource || "auto",
+        br: db.data.br || "999",
+        maxResults: db.data.maxResults ?? 30,
+        maxUploadBytes: db.data.maxUploadBytes ?? 100 * 1024 * 1024,
+      };
+    },
+    setValues: async (patch: Record<string, unknown>) => {
+      const db = await JSONFilePreset<MusicHubConfig>(CONFIG_PATH, DEFAULT_CONFIG);
+      const fields: (keyof MusicHubConfig)[] = ["defaultSource", "br", "maxResults", "maxUploadBytes"];
+      for (const f of fields) {
+        if (patch[f] !== undefined) (db.data as any)[f] = patch[f];
+      }
+      await db.write();
+    },
+  };
 }
 
-export default new MusicPlugin();
+export default new MusicHubPlugin();

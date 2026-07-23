@@ -1,13 +1,17 @@
-//@ts-nocheck
-import { Plugin } from "@utils/pluginBase";
-import { Api } from "teleproto";
+import { Plugin, type PanelSettingsAdapter, type PanelSettingField, type PanelFieldType } from "@utils/pluginBase";
 import { getPrefixes } from "@utils/pluginManager";
-import { sleep } from "teleproto/Helpers";
 import { createDirectoryInAssets } from "@utils/pathHelpers";
 import * as path from "path";
 import * as fs from "fs";
 import { safeGetMessages, safeGetReplyMessage } from "@utils/safeGetMessages";
-
+import type { MessageContext } from "@mtcute/dispatcher";
+import { thtml as html } from "@mtcute/html-parser";
+import { getGlobalClient } from "@utils/runtimeManager";
+import { tl, Long } from "@mtcute/node";
+import { Message } from "@mtcute/core";
+import { logger } from "@utils/logger";
+import { sleep } from "@utils/asyncHelpers";
+import { getErrorMessage } from "@utils/errorHelpers";
 import { htmlEscape } from "@utils/htmlEscape";
 
 const BOT_USERNAME = "ParseHubot";
@@ -75,7 +79,7 @@ function readState(): InitState {
         ? Number(parsed.ignoredUpToId)
         : undefined,
     };
-  } catch {
+  } catch (_e: unknown) {
     return { initialized: false };
   }
 }
@@ -83,7 +87,7 @@ function readState(): InitState {
 function writeState(state: InitState) {
   try {
     fs.writeFileSync(STATE_PATH, JSON.stringify(state), "utf-8");
-  } catch {}
+  } catch (e: unknown) { logger.warn('[parsehub] state write failed:', e) }
 }
 
 let initState: InitState = readState();
@@ -99,19 +103,15 @@ const isProgressText = (text?: string | null): boolean => {
   return PROGRESS_PREFIXES.some((prefix) => stripped.startsWith(prefix));
 };
 
-/** True when message carries real media. */
-function hasMediaPayload(msg: Api.Message): boolean {
-  const media = (msg as any).media;
-  if (!media) return false;
-  const cn = media.className || media._ || "";
-  if (!cn || cn === "MessageMediaEmpty") return false;
-  return true;
+/** True when message carries real media (mtcute returns null for empty). */
+function hasMediaPayload(msg: Message): boolean {
+  return msg.media != null;
 }
 
-function isFinalBotMessage(msg: Api.Message): boolean {
+function isFinalBotMessage(msg: Message): boolean {
   // Media always wins — bot may edit progress text in place while attaching file
   if (hasMediaPayload(msg)) return true;
-  const text = msg.message?.trim() || "";
+  const text = msg.text?.trim() || "";
   if (isProgressText(text)) return false;
   return Boolean(text);
 }
@@ -131,61 +131,68 @@ function extractLinks(text: string): string[] {
   );
 }
 
-async function ensureBotReady(msg: Api.Message) {
-  const client = msg.client;
+async function ensureBotReady(msg: MessageContext) {
+  const client = await getGlobalClient();
   if (!client) return;
 
+  let botPeer: tl.TypeInputPeer;
+  let botUser: tl.TypeInputUser;
   try {
-    await client.invoke(new Api.contacts.Unblock({ id: BOT_USERNAME }));
-  } catch {}
+    botPeer = await client.resolvePeer(BOT_USERNAME);
+    botUser = await client.resolveUser(BOT_USERNAME);
+  } catch (e: unknown) { logger.warn('[parsehub] resolve failed:', e); return; }
 
   try {
-    const inputPeer = await client.getInputEntity(BOT_USERNAME);
-    await client.invoke(
-      new Api.account.UpdateNotifySettings({
-        peer: new Api.InputNotifyPeer({ peer: inputPeer }),
-        settings: new Api.InputPeerNotifySettings({
-          silent: true,
-          muteUntil: 2147483647,
-        }),
-      }),
-    );
-  } catch {}
+    await client.call({ _: "contacts.unblock", id: botPeer });
+  } catch (e: unknown) { logger.warn('[parsehub] unblock failed:', e) }
+
+  try {
+    const inputPeer = await client.resolvePeer(BOT_USERNAME);
+    await client.call({
+      _: "account.updateNotifySettings",
+      peer: { _: "inputNotifyPeer", peer: inputPeer },
+      settings: {
+        _: "inputPeerNotifySettings",
+        silent: true,
+        muteUntil: 2147483647,
+      },
+    });
+  } catch (e: unknown) { logger.warn('[parsehub] notify settings update failed:', e) }
 
   if (hasStartedBot) {
     return;
   }
 
   try {
-    const history = await safeGetMessages(client, BOT_USERNAME, { limit: 1 });
+    const history = await client.getHistory(BOT_USERNAME, { limit: 1 });
     if (history.length > 0) {
       hasStartedBot = true;
       return;
     }
-  } catch {}
+  } catch (e: unknown) { logger.warn('[parsehub] history fetch failed:', e) }
 
   try {
     if (!initState.initialized) {
       firstRunPreStartLastId = await getLatestBotMessageId(client);
       shouldIgnoreNextBotMessage = true;
     }
-    await client.invoke(
-      new Api.messages.StartBot({
-        bot: BOT_USERNAME,
-        peer: BOT_USERNAME,
-        startParam: "",
-      }),
-    );
+    await client.call({
+      _: "messages.startBot",
+      bot: botUser,
+      peer: botPeer,
+      randomId: Long.fromNumber(Date.now()),
+      startParam: "",
+    });
     hasStartedBot = true;
-  } catch {
+  } catch (e: unknown) {
     try {
       if (!initState.initialized) {
         firstRunPreStartLastId = await getLatestBotMessageId(client);
         shouldIgnoreNextBotMessage = true;
       }
-      await client.sendMessage(BOT_USERNAME, { message: "/start" });
+      await client.sendText(BOT_USERNAME, "/start");
       hasStartedBot = true;
-    } catch {}
+    } catch (e: unknown) { logger.warn('[parsehub] send /start failed:', e) }
   }
 
   // Best-effort: capture welcome message id to avoid mis-forwarding
@@ -203,19 +210,19 @@ async function ensureBotReady(msg: Api.Message) {
           shouldIgnoreNextBotMessage = false;
           break;
         }
-      } catch {}
+      } catch (e: unknown) { logger.warn('[parsehub] latest id fetch failed:', e) }
     }
   }
 }
 
-async function getLatestBotMessageId(client: any): Promise<number> {
+async function getLatestBotMessageId(client: TelegramClient): Promise<number> {
   if (!client) return 0;
   try {
-    const history = await safeGetMessages(client, BOT_USERNAME, { limit: 1 });
+    const history = await client.getHistory(BOT_USERNAME, { limit: 1 });
     if (history.length > 0) {
       return history[0].id;
     }
-  } catch {}
+  } catch (e: unknown) { logger.warn('获取历史记录失败', e) }
   return 0;
 }
 
@@ -243,39 +250,40 @@ const describeReason = (reason?: RelayReason): string => {
   }
 };
 
-async function forwardChunk(client: any, peer: any, ids: number[]) {
-  await client.forwardMessages(peer, {
-    fromPeer: BOT_USERNAME,
+async function forwardChunk(client: TelegramClient, peer: string | number, ids: number[]) {
+  await client.forwardMessagesById({
+    toChatId: peer,
+    fromChatId: BOT_USERNAME,
     messages: ids,
-    dropAuthor: true,
+    noAuthor: true,
   });
 }
 
 async function relayParseResult(
-  originMsg: Api.Message,
+  originMsg: MessageContext,
   link: string,
   baselineId: number,
 ): Promise<RelayOutcome> {
-  const client = originMsg.client;
+  const client = await getGlobalClient();
   if (!client) {
     return { lastId: baselineId, forwarded: false, reason: "no_client" };
   }
 
   try {
-    await client.sendMessage(BOT_USERNAME, { message: link });
-  } catch (error: any) {
+    await client.sendText(BOT_USERNAME, link);
+  } catch (error: unknown) {
     return {
       lastId: baselineId,
       forwarded: false,
       reason: "send_failed",
-      error: error?.message || String(error),
+      error: getErrorMessage(error),
     };
   }
 
   // Progress msgs (解析中/下载中/上传中) often keep the SAME id and are later
   // edited into the final media. Never permanently skip them via processedIds.
   const progressIds = new Set<number>();
-  const finalMessages = new Map<number, Api.Message>();
+  const finalMessages = new Map<number, Message>();
 
   let deadline = Date.now() + MAX_WAIT_MS;
   let lastId = baselineId;
@@ -286,27 +294,28 @@ async function relayParseResult(
   while (Date.now() < deadline) {
     await sleep(POLL_INTERVAL_MS);
 
-    let messages: Api.Message[] = [];
+    let messages: Message[] = [];
     try {
-      messages = await safeGetMessages(client, BOT_USERNAME, { limit: FETCH_LIMIT });
-    } catch (error: any) {
+      messages = await client.getHistory(BOT_USERNAME, { limit: FETCH_LIMIT });
+    } catch (error: unknown) {
       return {
         lastId,
         forwarded: false,
         reason: "fetch_failed",
-        error: error?.message || String(error),
+        error: getErrorMessage(error),
       };
     }
 
-    messages.sort((a, b) => a.id - b.id);
+    messages.sort((a: Message, b: Message) => a.id - b.id);
 
     for (const botMsg of messages) {
-      if (!botMsg || (botMsg as any).className === "MessageService") continue;
-      if (botMsg.out) continue;
+      if (!botMsg) continue;
+      if (botMsg.isOutgoing) continue;
       if (botMsg.id <= baselineId) continue;
 
-      const text = botMsg.message?.trim() || "";
+      const text = botMsg.text?.trim() || "";
 
+      // Still a progress status (may be the same msg id as before)
       if (isProgressText(text) && !hasMediaPayload(botMsg)) {
         // Stale progress left behind after a newer final result must not block forwarding
         const maxFinalId = finalMessages.size
@@ -330,10 +339,12 @@ async function relayParseResult(
       }
 
       if (!isFinalBotMessage(botMsg)) {
+        // Empty service-ish noise: mark high-water but do not forward
         lastId = Math.max(lastId, botMsg.id);
         continue;
       }
 
+      // First-run welcome /start reply: skip once
       if (firstRunIgnore && !hasMediaPayload(botMsg)) {
         firstRunIgnore = false;
         shouldIgnoreNextBotMessage = false;
@@ -341,13 +352,12 @@ async function relayParseResult(
         initState.initialized = true;
         initState.ignoredUpToId = botMsg.id;
         writeState(initState);
-        lastId = Math.max(lastId, botMsg.id);
-        progressIds.delete(botMsg.id);
         continue;
       }
 
       const isNew = botMsg.id > lastId || progressIds.has(botMsg.id) || !finalMessages.has(botMsg.id);
       if (!isNew && finalMessages.has(botMsg.id)) {
+        // already captured; still refresh object in case caption/media changed
         finalMessages.set(botMsg.id, botMsg);
         continue;
       }
@@ -358,6 +368,7 @@ async function relayParseResult(
       lastFinalActivity = Date.now();
     }
 
+    // Prefer break when we have finals AND progress has gone quiet
     if (
       finalMessages.size > 0 &&
       progressIds.size === 0 &&
@@ -366,12 +377,14 @@ async function relayParseResult(
       break;
     }
 
+    // If we only ever saw progress and it went silent for a long time, keep looping until deadline
     if (
       finalMessages.size > 0 &&
       progressIds.size > 0 &&
       Date.now() - lastProgressActivity >= RESULT_IDLE_MS * 3 &&
       Date.now() - lastFinalActivity >= RESULT_IDLE_MS
     ) {
+      // progress stuck without turning into final — forward what we have
       break;
     }
   }
@@ -381,22 +394,23 @@ async function relayParseResult(
   }
 
   const sortedMessages = Array.from(finalMessages.values()).sort(
-    (a, b) => a.id - b.id,
+    (a: Message, b: Message) => a.id - b.id,
   );
 
   let forwarded = false;
   const fallbackTexts: string[] = [];
 
+  // Sequential forwarding: each chunk uses fallback text on failure, so order matters
   for (let i = 0; i < sortedMessages.length; i += 100) {
     const chunk = sortedMessages.slice(i, i + 100);
-    const ids = chunk.map((m) => m.id);
+    const ids = chunk.map((m: Message) => m.id);
 
     try {
-      await forwardChunk(client, originMsg.peerId, ids);
+      await forwardChunk(client, originMsg.chat.id, ids);
       forwarded = true;
-    } catch {
+    } catch (_e: unknown) {
       const snippet = chunk
-        .map((m) => m.message?.trim())
+        .map((m: Message) => m.text?.trim())
         .filter(Boolean)
         .join("\n\n");
       fallbackTexts.push(
@@ -409,12 +423,11 @@ async function relayParseResult(
 
   if (!forwarded && fallbackTexts.length) {
     try {
-      await client.sendMessage(originMsg.peerId, {
-        message: `📨 @${BOT_USERNAME} 返回内容：\n\n${fallbackTexts.join("\n\n")}`,
+      await client.sendText(originMsg.chat.id, `📨 @${BOT_USERNAME} 返回内容：\n\n${fallbackTexts.join("\n\n")}`, {
         replyTo: originMsg.id,
       });
       forwarded = true;
-    } catch {}
+    } catch (e: unknown) { logger.warn('[parsehub] send to origin failed:', e) }
   }
 
   return {
@@ -425,97 +438,36 @@ async function relayParseResult(
 }
 
 class ParseHubPlugin extends Plugin {
+  description = helpText;
 
-  description: string = `\n${pluginName}\n\n${helpText}`;
-  cmdHandlers: Record<string, (msg: Api.Message) => Promise<void>> = {
-    parsehub: async (msg: Api.Message) => {
-      const rawText = msg.message || "";
-      const cleaned = rawText.replace(
-        new RegExp(`^${commandName}\\s*`, "i"),
-        "",
-      );
-      let links = extractLinks(cleaned);
-
-      // 若命令未包含链接且为回复消息，从被回复消息中提取链接
-      if (!links.length && msg.replyTo?.replyToMsgId) {
-        try {
-          const replied = await safeGetReplyMessage(msg);
-          const replyText = replied?.message || "";
-          const replyLinks = extractLinks(replyText);
-          if (replyLinks.length) {
-            links = replyLinks;
-          }
-        } catch {}
-      }
-
-      // 若命令和被回复消息都包含链接，合并去重，命令里的在前
-      if (msg.replyTo?.replyToMsgId) {
-        try {
-          const replied = await safeGetReplyMessage(msg);
-          const replyText = replied?.message || "";
-          const replyLinks = extractLinks(replyText);
-          if (replyLinks.length) {
-            const set = new Set<string>(links);
-            for (const l of replyLinks) set.add(l);
-            links = Array.from(set);
-          }
-        } catch {}
-      }
-
-      if (!links.length) {
-        await msg.edit({ text: helpText, parseMode: "html" });
-        return;
-      }
-
-      if (links.length > 1) {
-        links = [links[0]];
-      }
-
-      await msg.edit({
-        text: `✅ 已提交链接至 @${BOT_USERNAME}，正在解析中，请等待。`,
-        parseMode: "html",
-      });
-
+  cmdHandlers = {
+    parsehub: async (msg: MessageContext) => {
       await ensureBotReady(msg);
-      const client = msg.client;
-      if (!client) {
-        await msg.edit({
-          text: `❌ 无法获取 Telegram 客户端实例，请稍后重试。`,
-        });
+
+      const client = await getGlobalClient();
+      if (!client) return;
+
+      const links = extractLinks(msg.text || "");
+      const replyLinks = msg.replyToMessage
+        ? extractLinks(msg.replyToMessage.text || "")
+        : [];
+      const allLinks = [...new Set([...links, ...replyLinks])];
+
+      if (allLinks.length === 0) {
+        await msg.edit({ text: html(helpText) });
         return;
       }
 
-      let baselineId = await getLatestBotMessageId(client);
-      // If we have recorded a welcome message id to ignore, advance baseline
-      if (ignoredUpToId > baselineId) {
-        baselineId = ignoredUpToId;
-      }
-      // If first-run flag is set but latest already moved beyond pre-start,
-      // treat initialization as complete to avoid skipping valid results.
-      if (
-        shouldIgnoreNextBotMessage &&
-        firstRunPreStartLastId > 0 &&
-        baselineId > firstRunPreStartLastId
-      ) {
-        shouldIgnoreNextBotMessage = false;
-        initState.initialized = true;
-        initState.ignoredUpToId = baselineId;
-        writeState(initState);
-      }
+      const baselineId = initState.ignoredUpToId || 0;
 
-      for (const link of links) {
+      for (const link of allLinks) {
         const outcome = await relayParseResult(msg, link, baselineId);
-        baselineId = outcome.lastId;
+
+        const reasonText = describeReason(outcome.reason);
+        const detail = outcome.error ? ` (${htmlEscape(outcome.error)})` : "";
 
         if (!outcome.forwarded) {
-          const reasonText = htmlEscape(describeReason(outcome.reason));
-          const detail =
-            outcome.error && outcome.error !== "undefined"
-              ? `\n\n错误信息：${htmlEscape(outcome.error)}`
-              : "";
-          await client.sendMessage(msg.peerId, {
-            message: `⚠️ 未能获取 <b>${htmlEscape(link)}</b> 的最终结果（${reasonText}）。请稍后重试或直接私聊 @${BOT_USERNAME}。${detail}`,
-            parseMode: "html",
+          await client.sendText(msg.chat.id, html(`⚠️ 未能获取 <b>${htmlEscape(link)}</b> 的最终结果（${reasonText}）。请稍后重试或直接私聊 @${BOT_USERNAME}。${detail}`), {
             replyTo: msg.id,
           });
         }
@@ -525,7 +477,65 @@ class ParseHubPlugin extends Plugin {
 
       try {
         await msg.delete();
-      } catch {}
+      } catch (e: unknown) { logger.warn('[parsehub] msg already deleted:', e) }
+    },
+  };
+
+  // Panel Settings Adapter
+  panelAdapter: PanelSettingsAdapter = {
+    id: "parsehub",
+    title: "ParseHub 解析",
+    description: "链接解析插件状态：初始化状态、忽略消息 ID",
+    category: "插件配置",
+    icon: "🔗",
+    getSchema: (): PanelSettingField[] => [
+      {
+        key: "initialized",
+        label: "已初始化",
+        type: "boolean",
+        default: false,
+        description: "是否已完成首次启动初始化",
+      },
+      {
+        key: "ignoredUpToId",
+        label: "忽略消息 ID",
+        type: "number",
+        min: 0,
+        default: 0,
+        description: "启动时忽略的最大消息 ID (避免处理历史消息)",
+      },
+      {
+        key: "resetState",
+        label: "重置状态",
+        type: "boolean",
+        default: false,
+        description: "开启后保存将清空状态文件 (需手动关闭)",
+      },
+    ],
+    getValues: async () => {
+      const state = readState();
+      return {
+        initialized: state.initialized,
+        ignoredUpToId: state.ignoredUpToId || 0,
+        resetState: false,
+      };
+    },
+    setValues: async (patch: Record<string, unknown>) => {
+      if (patch.resetState === true) {
+        try {
+          fs.unlinkSync(STATE_PATH);
+          logger.info("[parsehub] State file reset via panel");
+        } catch { }
+        return;
+      }
+
+      const state: InitState = {
+        initialized: Boolean(patch.initialized ?? initState.initialized),
+        ignoredUpToId: Number(patch.ignoredUpToId ?? initState.ignoredUpToId || 0) || 0,
+      };
+      writeState(state);
+      initState = state;
+      ignoredUpToId = state.ignoredUpToId || 0;
     },
   };
 }
