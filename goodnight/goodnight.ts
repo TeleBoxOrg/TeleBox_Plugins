@@ -1,8 +1,6 @@
-import { Plugin, type PanelSettingsAdapter, type PanelSettingField, type PanelFieldType } from "@utils/pluginBase";
+import { Plugin } from "@utils/pluginBase";
 import { getPrefixes } from "@utils/pluginManager";
-import type { MessageContext } from "@mtcute/dispatcher";
-import { thtml as html } from "@mtcute/html-parser";
-import type { Peer, User } from "@mtcute/core";
+import { Api } from "teleproto";
 import { JSONFilePreset } from "lowdb/node";
 import { resolvePluginAssetFile } from "@utils/pathHelpers";
 import * as path from "path";
@@ -10,7 +8,7 @@ import dayjs from "dayjs";
 const prefixes = getPrefixes();
 const mainPrefix = prefixes[0];
 
-import { logger } from "@utils/logger";
+import { getGlobalClient } from "@utils/runtimeManager";
 
 // 定义数据库结构
 interface GroupData {
@@ -38,7 +36,7 @@ class GreetingPlugin extends Plugin {
     };
     
     // 数据库实例
-    private db!: Awaited<ReturnType<typeof JSONFilePreset<DBData>>>;
+    private db: any;
     
     // 关键词配置
     private readonly sleepKeywords = ["晚安", "晚", "睡觉", "睡了", "去睡了", "晚安喵"];
@@ -49,7 +47,8 @@ class GreetingPlugin extends Plugin {
     }
 
   cleanup(): void {
-    // 引用重置：db 由 reload 后重新初始化自动覆盖，无需显式清空。
+    // 引用重置：清空实例级 db / cache / manager 引用，便于 reload 后重新初始化。
+    this.db = null;
   }
 
   async setup(): Promise<void> {
@@ -72,20 +71,20 @@ class GreetingPlugin extends Plugin {
 
     // 指令处理器
     cmdHandlers = {
-        goodnight: async (msg: MessageContext) => {
+        goodnight: async (msg: Api.Message) => {
             await this.handleCommand(msg);
         },
         // 添加 gn 作为 .goodnight 的简写别名
-        gn: async (msg: MessageContext) => {
+        gn: async (msg: Api.Message) => {
             await this.handleCommand(msg);
         }
     };
 
     // 统一处理指令逻辑
-    private async handleCommand(msg: MessageContext) {
-        if (!this.db) { await this.initDB(); }
-
-        const chatId = msg.chat.id.toString();
+    private async handleCommand(msg: Api.Message) {
+        if (!this.db) await this.initDB();
+        
+        const chatId = msg.chatId?.toString();
         if (!chatId) return;
 
         // 获取或初始化数据
@@ -128,24 +127,24 @@ class GreetingPlugin extends Plugin {
 
         if (subCommand === "on") {
             if (groupData.enabled) {
-                await msg.edit({ text: html`✅ 本群早晚安统计已经是<b>开启</b>状态` });
+                await msg.edit({ text: "✅ 本群早晚安统计已经是<b>开启</b>状态", parseMode: "html" });
             } else {
                 groupData.enabled = true;
                 await this.db.write();
-                await msg.edit({ text: html`✅ 本群早晚安统计已<b>开启</b>` });
+                await msg.edit({ text: "✅ 本群早晚安统计已<b>开启</b>", parseMode: "html" });
             }
         } else if (subCommand === "off") {
             if (!groupData.enabled) {
-                await msg.edit({ text: html`🚫 本群早晚安统计已经是<b>关闭</b>状态` });
+                await msg.edit({ text: "🚫 本群早晚安统计已经是<b>关闭</b>状态", parseMode: "html" });
             } else {
                 groupData.enabled = false;
                 await this.db.write();
-                await msg.edit({ text: html`🚫 本群早晚安统计已<b>关闭</b>` });
+                await msg.edit({ text: "🚫 本群早晚安统计已<b>关闭</b>", parseMode: "html" });
             }
         } else if (!isNaN(timezoneInput)) {
             // 设置时区逻辑
             if (timezoneInput < -12 || timezoneInput > 14) {
-                await msg.edit({ text: html`❌ 时区必须在 UTC-12 到 UTC+14 之间` });
+                await msg.edit({ text: "❌ 时区必须在 UTC-12 到 UTC+14 之间", parseMode: "html" });
                 return;
             }
             
@@ -160,7 +159,8 @@ class GreetingPlugin extends Plugin {
             
             const sign = timezoneInput >= 0 ? "+" : "";
             await msg.edit({ 
-                text: html(`✅ 已将本群时区设置为 <b>UTC${sign}${timezoneInput}</b>\n当前时间: ${dayjs(targetDate).format("HH:mm:ss")}`)
+                text: `✅ 已将本群时区设置为 <b>UTC${sign}${timezoneInput}</b>\n当前时间: ${dayjs(targetDate).format("HH:mm:ss")}`, 
+                parseMode: "html" 
             });
         } else {
             // 显示状态和帮助
@@ -176,23 +176,23 @@ class GreetingPlugin extends Plugin {
                          `• <code>${mainPrefix}goodnight on/off</code> - 开启或关闭统计\n` +
                          `• <code>${mainPrefix}goodnight utc+8</code> - 设置时区\n` +
                          `• <code>${mainPrefix}goodnight</code> - 查看状态`;
-            await msg.edit({ text: html(help) });
+            await msg.edit({ text: help, parseMode: "html" });
         }
     }
 
     // 监听所有消息
-    listenMessageHandler = async (msg: MessageContext) => {
+    listenMessageHandler = async (msg: Api.Message) => {
         // 1. 基础过滤：必须有文本，且忽略太长的消息
         const text = msg.text?.trim();
         if (!text || text.length > 10) return;
 
         // 2. 获取基本信息
-        const chatId = msg.chat.id.toString();
-        const userId = String(msg.sender.id);
+        const chatId = msg.chatId?.toString();
+        const userId = msg.senderId?.toString();
         if (!chatId || !userId) return;
 
         // 3. 检查功能开关
-        if (!this.db) { await this.initDB(); }
+        if (!this.db) await this.initDB();
         const groupData = this.db.data.groups[chatId];
         
         // 关键逻辑：如果数据不存在（从未设置过），或者 enabled 为 false，直接忽略
@@ -224,9 +224,9 @@ class GreetingPlugin extends Plugin {
     }
 
     // 核心处理逻辑
-    private async processGreeting(msg: MessageContext, chatId: string, userId: string, type: "sleep" | "wake") {
+    private async processGreeting(msg: Api.Message, chatId: string, userId: string, type: "sleep" | "wake") {
         // 确保数据库已加载
-        if (!this.db) { await this.initDB(); }
+        if (!this.db) await this.initDB();
 
         // 获取群组数据（listener 已确保数据存在且 enabled=true）
         let groupData = this.db.data.groups[chatId];
@@ -268,13 +268,12 @@ class GreetingPlugin extends Plugin {
         // 获取用户显示名称
         let senderName = "神秘人";
         try {
-            const sender: Peer = msg.sender;
+            const sender = await msg.getSender() as any;
             if (sender) {
-                const userSender = sender.type === 'user' ? sender as User : null;
-                senderName = userSender?.firstName || userSender?.username || "群友";
+                senderName = sender.firstName || sender.username || "群友";
             }
-        } catch (e: unknown) {
-            logger.error("获取用户信息失败", e);
+        } catch (e) {
+            console.error("获取用户信息失败", e);
         }
 
         // 构建回复内容
@@ -286,45 +285,13 @@ class GreetingPlugin extends Plugin {
 
         // 发送回复
         try {
-            await msg.replyText(replyText);
-        } catch (e: unknown) {
-            logger.error("回复消息失败", e);
+            await msg.reply({
+                message: replyText
+            });
+        } catch (e) {
+            console.error("回复消息失败", e);
         }
     }
 }
-
-
-  // Panel Settings Adapter
-  panelAdapter: PanelSettingsAdapter = {
-    id: "goodnight",
-    title: "晚安打卡",
-    description: "晚安/早安打卡配置",
-    category: "插件配置",
-    icon: "🌙",
-    getSchema: (): PanelSettingField[] => [
-      {
-            "key": "enabled",
-            "label": "启用",
-            "type": "boolean"
-      },
-      {
-            "key": "timezone",
-            "label": "时区偏移 (小时)",
-            "type": "number",
-            "min": -12,
-            "max": 14,
-            "default": 8
-      }
-],
-    getValues: async (): Promise<Record<string, unknown>> => {
-      const db = await JSONFilePreset<GroupData>(path.join(createDirectoryInAssets("goodnight"), "config.json"), {} as any);
-      return db.data as Record<string, unknown>;
-    },
-    setValues: async (patch: Record<string, unknown>): Promise<void> => {
-      const db = await JSONFilePreset<GroupData>(path.join(createDirectoryInAssets("goodnight"), "config.json"), {} as any);
-      Object.assign(db.data, patch);
-      await db.write();
-    },
-  };
 
 export default new GreetingPlugin();

@@ -1,19 +1,17 @@
 import { getGlobalClient } from "@utils/runtimeManager";
 import { createDirectoryInAssets } from "@utils/pathHelpers";
-import { Plugin, type PanelSettingsAdapter, type PanelSettingField, type PanelFieldType } from "@utils/pluginBase";
+import { Plugin } from "@utils/pluginBase";
 import { getPrefixes } from "@utils/pluginManager";
 import { tryGetCurrentRuntime } from "@utils/runtimeManager";
 import { safeGetReplyMessage } from "@utils/safeGetMessages";
 import type { Low } from "lowdb";
 import { JSONFilePreset } from "lowdb/node";
+import bigInt from "big-integer";
 import path from "path";
-import type { MessageContext } from "@mtcute/dispatcher";
-import { thtml as html } from "@mtcute/html-parser";
-import { logger } from "@utils/logger";
-import { hasRawType, getRawType } from "@utils/entityTypeGuards";
-import type { InputChannel, InputPeerChannel, InputUser, InputPeerUser } from "@utils/tlTypes";
-import { getErrorMessage } from "@utils/errorHelpers";
-import { sleep } from "@utils/asyncHelpers";
+import { Api } from "teleproto";
+import { sleep } from "teleproto/Helpers";
+
+import { htmlEscape } from "@utils/htmlEscape";
 
 const prefixes = getPrefixes();
 const mainPrefix = prefixes[0];
@@ -65,19 +63,20 @@ type TempAdminJob = {
   userEntity: any;
   userId: number;
   userDisplay: string;
+  originalRank: string;
   replyToMsgId?: number;
   expiresAt: number;
   retryCount: number;
 };
 
 type StoredChannel = {
-  className: "any" | "InputChannel";
+  className: "InputPeerChannel" | "InputChannel";
   channelId: string;
   accessHash: string;
 };
 
 type StoredUser = {
-  className: "any" | "InputUser";
+  className: "InputPeerUser" | "InputUser";
   userId: string;
   accessHash: string;
 };
@@ -88,6 +87,7 @@ type StoredJob = {
   user: StoredUser;
   userId: number;
   userDisplay: string;
+  originalRank?: string;
   replyToMsgId?: number;
   expiresAt: number;
   retryCount?: number;
@@ -102,37 +102,28 @@ type CommandResponse = {
   parseMode?: "html";
 };
 
-function htmlEscape(text: string): string {
-  return text
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#x27;");
-}
-
 function codeTag(text: string | number): string {
   return `<code>${htmlEscape(String(text))}</code>`;
 }
 
-function isMessageNotModified(error: unknown): boolean {
-  return String(error instanceof Error ? error.message : error).includes("MESSAGE_NOT_MODIFIED");
+function isMessageNotModified(error: any): boolean {
+  return String(error?.message || error).includes("MESSAGE_NOT_MODIFIED");
 }
 
 async function editMessageIgnoringNotModified(
-  msg: MessageContext,
-  options: { text: unknown }
+  msg: Api.Message,
+  options: Parameters<Api.Message["edit"]>[0]
 ): Promise<void> {
   try {
-    await msg.edit(options as { text: string });
-  } catch (error: unknown) {
+    await msg.edit(options);
+  } catch (error) {
     if (!isMessageNotModified(error)) throw error;
   }
 }
 
-async function deleteMessageQuiet(msg: MessageContext): Promise<void> {
+async function deleteMessageQuiet(msg: Api.Message): Promise<void> {
   try {
-    const target = msg as MessageContext & { safeDelete?: (opts: { revoke: boolean }) => Promise<void>; delete?: (opts: { revoke: boolean }) => Promise<void> };
+    const target = msg as any;
     if (typeof target.safeDelete === "function") {
       await target.safeDelete({ revoke: true });
       return;
@@ -140,42 +131,45 @@ async function deleteMessageQuiet(msg: MessageContext): Promise<void> {
     if (typeof target.delete === "function") {
       await target.delete({ revoke: true });
     }
-  } catch (error: unknown) {
-    logger.error("[tmp_admin] 删除 sudo 命令副本失败:", error);
+  } catch (error) {
+    console.error("[tmp_admin] 删除 sudo 命令副本失败:", error);
   }
 }
 
 async function respondToCommand(
-  msg: MessageContext,
-  trigger: MessageContext | undefined,
+  msg: Api.Message,
+  trigger: Api.Message | undefined,
   options: CommandResponse,
   ignoreNotModified?: boolean
 ): Promise<void> {
-  const editText = options.parseMode === "html" ? html(options.text) : options.text;
-  const sendContent = options.parseMode === "html" ? html(options.text) : options.text;
-
   if (!trigger) {
     if (ignoreNotModified) {
-      await editMessageIgnoringNotModified(msg, { text: editText });
+      await editMessageIgnoringNotModified(msg, options);
       return;
     }
-    await msg.edit({ text: editText } as { text: string });
+    await msg.edit(options);
     return;
   }
 
-  const client = (msg as MessageContext & { client?: unknown }).client;
-  const peer = msg.chat.id;
+  const client = trigger.client || msg.client;
+  const peer = trigger.peerId || msg.peerId;
   if (!client || !peer) {
-    await editMessageIgnoringNotModified(msg, { text: editText });
+    await editMessageIgnoringNotModified(msg, options);
     return;
   }
+
+  const sendOptions = {
+    message: options.text,
+    ...(options.parseMode ? { parseMode: options.parseMode } : {}),
+  };
 
   try {
-    await client.sendText(peer, sendContent, {
+    await client.sendMessage(peer, {
+      ...sendOptions,
       replyTo: trigger.id,
     });
-  } catch (_e: unknown) {
-    await client.sendText(peer, sendContent);
+  } catch {
+    await client.sendMessage(peer, sendOptions);
   }
 
   await deleteMessageQuiet(msg);
@@ -194,12 +188,16 @@ function formatDuration(minutes: number): string {
   return `${minutes} 分钟`;
 }
 
-function getReplyToMsgId(msg: MessageContext, trigger?: MessageContext): number | undefined {
+function getReplyToMsgId(msg: Api.Message, trigger?: Api.Message): number | undefined {
   return trigger?.id || msg.id;
 }
 
-function getChatKey(chatEntity: any, msg: MessageContext): string {
-  const raw = chatEntity?.id ?? msg.chat.id;
+function getChatKey(chatEntity: any, msg: Api.Message): string {
+  const raw =
+    chatEntity?.id ??
+    (msg.peerId as any)?.channelId ??
+    (msg.peerId as any)?.chatId ??
+    (msg as any).chatId;
   return String(raw);
 }
 
@@ -207,11 +205,11 @@ function getJobKey(chatKey: string, userId: number): string {
   return `${chatKey}:${userId}`;
 }
 
-function messageHasReply(msg: MessageContext): boolean {
-  return !!(msg.replyToMessage?.id || (msg as { replyToMsgId?: number }).replyToMsgId);
+function messageHasReply(msg: Api.Message): boolean {
+  return !!((msg as any).replyToMsgId || (msg as any).replyTo?.replyToMsgId);
 }
 
-function getTargetSourceMessage(msg: MessageContext, trigger?: MessageContext): MessageContext {
+function getTargetSourceMessage(msg: Api.Message, trigger?: Api.Message): Api.Message {
   if (trigger && messageHasReply(trigger)) return trigger;
   return msg;
 }
@@ -224,59 +222,63 @@ function longToString(value: any): string {
 }
 
 function serializeChannel(channel: any): StoredChannel {
-  const cn = channel?._ === "inputPeerChannel" ? "any"
-           : channel?._ === "inputChannel" ? "InputChannel"
-           : undefined;
-  if (!cn) {
-    throw new Error(`不支持持久化当前对话实体: ${channel?._ || "unknown"}`);
+  if (
+    channel?.className !== "InputPeerChannel" &&
+    channel?.className !== "InputChannel"
+  ) {
+    throw new Error(`不支持持久化当前对话实体: ${channel?.className || "unknown"}`);
   }
 
   return {
-    className: cn,
+    className: channel.className,
     channelId: longToString(channel.channelId),
     accessHash: longToString(channel.accessHash),
   };
 }
 
 function serializeUser(user: any): StoredUser {
-  const cn = user?._ === "inputPeerUser" ? "any"
-           : user?._ === "inputUser" ? "InputUser"
-           : undefined;
-  if (!cn) {
-    throw new Error(`不支持持久化目标用户实体: ${user?._ || "unknown"}`);
+  if (user?.className !== "InputPeerUser" && user?.className !== "InputUser") {
+    throw new Error(`不支持持久化目标用户实体: ${user?.className || "unknown"}`);
   }
 
   return {
-    className: cn,
+    className: user.className,
     userId: longToString(user.userId),
     accessHash: longToString(user.accessHash),
   };
 }
 
-function deserializeChannel(stored: StoredChannel): InputChannel | InputPeerChannel {
+function deserializeChannel(stored: StoredChannel): any {
+  const args = {
+    channelId: bigInt(stored.channelId),
+    accessHash: bigInt(stored.accessHash),
+  };
   if (stored.className === "InputChannel") {
-    return { _: "inputChannel", channelId: Number(stored.channelId), accessHash: Number(stored.accessHash) } as InputChannel;
+    return new Api.InputChannel(args);
   }
-  return { _: "inputPeerChannel", channelId: Number(stored.channelId), accessHash: Number(stored.accessHash) } as InputPeerChannel;
+  return new Api.InputPeerChannel(args);
 }
 
-function deserializeUser(stored: StoredUser): InputUser | InputPeerUser {
+function deserializeUser(stored: StoredUser): any {
+  const args = {
+    userId: bigInt(stored.userId),
+    accessHash: bigInt(stored.accessHash),
+  };
   if (stored.className === "InputUser") {
-    return { _: "inputUser", userId: Number(stored.userId), accessHash: Number(stored.accessHash) } as InputUser;
+    return new Api.InputUser(args);
   }
-  return { _: "inputPeerUser", userId: Number(stored.userId), accessHash: Number(stored.accessHash) } as InputPeerUser;
+  return new Api.InputPeerUser(args);
 }
 
-function toSendPeer(channel: InputChannel | InputPeerChannel): InputPeerChannel {
-  if (channel?._ === "inputPeerChannel") return channel;
-  if (channel?._ === "inputChannel") {
-    return {
-      _: "inputPeerChannel",
+function toSendPeer(channel: any): any {
+  if (channel?.className === "InputPeerChannel") return channel;
+  if (channel?.className === "InputChannel") {
+    return new Api.InputPeerChannel({
       channelId: channel.channelId,
       accessHash: channel.accessHash,
-    } as InputPeerChannel;
+    });
   }
-  return channel as InputPeerChannel;
+  return channel;
 }
 
 function hasNonOtherAdminRights(rights?: any): boolean {
@@ -286,10 +288,15 @@ function hasNonOtherAdminRights(rights?: any): boolean {
 
 function isTemporaryAdminParticipant(participant?: any): boolean {
   return (
-    participant?._ === "channelParticipantAdmin" &&
-    (participant as { rank?: string }).rank === tempTitle &&
-    !hasNonOtherAdminRights((participant as { adminRights?: Record<string, boolean> }).adminRights)
+    participant instanceof Api.ChannelParticipantAdmin &&
+    (participant as any).rank === tempTitle &&
+    !hasNonOtherAdminRights((participant as any).adminRights)
   );
+}
+
+function getParticipantRank(participant?: any): string {
+  const rank = (participant as any)?.rank;
+  return typeof rank === "string" ? rank : "";
 }
 
 async function formatEntity(target: any, mention?: boolean, throwErrorIfFailed?: boolean) {
@@ -300,13 +307,13 @@ async function formatEntity(target: any, mention?: boolean, throwErrorIfFailed?:
   let id: any;
   let entity: any;
   try {
-    entity = target?._ ? target : await client.getChat(target as string | number);
+    entity = target?.className ? target : await client.getEntity(target);
     if (!entity) throw new Error("无法获取 entity");
     id = entity.id;
     if (!id) throw new Error("无法获取 entity id");
-  } catch (e: unknown) {
+  } catch (e: any) {
     if (throwErrorIfFailed) {
-      throw new Error(`无法获取 ${target} 的 entity: ${getErrorMessage(e) || "未知错误"}`);
+      throw new Error(`无法获取 ${target} 的 entity: ${e?.message || "未知错误"}`);
     }
   }
 
@@ -322,7 +329,7 @@ async function formatEntity(target: any, mention?: boolean, throwErrorIfFailed?:
 
   if (id) {
     displayParts.push(`<a href="tg://user?id=${id}">${id}</a>`);
-  } else if (!target?._) {
+  } else if (!target?.className) {
     displayParts.push(codeTag(target));
   }
 
@@ -343,7 +350,7 @@ class TmpAdminPlugin extends Plugin {
     super();
     this.restorePromise = this.restoreJobs().catch((error) => {
       if (String(error?.message || error).includes("runtime is not initialized")) return;
-      logger.error("[tmp_admin] 恢复临时管理员任务失败:", error);
+      console.error("[tmp_admin] 恢复临时管理员任务失败:", error);
     });
   }
 
@@ -358,34 +365,30 @@ class TmpAdminPlugin extends Plugin {
 
   cmdHandlers: Record<
     string,
-    (msg: MessageContext, trigger?: MessageContext) => Promise<void>
+    (msg: Api.Message, trigger?: Api.Message) => Promise<void>
   > = {
-    tmp_admin: async (msg: MessageContext, trigger?: MessageContext) => {
+    tmp_admin: async (msg: Api.Message, trigger?: Api.Message) => {
       await this.restorePromise;
-      const parts = (msg.text || "").trim().split(/\s+/).filter(Boolean);
+      const parts = (msg.message || "").trim().split(/\s+/).filter(Boolean);
       const sub = (parts[1] || "").toLowerCase();
 
       if (["help", "h"].includes(sub)) {
-        await respondToCommand(msg, trigger, { text: helpText });
+        await respondToCommand(msg, trigger, { text: helpText, parseMode: "html" });
         return;
       }
 
-      const isInChannel = (msg as { isChannel?: boolean }).isChannel;
+      const isInChannel = (msg as any).isChannel;
       if (!isInChannel) {
         await respondToCommand(msg, trigger, {
           text: `请在超级群/频道中使用 <code>${commandName}</code> 命令`,
+          parseMode: "html",
         });
         return;
       }
 
-      const client = await getGlobalClient();
-      if (!client) {
-        await respondToCommand(msg, trigger, { text: "Telegram 客户端未初始化" });
-        return;
-      }
-      const channel = client.resolvePeer(msg.chat.id) as unknown as { _?: string; channelId?: number | string; accessHash?: number | string };
-      const chatEntity = await msg.getCompleteChat();
-      if (!channel || !hasRawType(chatEntity, "channel")) {
+      const channel = await msg.getInputChat();
+      const chatEntity = await msg.getChat();
+      if (!channel || !(chatEntity instanceof Api.Channel)) {
         await respondToCommand(msg, trigger, { text: "无法获取当前超级群/频道实体" });
         return;
       }
@@ -427,16 +430,16 @@ class TmpAdminPlugin extends Plugin {
         return;
       }
 
-      await respondToCommand(msg, trigger, { text: helpText });
+      await respondToCommand(msg, trigger, { text: helpText, parseMode: "html" });
     },
   };
 
   private async addTemporaryAdmin(params: {
-    msg: MessageContext;
-    targetSourceMsg: MessageContext;
-    trigger?: MessageContext;
+    msg: Api.Message;
+    targetSourceMsg: Api.Message;
+    trigger?: Api.Message;
     channel: any;
-    chatEntity: any;
+    chatEntity: Api.Channel;
     targetArg?: string;
     durationArg?: string;
   }): Promise<void> {
@@ -445,9 +448,10 @@ class TmpAdminPlugin extends Plugin {
     let durationMinutes: number;
     try {
       durationMinutes = parseDurationMinutes(durationArg);
-    } catch (e: unknown) {
+    } catch (e: any) {
       await respondToCommand(msg, trigger, {
-        text: `设置临时管理员失败：${codeTag(getErrorMessage(e) || String(e))}`,
+        text: `设置临时管理员失败：${codeTag(e?.message || e)}`,
+        parseMode: "html",
       });
       return;
     }
@@ -468,22 +472,23 @@ class TmpAdminPlugin extends Plugin {
     let participant: any;
     try {
       participant = await this.getCurrentParticipantOrThrow(channel, userEntity);
-    } catch (e: unknown) {
+    } catch (e: any) {
       await respondToCommand(msg, trigger, {
         text:
-          `查询当前管理员状态失败：${codeTag(getErrorMessage(e) || String(e))}\n` +
+          `查询当前管理员状态失败：${codeTag(e?.message || e)}\n` +
           "为避免覆盖现有管理员权限, 已取消设置。",
+        parseMode: "html",
       });
       return;
     }
 
-    if (participant?._ === "channelParticipantCreator") {
+    if (participant instanceof Api.ChannelParticipantCreator) {
       await respondToCommand(msg, trigger, { text: "不能把群主设置为临时管理员" });
       return;
     }
 
     if (
-      participant?._ === "channelParticipantAdmin" &&
+      participant instanceof Api.ChannelParticipantAdmin &&
       !isTemporaryAdminParticipant(participant)
     ) {
       if (this.jobs.has(key)) {
@@ -502,24 +507,31 @@ class TmpAdminPlugin extends Plugin {
       return;
     }
 
+    const existingJob = this.jobs.get(key);
+    const originalRank =
+      existingJob?.originalRank ??
+      (isTemporaryAdminParticipant(participant) ? "" : getParticipantRank(participant));
+
     try {
-      await client.call({
-        _: "channels.editAdmin",
-        channel,
-        userId: userEntity,
-        adminRights: { _: "chatAdminRights", other: true },
-        rank: tempTitle,
-      });
+      await client.invoke(
+        new Api.channels.EditAdmin({
+          channel,
+          userId: userEntity,
+          adminRights: new Api.ChatAdminRights({ other: true }),
+          rank: tempTitle,
+        })
+      );
       const user = await formatEntity(userId || userEntity, true);
       const expiresAt = Date.now() + durationMinutes * 60_000;
       const job: TempAdminJob = {
         client,
         channel,
         chatKey,
-        peerId: msg.chat.id,
+        peerId: msg.peerId,
         userEntity,
         userId,
         userDisplay: user.display,
+        originalRank,
         replyToMsgId: getReplyToMsgId(msg, trigger),
         expiresAt,
         retryCount: 0,
@@ -529,8 +541,8 @@ class TmpAdminPlugin extends Plugin {
       let persistenceWarning = "";
       try {
         await this.persistJob(key, job);
-      } catch (e: unknown) {
-        persistenceWarning = `\n持久化失败: ${codeTag(getErrorMessage(e) || String(e))}`;
+      } catch (e: any) {
+        persistenceWarning = `\n持久化失败: ${codeTag(e?.message || e)}`;
       }
 
       await sleep(1200);
@@ -541,9 +553,9 @@ class TmpAdminPlugin extends Plugin {
           verificationWarning =
             "\n状态校验未确认, 已保留到期解除任务。若服务端稍后同步, 到期仍会尝试解除。";
         }
-      } catch (e: unknown) {
+      } catch (e: any) {
         verificationWarning =
-          `\n状态校验失败, 已保留到期解除任务: ${codeTag(getErrorMessage(e) || String(e))}`;
+          `\n状态校验失败, 已保留到期解除任务: ${codeTag(e?.message || e)}`;
       }
 
       await respondToCommand(msg, trigger, {
@@ -552,20 +564,22 @@ class TmpAdminPlugin extends Plugin {
           `头衔: ${codeTag(tempTitle)}\n` +
           `时长: ${codeTag(formatDuration(durationMinutes))}` +
           `${persistenceWarning}${verificationWarning}`,
+        parseMode: "html",
       }, true);
-    } catch (e: unknown) {
+    } catch (e: any) {
       await respondToCommand(msg, trigger, {
-        text: `设置临时管理员失败：${codeTag(getErrorMessage(e) || String(e))}`,
+        text: `设置临时管理员失败：${codeTag(e?.message || e)}`,
+        parseMode: "html",
       }, true);
     }
   }
 
   private async removeTemporaryAdmin(params: {
-    msg: MessageContext;
-    targetSourceMsg: MessageContext;
-    trigger?: MessageContext;
+    msg: Api.Message;
+    targetSourceMsg: Api.Message;
+    trigger?: Api.Message;
     channel: any;
-    chatEntity: any;
+    chatEntity: Api.Channel;
     targetArg?: string;
     manual: boolean;
   }): Promise<void> {
@@ -588,11 +602,12 @@ class TmpAdminPlugin extends Plugin {
     let participant: any;
     try {
       participant = await this.getCurrentParticipantOrThrow(channel, userEntity);
-    } catch (e: unknown) {
+    } catch (e: any) {
       await respondToCommand(msg, trigger, {
         text:
-          `查询当前管理员状态失败：${codeTag(getErrorMessage(e) || String(e))}\n` +
+          `查询当前管理员状态失败：${codeTag(e?.message || e)}\n` +
           "已保留临时管理员记录, 未执行解除。",
+        parseMode: "html",
       });
       return;
     }
@@ -616,7 +631,7 @@ class TmpAdminPlugin extends Plugin {
       const client = await getGlobalClient();
       if (!client) throw new Error("Telegram 客户端未初始化");
 
-      await this.demoteAdmin(client, channel, userEntity);
+      await this.demoteAdmin(client, channel, userEntity, job?.originalRank);
 
       this.clearLocalJob(key);
       await this.deleteStoredJob(key);
@@ -624,10 +639,12 @@ class TmpAdminPlugin extends Plugin {
       const user = await formatEntity(userId || userEntity, true);
       await respondToCommand(msg, trigger, {
         text: `${manual ? "已提前解除" : "已解除"}临时管理员: ${user.display}`,
+        parseMode: "html",
       }, true);
-    } catch (e: unknown) {
+    } catch (e: any) {
       await respondToCommand(msg, trigger, {
-        text: `解除临时管理员失败：${codeTag(getErrorMessage(e) || String(e))}`,
+        text: `解除临时管理员失败：${codeTag(e?.message || e)}`,
+        parseMode: "html",
       }, true);
     }
   }
@@ -649,7 +666,7 @@ class TmpAdminPlugin extends Plugin {
             job.channel,
             job.userEntity
           );
-        } catch (e: unknown) {
+        } catch (e) {
           scheduleRetry(e);
           return;
         }
@@ -665,8 +682,8 @@ class TmpAdminPlugin extends Plugin {
         }
 
         try {
-          await this.demoteAdmin(job.client, job.channel, job.userEntity);
-        } catch (e: unknown) {
+          await this.demoteAdmin(job.client, job.channel, job.userEntity, job.originalRank);
+        } catch (e) {
           scheduleRetry(e);
           return;
         }
@@ -680,14 +697,14 @@ class TmpAdminPlugin extends Plugin {
       }, Math.min(Math.max(0, delay), maxTimerDelayMs));
     };
 
-    const scheduleRetry = (error: unknown) => {
+    const scheduleRetry = (error: any) => {
       if (job.retryCount >= maxExpiryRetries) {
         this.jobs.delete(key);
         void this.deleteStoredJobQuiet(key);
         void this.sendReplyQuiet(
           job,
           `临时管理员到期自动解除失败, 已重试 ${maxExpiryRetries} 次: ${codeTag(
-            error instanceof Error ? error.message : String(error)
+            error?.message || error
           )}`
         );
         return;
@@ -695,7 +712,7 @@ class TmpAdminPlugin extends Plugin {
 
       job.retryCount += 1;
       void this.persistJobQuiet(key, job);
-      logger.error(
+      console.error(
         `[tmp_admin] 临时管理员到期解除失败, ${expiryRetryDelayMs / 1000}s 后重试 ${key} (${job.retryCount}/${maxExpiryRetries}):`,
         error
       );
@@ -735,7 +752,7 @@ class TmpAdminPlugin extends Plugin {
       mutator(db.data);
       await db.write();
     });
-    this.dbQueue = run.catch(() => { /* DB write queue error, non-critical */ });
+    this.dbQueue = run.catch(() => {});
     await run;
   }
 
@@ -746,6 +763,7 @@ class TmpAdminPlugin extends Plugin {
       user: serializeUser(job.userEntity),
       userId: job.userId,
       userDisplay: job.userDisplay,
+      originalRank: job.originalRank,
       replyToMsgId: job.replyToMsgId,
       expiresAt: job.expiresAt,
       retryCount: job.retryCount,
@@ -764,16 +782,16 @@ class TmpAdminPlugin extends Plugin {
   private async deleteStoredJobQuiet(key: string): Promise<void> {
     try {
       await this.deleteStoredJob(key);
-    } catch (error: unknown) {
-      logger.error(`[tmp_admin] 删除持久化任务失败 ${key}:`, error);
+    } catch (error) {
+      console.error(`[tmp_admin] 删除持久化任务失败 ${key}:`, error);
     }
   }
 
   private async persistJobQuiet(key: string, job: TempAdminJob): Promise<void> {
     try {
       await this.persistJob(key, job);
-    } catch (error: unknown) {
-      logger.error(`[tmp_admin] 更新持久化任务失败 ${key}:`, error);
+    } catch (error) {
+      console.error(`[tmp_admin] 更新持久化任务失败 ${key}:`, error);
     }
   }
 
@@ -799,12 +817,13 @@ class TmpAdminPlugin extends Plugin {
           userEntity,
           userId: stored.userId,
           userDisplay: stored.userDisplay,
+          originalRank: stored.originalRank || "",
           replyToMsgId: stored.replyToMsgId,
           expiresAt: stored.expiresAt,
           retryCount: stored.retryCount || 0,
         });
-      } catch (error: unknown) {
-        logger.error(`[tmp_admin] 跳过无法恢复的任务 ${key}:`, error);
+      } catch (error) {
+        console.error(`[tmp_admin] 跳过无法恢复的任务 ${key}:`, error);
         removedKeys.push(key);
       }
     }
@@ -816,40 +835,45 @@ class TmpAdminPlugin extends Plugin {
     }
   }
 
-  private async demoteAdmin(client: any, channel: any, userEntity: any): Promise<void> {
-    await client.call({
-      _: "channels.editAdmin",
-      channel,
-      userId: userEntity,
-      adminRights: { _: "chatAdminRights" },
-      rank: "",
-    });
+  private async demoteAdmin(client: any, channel: any, userEntity: any, originalRank?: string): Promise<void> {
+    await client.invoke(
+      new Api.channels.EditAdmin({
+        channel,
+        userId: userEntity,
+        adminRights: new Api.ChatAdminRights({}),
+        rank: originalRank || "",
+      })
+    );
   }
 
   private async sendReply(job: TempAdminJob, message: string): Promise<void> {
-    const text = html(message) as unknown as string;
+    const baseOptions = {
+      message,
+      parseMode: "html" as const,
+    };
 
     try {
-      await job.client.sendText(job.peerId, text, {
+      await job.client.sendMessage(job.peerId, {
+        ...baseOptions,
         ...(job.replyToMsgId ? { replyTo: job.replyToMsgId } : {}),
       });
-    } catch (e: unknown) {
+    } catch (e) {
       if (!job.replyToMsgId) throw e;
-      await job.client.sendText(job.peerId, text);
+      await job.client.sendMessage(job.peerId, baseOptions);
     }
   }
 
   private async sendReplyQuiet(job: TempAdminJob, message: string): Promise<void> {
     try {
       await this.sendReply(job, message);
-    } catch (error: unknown) {
-      logger.error("[tmp_admin] 发送到期通知失败:", error);
+    } catch (error) {
+      console.error("[tmp_admin] 发送到期通知失败:", error);
     }
   }
 
   private async listJobs(
-    msg: MessageContext,
-    trigger: MessageContext | undefined,
+    msg: Api.Message,
+    trigger: Api.Message | undefined,
     chatKey: string
   ): Promise<void> {
     const jobs = [...this.jobs.values()].filter((job) => job.chatKey === chatKey);
@@ -866,6 +890,7 @@ class TmpAdminPlugin extends Plugin {
 
     await respondToCommand(msg, trigger, {
       text: `当前临时管理员：\n${lines.join("\n")}`,
+      parseMode: "html",
     });
   }
 
@@ -874,16 +899,17 @@ class TmpAdminPlugin extends Plugin {
     targetEntity: any
   ): Promise<any> {
     const client = await getGlobalClient();
-    const info = await (client as unknown as { call: (params: Record<string, unknown>) => Promise<unknown> }).call({
-      _: "channels.getParticipant",
-      channel,
-      participant: targetEntity,
-    });
-    return (info as { participant?: unknown })?.participant;
+    const info = await client.invoke(
+      new Api.channels.GetParticipant({
+        channel,
+        participant: targetEntity,
+      })
+    );
+    return (info as any)?.participant;
   }
 
   private async resolveUserFromReplyOrArg(
-    msg: MessageContext,
+    msg: Api.Message,
     channel: any,
     arg?: string
   ): Promise<ResolvedUser> {
@@ -896,26 +922,27 @@ class TmpAdminPlugin extends Plugin {
 
       let sender: any;
       try {
-        sender = await (reply as { getCompleteSender?: () => Promise<unknown> }).getCompleteSender?.();
-      } catch (_e: unknown) {
+        sender = await (reply as any).getSender?.();
+      } catch {
         sender = undefined;
       }
 
-      if (hasRawType(sender, "user")) {
-        const input = client.resolvePeer(sender.id);
+      if (sender instanceof Api.User) {
+        const input = await client.getInputEntity(sender.id);
         return { id: Number(sender.id), entity: input };
       }
 
-      const uid = Number((reply as { sender?: { id?: number | string } }).sender?.id);
+      const fromId: any = reply.fromId as any;
+      const uid = Number(fromId?.userId);
       if (!uid) return {};
 
       try {
-        const input = client.resolvePeer(uid);
-        const full = await client.getChat(input as unknown as Parameters<typeof client.getChat>[0]);
-        if (hasRawType(full, "user")) {
-          return { id: Number((full as { id?: number }).id), entity: input };
+        const input = await client.getInputEntity(uid);
+        const full = await client.getEntity(input);
+        if (full instanceof Api.User) {
+          return { id: Number(full.id), entity: input };
         }
-      } catch (_e: unknown) {
+      } catch {
         return {};
       }
     }
@@ -923,13 +950,11 @@ class TmpAdminPlugin extends Plugin {
     if (!arg) return {};
 
     try {
-      const full = await client.getChat(arg as string);
-      if (!hasRawType(full, "user")) return {};
-      const fullId = (full as { id?: number }).id;
-      if (fullId === undefined) return {};
-      const input = client.resolvePeer(fullId);
-      return { id: Number(fullId), entity: input };
-    } catch (_e: unknown) {
+      const full = await client.getEntity(arg as any);
+      if (!(full instanceof Api.User)) return {};
+      const input = await client.getInputEntity(full.id);
+      return { id: Number(full.id), entity: input };
+    } catch {
       const numericId = Number(arg);
       if (!Number.isFinite(numericId)) return {};
 
@@ -937,28 +962,29 @@ class TmpAdminPlugin extends Plugin {
         let offset = 0;
         const limit = 200;
         for (let i = 0; i < 5; i++) {
-          const result: unknown = await (client as unknown as { call: (params: Record<string, unknown>) => Promise<unknown> }).call({
-            _: "channels.getParticipants",
-            channel,
-            filter: { _: "channelParticipantsRecent" },
-            offset,
-            limit,
-            hash: 0,
-          });
-          const participants: Array<{ userId?: number }> = (result as { participants?: Array<{ userId?: number }> })?.participants || [];
-          const users: Array<{ id?: number }> = (result as { users?: Array<{ id?: number }> })?.users || [];
-          const found = participants.find((p) => Number(p.userId) === numericId);
+          const result: any = await client.invoke(
+            new Api.channels.GetParticipants({
+              channel,
+              filter: new Api.ChannelParticipantsRecent(),
+              offset,
+              limit,
+              hash: 0 as any,
+            })
+          );
+          const participants: any[] = result?.participants || [];
+          const users: any[] = result?.users || [];
+          const found = participants.find((p: any) => Number(p.userId) === numericId);
           if (found) {
-            const user = users.find((u) => Number(u.id) === numericId);
+            const user = users.find((u: any) => Number(u.id) === numericId);
             if (user) {
-              const input = client.resolvePeer(user.id as number);
+              const input = await client.getInputEntity(user);
               return { id: Number(user.id), entity: input };
             }
           }
           if (!participants.length) break;
           offset += participants.length;
         }
-      } catch (_e: unknown) {
+      } catch {
         return {};
       }
     }
@@ -966,31 +992,5 @@ class TmpAdminPlugin extends Plugin {
     return {};
   }
 }
-
-
-  // Panel Settings Adapter
-  panelAdapter: PanelSettingsAdapter = {
-    id: "tmp_admin",
-    title: "临时管理",
-    description: "临时管理员配置",
-    category: "插件配置",
-    icon: "🛡️",
-    getSchema: (): PanelSettingField[] => [
-      {
-            "key": "enabled",
-            "label": "启用",
-            "type": "boolean"
-      }
-],
-    getValues: async (): Promise<Record<string, unknown>> => {
-      const db = await JSONFilePreset<any>(path.join(createDirectoryInAssets("tmp_admin"), "config.json"), {} as any);
-      return db.data as Record<string, unknown>;
-    },
-    setValues: async (patch: Record<string, unknown>): Promise<void> => {
-      const db = await JSONFilePreset<any>(path.join(createDirectoryInAssets("tmp_admin"), "config.json"), {} as any);
-      Object.assign(db.data, patch);
-      await db.write();
-    },
-  };
 
 export default new TmpAdminPlugin();

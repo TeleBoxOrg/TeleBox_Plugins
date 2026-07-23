@@ -1,9 +1,9 @@
-import { Plugin, type PanelSettingsAdapter, type PanelSettingField, type PanelFieldType } from "@utils/pluginBase";
+import { Plugin } from "@utils/pluginBase";
 import { getGlobalClient } from "@utils/runtimeManager";
 import { getPrefixes } from "@utils/pluginManager";
-import type { MessageContext } from "@mtcute/dispatcher";
-import { thtml as html } from "@mtcute/html-parser";
 import { createDirectoryInTemp, resolvePluginAssetFile } from "@utils/pathHelpers";
+import { Api } from "teleproto";
+import { CustomFile } from "teleproto/client/uploads.js";
 import { JSONFilePreset } from "lowdb/node";
 import * as fs from "fs";
 import * as path from "path";
@@ -15,12 +15,10 @@ import archiver from "archiver";
 import dayjs from "dayjs";
 import crypto from "crypto";
 
-import type { TelegramClient } from '@mtcute/core/client.js';
-import type { InputPeerLike } from '@mtcute/core/highlevel/types/index.js';
-// @ts-ignore - ssh2 has no type declarations
+// SSH2模块直接导入 - 跳过类型检查
+// @ts-ignore
 import { Client as SSH2Client } from 'ssh2';
-import { logger } from "@utils/logger";
-import { getErrorMessage } from "@utils/errorHelpers";
+
 import { htmlEscape } from "@utils/htmlEscape";
 
 const execFileAsync = promisify(execFile);
@@ -70,6 +68,7 @@ async function isSshServiceActive(): Promise<boolean> {
   }
 }
 
+// HTML转义函数
 // 验证路径安全性
 function validatePath(pathStr: string): boolean {
   if (!pathStr || typeof pathStr !== "string") return false;
@@ -139,7 +138,7 @@ async function checkPortInUse(port: number): Promise<{ inUse: boolean; processIn
       });
     }
   }
-}
+};
 
 // 密码复杂度验证
 const validatePassword = (password: string): boolean => {
@@ -164,7 +163,7 @@ const DEFAULT_CONFIG: Record<string, string> = {
 
 // 配置管理器
 class ConfigManager {
-  private static db: Awaited<ReturnType<typeof JSONFilePreset<Record<string, string>>>> | null = null;
+  private static db: any = null;
   private static initialized = false;
   private static initLock = false;  // 添加锁防止并发初始化
   private static configPath: string;
@@ -195,13 +194,13 @@ class ConfigManager {
         legacyDirs: ["sshkey"],
         legacyFiles: [{ dir: "sshkey", fileName: "sshkey_config.json" }],
       });
-      this.db = await JSONFilePreset<Record<string, string>>(
+      this.db = await JSONFilePreset<Record<string, any>>(
         this.configPath,
         { ...DEFAULT_CONFIG }
       );
       this.initialized = true;
-    } catch (error: unknown) {
-      logger.error("[ssh] 初始化配置失败:", error);
+    } catch (error) {
+      console.error("[ssh] 初始化配置失败:", error);
     } finally {
       this.initLock = false;
     }
@@ -221,13 +220,14 @@ class ConfigManager {
       this.db.data[key] = value;
       await this.db.write();
       return true;
-    } catch (error: unknown) {
-      logger.error(`[ssh] 设置配置失败 ${key}:`, error);
+    } catch (error) {
+      console.error(`[ssh] 设置配置失败 ${key}:`, error);
       return false;
     }
   }
 }
 
+// 帮助文本
 // SSH服务重启通用函数
 const restartSSHService = async (): Promise<{ success: boolean; command?: string }> => {
   const commands: Array<{ file: string; args: string[]; label: string }> = [
@@ -327,23 +327,23 @@ class SSHPlugin extends Plugin {
   description: string = `SSH管理和服务器配置\n\n${help_text}`;
 
   cmdHandlers = {
-    ssh: async (msg: MessageContext) => {
+    ssh: async (msg: Api.Message) => {
       await this.handleSSH(msg);
     }
   };
 
   // 主命令处理器
-  private async handleSSH(msg: MessageContext): Promise<void> {
+  private async handleSSH(msg: Api.Message): Promise<void> {
     const client = await getGlobalClient();
     if (!client) {
-      await msg.edit({ text: "❌ 客户端未初始化" });
+      await msg.edit({ text: "❌ 客户端未初始化", parseMode: "html" });
       return;
     }
 
     // 检查执行权限 - 只能在收藏夹或指定会话执行
-    const isPrivate = (msg as { isPrivate?: boolean }).isPrivate;
-    const chatId = (msg.chat?.id)?.toString();
-    const userId = (msg.sender?.id)?.toString();
+    const isPrivate = msg.isPrivate;
+    const chatId = msg.chatId?.toString();
+    const userId = msg.senderId?.toString();
     const targetChat = await ConfigManager.get(CONFIG_KEYS.TARGET_CHAT);
     
     // 检查是否在允许的位置执行
@@ -359,7 +359,8 @@ class SSHPlugin extends Plugin {
     
     if (!canExecute) {
       await msg.edit({
-        text: html(`🔒 <b>权限限制</b>\n\n此SSH管理插件只能在以下位置执行：\n• 收藏夹\n• 已设置的目标会话\n\n💡 当前目标: <code>${htmlEscape(targetChat)}</code>`)
+        text: "🔒 <b>权限限制</b>\n\n此SSH管理插件只能在以下位置执行：\n• 收藏夹\n• 已设置的目标会话\n\n💡 当前目标: <code>" + htmlEscape(targetChat === "me" ? "收藏夹" : targetChat) + "</code>\n⚠️ 请在允许的位置使用此插件",
+        parseMode: "html"
       });
       return;
     }
@@ -372,12 +373,12 @@ class SSHPlugin extends Plugin {
     try {
       if (!sub) {
         // 无参数时显示帮助
-        await msg.edit({ text: help_text });
+        await msg.edit({ text: help_text, parseMode: "html" });
         return;
       }
 
       if (sub === "help" || sub === "h") {
-        await msg.edit({ text: help_text });
+        await msg.edit({ text: help_text, parseMode: "html" });
         return;
       }
 
@@ -392,6 +393,7 @@ class SSHPlugin extends Plugin {
           } else {
             await msg.edit({
               text: `❌ <b>无效的生成模式</b>\n\n用法:\n• <code>${mainPrefix}ssh gen add</code> - 生成新密钥并追加\n• <code>${mainPrefix}ssh gen replace</code> - 生成新密钥并替换所有旧密钥`,
+              parseMode: "html"
             });
           }
           break;
@@ -454,20 +456,22 @@ class SSHPlugin extends Plugin {
 
         default:
           await msg.edit({
-            text: `❌ 未知子命令: <code>${htmlEscape(sub)}</code>\n\n使用 <code>${mainPrefix}ssh help</code> 查看帮助`,
+            text: `❓ 未知子命令，使用 <code>${mainPrefix}ssh help</code> 查看说明`,
+            parseMode: "html"
           });
       }
-    } catch (error: unknown) {
-      logger.error("[ssh] 执行失败:", error);
+    } catch (error: any) {
+      console.error("[ssh] 执行失败:", error);
       await msg.edit({
-        text: `❌ <b>执行失败:</b> ${htmlEscape(getErrorMessage(error) || "未知错误")}`,
+        text: `❌ <b>执行失败:</b> ${htmlEscape(error.message || "未知错误")}`,
+        parseMode: "html"
       });
     }
   }
 
   // 生成SSH密钥
-  private async generateSSHKeys(msg: MessageContext, client: TelegramClient, mode: "add" | "replace" = "add"): Promise<void> {
-    await msg.edit({ text: "🔄 正在生成SSH密钥对..." });
+  private async generateSSHKeys(msg: Api.Message, client: any, mode: "add" | "replace" = "add"): Promise<void> {
+    await msg.edit({ text: "🔄 正在生成SSH密钥对...", parseMode: "html" });
 
     const timestamp = dayjs().format("YYYYMMDD_HHmmss");
     const workDir = path.join(createDirectoryInTemp("sshkey"), `keys_${timestamp}`);
@@ -502,13 +506,13 @@ class SSHPlugin extends Plugin {
         // 首先检查 puttygen 是否可用
         try {
           await execFileAsync("puttygen", ["--version"]);
-        } catch (_e: unknown) {
+        } catch {
           // puttygen 不可用，尝试安装 putty-tools
-          logger.info("[ssh] puttygen 未找到，正在安装 putty-tools...");
+          console.log("[ssh] puttygen 未找到，正在安装 putty-tools...");
           try {
             await execFileAsync("apt-get", ["update"]);
             await execFileAsync("apt-get", ["install", "-y", "putty-tools"]);
-          } catch (_e: unknown) {
+          } catch {
             throw new Error("无法安装 putty-tools");
           }
         }
@@ -516,9 +520,9 @@ class SSHPlugin extends Plugin {
         // 转换为PPK格式
         await execFileAsync("puttygen", [keyPath, "-o", `${keyPath}.ppk`]);
         ppkKey = fs.readFileSync(`${keyPath}.ppk`, "utf-8");
-        logger.info("[ssh] PPK格式密钥生成成功");
-      } catch (error: unknown) {
-        logger.info(`[ssh] PPK转换失败: ${getErrorMessage(error)}，跳过PPK格式`);
+        console.log("[ssh] PPK格式密钥生成成功");
+      } catch (error: any) {
+        console.log(`[ssh] PPK转换失败: ${error.message}，跳过PPK格式`);
       }
 
       // 获取服务器信息
@@ -551,7 +555,7 @@ class SSHPlugin extends Plugin {
       fs.mkdirSync("/root/.ssh", { recursive: true, mode: 0o700 });
       
       if (isFirstTime) {
-        await msg.edit({ text: "🔄 首次生成密钥，正在设置SSH环境..." });
+        await msg.edit({ text: "🔄 首次生成密钥，正在设置SSH环境...", parseMode: "html" });
         
         // 首次设置，确保所有权限正确
         fs.chmodSync("/root/.ssh", 0o700);
@@ -572,9 +576,9 @@ class SSHPlugin extends Plugin {
             "/root/.ssh/authorized_keys",
             `/root/.ssh/authorized_keys.backup.${backupTimestamp}`,
           );
-        } catch (e: unknown) { logger.warn('操作失败', e) }
+        } catch {}
         
-        await msg.edit({ text: "🔄 正在替换密钥..." });
+        await msg.edit({ text: "🔄 正在替换密钥...", parseMode: "html" });
         // 直接写入公钥，确保格式正确
         fs.writeFileSync("/root/.ssh/authorized_keys", publicKey + "\n");
         
@@ -583,12 +587,12 @@ class SSHPlugin extends Plugin {
         let existingKeys = "";
         try {
           existingKeys = fs.readFileSync("/root/.ssh/authorized_keys", "utf-8");
-        } catch (e: unknown) { logger.warn('操作失败', e) }
+        } catch {}
         
         // 检查密钥是否已存在（通过比较公钥数据部分）
         const newKeyData = keyParts[1];
         if (existingKeys.includes(newKeyData)) {
-          await msg.edit({ text: "⚠️ 密钥已存在，跳过添加..." });
+          await msg.edit({ text: "⚠️ 密钥已存在，跳过添加...", parseMode: "html" });
         } else {
           // 追加新密钥
           fs.appendFileSync("/root/.ssh/authorized_keys", publicKey + "\n");
@@ -601,38 +605,45 @@ class SSHPlugin extends Plugin {
       
       // 如果是首次生成，还需要确保SSH服务配置
       if (isFirstTime) {
-        await msg.edit({ text: "🔄 首次设置，正在优化SSH配置..." });
+        await msg.edit({ text: "🔄 首次设置，正在优化SSH配置...", parseMode: "html" });
         
         // 确保SSH服务允许密钥认证
         try {
           await modifySSHConfig("PubkeyAuthentication", "yes", false);
           await modifySSHConfig("AuthorizedKeysFile", "/root/.ssh/authorized_keys", false);
-        } catch (configError: unknown) {
-          logger.info("[ssh] SSH配置优化失败，但密钥已正确设置:", configError);
+        } catch (configError) {
+          console.log("[ssh] SSH配置优化失败，但密钥已正确设置:", configError);
         }
       }
 
       // 获取目标会话
       const targetChat = await ConfigManager.get(CONFIG_KEYS.TARGET_CHAT);
-      let peer: InputPeerLike;
+      let peer: any;
 
       if (targetChat === "me") {
         peer = "me";
       } else {
         try {
-          peer = await client.resolvePeer(targetChat);
-        } catch (_e: unknown) {
+          peer = await client.getEntity(targetChat);
+        } catch {
           peer = "me";
-          await msg.replyText(html(`⚠️ 无法找到指定会话 ${targetChat}，已发送到收藏夹`));
+          await msg.reply({ 
+            message: `⚠️ 无法找到指定会话 ${targetChat}，已发送到收藏夹`,
+            parseMode: "html"
+          });
         }
       }
 
       // 发送文件
-      await client.sendMedia(peer, {
-        type: "document",
-        file: Buffer.from(fs.readFileSync(archivePath)),
-        fileName: `${hostname}_ssh_keys.zip`,
-        caption: `🔐 <b>SSH密钥包</b> - ${hostname} - ${timestamp}\n\n<b>包含文件：</b>\n• RSA私钥 (OpenSSH格式)\n• RSA私钥 (PPK格式)\n• 使用说明\n\n⚠️ <b>请妥善保管私钥文件</b>`,
+      await client.sendFile(peer, {
+        file: new CustomFile(
+          "ssh_keys_package.zip",
+          fs.statSync(archivePath).size,
+          "",
+          fs.readFileSync(archivePath)
+        ),
+        caption: `🔐 <b>SSH密钥包</b> - ${hostname} - ${timestamp}\n\n<b>包含文件：</b>\n• RSA私钥 (OpenSSH格式)\n• RSA公钥\n${ppkKey ? "• RSA私钥 (PPK格式)\n" : ""}• 使用说明\n\n⚠️ <b>请妥善保管私钥文件</b>`,
+        parseMode: "html"
       });
 
       const modeText = mode === "replace" ? "已替换所有旧密钥" : "已追加到现有密钥";
@@ -642,7 +653,7 @@ class SSHPlugin extends Plugin {
       try {
         const keysContent = fs.readFileSync("/root/.ssh/authorized_keys", "utf-8");
         keyCount = keysContent.trim().split('\n').filter(line => line.trim() && !line.startsWith('#')).length;
-      } catch (e: unknown) { logger.warn('操作失败', e) }
+      } catch {}
 
       // 生成状态消息
       let setupMessage = "";
@@ -652,12 +663,13 @@ class SSHPlugin extends Plugin {
       
       await msg.edit({
         text: `✅ <b>SSH密钥生成成功</b>\n\n📁 密钥包已发送到: ${targetChat === "me" ? "收藏夹" : htmlEscape(targetChat)}\n🔑 公钥${modeText}\n📊 当前共有 ${keyCount} 个授权密钥\n\n<b>服务器信息：</b>\n🖥️ 主机: ${htmlEscape(hostname)}\n🌐 IP: ${htmlEscape(ipAddress)}\n🔌 端口: ${htmlEscape(sshPort)}\n\n<b>连接命令：</b>\n<code>ssh -i ${htmlEscape(keyName)} root@${htmlEscape(ipAddress)} -p ${htmlEscape(sshPort)}</code>${setupMessage}\n\n💡 <b>提示：</b>\n• 请下载并保存私钥文件\n• 本地设置权限: <code>chmod 600 ${htmlEscape(keyName)}</code>\n• 使用 <code>${htmlEscape(mainPrefix)}ssh keys</code> 查看所有密钥`,
+        parseMode: "html"
       });
 
       // 清理临时文件
       fs.rmSync(workDir, { recursive: true, force: true });
 
-    } catch (error: unknown) {
+    } catch (error: any) {
       // 清理临时文件
       if (fs.existsSync(workDir)) {
         fs.rmSync(workDir, { recursive: true, force: true });
@@ -667,8 +679,8 @@ class SSHPlugin extends Plugin {
   }
 
   // 查看授权密钥列表
-  private async listAuthorizedKeys(msg: MessageContext): Promise<void> {
-    await msg.edit({ text: "🔄 正在查看授权密钥..." });
+  private async listAuthorizedKeys(msg: Api.Message): Promise<void> {
+    await msg.edit({ text: "🔄 正在查看授权密钥...", parseMode: "html" });
 
     try {
       const authorizedKeysPath = "/root/.ssh/authorized_keys";
@@ -676,18 +688,20 @@ class SSHPlugin extends Plugin {
       // 检查文件是否存在
       if (!fs.existsSync(authorizedKeysPath)) {
         await msg.edit({
-          text: html`❌ <b>未找到授权密钥文件</b>\n\n文件路径: <code>/root/.ssh/authorized_keys</code>\n状态: 不存在`
+          text: "❌ <b>未找到授权密钥文件</b>\n\n文件路径: <code>/root/.ssh/authorized_keys</code>\n状态: 不存在",
+          parseMode: "html"
         });
         return;
       }
 
       // 读取并解析密钥
-      const keysRaw = fs.readFileSync(authorizedKeysPath, "utf-8");
-      const lines = keysRaw.trim().split('\n').filter(line => line.trim() && !line.startsWith('#'));
+      const lines = fs.readFileSync(authorizedKeysPath, "utf8")
+        .trim().split("\n").filter((line) => line.trim() && !line.startsWith("#"));
       
       if (lines.length === 0) {
         await msg.edit({
-          text: html`📋 <b>授权密钥列表</b>\n\n当前没有任何授权密钥`
+          text: "📋 <b>授权密钥列表</b>\n\n当前没有任何授权密钥",
+          parseMode: "html"
         });
         return;
       }
@@ -760,16 +774,17 @@ class SSHPlugin extends Plugin {
 
       await msg.edit({
         text: keyList,
+        parseMode: "html"
       });
       
-    } catch (error: unknown) {
-      throw new Error(`查看授权密钥失败: ${getErrorMessage(error)}`);
+    } catch (error: any) {
+      throw new Error(`查看授权密钥失败: ${error.message}`);
     }
   }
 
   // 清空授权密钥
-  private async clearAuthorizedKeys(msg: MessageContext): Promise<void> {
-    await msg.edit({ text: "⚠️ 正在清空所有授权密钥..." });
+  private async clearAuthorizedKeys(msg: Api.Message): Promise<void> {
+    await msg.edit({ text: "⚠️ 正在清空所有授权密钥...", parseMode: "html" });
 
     try {
       const authorizedKeysPath = "/root/.ssh/authorized_keys";
@@ -777,29 +792,30 @@ class SSHPlugin extends Plugin {
       // 备份现有密钥
       const timestamp = dayjs().format("YYYYMMDD_HHmmss");
       try {
-        if (fs.existsSync(authorizedKeysPath)) {
-          fs.copyFileSync(authorizedKeysPath, `${authorizedKeysPath}.backup.${timestamp}`);
-        }
-      } catch (e: unknown) { logger.warn(`[ssh] 文件不存在时忽略备份错误:`, e) }
-      
+        fs.copyFileSync(authorizedKeysPath, `${authorizedKeysPath}.backup.${timestamp}`);
+      } catch {
+        // 文件不存在时忽略备份错误
+      }
+
       // 清空密钥文件
       fs.mkdirSync("/root/.ssh", { recursive: true, mode: 0o700 });
-      fs.writeFileSync(authorizedKeysPath, "");
       fs.chmodSync("/root/.ssh", 0o700);
+      fs.writeFileSync(authorizedKeysPath, "", { mode: 0o600 });
       fs.chmodSync(authorizedKeysPath, 0o600);
 
       await msg.edit({
         text: `✅ <b>授权密钥已清空</b>\n\n🗂️ 备份文件: <code>${authorizedKeysPath}.backup.${timestamp}</code>\n\n⚠️ <b>警告:</b> 所有SSH密钥登录已失效，请确保有其他方式访问服务器`,
+        parseMode: "html"
       });
       
-    } catch (error: unknown) {
-      throw new Error(`清空授权密钥失败: ${getErrorMessage(error)}`);
+    } catch (error: any) {
+      throw new Error(`清空授权密钥失败: ${error.message}`);
     }
   }
 
   // 导出授权密钥
-  private async exportAuthorizedKeys(msg: MessageContext): Promise<void> {
-    await msg.edit({ text: "🔄 正在导出授权密钥..." });
+  private async exportAuthorizedKeys(msg: Api.Message): Promise<void> {
+    await msg.edit({ text: "🔄 正在导出授权密钥...", parseMode: "html" });
 
     try {
       const authorizedKeysPath = "/root/.ssh/authorized_keys";
@@ -807,17 +823,19 @@ class SSHPlugin extends Plugin {
       // 检查文件是否存在
       if (!fs.existsSync(authorizedKeysPath)) {
         await msg.edit({
-          text: html`❌ <b>未找到授权密钥文件</b>\n\n文件路径: <code>/root/.ssh/authorized_keys</code>\n状态: 不存在`
+          text: "❌ <b>未找到授权密钥文件</b>\n\n文件路径: <code>/root/.ssh/authorized_keys</code>\n状态: 不存在",
+          parseMode: "html"
         });
         return;
       }
 
       // 读取密钥内容
-      const keysContent = fs.readFileSync(authorizedKeysPath, "utf-8").trim();
+      const keysContent = fs.readFileSync(authorizedKeysPath, "utf8").trim();
       
       if (!keysContent) {
         await msg.edit({
-          text: html`📋 <b>授权密钥为空</b>\n\n当前没有任何授权密钥可导出`
+          text: "📋 <b>授权密钥为空</b>\n\n当前没有任何授权密钥可导出",
+          parseMode: "html"
         });
         return;
       }
@@ -868,50 +886,57 @@ ${keysContent}`;
       if (!client) {
         await msg.edit({
           text: `✅ <b>密钥导出完成</b>\n\n📊 密钥数量: ${lines.length}\n📁 文件已生成，但无法发送\n\n请检查客户端连接`,
+          parseMode: "html"
         });
         return;
       }
 
       const targetChat = await ConfigManager.get(CONFIG_KEYS.TARGET_CHAT);
-      let peer: InputPeerLike;
+      let peer: any;
 
       if (targetChat === "me") {
         peer = "me";
       } else {
         try {
-          peer = await client.resolvePeer(targetChat);
-        } catch (_e: unknown) {
+          peer = await client.getEntity(targetChat);
+        } catch {
           peer = "me";
         }
       }
 
       // 发送导出文件
-      await client.sendMedia(peer, {
-        type: "document",
-        file: Buffer.from(fs.readFileSync(archivePath)),
-        fileName: `${hostname}_ssh_keys.zip`,
+      await client.sendFile(peer, {
+        file: new CustomFile(
+          "ssh_keys_export.zip",
+          fs.statSync(archivePath).size,
+          "",
+          fs.readFileSync(archivePath)
+        ),
         caption: `📦 <b>SSH密钥导出包</b>\n\n🖥️ 服务器: ${hostname}\n📊 密钥数量: ${lines.length}\n📅 导出时间: ${dayjs().format("YYYY-MM-DD HH:mm:ss")}\n\n📁 <b>包含文件:</b>\n• authorized_keys_export.txt (带注释说明)\n• authorized_keys (纯密钥文件)\n\n⚠️ <b>安全提示:</b> 请妥善保管密钥文件`,
+        parseMode: "html"
       });
 
       await msg.edit({
-        text: html(`✅ <b>密钥导出成功</b>\n\n📊 导出密钥数量: ${lines.length}\n📁 文件已发送到: ${targetChat === "me" ? "收藏夹" : htmlEscape(targetChat)}\n\n💡 <b>文件说明:</b>\n• 带注释的完整导出文件\n• 纯净的authorized_keys文件\n• 可直接用于其他服务器配置`),
+        text: `✅ <b>密钥导出成功</b>\n\n📊 导出密钥数量: ${lines.length}\n📁 文件已发送到: ${targetChat === "me" ? "收藏夹" : htmlEscape(targetChat)}\n\n💡 <b>文件说明:</b>\n• 带注释的完整导出文件\n• 纯净的authorized_keys文件\n• 可直接用于其他服务器配置`,
+        parseMode: "html"
       });
 
       // 清理临时文件
       fs.rmSync(workDir, { recursive: true, force: true });
 
-    } catch (error: unknown) {
-      throw new Error(`导出授权密钥失败: ${getErrorMessage(error)}`);
+    } catch (error: any) {
+      throw new Error(`导出授权密钥失败: ${error.message}`);
     }
   }
 
   // 修改root密码
-  private async changePassword(msg: MessageContext, args: string[]): Promise<void> {
+  private async changePassword(msg: Api.Message, args: string[]): Promise<void> {
     const newPassword = args.join(" ").trim();
     
     if (!newPassword) {
       await msg.edit({
         text: `❌ <b>请提供新密码</b>\n\n示例: <code>${mainPrefix}ssh passwd 新密码123</code>`,
+        parseMode: "html"
       });
       return;
     }
@@ -920,36 +945,39 @@ ${keysContent}`;
     if (!validatePassword(newPassword)) {
       await msg.edit({
         text: `❌ <b>密码不符合要求</b>\n\n密码长度至少8位`,
+        parseMode: "html"
       });
       return;
     }
 
-    await msg.edit({ text: "🔄 正在修改root密码..." });
+    await msg.edit({ text: "🔄 正在修改root密码...", parseMode: "html" });
 
     try {
-      await runWithInput("chpasswd", [], `root:${newPassword}`);
+      await runWithInput("chpasswd", [], `root:${newPassword}\n`);
 
       // 不显示明文密码
       await msg.edit({
         text: `✅ <b>root密码修改成功</b>\n\n⚠️ 请妥善保管新密码`,
+        parseMode: "html"
       });
-    } catch (error: unknown) {
-      throw new Error(`修改密码失败: ${getErrorMessage(error)}`);
+    } catch (error: any) {
+      throw new Error(`修改密码失败: ${error.message}`);
     }
   }
 
   // 修改SSH端口
-  private async changeSSHPort(msg: MessageContext, portStr: string): Promise<void> {
+  private async changeSSHPort(msg: Api.Message, portStr: string): Promise<void> {
     const port = validatePort(portStr);
     
     if (!port) {
       await msg.edit({
         text: `❌ <b>无效的端口号</b>\n\n端口范围: 1-65535\n示例: <code>${mainPrefix}ssh port 2222</code>`,
+        parseMode: "html"
       });
       return;
     }
 
-    await msg.edit({ text: `🔄 正在检查端口 ${port} 是否可用...` });
+    await msg.edit({ text: `🔄 正在检查端口 ${port} 是否可用...`, parseMode: "html" });
 
     try {
       // 获取当前SSH端口，用于后续关闭旧端口防火墙
@@ -961,32 +989,35 @@ ${keysContent}`;
         if (portCheck.inUse) {
           await msg.edit({
             text: `❌ <b>端口冲突检测失败</b>\n\n端口 <code>${port}</code> 已被占用\n进程信息: <code>${htmlEscape(portCheck.processInfo || '未知')}</code>\n\n💡 <b>建议:</b>\n• 选择其他端口号\n• 停止占用该端口的服务\n• 使用 <code>netstat -tlnp | grep :${port}</code> 查看详情`,
+            parseMode: "html"
           });
           return;
         }
       }
       
-      await msg.edit({ text: `🔄 端口 ${port} 可用，正在修改SSH配置...` });
+      await msg.edit({ text: `🔄 端口 ${port} 可用，正在修改SSH配置...`, parseMode: "html" });
       
       // 使用通用函数修改SSH配置
       const timestamp = await modifySSHConfig("Port", String(port));
       
-      await msg.edit({ text: `🔄 SSH配置已更新，正在开放防火墙端口 ${port}...` });
+      await msg.edit({ text: `🔄 SSH配置已更新，正在开放防火墙端口 ${port}...`, parseMode: "html" });
       
       // 自动开放新端口的防火墙
       try {
         await execFileAsync("iptables", ["-I", "INPUT", "-p", "tcp", "--dport", String(port), "-j", "ACCEPT"]);
         await execFileAsync("iptables", ["-I", "INPUT", "-p", "udp", "--dport", String(port), "-j", "ACCEPT"]);
+
+        // 尝试保存iptables规则
         try {
           await saveIptablesRules();
-        } catch (e: unknown) {
-          logger.info("[ssh] 无法持久化iptables规则:", e);
+        } catch {
+          console.log("[ssh] 无法持久化iptables规则");
         }
-      } catch (firewallError: unknown) {
-        logger.warn("[ssh] 防火墙端口开放失败:", getErrorMessage(firewallError));
+      } catch (firewallError: any) {
+        console.warn("[ssh] 防火墙端口开放失败:", firewallError.message);
       }
       
-      await msg.edit({ text: `🔄 防火墙已配置，正在重启SSH服务...` });
+      await msg.edit({ text: `🔄 防火墙已配置，正在重启SSH服务...`, parseMode: "html" });
       
       // 重启SSH服务使配置生效
       const restartResult = await restartSSHService();
@@ -1005,26 +1036,28 @@ ${keysContent}`;
 
       await msg.edit({
         text: `✅ <b>SSH端口修改成功</b>\n\n🔧 新端口: <code>${port}</code>\n🛡️ 防火墙: 已自动开放 TCP/UDP ${port}\n📄 备份文件: /etc/ssh/sshd_config.backup.${htmlEscape(timestamp)}${oldPortWarning}\n\n⚠️ <b>重要:</b> 请用新端口测试连接后再断开当前会话`,
+        parseMode: "html"
       });
-    } catch (error: unknown) {
-      throw new Error(`修改SSH端口失败: ${getErrorMessage(error)}`);
+    } catch (error: any) {
+      throw new Error(`修改SSH端口失败: ${error.message}`);
     }
   }
 
   // 开关密码登录
-  private async togglePasswordAuth(msg: MessageContext, mode: string): Promise<void> {
+  private async togglePasswordAuth(msg: Api.Message, mode: string): Promise<void> {
     const enable = mode === "on" || mode === "enable" || mode === "yes";
     const disable = mode === "off" || mode === "disable" || mode === "no";
     
     if (!enable && !disable) {
       await msg.edit({
         text: `❌ <b>无效的参数</b>\n\n使用: <code>${mainPrefix}ssh pwauth on/off</code>`,
+        parseMode: "html"
       });
       return;
     }
 
     const action = enable ? "开启" : "关闭";
-    await msg.edit({ text: `🔄 正在${action}密码登录...` });
+    await msg.edit({ text: `🔄 正在${action}密码登录...`, parseMode: "html" });
 
     try {
       const authValue = enable ? "yes" : "no";
@@ -1047,26 +1080,28 @@ ${keysContent}`;
 
       await msg.edit({
         text: `✅ <b>密码登录已${action}</b>\n\n当前状态: ${enable ? "✅ 已开启" : "❌ 已关闭"}\n备份文件: /etc/ssh/sshd_config.backup.${timestamp}`,
+        parseMode: "html"
       });
-    } catch (error: unknown) {
-      throw new Error(`${action}密码登录失败: ${getErrorMessage(error)}`);
+    } catch (error: any) {
+      throw new Error(`${action}密码登录失败: ${error.message}`);
     }
   }
 
   // 开关密钥登录
-  private async toggleKeyAuth(msg: MessageContext, mode: string): Promise<void> {
+  private async toggleKeyAuth(msg: Api.Message, mode: string): Promise<void> {
     const enable = mode === "on" || mode === "enable" || mode === "yes";
     const disable = mode === "off" || mode === "disable" || mode === "no";
     
     if (!enable && !disable) {
       await msg.edit({
         text: `❌ <b>无效的参数</b>\n\n使用: <code>${mainPrefix}ssh keyauth on/off</code>`,
+        parseMode: "html"
       });
       return;
     }
 
     const action = enable ? "开启" : "关闭";
-    await msg.edit({ text: `🔄 正在${action}密钥登录...` });
+    await msg.edit({ text: `🔄 正在${action}密钥登录...`, parseMode: "html" });
 
     try {
       const authValue = enable ? "yes" : "no";
@@ -1096,14 +1131,15 @@ ${keysContent}`;
 
       await msg.edit({
         text: `✅ <b>密钥登录已${action}</b>\n\n当前状态: ${enable ? "✅ 已开启" : "❌ 已关闭"}\n备份文件: /etc/ssh/sshd_config.backup.${timestamp}${warningText}`,
+        parseMode: "html"
       });
-    } catch (error: unknown) {
-      throw new Error(`${action}密钥登录失败: ${getErrorMessage(error)}`);
+    } catch (error: any) {
+      throw new Error(`${action}密钥登录失败: ${error.message}`);
     }
   }
 
   // 开关Root登录
-  private async toggleRootLogin(msg: MessageContext, mode: string): Promise<void> {
+  private async toggleRootLogin(msg: Api.Message, mode: string): Promise<void> {
     const enable = mode === "on" || mode === "enable" || mode === "yes";
     const disable = mode === "off" || mode === "disable" || mode === "no";
     const keyOnly = mode === "keyonly" || mode === "key-only" || mode === "keys";
@@ -1111,6 +1147,7 @@ ${keysContent}`;
     if (!enable && !disable && !keyOnly) {
       await msg.edit({
         text: `❌ <b>无效的参数</b>\n\n用法:\n• <code>${mainPrefix}ssh rootlogin on</code> - 允许所有root登录方式\n• <code>${mainPrefix}ssh rootlogin off</code> - 完全禁止root登录\n• <code>${mainPrefix}ssh rootlogin keyonly</code> - 仅允许密钥登录root`,
+        parseMode: "html"
       });
       return;
     }
@@ -1129,7 +1166,7 @@ ${keysContent}`;
       authValue = "no";
     }
 
-    await msg.edit({ text: `🔄 正在${action}...` });
+    await msg.edit({ text: `🔄 正在${action}...`, parseMode: "html" });
 
     try {
       // 检查当前是否有其他登录方式
@@ -1146,13 +1183,15 @@ ${keysContent}`;
           if (userList.length === 0) {
             await msg.edit({
               text: `❌ <b>检测到没有普通用户账户</b>\n\n完全禁用root登录可能导致系统无法访问。\n\n<b>建议:</b>\n• 使用 <code>${mainPrefix}ssh rootlogin keyonly</code> 仅允许密钥登录\n• 或先手动创建普通用户账户再禁用root\n\n如需继续强制禁用，请再次执行命令。`,
+              parseMode: "html"
             });
             return;
           }
-        } catch (_e: unknown) {
+        } catch {
           // 检查失败时给出警告
           await msg.edit({
             text: `⚠️ <b>无法检测用户账户</b>\n\n建议使用 <code>${mainPrefix}ssh rootlogin keyonly</code> 而不是完全禁用\n\n如需继续禁用root登录:\n<code>${mainPrefix}ssh rootlogin off</code>`,
+            parseMode: "html"
           });
           return;
         }
@@ -1183,31 +1222,34 @@ ${keysContent}`;
       
       await msg.edit({
         text: `✅ <b>Root登录配置已更新</b>\n\n状态: ${statusText}\n配置值: <code>PermitRootLogin ${authValue}</code>\n备份文件: /etc/ssh/sshd_config.backup.${timestamp}\n\n${securityTip}`,
+        parseMode: "html"
       });
-    } catch (error: unknown) {
-      throw new Error(`配置Root登录失败: ${getErrorMessage(error)}`);
+    } catch (error: any) {
+      throw new Error(`配置Root登录失败: ${error.message}`);
     }
   }
 
   // 启用root账户直接登录
-  private async enableRootAccount(msg: MessageContext, args: string[]): Promise<void> {
+  private async enableRootAccount(msg: Api.Message, args: string[]): Promise<void> {
     const password = args.join(" ").trim();
     
     if (!password) {
       await msg.edit({
         text: `❌ <b>请提供root密码</b>\n\n示例: <code>${mainPrefix}ssh enableroot 新密码123</code>\n\n⚠️ <b>说明:</b> 此命令会启用root账户并设置密码，允许直接SSH登录root`,
+        parseMode: "html"
       });
       return;
     }
 
     if (!validatePassword(password)) {
       await msg.edit({
-        text: html`❌ <b>密码不符合要求</b>\n\n• 密码长度至少8位\n• 建议包含数字、字母、特殊字符`
+        text: "❌ <b>密码不符合要求</b>\n\n• 密码长度至少8位\n• 建议包含数字、字母、特殊字符",
+        parseMode: "html"
       });
       return;
     }
 
-    await msg.edit({ text: "🔄 正在启用root账户直接登录..." });
+    await msg.edit({ text: "🔄 正在启用root账户直接登录...", parseMode: "html" });
 
     try {
       // 1. 解锁root账户
@@ -1230,18 +1272,17 @@ ${keysContent}`;
       
       await msg.edit({
         text: `✅ <b>Root账户已启用</b>\n\n🔑 Root密码: <code>${htmlEscape(password)}</code>\n🔓 账户状态: 已解锁\n🚪 SSH登录: 已允许\n📄 备份文件: /etc/ssh/sshd_config.backup.${currentConfig}\n\n✨ <b>现在可以直接用root登录SSH了！</b>\n\n⚠️ <b>安全提示:</b>\n• 建议设置复杂密码\n• 考虑配置SSH密钥登录\n• 可用 <code>${mainPrefix}ssh rootlogin keyonly</code> 提升安全性`,
+        parseMode: "html"
       });
       
-    } catch (error: unknown) {
-      throw new Error(`启用root账户失败: ${getErrorMessage(error)}`);
+    } catch (error: any) {
+      throw new Error(`启用root账户失败: ${error.message}`);
     }
   }
 
-
-
   // 重启SSH服务
-  private async restartSSH(msg: MessageContext): Promise<void> {
-    await msg.edit({ text: "🔄 正在重启SSH服务..." });
+  private async restartSSH(msg: Api.Message): Promise<void> {
+    await msg.edit({ text: "🔄 正在重启SSH服务...", parseMode: "html" });
 
     try {
       // 使用通用函数重启SSH服务
@@ -1256,24 +1297,26 @@ ${keysContent}`;
 
       await msg.edit({
         text: `✅ <b>SSH服务重启成功</b>\n\n重启命令: <code>${htmlEscape(restartResult.command || "未知")}</code>\n服务状态: ${sshStatus}\n\n💡 建议重启后验证SSH连接`,
+        parseMode: "html"
       });
-    } catch (error: unknown) {
-      throw new Error(`重启SSH服务失败: ${getErrorMessage(error)}`);
+    } catch (error: any) {
+      throw new Error(`重启SSH服务失败: ${error.message}`);
     }
   }
 
   // 开放防火墙端口
-  private async openPort(msg: MessageContext, portStr: string): Promise<void> {
+  private async openPort(msg: Api.Message, portStr: string): Promise<void> {
     const port = validatePort(portStr);
     
     if (!port) {
       await msg.edit({
         text: `❌ <b>无效的端口号</b>\n\n端口范围: 1-65535\n示例: <code>${mainPrefix}ssh open 80</code>`,
+        parseMode: "html"
       });
       return;
     }
 
-    await msg.edit({ text: `🔄 正在开放端口 ${port}...` });
+    await msg.edit({ text: `🔄 正在开放端口 ${port}...`, parseMode: "html" });
 
     try {
       // 使用iptables开放端口
@@ -1283,30 +1326,32 @@ ${keysContent}`;
       // 尝试保存iptables规则
       try {
         await saveIptablesRules();
-      } catch (e: unknown) {
-        logger.info("[sshkey] 无法持久化iptables规则:", e);
+      } catch {
+        console.log("[sshkey] 无法持久化iptables规则");
       }
 
       await msg.edit({
         text: `✅ <b>端口 ${port} 已开放</b>\n\n协议: TCP/UDP\n\n💡 提示: 规则已添加到iptables，重启后可能需要重新设置`,
+        parseMode: "html"
       });
-    } catch (error: unknown) {
-      throw new Error(`开放端口失败: ${getErrorMessage(error)}`);
+    } catch (error: any) {
+      throw new Error(`开放端口失败: ${error.message}`);
     }
   }
 
   // 关闭防火墙端口
-  private async closePort(msg: MessageContext, portStr: string): Promise<void> {
+  private async closePort(msg: Api.Message, portStr: string): Promise<void> {
     const port = validatePort(portStr);
     
     if (!port) {
       await msg.edit({
         text: `❌ <b>无效的端口号</b>\n\n端口范围: 1-65535\n示例: <code>${mainPrefix}ssh close 80</code>`,
+        parseMode: "html"
       });
       return;
     }
 
-    await msg.edit({ text: `🔄 正在关闭端口 ${port}...` });
+    await msg.edit({ text: `🔄 正在关闭端口 ${port}...`, parseMode: "html" });
 
     try {
       // 使用iptables关闭端口
@@ -1320,28 +1365,30 @@ ${keysContent}`;
       // 尝试保存iptables规则
       try {
         await saveIptablesRules();
-      } catch (e: unknown) {
-        logger.info("[sshkey] 无法持久化iptables规则:", e);
+      } catch {
+        console.log("[sshkey] 无法持久化iptables规则");
       }
 
       await msg.edit({
         text: `✅ <b>端口 ${port} 已关闭</b>\n\n协议: TCP/UDP\n\n💡 提示: 规则已添加到iptables，重启后可能需要重新设置`,
+        parseMode: "html"
       });
-    } catch (error: unknown) {
-      throw new Error(`关闭端口失败: ${getErrorMessage(error)}`);
+    } catch (error: any) {
+      throw new Error(`关闭端口失败: ${error.message}`);
     }
   }
 
   // 设置接收目标
-  private async setTarget(msg: MessageContext, target: string): Promise<void> {
+  private async setTarget(msg: Api.Message, target: string): Promise<void> {
     if (!target) {
       await msg.edit({
         text: `❌ <b>请提供目标</b>\n\n示例:\n<code>${mainPrefix}ssh set me</code> - 重置为默认发送到收藏夹\n<code>${mainPrefix}ssh set @username</code> - 设置发送到指定用户\n<code>${mainPrefix}ssh set -1001234567890</code> - 设置发送到指定群组/频道`,
+        parseMode: "html"
       });
       return;
     }
 
-      await msg.edit({ text: `🔄 正在设置接收目标为: ${htmlEscape(target)}...` });
+      await msg.edit({ text: `🔄 正在设置接收目标为: ${htmlEscape(target)}...`, parseMode: "html" });
 
     try {
       // 验证目标是否有效
@@ -1349,10 +1396,11 @@ ${keysContent}`;
         const client = await getGlobalClient();
         if (client) {
           try {
-            await client.resolvePeer(target);
-          } catch (_e: unknown) {
+            await client.getEntity(target);
+          } catch {
             await msg.edit({
               text: `⚠️ <b>无法验证目标有效性</b>\n\n目标 <code>${htmlEscape(target)}</code> 可能无效，但配置已保存。\n\n发送时如果失败将自动使用收藏夹。`,
+              parseMode: "html"
             });
             await ConfigManager.set(CONFIG_KEYS.TARGET_CHAT, target);
             return;
@@ -1365,24 +1413,23 @@ ${keysContent}`;
 
       await msg.edit({
         text: `✅ <b>接收目标已设置</b>\n\n目标: <code>${htmlEscape(target)}</code>\n\n${target === "me" ? "密钥将发送到收藏夹" : "密钥将发送到指定会话"}`,
+        parseMode: "html"
       });
-    } catch (error: unknown) {
-      throw new Error(`设置目标失败: ${getErrorMessage(error)}`);
+    } catch (error: any) {
+      throw new Error(`设置目标失败: ${error.message}`);
     }
   }
 
   // 显示配置信息
-  private async showInfo(msg: MessageContext): Promise<void> {
-    await msg.edit({ text: "🔄 正在获取SSH状态信息..." });
+  private async showInfo(msg: Api.Message): Promise<void> {
+    await msg.edit({ text: "🔄 正在获取SSH状态信息...", parseMode: "html" });
 
     try {
-      // 获取插件配置（并行读取）
-      const [targetChat, sshPort, passwordAuth, pubkeyAuth] = await Promise.all([
-        ConfigManager.get(CONFIG_KEYS.TARGET_CHAT),
-        ConfigManager.get(CONFIG_KEYS.SSH_PORT),
-        ConfigManager.get(CONFIG_KEYS.PASSWORD_AUTH),
-        ConfigManager.get(CONFIG_KEYS.PUBKEY_AUTH),
-      ]);
+      // 获取插件配置
+      const targetChat = await ConfigManager.get(CONFIG_KEYS.TARGET_CHAT);
+      const sshPort = await ConfigManager.get(CONFIG_KEYS.SSH_PORT);
+      const passwordAuth = await ConfigManager.get(CONFIG_KEYS.PASSWORD_AUTH);
+      const pubkeyAuth = await ConfigManager.get(CONFIG_KEYS.PUBKEY_AUTH);
 
       // 获取当前SSH服务状态
       const sshStatus = await isSshServiceActive() ? "✅ 运行中" : "❌ 未运行";
@@ -1432,8 +1479,8 @@ ${keysContent}`;
         const portMatch = configContent.match(/^\s*Port\s+(\d+)/mi);
         actualPort = portMatch ? portMatch[1] : "22(默认)";
         
-      } catch (error: unknown) {
-        logger.info("[ssh] 无法读取sshd_config:", error);
+      } catch (error) {
+        console.log("[ssh] 无法读取sshd_config:", error);
       }
 
       // 检查authorized_keys文件
@@ -1443,20 +1490,19 @@ ${keysContent}`;
         keyCount = fs.existsSync(authorizedKeysPath)
           ? fs.readFileSync(authorizedKeysPath, "utf8").split("\n").filter((line) => line.trim()).length
           : 0;
-      } catch (_e: unknown) {
+      } catch {
         keyCount = 0;
       }
 
       // 获取防火墙规则数量
       let iptablesInfo = "";
       try {
-        const { stdout } = await execFileAsync("iptables", ["-L", "INPUT", "-n"]);
-        const ruleCount = stdout.trim().split("\n").length - 2; // 减去标题行
+        const result = await execFileAsync("iptables", ["-L", "INPUT", "-n"]);
+        const ruleCount = Math.max(0, result.stdout.trim().split("\n").length - 2);
         iptablesInfo = `\n防火墙规则: ${ruleCount > 0 ? ruleCount + " 条" : "无限制"}`;
-      } catch (_e: unknown) {
+      } catch {
         iptablesInfo = "";
       }
-
 
       // 获取系统信息
       let systemInfo = "";
@@ -1467,15 +1513,16 @@ ${keysContent}`;
           uptime = (await execFileAsync("uptime", ["-p"])).stdout.trim() || "未知";
         } catch { }
         systemInfo = `\n\n<b>系统信息：</b>\n主机名: <code>${htmlEscape(hostname)}</code>\n运行时间: ${htmlEscape(uptime)}`;
-      } catch (_e: unknown) {
+      } catch {
         systemInfo = "";
       }
 
       await msg.edit({
         text: `📊 <b>SSH状态信息</b>\n\n<b>SSH服务状态：</b>\n服务状态: ${sshStatus}\n端口: <code>${htmlEscape(actualPort)}</code>\n\n<b>认证配置：</b>\n密码登录: ${actualPasswordAuth}\nRoot登录: ${rootLogin}\n密钥登录: ${actualPubkeyAuth}\n已授权密钥: ${keyCount} 个${iptablesInfo}\n\n<b>插件配置：</b>\n接收目标: <code>${htmlEscape(targetChat)}</code>\n${targetChat === "me" ? "(发送到收藏夹)" : "(发送到指定会话)"}\n\n<b>相关文件：</b>\n• SSH配置: /etc/ssh/sshd_config\n• 授权密钥: /root/.ssh/authorized_keys${systemInfo}`,
+        parseMode: "html"
       });
-    } catch (error: unknown) {
-      throw new Error(`获取SSH状态信息失败: ${getErrorMessage(error)}`);
+    } catch (error: any) {
+      throw new Error(`获取SSH状态信息失败: ${error.message}`);
     }
   }
 
@@ -1488,7 +1535,7 @@ ${keysContent}`;
       });
 
       output.on('close', () => {
-        logger.info(`[ssh] 压缩包创建成功: ${archive.pointer()} bytes`);
+        console.log(`[ssh] 压缩包创建成功: ${archive.pointer()} bytes`);
         resolve();
       });
 
@@ -1511,70 +1558,5 @@ ${keysContent}`;
   }
 
 }
-
-
-  // Panel Settings Adapter
-  panelAdapter: PanelSettingsAdapter = {
-    id: "ssh",
-    title: "SSH 管理",
-    description: "SSH 服务配置",
-    category: "插件配置",
-    icon: "🔐",
-    getSchema: (): PanelSettingField[] => [
-      {
-            "key": "ssh_target_chat",
-            "label": "目标聊天",
-            "type": "string",
-            "default": "me"
-      },
-      {
-            "key": "ssh_ssh_port",
-            "label": "SSH 端口",
-            "type": "number",
-            "min": 1,
-            "max": 65535,
-            "default": 22
-      },
-      {
-            "key": "ssh_password_auth",
-            "label": "密码认证",
-            "type": "select",
-            "options": [
-                  {
-                        "value": "yes",
-                        "label": "开启"
-                  },
-                  {
-                        "value": "no",
-                        "label": "关闭"
-                  }
-            ]
-      },
-      {
-            "key": "ssh_pubkey_auth",
-            "label": "公钥认证",
-            "type": "select",
-            "options": [
-                  {
-                        "value": "yes",
-                        "label": "开启"
-                  },
-                  {
-                        "value": "no",
-                        "label": "关闭"
-                  }
-            ]
-      }
-],
-    getValues: async (): Promise<Record<string, unknown>> => {
-      const db = await JSONFilePreset<any>(resolvePluginAssetFile({plugin:"ssh",fileName:"ssh_config.json",legacyDirs:["sshkey"],legacyFiles:[{dir:"sshkey",fileName:"sshkey_config.json"}]}), { ...DEFAULT_CONFIG });
-      return db.data as Record<string, unknown>;
-    },
-    setValues: async (patch: Record<string, unknown>): Promise<void> => {
-      const db = await JSONFilePreset<any>(resolvePluginAssetFile({plugin:"ssh",fileName:"ssh_config.json",legacyDirs:["sshkey"],legacyFiles:[{dir:"sshkey",fileName:"sshkey_config.json"}]}), { ...DEFAULT_CONFIG });
-      Object.assign(db.data, patch);
-      await db.write();
-    },
-  };
 
 export default new SSHPlugin();
