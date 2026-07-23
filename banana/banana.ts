@@ -2,21 +2,48 @@ import axios from "axios";
 import path from "path";
 import type { Low } from "lowdb";
 import { JSONFilePreset } from "lowdb/node";
-import { Plugin } from "@utils/pluginBase";
+import { Plugin, type PanelSettingsAdapter, type PanelSettingField, type PanelFieldType } from "@utils/pluginBase";
 import { getPrefixes } from "@utils/pluginManager";
-import { Api } from "teleproto";
-import { CustomFile } from "teleproto/client/uploads.js";
 import { createDirectoryInAssets } from "@utils/pathHelpers";
 import { safeGetReplyMessage } from "@utils/safeGetMessages";
-
-import { htmlEscape } from "@utils/htmlEscape";
+import { getGlobalClient } from "@utils/runtimeManager";
+import { getErrorMessage } from "@utils/errorHelpers";
+import type { MtcuteFileLocation } from "@utils/mtcuteTypes";
+import { thtml as html } from "@mtcute/html-parser";
+import type { MessageContext } from "@mtcute/dispatcher";
+import type { MessageMedia } from "@mtcute/core";
 
 const prefixes = getPrefixes();
 const mainPrefix = prefixes[0];
 
+
 interface BananaConfig {
   apiKey: string;
   maxBytes: number;
+}
+
+// Gemini API response types
+interface GeminiInlinePart {
+  text?: string;
+  inline_data?: { data?: string; mime_type?: string; mimeType?: string };
+  inlineData?: { data?: string; mime_type?: string; mimeType?: string };
+  data?: string;
+  mime_type?: string;
+  mimeType?: string;
+}
+
+interface GeminiCandidate {
+  content?: { parts?: GeminiInlinePart[] };
+  finishReason?: string;
+}
+
+interface GeminiPromptFeedback {
+  blockReason?: string;
+}
+
+interface GeminiResponseData {
+  candidates?: GeminiCandidate[];
+  promptFeedback?: GeminiPromptFeedback;
 }
 
 const FIXED_MODEL = "gemini-3-pro-image-preview";
@@ -52,39 +79,14 @@ const formatBytes = (bytes: number): string => {
   return `${bytes}B`;
 };
 
-function estimateMediaSizeBytes(message: Api.Message): number {
-  const doc = (message as any).document;
-  if (doc && typeof doc.size === "number") {
-    return Number(doc.size);
+function estimateMediaSizeBytes(message: MessageContext | import("@mtcute/node").Message): number {
+  const media = message.media;
+  if (!media) return 0;
+  // mtcute FileLocation-derived types have optional fileSize on .raw
+  const raw = (media as unknown as { raw?: { fileSize?: number } })?.raw;
+  if (typeof raw?.fileSize === "number") {
+    return raw.fileSize;
   }
-
-  const video = (message as any).video;
-  if (video && typeof video.size === "number") {
-    return Number(video.size);
-  }
-
-  const gif = (message as any).gif;
-  if (gif && typeof gif.size === "number") {
-    return Number(gif.size);
-  }
-
-  const photo = (message as any).photo;
-  if (photo && Array.isArray(photo.sizes)) {
-    let max = 0;
-    for (const size of photo.sizes) {
-      const progressive = (size as any).sizes;
-      if (Array.isArray(progressive) && progressive.length) {
-        const candidate = Math.max(...progressive);
-        if (candidate > max) max = candidate;
-      }
-      const directSize = (size as any).size;
-      if (typeof directSize === "number" && directSize > max) {
-        max = directSize;
-      }
-    }
-    return max;
-  }
-
   return 0;
 }
 
@@ -165,7 +167,7 @@ function normalizeMaxBytes(bytes: number | string | null | undefined): number {
 
 async function resolveMaxImageBytes(): Promise<number> {
   const stored = await getConfigValue("maxBytes");
-  return normalizeMaxBytes(stored as any);
+  return normalizeMaxBytes(stored);
 }
 
 function maskKey(key: string): string {
@@ -174,13 +176,11 @@ function maskKey(key: string): string {
   return `${key.slice(0, 4)}***${key.slice(-4)}`;
 }
 
-function resolveMimeType(media: any): string {
-  const documentMime = media?.document?.mimeType;
-  if (typeof documentMime === "string" && documentMime.startsWith("image/")) {
-    return documentMime;
-  }
-  if (media?.photo) {
-    return "image/jpeg";
+function resolveMimeType(media: MessageMedia): string {
+  // mtcute media types
+  if (media?.type === "photo") return "image/jpeg";
+  if (typeof (media as { mimeType?: string })?.mimeType === "string" && (media as { mimeType?: string }).mimeType?.startsWith("image/")) {
+    return (media as { mimeType?: string }).mimeType!;
   }
   return "image/png";
 }
@@ -194,7 +194,7 @@ function extFromMime(mime: string): string {
 }
 
 async function handleConfig(
-  msg: Api.Message,
+  msg: MessageContext,
   subcommand: string,
   subValue: string,
 ): Promise<void> {
@@ -214,8 +214,7 @@ async function handleConfig(
       if (!subValue) {
         const current = await resolveMaxImageBytes();
         await msg.edit({
-          text: `当前图片大小上限：${formatBytes(current)}（范围 ${formatBytes(MIN_ALLOWED_IMAGE_BYTES)} - ${formatBytes(MAX_ALLOWED_IMAGE_BYTES)}）\n使用 <code>${mainPrefix}banana limit default</code> 可恢复默认值`,
-          parseMode: "html",
+          text: html`当前图片大小上限：${formatBytes(current)}（范围 ${formatBytes(MIN_ALLOWED_IMAGE_BYTES)} - ${formatBytes(MAX_ALLOWED_IMAGE_BYTES)}）\n使用 <code>${mainPrefix}banana limit default</code> 可恢复默认值`,
         });
         return;
       }
@@ -277,7 +276,7 @@ async function handleConfig(
 }
 
 async function handleImageEdit(
-  msg: Api.Message,
+  msg: MessageContext,
   promptText: string,
 ): Promise<void> {
   const apiKey = (await getConfigValue("apiKey")).trim();
@@ -302,7 +301,7 @@ async function handleImageEdit(
     return;
   }
 
-  const client = (msg as any).client;
+  const client = await getGlobalClient();
   if (!client) {
     await msg.edit({ text: "❌ 无法获取客户端实例" });
     return;
@@ -322,19 +321,8 @@ async function handleImageEdit(
 
   let mediaBuffer: Buffer | null = null;
   try {
-    const mediaData = await client.downloadMedia(replyMsg.media, {
-      workers: 1,
-    });
-    if (Buffer.isBuffer(mediaData)) {
-      mediaBuffer = mediaData;
-    } else if (mediaData && typeof (mediaData as any).read === "function") {
-      const chunks: Buffer[] = [];
-      for await (const chunk of mediaData as any) {
-        chunks.push(Buffer.from(chunk));
-      }
-      mediaBuffer = Buffer.concat(chunks);
-    }
-  } catch (error) {
+    mediaBuffer = Buffer.from(await client.downloadAsBuffer(replyMsg.media as MtcuteFileLocation));
+  } catch (error: unknown) {
     await msg.edit({ text: `❌ 图片下载失败: ${error}` });
     return;
   }
@@ -376,26 +364,27 @@ async function handleImageEdit(
 
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${FIXED_MODEL}:generateContent?key=${encodeURIComponent(apiKey)}`;
 
-  let responseData: any;
+  let responseData: GeminiResponseData | undefined;
   try {
     const response = await axios.post(url, requestBody, { timeout: 120000 });
     responseData = response.data;
-  } catch (error: any) {
+  } catch (error: unknown) {
     if (axios.isAxiosError(error)) {
-      const status = error.response?.status;
-      const message = error.response?.data?.error?.message || error.message;
+      const axiosErr = error as { response?: { status?: number; data?: { error?: { message?: string } } } };
+      const status = axiosErr.response?.status;
+      const message = axiosErr.response?.data?.error?.message || getErrorMessage(error);
       await msg.edit({
         text: `❌ Gemini 请求失败 (${status ?? "网络错误"}): ${message}`,
       });
     } else {
-      await msg.edit({ text: `❌ 请求失败: ${(error as Error).message}` });
+      await msg.edit({ text: `❌ 请求失败: ${getErrorMessage(error)}` });
     }
     return;
   }
 
-  const candidates: any[] = responseData?.candidates || [];
+  const candidates: GeminiCandidate[] = (responseData as GeminiResponseData | undefined)?.candidates || [];
   if (!candidates.length) {
-    const blockReason = responseData?.promptFeedback?.blockReason;
+    const blockReason = (responseData as GeminiResponseData | undefined)?.promptFeedback?.blockReason;
     if (blockReason) {
       await msg.edit({ text: `❌ 请求被阻止: ${blockReason}` });
     } else {
@@ -410,11 +399,11 @@ async function handleImageEdit(
     return;
   }
 
-  const inlineParts: any[] = [];
+  const inlineParts: Array<{ data?: string; mime_type?: string; mimeType?: string }> = [];
   const textParts: string[] = [];
 
   for (const candidate of candidates) {
-    const parts: any[] = candidate?.content?.parts || [];
+    const parts: GeminiInlinePart[] = candidate?.content?.parts || [];
     for (const part of parts) {
       // Support both snake_case and camelCase responses
       const inlineData = part?.inline_data || part?.inlineData;
@@ -432,11 +421,10 @@ async function handleImageEdit(
     return;
   }
 
-  const captionBase = `<b>提示:</b> ${htmlEscape(prompt)}`;
   const extraText = textParts.length
-    ? `\n\n${htmlEscape(textParts.join("\n"))}`
+    ? `\n\n${textParts.join("\n")}`
     : "";
-  const caption = `${captionBase}${extraText}`;
+  const captionHtml = html`<b>提示:</b> ${prompt}${extraText}`;
 
   let sent = false;
   for (let index = 0; index < inlineParts.length; index += 1) {
@@ -449,21 +437,20 @@ async function handleImageEdit(
     if (!buffer.length) continue;
 
     const fileName = `banana_${Date.now()}_${index}.${extFromMime(mime)}`;
-    const file = new CustomFile(fileName, buffer.length, "", buffer);
 
-    await client.sendFile(msg.peerId, {
-      file,
-      caption: !sent ? caption : undefined,
-      parseMode: !sent ? "html" : undefined,
+    await client.sendMedia(msg.chat.id, {
+      type: 'photo',
+      file: buffer,
+      fileName,
+      caption: !sent ? captionHtml : undefined,
+    }, {
       replyTo: replyMsg.id,
     });
     sent = true;
   }
 
   if (!sent && textParts.length) {
-    await client.sendMessage(msg.peerId, {
-      message: caption,
-      parseMode: "html",
+    await client.sendText(msg.chat.id, captionHtml, {
       replyTo: replyMsg.id,
     });
     sent = true;
@@ -472,16 +459,16 @@ async function handleImageEdit(
   if (sent) {
     try {
       await msg.delete();
-    } catch (error) {
-      await msg.edit({ text: caption, parseMode: "html" });
+    } catch (_e: unknown) {
+      await msg.edit({ text: captionHtml });
     }
   } else {
     await msg.edit({ text: "❌ 未成功发送生成的内容" });
   }
 }
 
-async function handleBananaCommand(msg: Api.Message): Promise<void> {
-  const raw = msg.message || "";
+async function handleBananaCommand(msg: MessageContext): Promise<void> {
+  const raw = msg.text || "";
   const trimmed = raw.trim();
   const tokens = trimmed ? trimmed.split(/\s+/) : [];
   tokens.shift();
@@ -501,9 +488,44 @@ async function handleBananaCommand(msg: Api.Message): Promise<void> {
 class BananaPlugin extends Plugin {
 
   description: string = `Nano-Banana 图像编辑插件\n\n${help_text}`;
-  cmdHandlers: Record<string, (msg: Api.Message) => Promise<void>> = {
+  cmdHandlers: Record<string, (msg: MessageContext) => Promise<void>> = {
     banana: handleBananaCommand,
   };
 }
+
+
+  // Panel Settings Adapter
+  panelAdapter: PanelSettingsAdapter = {
+    id: "banana",
+    title: "香蕉贴纸",
+    description: "香蕉贴纸 API 配置",
+    category: "插件配置",
+    icon: "🍌",
+    getSchema: (): PanelSettingField[] => [
+      {
+            "key": "apiKey",
+            "label": "API 密钥",
+            "type": "password",
+            "secret": true
+      },
+      {
+            "key": "maxBytes",
+            "label": "最大文件大小 (字节)",
+            "type": "number",
+            "min": 1024,
+            "max": 52428800,
+            "default": 10485760
+      }
+],
+    getValues: async (): Promise<Record<string, unknown>> => {
+      const db = await JSONFilePreset<BananaConfig>(path.join(createDirectoryInAssets("banana"), "config.json"), {} as any);
+      return db.data as Record<string, unknown>;
+    },
+    setValues: async (patch: Record<string, unknown>): Promise<void> => {
+      const db = await JSONFilePreset<BananaConfig>(path.join(createDirectoryInAssets("banana"), "config.json"), {} as any);
+      Object.assign(db.data, patch);
+      await db.write();
+    },
+  };
 
 export default new BananaPlugin();

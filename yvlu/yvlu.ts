@@ -1,12 +1,12 @@
 //@ts-nocheck
 import { safeGetMe } from "@utils/authGuards";
+import { htmlEscape } from "@utils/htmlEscape";
+
 // YVLU Plugin - 生成文字语录贴纸
 import axios from "axios";
 import _ from "lodash";
-import bigInteger from "big-integer";
 import { getPrefixes } from "@utils/pluginManager";
-import { Plugin } from "@utils/pluginBase";
-import { Api, utils } from "teleproto";
+import { Plugin, type PanelSettingsAdapter, type PanelSettingField, type PanelFieldType } from "@utils/pluginBase";
 import {
   createDirectoryInAssets,
   createDirectoryInTemp,
@@ -22,292 +22,24 @@ import {
   dealCommandPluginWithMessage,
   getCommandFromMessage,
 } from "@utils/pluginManager";
-import { sleep } from "teleproto/Helpers";
+import { sleep } from "@utils/asyncHelpers";
 import { safeGetReplyMessage, safeGetMessages } from "@utils/safeGetMessages";
+import { logger } from "@utils/logger";
+import { EntityLike, MessageLike } from "@utils/tlTypes";
+import { getErrorMessage } from "@utils/errorHelpers";
 import dayjs from "dayjs";
-import { CustomFile } from "teleproto/client/uploads.js";
 import * as zlib from "zlib";
 import { execFile } from "child_process";
 import { promisify } from "util";
-import * as os from "os";
-
-import { htmlEscape } from "@utils/htmlEscape";
+import { thtml as html } from "@mtcute/node";
 
 const execFileAsync = promisify(execFile);
 
 const timeout = 60000; // 超时
 const PYTHON_PATH = "python3"; // Python 路径，可修改为 venv 中的路径，如："/path/to/venv/bin/python"
 
-const QUOTE_RPC_TIMEOUT_MS = 20000;
-
-function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
-  let timer: NodeJS.Timeout;
-  const timeout = new Promise<never>((_, reject) => {
-    timer = setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms);
-    if (timer.unref) timer.unref();
-  });
-  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
-}
-
-const avatarCache = new Map<string, Buffer | undefined>();
-
-function stableEntityKey(entity: any): string | undefined {
-  const raw = entity?.id ?? entity?.userId ?? entity?.channelId ?? entity?.chatId ?? entity?.accessHash ?? entity;
-  if (!raw) return undefined;
-  try {
-    return typeof raw === "bigint" ? raw.toString() : JSON.stringify(raw, (_, v) => typeof v === "bigint" ? v.toString() : v);
-  } catch (_) {
-    return String(raw);
-  }
-}
-
-async function downloadEntityAvatar(client: any, entity: any): Promise<Buffer | undefined> {
-  if (!client || !entity) return undefined;
-  const key = stableEntityKey(entity);
-  if (key && avatarCache.has(key)) return avatarCache.get(key);
-
-  // Resolve a full entity with photo + accessHash. getSender() may return a
-  // min entity (no accessHash), and we need a full entity for getInputPeer.
-  let fullEntity = entity;
-  try {
-    if (!(entity.accessHash !== undefined && !entity.min) && entity.id) {
-      fullEntity = await withTimeout(client.getEntity(entity), QUOTE_RPC_TIMEOUT_MS, "downloadEntityAvatar.getEntity");
-    }
-  } catch (e: any) {
-    console.warn("yvlu avatar getEntity failed, using raw entity", e?.message || e);
-  }
-
-  const photo = fullEntity?.photo;
-  if (!photo || photo._ === "userProfilePhotoEmpty" || photo._ === "chatPhotoEmpty") {
-    if (key) avatarCache.set(key, undefined);
-    return undefined;
-  }
-
-  const tryDownload = async (isBig: boolean): Promise<Buffer | undefined> => {
-    try {
-      // Bypass the MediaScheduler (which retries 5×15s = 75s on failure) by
-      // using raw upload.GetFile via client.invoke with the photo's DC.
-      // This gives us a single attempt that our withTimeout can actually cap.
-      const inputPeer = client.utils?.getInputPeer ? client.utils.getInputPeer(fullEntity) : (await withTimeout(client.getInputEntity(fullEntity), QUOTE_RPC_TIMEOUT_MS, "downloadEntityAvatar.getInputEntity"));
-      const location = new Api.InputPeerPhotoFileLocation({
-        peer: inputPeer,
-        photoId: photo.photoId,
-        big: isBig,
-      });
-      const dcId = photo.dcId ?? fullEntity?.photo?.dc_id;
-      const result = await withTimeout(
-        client.invoke(
-          new Api.upload.GetFile({
-            location,
-            offset: bigInteger.zero,
-            limit: 512 * 1024,
-            precise: true,
-          }),
-          dcId,
-        ),
-        QUOTE_RPC_TIMEOUT_MS,
-        `downloadEntityAvatar.${isBig ? "big" : "small"}`,
-      ) as { bytes?: unknown };
-      const buffer = result?.bytes;
-      return Buffer.isBuffer(buffer) && buffer.length > 0 ? buffer : undefined;
-    } catch (err: any) {
-      console.warn(`yvlu avatar ${isBig ? "big" : "small"} download failed`, err?.message || err);
-      return undefined;
-    }
-  };
-
-  const [small, big] = await Promise.all([tryDownload(false), tryDownload(true)]);
-  const normalized = small ? await normalizeAvatarBuffer(small) : big ? await normalizeAvatarBuffer(big) : undefined;
-  if (key) avatarCache.set(key, normalized);
-  return normalized;
-}
-
-async function normalizeAvatarBuffer(buffer: Buffer): Promise<Buffer> {
-  try {
-    const sharp = (await import("sharp")).default;
-    return await sharp(buffer)
-      .resize(256, 256, { fit: "cover", position: "centre" })
-      .flatten({ background: { r: 0, g: 0, b: 0 } })
-      .png()
-      .toBuffer();
-  } catch (err: any) {
-    console.warn("yvlu avatar normalize failed", err?.message || err);
-    return buffer.length > 0 ? buffer : undefined;
-  }
-}
-
-async function rawDownloadFile(client: any, location: any, dcId: number | undefined): Promise<Buffer | undefined> {
-  if (!client || !location) return undefined;
-  try {
-    const result = await withTimeout(
-      client.invoke(
-        new Api.upload.GetFile({
-          location,
-          offset: bigInteger.zero,
-          limit: 512 * 1024,
-          precise: true,
-        }),
-        dcId,
-      ),
-      QUOTE_RPC_TIMEOUT_MS,
-      "rawDownloadFile",
-    ) as { bytes?: unknown };
-    const buffer = result?.bytes;
-    return Buffer.isBuffer(buffer) && buffer.length > 0 ? buffer : undefined;
-  } catch (err: any) {
-    console.warn("yvlu rawDownloadFile failed", err?.message || err);
-    return undefined;
-  }
-}
-
-async function downloadMediaBuffer(client: any, target: any): Promise<Buffer | undefined> {
-  if (!client || !target) return undefined;
-  // For small media (thumbnails, static stickers, photos), try raw upload.GetFile first
-  // Fall back to downloadMedia if raw download fails or isn't applicable
-  try {
-    const media = target.media ?? target;
-    // Try to get document/photo info for raw download
-    let doc = media?.document ?? media?.photo;
-    if (doc && doc.id && doc.accessHash) {
-      // Small files: use raw download
-      const isLarge = doc.size && doc.size > 1024 * 1024;
-      if (!isLarge) {
-        const location = new Api.InputDocumentFileLocation({
-          id: doc.id,
-          accessHash: doc.accessHash,
-          fileReference: doc.fileReference,
-          thumbSize: "w",
-        });
-        const rawBuffer = await rawDownloadFile(client, location, doc.dcId);
-        if (rawBuffer) return rawBuffer;
-      }
-    }
-  } catch (err) {
-    console.debug("[yvlu] raw download failed, fallback to downloadMedia:", err?.message || err);
-  }
-  // Fallback to downloadMedia with timeout
-  try {
-    const downloaded = await withTimeout(client.downloadMedia(target, { outputFile: path.join(os.tmpdir(), `yvlu_media_${Date.now()}_${Math.random().toString(16).slice(2)}`) }), QUOTE_RPC_TIMEOUT_MS, "downloadMediaBuffer.downloadMedia");
-    if (Buffer.isBuffer(downloaded)) return downloaded;
-    if (downloaded && typeof downloaded === "string" && fs.existsSync(downloaded)) return fs.readFileSync(downloaded);
-  } catch (err: any) {
-    console.warn("yvlu media download failed", err?.message || err);
-  }
-  return undefined;
-}
-
-// Helper to check if file format needs conversion
-function needsConversion(buffer: Buffer, mimeType: string | undefined): boolean {
-  if (!buffer || !mimeType) return false;
-  return mimeType === "application/x-tgsticker" || // TGS
-    mimeType === "video/mp4" || mimeType === "image/gif" || // GIF/MP4
-    isTgsFormat(buffer) || isMp4Format(buffer) || isWebmFormat(buffer);
-}
-
-async function downloadAndProcessMedia(client: any, message: any): Promise<{ buffer: Buffer; mime: string } | undefined> {
-  if (!message.media) return undefined;
-
-  let mediaTypeForQuote: string | undefined = undefined;
-  const isSticker = message.media instanceof Api.MessageMediaDocument &&
-    message.media.document &&
-    message.media.document.attributes?.some((a: any) => a instanceof Api.DocumentAttributeSticker);
-
-  if (isSticker) mediaTypeForQuote = "sticker";
-  else mediaTypeForQuote = "photo";
-
-  const mimeType = message.media.document?.mimeType;
-  const isTgsSticker = isSticker && mimeType === "application/x-tgsticker";
-  const isGifOrMp4 = mimeType === "video/mp4" || mimeType === "image/gif";
-
-  const buffer = await downloadMediaBuffer(client, message);
-  if (!Buffer.isBuffer(buffer)) return undefined;
-
-  let finalBuffer = buffer;
-  let finalMime = mimeType;
-
-  // Convert TGS to WebM
-  if (isTgsSticker || isTgsFormat(buffer)) {
-    try {
-      const depCheck = await checkTgsDependencies();
-      if (!depCheck.ok) console.error(`[yvlu] ${depCheck.message}`);
-      else {
-        console.log(`[yvlu] 检测到 TGS 贴纸，开始转换为 WebM...`);
-        finalBuffer = await convertTgsToWebm(buffer);
-        finalMime = "video/webm";
-        console.log(`[yvlu] TGS -> WebM 转换成功，大小: ${finalBuffer.length}`);
-      }
-    } catch (convertError) {
-      console.error(`[yvlu] TGS 转换失败:`, convertError);
-    }
-  } else if (isGifOrMp4 || isMp4Format(buffer)) {
-    try {
-      console.log(`[yvlu] 检测到 GIF/MP4，开始转换为 WebM...`);
-      finalBuffer = await convertMp4ToWebm(buffer);
-      finalMime = "video/webm";
-      console.log(`[yvlu] MP4 -> WebM 转换成功，大小: ${finalBuffer.length}`);
-    } catch (convertError) {
-      console.error(`[yvlu] MP4 转换失败:`, convertError);
-    }
-  }
-
-  const mime = finalMime || (mediaTypeForQuote === "sticker" ? "image/webp" : "image/jpeg");
-  console.log(`媒体下载: mimeType=${mimeType}, isTgs=${isTgsSticker}, isGif=${isGifOrMp4}, size=${finalBuffer.length}`);
-  return { buffer: finalBuffer, mime };
-}
-
-async function getPeerEntity(client: any, peer: any): Promise<any | undefined> {
-  if (!client || !peer) return undefined;
-  const key = JSON.stringify(peer, (_, v) => typeof v === "bigint" ? v.toString() : v);
-  try {
-    return await withTimeout(client.getEntity(peer), QUOTE_RPC_TIMEOUT_MS, "getPeerEntity.getEntity");
-  } catch (_) {
-    try {
-      return await withTimeout(client.getInputEntity(peer), QUOTE_RPC_TIMEOUT_MS, "getPeerEntity.getInputEntity");
-    } catch (_) {
-      return undefined;
-    }
-  }
-}
-
-async function ensureFullEntity(client: any, entity: any): Promise<any> {
-  if (!entity || !client) return entity;
-  // If entity has an id but no emojiStatus at all, it may be incomplete
-  if (entity.id && entity.emojiStatus === undefined && entity.emoji_status === undefined) {
-    try {
-      const full = await withTimeout(client.getEntity(entity), QUOTE_RPC_TIMEOUT_MS, "ensureFullEntity");
-      return full || entity;
-    } catch { return entity; }
-  }
-  return entity;
-}
-
-async function senderEntity(msg: any): Promise<any | undefined> {
-  const peer = (msg as any).senderId ?? (msg as any).fromId;
-  const key = peer ? `sender:${stableEntityKey(peer)}` : undefined;
-  try {
-    const sender = await withTimeout((msg as any).getSender?.(), QUOTE_RPC_TIMEOUT_MS, "senderEntity.getSender");
-    if (sender) {
-      if (key) { /* cache if needed */ }
-      return sender;
-    }
-  } catch (err) {
-    console.debug("[yvlu] getSender failed:", err?.message || err);
-  }
-  const entity = await getPeerEntity((msg as any).client, peer);
-  return entity;
-}
-
-function emojiStatusIdFromEntity(entity: any): string | undefined {
-  const status = entity?.emojiStatus ?? entity?.emoji_status;
-  if (!status) return undefined;
-  if (typeof status !== "object") {
-    const id = status?.value ?? status;
-    return id ? String(id) : undefined;
-  }
-  const documentId = status.documentId ?? status.document_id ?? status.customEmojiId ?? status.custom_emoji_id ?? status.id;
-  if (!documentId) return undefined;
-  return String(documentId);
-}
+// timeout for lightweight RPC helpers (ensureFullUser etc.)
+const YVLU_EMOJI_TIMEOUT_MS = 20000;
 
 const hashCode = (s: any) => {
   const l = s.length;
@@ -350,7 +82,7 @@ async function checkTgsDependencies(): Promise<{
       "-c",
       "from rlottie_python import LottieAnimation",
     ]);
-  } catch (e) {
+  } catch (_e: unknown) {
     return {
       ok: false,
       message:
@@ -359,7 +91,7 @@ async function checkTgsDependencies(): Promise<{
   }
   try {
     await execFileAsync("ffmpeg", ["-version"]);
-  } catch (e) {
+  } catch (_e: unknown) {
     return {
       ok: false,
       message: "缺少 ffmpeg，请安装: apt-get install -y ffmpeg",
@@ -412,13 +144,13 @@ anim.save_animation(sys.argv[2])
   } finally {
     try {
       fs.unlinkSync(tgsPath);
-    } catch (e) {}
+    } catch (e: unknown) { logger.warn('[yvlu] 清理临时文件失败:', e) }
     try {
       fs.unlinkSync(gifPath);
-    } catch (e) {}
+    } catch (e: unknown) { logger.warn('[yvlu] 清理临时文件失败:', e) }
     try {
       fs.unlinkSync(webmPath);
-    } catch (e) {}
+    } catch (e: unknown) { logger.warn('[yvlu] 清理临时文件失败:', e) }
   }
 }
 
@@ -483,10 +215,10 @@ async function convertMp4ToWebm(mp4Buffer: Buffer): Promise<Buffer> {
   } finally {
     try {
       fs.unlinkSync(mp4Path);
-    } catch (e) {}
+    } catch (e: unknown) { logger.warn('[yvlu] 清理临时文件失败:', e) }
     try {
       fs.unlinkSync(webmPath);
-    } catch (e) {}
+    } catch (e: unknown) { logger.warn('[yvlu] 清理临时文件失败:', e) }
   }
 }
 
@@ -538,26 +270,30 @@ function getWebPDimensions(imageBuffer: any): {
     }
 
     // 如果无法解析，返回默认尺寸
-    console.warn("Unknown WebP format, using default dimensions");
+    logger.warn("Unknown WebP format, using default dimensions");
     return { width: 512, height: 768 };
-  } catch (error) {
-    console.warn("Failed to parse WebP dimensions:", error);
+  } catch (error: unknown) {
+    logger.warn("Failed to parse WebP dimensions:", error);
     return { width: 512, height: 768 };
   }
 }
 
 const codeTag = (text: string): string => `<code>${htmlEscape(text)}</code>`;
 
-const getPeerNumericId = (peer?: Api.TypePeer): number | undefined => {
+const getPeerNumericId = (peer?: any): number | undefined => {
   if (!peer) return undefined;
-  if (peer instanceof Api.PeerUser) return peer.userId;
-  if (peer instanceof Api.PeerChat) return -peer.chatId;
-  if (peer instanceof Api.PeerChannel) return -peer.channelId;
+  if (peer.type === "user") return peer.id;
+  if (peer.type === "chat" || peer.type === "group") return -peer.id;
+  if (peer.type === "channel") return -peer.id;
+  // Fallback for raw TL peers
+  if (peer._ === "peerUser") return peer.userId;
+  if (peer._ === "peerChat") return -peer.chatId;
+  if (peer._ === "peerChannel") return -peer.channelId;
   return undefined;
 };
 
 const resolveForwardSenderFromHeader = async (
-  forwardHeader: Api.MessageFwdHeader,
+  forwardHeader: any,
   client: any,
 ) => {
   if (!forwardHeader) return undefined;
@@ -577,14 +313,14 @@ const resolveForwardSenderFromHeader = async (
 
   for (const peer of peerCandidates) {
     try {
-      const entity = await client?.getEntity(peer as any);
+      const entity = await client?.resolvePeer(peer);
       if (entity) {
         return entity;
       }
-    } catch (error) {
+    } catch (error: unknown) {
       const errMsg = (error?.errorMessage || error?.message || "").toString();
       if (!errMsg.includes("CHANNEL_PRIVATE")) {
-        console.warn("解析转发发送者失败", error);
+        logger.warn("解析转发发送者失败", error);
       }
     }
   }
@@ -650,83 +386,152 @@ const help_text = [
 ].join("\n");
 
 // 转换Telegram消息实体为quote-api格式
-function convertEntities(entities: Api.TypeMessageEntity[]): any[] {
+function convertEntities(entities: any[]): any[] {
   if (!entities) return [];
 
-  return entities.map((entity) => {
-    // console.log(entity);
+  return entities.map((entity: any) => {
     const baseEntity = {
-      offset: entity.offset,
-      length: entity.length,
+      offset: entity.offset ?? entity.raw?.offset ?? 0,
+      length: entity.length ?? entity.raw?.length ?? 0,
     };
 
-    if (entity instanceof Api.MessageEntityBold) {
-      return { ...baseEntity, type: "bold" };
-    } else if (entity instanceof Api.MessageEntityItalic) {
-      return { ...baseEntity, type: "italic" };
-    } else if (entity instanceof Api.MessageEntityUnderline) {
-      return { ...baseEntity, type: "underline" };
-    } else if (entity instanceof Api.MessageEntityStrike) {
-      return { ...baseEntity, type: "strikethrough" };
-    } else if (entity instanceof Api.MessageEntityCode) {
-      return { ...baseEntity, type: "code" };
-    } else if (entity instanceof Api.MessageEntityPre) {
-      return { ...baseEntity, type: "pre" };
-    } else if (entity instanceof Api.MessageEntityCustomEmoji) {
-      const documentId = (entity as any).documentId;
-      const custom_emoji_id =
-        documentId?.value?.toString() || documentId?.toString() || "";
-      return {
-        ...baseEntity,
-        type: "custom_emoji",
-        custom_emoji_id,
-      };
-    } else if (entity instanceof Api.MessageEntityUrl) {
-      return { ...baseEntity, type: "url" };
-    } else if (entity instanceof Api.MessageEntityTextUrl) {
-      return {
-        ...baseEntity,
-        type: "text_link",
-        url: (entity as any).url || "",
-      };
-    } else if (entity instanceof Api.MessageEntityMention) {
-      return { ...baseEntity, type: "mention" };
-    } else if (entity instanceof Api.MessageEntityMentionName) {
-      return {
-        ...baseEntity,
-        type: "text_mention",
-        user: { id: (entity as any).userId },
-      };
-    } else if (entity instanceof Api.MessageEntityHashtag) {
-      return { ...baseEntity, type: "hashtag" };
-    } else if (entity instanceof Api.MessageEntityCashtag) {
-      return { ...baseEntity, type: "cashtag" };
-    } else if (entity instanceof Api.MessageEntityBotCommand) {
-      return { ...baseEntity, type: "bot_command" };
-    } else if (entity instanceof Api.MessageEntityEmail) {
-      return { ...baseEntity, type: "email" };
-    } else if (entity instanceof Api.MessageEntityPhone) {
-      return { ...baseEntity, type: "phone_number" };
-    } else if (entity instanceof Api.MessageEntitySpoiler) {
-      return { ...baseEntity, type: "spoiler" };
-    }
+    // mtcute MessageEntity: .kind / .params.kind
+    // TL raw: ._ ; gramjs: className / type
+    const entityType =
+      entity.kind ||
+      entity.params?.kind ||
+      entity.type ||
+      entity._ ||
+      entity.className ||
+      entity.constructor?.name ||
+      "";
 
-    return baseEntity;
-  });
+    switch (entityType) {
+      case "bold":
+      case "messageEntityBold":
+        return { ...baseEntity, type: "bold" };
+      case "italic":
+      case "messageEntityItalic":
+        return { ...baseEntity, type: "italic" };
+      case "underline":
+      case "messageEntityUnderline":
+        return { ...baseEntity, type: "underline" };
+      case "strikethrough":
+      case "messageEntityStrike":
+        return { ...baseEntity, type: "strikethrough" };
+      case "code":
+      case "messageEntityCode":
+        return { ...baseEntity, type: "code" };
+      case "pre":
+      case "messageEntityPre":
+        return { ...baseEntity, type: "pre", language: entity.language ?? entity.params?.language };
+      case "emoji": // mtcute custom emoji kind
+      case "custom_emoji":
+      case "customEmoji":
+      case "messageEntityCustomEmoji": {
+        const idRaw =
+          entity.emojiId ??
+          entity.params?.emojiId ??
+          entity.custom_emoji_id ??
+          entity.customEmojiId ??
+          entity.documentId ??
+          entity.document_id ??
+          entity.raw?.documentId ??
+          entity.raw?.document_id;
+        const custom_emoji_id =
+          idRaw?.value?.toString?.() ||
+          (typeof idRaw?.toString === "function" ? idRaw.toString() : "") ||
+          (idRaw != null ? String(idRaw) : "") ||
+          "";
+        return {
+          ...baseEntity,
+          type: "custom_emoji",
+          custom_emoji_id: custom_emoji_id === "[object Object]" ? "" : custom_emoji_id,
+        };
+      }
+      case "url":
+      case "messageEntityUrl":
+        return { ...baseEntity, type: "url" };
+      case "text_link":
+      case "textLink":
+      case "messageEntityTextUrl":
+        return {
+          ...baseEntity,
+          type: "text_link",
+          url: entity.url || entity.params?.url || "",
+        };
+      case "mention":
+      case "messageEntityMention":
+        return { ...baseEntity, type: "mention" };
+      case "text_mention":
+      case "textMention":
+      case "messageEntityMentionName":
+        return {
+          ...baseEntity,
+          type: "text_mention",
+          user: { id: entity.userId ?? entity.params?.userId },
+        };
+      case "hashtag":
+      case "messageEntityHashtag":
+        return { ...baseEntity, type: "hashtag" };
+      case "cashtag":
+      case "messageEntityCashtag":
+        return { ...baseEntity, type: "cashtag" };
+      case "bot_command":
+      case "botCommand":
+      case "messageEntityBotCommand":
+        return { ...baseEntity, type: "bot_command" };
+      case "email":
+      case "messageEntityEmail":
+        return { ...baseEntity, type: "email" };
+      case "phone_number":
+      case "phoneNumber":
+      case "messageEntityPhone":
+        return { ...baseEntity, type: "phone_number" };
+      case "spoiler":
+      case "messageEntitySpoiler":
+        return { ...baseEntity, type: "spoiler" };
+      case "blockquote":
+      case "messageEntityBlockquote":
+        return { ...baseEntity, type: "blockquote" };
+      default:
+        // className fallback for gramjs-like objects
+        if (String(entityType).includes("CustomEmoji")) {
+          const idRaw = entity.documentId ?? entity.document_id ?? entity.emojiId;
+          const custom_emoji_id = idRaw?.toString?.() || String(idRaw || "");
+          return { ...baseEntity, type: "custom_emoji", custom_emoji_id };
+        }
+        return baseEntity;
+    }
+  }).filter((e: any) => e && e.length > 0 && e.type);
 }
 
-// ======== quote-api 高级字段辅助函数 ========
+// ======== quote-api 高级字段辅助函数 (mtcute) ========
 
-function getDocumentAttributes(msg: Api.Message): any[] {
+const QUOTE_RPC_TIMEOUT_MS = 20000;
+
+function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
+  let timer: NodeJS.Timeout;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms);
+    if (timer.unref) timer.unref();
+  });
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
+}
+
+function getDocumentAttributes(msg: any): any[] {
   const doc = (msg as any).document ?? (msg as any).media?.document;
   return doc?.attributes || [];
 }
 
-function audioAttribute(msg: Api.Message): any | undefined {
-  return getDocumentAttributes(msg).find((a: any) => (a.className || a.constructor?.name || "").includes("Audio"));
+function audioAttribute(msg: any): any | undefined {
+  return getDocumentAttributes(msg).find((a: any) => {
+    const t = a.type || a._ || a.className || "";
+    return t.includes("Audio");
+  });
 }
 
-function voiceWaveform(msg: Api.Message): number[] | undefined {
+function voiceWaveform(msg: any): number[] | undefined {
   const attr = audioAttribute(msg);
   const raw = attr?.waveform;
   if (!raw) return undefined;
@@ -738,58 +543,75 @@ function voiceWaveform(msg: Api.Message): number[] | undefined {
   return arr.map((x) => Math.max(0, Math.min(31, x)));
 }
 
-function getMediaKind(msg: Api.Message): string | undefined {
+function getMediaKind(msg: any): string | undefined {
   const media: any = (msg as any).media;
   if (!media) return undefined;
-  const cls = media.className || media.constructor?.name || "";
+  const type = media.type || media._ || media.className || "";
   const attrs = getDocumentAttributes(msg);
-  if (attrs.some((a: any) => (a.className || "").includes("Sticker"))) return "sticker";
-  if (attrs.some((a: any) => (a.className || "").includes("Animated")) || cls.includes("Dice")) return "animation";
-  if (attrs.some((a: any) => (a.className || "").includes("Audio") && a.voice)) return "voice";
-  if (attrs.some((a: any) => (a.className || "").includes("Audio"))) return "audio";
-  if (attrs.some((a: any) => (a.className || "").includes("Video") && a.roundMessage)) return "round";
-  if (attrs.some((a: any) => (a.className || "").includes("Video"))) return "video";
-  if (cls.includes("Photo")) return "photo";
-  if (cls.includes("Geo")) return "location";
-  if (cls.includes("Venue")) return "venue";
-  if (cls.includes("Contact")) return "contact";
-  if (cls.includes("Poll")) return "poll";
-  if (cls.includes("Document")) return "document";
+  if (attrs.some((a: any) => {
+    const t = a.type || a._ || a.className || "";
+    return t.includes("Sticker");
+  })) return "sticker";
+  if (attrs.some((a: any) => {
+    const t = a.type || a._ || a.className || "";
+    return t.includes("Animated");
+  }) || type.includes("Dice")) return "animation";
+  if (attrs.some((a: any) => {
+    const t = a.type || a._ || a.className || "";
+    return t.includes("Audio") && a.voice;
+  })) return "voice";
+  if (attrs.some((a: any) => {
+    const t = a.type || a._ || a.className || "";
+    return t.includes("Audio");
+  })) return "audio";
+  if (attrs.some((a: any) => {
+    const t = a.type || a._ || a.className || "";
+    return t.includes("Video") && a.roundMessage;
+  })) return "round";
+  if (attrs.some((a: any) => {
+    const t = a.type || a._ || a.className || "";
+    return t.includes("Video");
+  })) return "video";
+  if (type.includes("Photo")) return "photo";
+  if (type.includes("Geo")) return "location";
+  if (type.includes("Venue")) return "venue";
+  if (type.includes("Contact")) return "contact";
+  if (type.includes("Poll")) return "poll";
+  if (type.includes("Document")) return "document";
   return "media";
 }
 
-async function forwardedSource(msg: Api.Message): Promise<{ peer?: any; entity?: any; name?: string; anonymous: boolean } | undefined> {
-  const fwd: any = (msg as any).fwdFrom || (msg as any).fwd_from;
+async function forwardedSource(msg: any): Promise<{ peer?: any; entity?: any; name?: string; anonymous: boolean } | undefined> {
+  const fwd = msg.forward?.raw || msg.forward;
   if (!fwd) return undefined;
-  const client: any = (msg as any).client;
-  const headerName = fwd.fromName || fwd.savedFromName || fwd.postAuthor || "";
-  // Try fromId peer resolution
-  const peer = fwd.fromId || fwd.savedFromId || fwd.savedFromPeer;
+  const client = await getGlobalClient().catch(() => null);
+  if (!client) return { anonymous: true };
+  const headerName = (fwd as any).fromName || (fwd as any).savedFromName || (fwd as any).postAuthor || "";
+  const peer = (fwd as any).fromId || (fwd as any).savedFromId || (fwd as any).savedFromPeer;
   if (peer) {
     try {
       const entity = await withTimeout(client.getEntity(peer), QUOTE_RPC_TIMEOUT_MS, "forwardedSource.getEntity");
-      const name = (entity as any)?.firstName || (entity as any)?.title || (entity as any)?.name || headerName || "Forwarded";
+      const name = entity?.firstName || entity?.title || entity?.name || headerName || "Forwarded";
       return { peer, entity, name, anonymous: false };
     } catch (err) {
-    console.debug("[yvlu] forwardedSource getEntity failed:", err?.message || err);
+    console.debug("[yvlu] forwardedSource.getEntity failed:", err?.message || err);
   }
   }
   if (headerName) return { name: headerName, anonymous: true };
   return { anonymous: true };
 }
 
-async function senderRankInChat(msg: Api.Message, entity: any): Promise<string | undefined> {
+async function senderRankInChat(msg: any, entity: any): Promise<string | undefined> {
   if (!entity?.accessHash) return undefined;
   try {
-    const client: any = (msg as any).client ?? await getGlobalClient().catch(() => null);
+    const client = await getGlobalClient().catch(() => null);
     if (!client) return undefined;
-    const chatPeer = (msg as any).peerId ?? (msg as any).chatId ?? (msg as any).inputChat;
-    const inputUser = new Api.InputUser({ userId: entity.id, accessHash: entity.accessHash });
+    const inputUser = { _: "inputUser", userId: entity.id, accessHash: entity.accessHash };
     const result = await withTimeout(
-      client.invoke(new Api.channels.GetParticipant({ channel: chatPeer, participant: inputUser })),
+      client.call({ _: "channels.getParticipant", channel: msg.chat, participant: inputUser }),
       QUOTE_RPC_TIMEOUT_MS, "senderRank.channels.getParticipant",
     );
-    return (result as any)?.participant?.rank?.trim() || undefined;
+    return result?.participant?.rank?.trim() || undefined;
   } catch { return undefined; }
 }
 
@@ -837,7 +659,7 @@ async function generateQuote(
       validateStatus: () => true,
     });
 
-    console.log("quote-api响应状态:", response.status);
+    logger.info("quote-api响应状态:", response.status);
     const imageBuffer = Buffer.from(response.data);
     if (response.status < 200 || response.status >= 300) {
       const detail = imageBuffer.subarray(0, 160).toString("utf8").replace(/\s+/g, " ").trim();
@@ -848,19 +670,54 @@ async function generateQuote(
       throw new Error(`quote-api 返回类型异常：${contentType || "unknown"}`);
     }
     return { buffer: imageBuffer, ext: detectQuoteImageExt(imageBuffer) };
-  } catch (error) {
+  } catch (error: unknown) {
     if (axios.isAxiosError(error)) {
-      console.error(`quote-api请求失败:`, {
+      logger.error(`quote-api请求失败:`, {
         status: error.response?.status,
         statusText: error.response?.statusText,
         data: error.response?.data,
       });
     } else {
-      console.error(`调用quote-api失败: ${error}`);
+      logger.error(`调用quote-api失败: ${error}`);
     }
     throw error;
   }
 }
+
+async function downloadProfilePhotoBuffer(client: any, sender: EntityLike): Promise<Buffer | undefined> {
+  const photos = await client.getProfilePhotos(sender as any, { limit: 1 });
+  const photo = photos?.[0];
+  if (!photo) return undefined;
+  const data = await client.downloadAsBuffer(photo);
+  const buffer = Buffer.from(data);
+  return buffer.length > 0 ? buffer : undefined;
+}
+
+async function ensureFullUser(client: any, sender: any): Promise<any> {
+  if (!client || !sender) return sender;
+  try {
+    const isMin = !!(sender.isMin || sender.raw?.min);
+    const hasStatusField =
+      sender.emojiStatus != null ||
+      sender.emoji_status != null ||
+      sender.raw?.emojiStatus != null ||
+      sender.raw?.emoji_status != null;
+    // min peers often omit emojiStatus; also refresh when status field is totally absent
+    if (!isMin && hasStatusField) return sender;
+    if (typeof client.getUsers !== "function") return sender;
+    const users = await withTimeout(
+      client.getUsers(sender),
+      YVLU_EMOJI_TIMEOUT_MS,
+      "yvlu.ensureFullUser.getUsers",
+    );
+    const full = Array.isArray(users) ? users[0] : users;
+    return full || sender;
+  } catch (e: unknown) {
+    logger.debug("yvlu ensureFullUser failed", e);
+    return sender;
+  }
+}
+
 
 interface YvluConfig {
   stickerSetShortName: string;
@@ -878,7 +735,7 @@ class YvluPlugin extends Plugin {
     const configDir = createDirectoryInAssets("yvlu");
     this.configPath = path.join(configDir, "config.json");
 
-    console.log(`yvlu配置文件路径: ${this.configPath}`);
+    logger.info(`yvlu配置文件路径: ${this.configPath}`);
 
     // 如果配置文件不存在,创建默认配置
     if (!fs.existsSync(this.configPath)) {
@@ -892,7 +749,7 @@ class YvluPlugin extends Plugin {
         JSON.stringify(defaultConfig, null, 2),
         "utf-8",
       );
-      console.log(`已创建默认配置文件: ${this.configPath}`);
+      logger.info(`已创建默认配置文件: ${this.configPath}`);
     }
 
     // 加载配置
@@ -905,33 +762,33 @@ class YvluPlugin extends Plugin {
       if (!this.configPath || this.configPath === "") {
         const configDir = createDirectoryInAssets("yvlu");
         this.configPath = path.join(configDir, "config.json");
-        console.log(`重新初始化配置文件路径: ${this.configPath}`);
+        logger.info(`重新初始化配置文件路径: ${this.configPath}`);
       }
 
       if (!fs.existsSync(this.configPath)) {
-        console.error(`配置文件不存在: ${this.configPath}`);
-        console.log(`请手动创建配置文件: ${this.configPath}`);
+        logger.error(`配置文件不存在: ${this.configPath}`);
+        logger.info(`请手动创建配置文件: ${this.configPath}`);
         this.config = { stickerSetShortName: "" };
         return;
       }
 
       const configData = fs.readFileSync(this.configPath, "utf-8");
       this.config = JSON.parse(configData);
-      console.log("yvlu配置已加载:", this.config);
-      console.log("stickerSetShortName:", this.config?.stickerSetShortName);
-    } catch (error) {
-      console.error("加载yvlu配置失败:", error);
+      logger.info("yvlu配置已加载:", this.config);
+      logger.info("stickerSetShortName:", this.config?.stickerSetShortName);
+    } catch (error: unknown) {
+      logger.error("加载yvlu配置失败:", error);
       this.config = { stickerSetShortName: "" };
     }
   }
 
   cmdHandlers: Record<
     string,
-    (msg: Api.Message, trigger?: Api.Message) => Promise<void>
+    (msg: any, trigger?: any) => Promise<void>
   > = {
-    yvlu: async (msg: Api.Message, trigger?: Api.Message) => {
+    yvlu: async (msg: any, trigger?: any) => {
       const start = Date.now();
-      const args = msg.message.split(/\s+/);
+      const args = (msg.text || "").split(/\s+/);
       let count = 1;
       let r = false;
       let valid = false;
@@ -984,63 +841,60 @@ class YvluPlugin extends Plugin {
         try {
           const client = await getGlobalClient();
 
-          // teleproto reverse=true 会把 offsetId+1，所以要用 replied.id-1 才能包含被回复消息
-          // count=1 时直接用 replied，避免 history 扫描偏移
+          // count=1 直接用被回复消息；多条用 minId 保证包含 replied（mtcute reverse offset 语义不稳）
           let messages: any[];
           if (count <= 1) {
             messages = [replied];
           } else {
-            messages = await safeGetMessages(msg.client, replied.peerId, {
-              offsetId: replied!.id - 1,
+            const history = await client.getHistory(msg.chat, {
+              minId: replied!.id,
               limit: count,
               reverse: true,
-            });
+            }).catch(() => []);
+            messages = Array.isArray(history) ? history : [];
+            if (!messages.some((m: any) => Number(m?.id) === Number(replied.id))) {
+              messages = [replied, ...messages].slice(0, count);
+            }
           }
 
           if (!messages || messages.length === 0) {
             await msg.edit({ text: "未找到消息" });
             return;
           }
-          // 兜底：history 结果若不含被回复消息，强制插入到开头
-          if (!messages.some((m: any) => Number(m?.id) === Number(replied.id))) {
-            messages = [replied, ...messages].slice(0, count);
-          }
 
-          const items = [] as any[];
+          const items: Record<string, unknown>[] = [];
           let previousUserIdentifier: string | null = null;
 
-          for await (const [i, message] of messages.entries()) {
-            // 获取发送者信息
-            let sender: any = await message.getSender();
+          for (const [i, message] of messages.entries()) {
+            // 获取发送者信息：mtcute 的 Message 已解析 `.sender`（Peer），无异步 getSender()
+            let sender: EntityLike | null = (message.sender as EntityLike) || null;
 
-            // 如果无法获取发送者（可能是以频道身份发言），尝试从 peerId 获取
-            if (!sender) {
+            // 如果无法获取发送者（可能是以频道身份发言），尝试从 forward 信息获取
+            if (!sender && message.forward) {
               try {
-                const peerId =
-                  (message as any).peerId || (message as any).fromId;
-                if (peerId) {
-                  sender = await client.getEntity(peerId);
+                const fwdSender = message.forward.sender;
+                if (fwdSender && typeof (fwdSender as { id?: unknown }).id !== "undefined") {
+                  sender = fwdSender as unknown as EntityLike;
                 }
-              } catch (e) {
-                console.warn("从 peerId 获取发送者失败", e);
+              } catch (e: unknown) {
+                logger.warn("从转发获取发送者失败", e);
               }
             }
 
-            if (message.fwdFrom) {
-              let forwardedSender =
-                message.forward?.sender || message.forward?.chat;
+            if (message.forward) {
+              let forwardedSender = message.forward.sender || null;
 
               if (!forwardedSender) {
                 try {
-                  forwardedSender = await message.forward?.getSender();
-                } catch (error) {
-                  console.warn("获取转发发送者失败", error);
+                  forwardedSender = message.forward?.sender || null;
+                } catch (error: unknown) {
+                  logger.warn("获取转发发送者失败", error);
                 }
               }
 
               if (!forwardedSender) {
                 forwardedSender = await resolveForwardSenderFromHeader(
-                  message.fwdFrom,
+                  message.forward?.raw ?? null,
                   client,
                 );
               }
@@ -1063,22 +917,37 @@ class YvluPlugin extends Plugin {
               return;
             }
 
-            // Ensure we have a full entity (forwarding senders may be incomplete)
-            sender = await ensureFullEntity(client, sender);
+            // min/incomplete peer 可能没有 emojiStatus，先 getUsers 补全
+            sender = await ensureFullUser(client, sender);
 
             // 准备用户数据
-            const userId = (sender as any).id?.toString();
-            const name = (sender as any).name || "";
+            const senderLike = sender as EntityLike;
+            const userId = senderLike.id?.toString();
+            const name = (sender as unknown as { name?: string }).name || "";
             const firstName =
-              (sender as any).firstName || (sender as any).title || "";
-            const lastName = (sender as any).lastName || "";
-            const username = (sender as any).username || "";
-            // teleproto may expose emojiStatus.documentId as big-int-like; also try nested raw
-            const emojiStatus =
-              emojiStatusIdFromEntity(sender) ||
-              (sender as any).emojiStatus?.documentId?.toString?.() ||
-              (sender as any).emoji_status?.documentId?.toString?.() ||
-              null;
+              senderLike.firstName || senderLike.title || "";
+            const lastName = senderLike.lastName || "";
+            const username = senderLike.username || "";
+            const emojiStatusObj = (sender as any)?.emojiStatus ?? (sender as any)?.emoji_status;
+            let emojiStatus: string | null = null;
+            if (emojiStatusObj != null) {
+              try {
+                const via =
+                  emojiStatusObj?.emoji ??
+                  emojiStatusObj?.documentId ??
+                  emojiStatusObj?.document_id ??
+                  emojiStatusObj?.raw?.documentId ??
+                  emojiStatusObj?.raw?.document_id;
+                if (via != null && via !== "") {
+                  const s = typeof via?.toString === "function" ? via.toString() : String(via);
+                  if (s && s !== "[object Object]") emojiStatus = s;
+                } else if (typeof emojiStatusObj !== "object") {
+                  emojiStatus = String(emojiStatusObj);
+                }
+              } catch {
+                emojiStatus = null;
+              }
+            }
 
             // 生成用户唯一标识符：优先使用 userId，如果没有则使用名称的 hashCode
             const currentUserIdentifier =
@@ -1095,38 +964,40 @@ class YvluPlugin extends Plugin {
             let photo: { url: string } | undefined = undefined;
             if (shouldShowAvatar) {
               try {
-                const buffer = await downloadEntityAvatar(client, sender);
+                const buffer = await downloadProfilePhotoBuffer(client, sender as EntityLike);
                 if (Buffer.isBuffer(buffer) && buffer.length > 0) {
                   const base64 = buffer.toString("base64");
                   photo = {
-                    url: `data:image/png;base64,${base64}`,
+                    url: `data:image/jpeg;base64,${base64}`,
                   };
                 } else {
-                  console.warn("下载的头像数据无效或用户无头像");
+                  logger.warn("下载的头像数据无效或用户无头像");
                 }
-              } catch (e) {
-                console.warn("下载用户头像失败", e);
+              } catch (e: unknown) {
+                logger.warn("下载用户头像失败", e);
               }
               // 远程 quote-api 的 emoji_status 只接受纯字符串 ID，由远端自行拉表情。
-              // 本地无需预下载 customEmojiBuffer。
+              // 本地无需预下载 customEmojiBuffer（塞进请求会膨胀/易炸 JSON）。
             }
 
             if (i === 0) {
-              let replyTo = (trigger || msg)?.replyTo;
+              const replyTo = (trigger || msg)?.replyTo;
               if (replyTo?.quoteText) {
-                message.message = replyTo.quoteText;
-                message.entities = replyTo.quoteEntities;
+                message.text = replyTo.quoteText;
+                message.entities = replyTo.quoteEntities || [];
               }
             }
 
             // 转换消息实体
-            const entities = convertEntities(message.entities || []);
+            const entities = convertEntities(
+              message.entities || [],
+            );
 
             // 处理回复引用（支持 quote header 与真实被回复消息）
-            let replyBlock: any | undefined;
+            let replyBlock: { name: string; text: string; entities: unknown[]; chatId?: number } | undefined;
             if (r) {
               try {
-                const replyHeader: any = (message as any).replyTo;
+                const replyHeader = (message as MessageLike).replyTo as Record<string, unknown> | undefined;
 
                 // 1) 优先使用 quote header（包含被引用文本与实体偏移）
                 if (replyHeader?.quote && replyHeader.quoteText) {
@@ -1137,20 +1008,23 @@ class YvluPlugin extends Plugin {
                   try {
                     const repliedMsg = await safeGetReplyMessage(message);
                     if (repliedMsg) {
-                      const repliedSender = await repliedMsg.getSender();
+                      const repliedSender = repliedMsg.sender as EntityLike | null;
                       if (repliedSender) {
                         replyChatId = Number(repliedSender.id);
+                        const repliedSenderLike = repliedSender as EntityLike;
                         const rFirst =
-                          (repliedSender as any).firstName ||
-                          (repliedSender as any).title ||
+                          repliedSenderLike.firstName ||
+                          repliedSenderLike.title ||
                           "";
-                        const rLast = (repliedSender as any).lastName || "";
-                        const rUser = (repliedSender as any).username || "";
+                        const rLast = repliedSenderLike.lastName || "";
+                        const rUser = repliedSenderLike.username || "";
                         const composed = `${rFirst} ${rLast}`.trim();
                         replyName = composed || rUser || "unknown";
                       }
                     }
-                  } catch {}
+                  } catch (e: unknown) {
+                    logger.warn('[yvlu] 解析回复发送者信息失败:', e);
+                  }
 
                   // 实体
                   const revived = reviveEntities(replyHeader.quoteEntities);
@@ -1164,29 +1038,30 @@ class YvluPlugin extends Plugin {
                   };
                 } else if (
                   // 2) 次选：直接获取被回复消息
-                  (message as any).isReply ||
+                  (message as MessageLike).isReply ||
                   replyHeader?.replyToMsgId
                 ) {
                   try {
                     const repliedMsg = await safeGetReplyMessage(message);
                     if (repliedMsg) {
-                      const repliedSender = await repliedMsg.getSender();
+                      const repliedSender = repliedMsg.sender as EntityLike | null;
                       let replyName = "unknown";
                       let replyChatId: number | undefined;
                       if (repliedSender) {
                         replyChatId = Number(repliedSender.id);
+                        const repliedSenderLike = repliedSender as EntityLike;
                         const rFirst =
-                          (repliedSender as any).firstName ||
-                          (repliedSender as any).title ||
+                          repliedSenderLike.firstName ||
+                          repliedSenderLike.title ||
                           "";
-                        const rLast = (repliedSender as any).lastName || "";
-                        const rUser = (repliedSender as any).username || "";
+                        const rLast = repliedSenderLike.lastName || "";
+                        const rUser = repliedSenderLike.username || "";
                         const composed = `${rFirst} ${rLast}`.trim();
                         replyName = composed || rUser || "unknown";
                       }
 
                       // 使用被回复消息的文本 + 实体
-                      const replyText = repliedMsg.message || "";
+                      const replyText = repliedMsg.text || repliedMsg.message || "";
                       const replyEntities = convertEntities(
                         repliedMsg.entities || [],
                       );
@@ -1200,23 +1075,114 @@ class YvluPlugin extends Plugin {
                         };
                       }
                     }
-                  } catch {}
+                  } catch (e: unknown) {
+                    logger.warn('[yvlu] 解析回复引用信息失败:', e);
+                  }
                 }
-              } catch (e) {
-                console.warn("处理回复引用失败: ", e);
+              } catch (e: unknown) {
+                logger.warn("处理回复引用失败: ", e);
               }
             }
 
             let media: { url: string } | undefined = undefined;
-                        try {
-                          const mediaResult = await downloadAndProcessMedia(client, message);
-                          if (mediaResult) {
-                            const base64 = mediaResult.buffer.toString("base64");
-                            media = { url: `data:${mediaResult.mime};base64,${base64}` };
-                          }
-                        } catch (e) {
-                          console.error("下载媒体失败", e);
-                        }
+            try {
+              if (message.media) {
+                let mediaTypeForQuote: string | undefined = undefined;
+
+                // 判断是否为贴纸 - check type/className instead of instanceof
+                const mediaDoc = message.media.document;
+                const mediaAttrs = mediaDoc?.attributes;
+                const isSticker =
+                  mediaAttrs?.some(
+                    (a: any) => {
+                      const t = a.type || a._ || a.className;
+                      return t === "documentAttributeSticker" || t === "sticker";
+                    },
+                  ) || false;
+
+                if (isSticker) {
+                  mediaTypeForQuote = "sticker";
+                } else {
+                  mediaTypeForQuote = "photo";
+                }
+
+                const mimeType = (message.media as unknown as { document?: { mimeType?: string } }).document?.mimeType;
+
+                // 检测是否为 TGS 动态贴纸
+                const isTgsSticker =
+                  isSticker && mimeType === "application/x-tgsticker";
+
+                // 检测是否为 GIF/MP4 (Telegram 的 GIF 实际是 mp4)
+                const isGifOrMp4 =
+                  mimeType === "video/mp4" || mimeType === "image/gif";
+
+                // 检测是否为动态内容（需要下载原文件，不用缩略图）
+                const isAnimatedContent =
+                  (isSticker &&
+                    (mimeType === "video/webm" || // 视频贴纸
+                      mimeType === "image/webp" || // 可能是动态WebP
+                      isTgsSticker)) || // TGS 动态贴纸
+                  isGifOrMp4; // GIF/MP4
+
+                const buffer = await client.downloadAsBuffer(
+                  message.media as Parameters<typeof client.downloadAsBuffer>[0],
+                  isAnimatedContent ? {} : { thumb: 1 },
+                ).then((b) => Buffer.from(b));
+                if (Buffer.isBuffer(buffer)) {
+                  let finalBuffer = buffer;
+                  let finalMime = mimeType;
+
+                  // 如果是 TGS 格式，转换为 WebM
+                  if (isTgsSticker || isTgsFormat(buffer)) {
+                    try {
+                      const depCheck = await checkTgsDependencies();
+                      if (!depCheck.ok) {
+                        logger.error(`[yvlu] ${depCheck.message}`);
+                      } else {
+                        logger.info(
+                          `[yvlu] 检测到 TGS 贴纸，开始转换为 WebM...`,
+                        );
+                        finalBuffer = await convertTgsToWebm(buffer);
+                        finalMime = "video/webm";
+                        logger.info(
+                          `[yvlu] TGS -> WebM 转换成功，大小: ${finalBuffer.length}`,
+                        );
+                      }
+                    } catch (convertError: unknown) {
+                      logger.error(`[yvlu] TGS 转换失败:`, convertError);
+                    }
+                  }
+                  // 如果是 MP4/GIF，转换为 WebM
+                  else if (isGifOrMp4 || isMp4Format(buffer)) {
+                    try {
+                      logger.info(`[yvlu] 检测到 GIF/MP4，开始转换为 WebM...`);
+                      finalBuffer = await convertMp4ToWebm(buffer);
+                      finalMime = "video/webm";
+                      logger.info(
+                        `[yvlu] MP4 -> WebM 转换成功，大小: ${finalBuffer.length}`,
+                      );
+                    } catch (convertError: unknown) {
+                      logger.error(`[yvlu] MP4 转换失败:`, convertError);
+                      // 转换失败时保持原格式
+                    }
+                  }
+
+                  // 使用实际的 mimeType
+                  const mime =
+                    finalMime ||
+                    (mediaTypeForQuote === "sticker"
+                      ? "image/webp"
+                      : "image/jpeg");
+                  const base64 = finalBuffer.toString("base64");
+                  media = { url: `data:${mime};base64,${base64}` };
+                  logger.info(
+                    `媒体下载: mimeType=${mimeType}, isAnimated=${isAnimatedContent}, isTgs=${isTgsSticker}, isGif=${isGifOrMp4}, size=${finalBuffer.length}`,
+                  );
+                }
+              }
+            } catch (e: unknown) {
+              logger.error("下载媒体失败", e);
+            }
 
             // 构建高级消息对象（quote-api 全字段）
             const msgItem: any = {
@@ -1236,7 +1202,7 @@ class YvluPlugin extends Plugin {
                   ? String(emojiStatus)
                   : undefined,
               },
-              text: message.message || "",
+              text: message.text || "",
               entities: entities,
               avatar: shouldShowAvatar,
               ...(replyBlock ? { replyMessage: replyBlock } : {}),
@@ -1248,7 +1214,7 @@ class YvluPlugin extends Plugin {
             if (media) msgItem.media = media;
 
             // 转发行标签
-            if ((message as any).fwdFrom) {
+            if (message.forward) {
               const fwdInfo = await forwardedSource(message).catch(() => undefined);
               if (fwdInfo?.name) {
                 msgItem.forward = { label: fwdInfo.name };
@@ -1256,7 +1222,7 @@ class YvluPlugin extends Plugin {
             }
 
             // 管理员标签
-            if (sender && sender.accessHash) {
+            if (sender && (sender as any).accessHash) {
               const tag = await senderRankInChat(message, sender).catch(() => undefined);
               if (tag) msgItem.senderTag = tag;
             }
@@ -1264,26 +1230,31 @@ class YvluPlugin extends Plugin {
             // 媒体类型高级字段
             const mediaObj = (message as any).media;
             if (mediaObj) {
-              const kind = getMediaKind(message);
+              const kind = getMediaKind(message as any);
               if (kind === "voice") {
-                const waveform = voiceWaveform(message);
-                const attr = audioAttribute(message);
+                const waveform = voiceWaveform(message as any);
+                const attr = audioAttribute(message as any);
                 const duration = Number(attr?.duration ?? attr?.voiceDuration ?? 0) || undefined;
                 if (waveform) msgItem.voice = { waveform, ...(duration !== undefined ? { duration } : {}) };
               } else if (kind === "document") {
                 const doc = (message as any).document ?? (message as any).media?.document;
-                const fn = doc?.attributes?.find((a: any) => a.className?.includes?.("Filename") || a.constructor?.name?.includes?.("Filename"));
+                const fn = doc?.attributes?.find((a: any) => {
+                  const t = a.type || a._ || a.className || "";
+                  return t.includes("Filename");
+                });
                 const name = String(fn?.fileName || fn?.file_name || "file");
                 msgItem.document = { file_name: name };
               } else if (kind === "audio") {
-                const attr = audioAttribute(message);
+                const attr = audioAttribute(message as any);
                 const title = attr?.title || attr?.fileName || attr?.file_name || "Audio";
                 const performer = attr?.performer || attr?.artist;
                 const duration = Number(attr?.duration ?? 0) || undefined;
                 msgItem.audio = { title, ...(performer ? { performer } : {}), ...(duration !== undefined ? { duration } : {}) };
               } else if (kind === "video" || kind === "animation" || kind === "round") {
-                // 如果有 mediaCanvas（预先下载的媒体），标记 type/duration
-                const attr = getDocumentAttributes(message).find((a: any) => a.className?.includes?.("Video") || a.constructor?.name?.includes?.("Video"));
+                const attr = getDocumentAttributes(message as any).find((a: any) => {
+                  const t = a.type || a._ || a.className || "";
+                  return t.includes("Video");
+                });
                 const mediaDuration = Number(attr?.duration ?? 0) || undefined;
                 msgItem.mediaType = kind === "animation" ? "gif" : kind === "round" ? "video" : kind;
                 if (mediaDuration) msgItem.mediaDuration = mediaDuration;
@@ -1293,7 +1264,7 @@ class YvluPlugin extends Plugin {
             items.push(msgItem);
           }
 
-          const quoteData = {
+          const quoteData: Record<string, unknown> = {
             type: "quote",
             format: "webp",
             backgroundColor: "#1b1429",
@@ -1327,10 +1298,10 @@ class YvluPlugin extends Plugin {
             return;
           }
 
-          console.log(
+          logger.info(
             `[yvlu] API返回: buffer长度=${imageBuffer?.length}, ext=${imageExt}`,
           );
-          console.log(
+          logger.info(
             `[yvlu] buffer前20字节: ${imageBuffer
               ?.slice(0, 20)
               .toString("hex")}`,
@@ -1344,7 +1315,7 @@ class YvluPlugin extends Plugin {
             const isWebm = isWebmFormat(imageBuffer);
             const isAnimated = isAnimatedWebP(imageBuffer);
 
-            console.log(
+            logger.info(
               `检测到的图片尺寸: ${dimensions.width}x${
                 dimensions.height
               }, 格式: ${isWebm ? "webm" : "webp"}, 动态: ${
@@ -1352,95 +1323,85 @@ class YvluPlugin extends Plugin {
               }`,
             );
 
+            const os = await import("os");
+            const tmpDir = os.tmpdir();
+
             if (isWebm) {
               // webm 格式：直接发送为贴纸（参考 eatgif）
-              const os = await import("os");
-              const tmpDir = os.tmpdir();
               const uniqueId = Date.now().toString();
               const webmPath = path.join(tmpDir, `sticker_${uniqueId}.webm`);
 
               try {
                 fs.writeFileSync(webmPath, imageBuffer);
 
-                await client.sendFile(msg.peerId, {
+                await client.sendMedia(msg.chat.id, {
+                  type: "sticker",
                   file: webmPath,
-                  attributes: [
-                    new Api.DocumentAttributeSticker({
-                      alt: "📝",
-                      stickerset: new Api.InputStickerSetEmpty(),
-                    }),
-                  ],
-                  replyTo: replied?.id,
-                });
+                  fileName: "yvlu.webm",
+                  fileMime: "video/webm",
+                  alt: "📝",
+                }, { replyTo: replied?.id });
 
-                console.log("[yvlu] 动态贴纸发送成功 (webm)");
+                logger.info("[yvlu] 动态贴纸发送成功 (webm)");
               } finally {
                 try {
                   fs.unlinkSync(webmPath);
-                } catch (e) {}
+                } catch (e: unknown) { logger.warn('[yvlu] 清理临时文件失败:', e) }
               }
             } else {
-              const file = new CustomFile(
-                `quote.${imageExt}`,
-                imageBuffer.length,
-                "",
-                imageBuffer,
-              );
+              const uniqueId = Date.now().toString();
+              const outputPath = path.join(tmpDir, `quote_${uniqueId}.${imageExt}`);
 
-              if (imageExt === "webp") {
-                const stickerAttr = new Api.DocumentAttributeSticker({
-                  alt: "📝",
-                  stickerset: new Api.InputStickerSetEmpty(),
-                });
-                const imageSizeAttr = new Api.DocumentAttributeImageSize({
-                  w: dimensions.width,
-                  h: dimensions.height,
-                });
-                const filenameAttr = new Api.DocumentAttributeFilename({
-                  fileName: "quote.webp",
-                });
-                await client.sendFile(msg.peerId, {
-                  file,
-                  forceDocument: false,
-                  attributes: [stickerAttr, imageSizeAttr, filenameAttr],
-                  replyTo: replied?.id,
-                });
-                console.log("[yvlu] 静态贴纸发送成功");
-              } else {
-                await client.sendFile(msg.peerId, {
-                  file,
-                  forceDocument: false,
-                  replyTo: replied?.id,
-                });
-                console.log("[yvlu] PNG 图片发送成功");
+              try {
+                fs.writeFileSync(outputPath, imageBuffer);
+
+                if (imageExt === "webp") {
+                  await client.sendMedia(msg.chat.id, {
+                    type: "sticker",
+                    file: outputPath,
+                    fileName: "yvlu.webp",
+                    fileMime: "image/webp",
+                    alt: "📝",
+                  }, { replyTo: replied?.id });
+                  logger.info("[yvlu] 静态贴纸发送成功");
+                } else {
+                  await client.sendMedia(msg.chat.id, {
+                    type: "photo",
+                    file: outputPath,
+                  }, { replyTo: replied?.id });
+                  logger.info("[yvlu] PNG 图片发送成功");
+                }
+              } finally {
+                try {
+                  fs.unlinkSync(outputPath);
+                } catch (e: unknown) { logger.warn('[yvlu] 清理临时文件失败:', e) }
               }
             }
 
-            console.log("[yvlu] 文件发送成功");
-          } catch (fileError) {
-            console.error(`发送文件失败: ${fileError}`);
-            await msg.edit({ text: `发送文件失败: ${htmlEscape(String(fileError))}`, parseMode: "html" });
+            logger.info("[yvlu] 文件发送成功");
+          } catch (fileError: unknown) {
+            logger.error(`发送文件失败: ${fileError}`);
+            await msg.edit({ text: `发送文件失败: ${htmlEscape(String(fileError))}` });
             return;
           }
 
           await msg.delete();
 
           const end = Date.now();
-          console.log(`语录生成耗时: ${end - start}ms`);
-        } catch (error) {
-          console.error(`语录生成失败: ${error}`);
-          await msg.edit({ text: `语录生成失败: ${htmlEscape(String(error))}`, parseMode: "html" });
+          logger.info(`语录生成耗时: ${end - start}ms`);
+        } catch (error: unknown) {
+          logger.error(`语录生成失败: ${error}`);
+          await msg.edit({ text: `语录生成失败: ${htmlEscape(String(error))}` });
         }
       } else {
         await msg.edit({
-          text: help_text,
-          parseMode: "html",
+          text: html(help_text),
         });
       }
     },
   };
 
-  async handleConfigCommand(msg: Api.Message, args: string[]) {
+  async handleConfigCommand(msg: any, args: string[]) {
     try {
       // 确保配置已加载
       await this.loadConfig();
@@ -1460,10 +1421,11 @@ ${
 <b>配置文件路径:</b>
 ${codeTag(this.configPath)}
 
+
 <b>可用配置命令:</b>
 <code>${commandName} config sticker 贴纸包名称</code> - 设置贴纸包名称
 `;
-        await msg.edit({ text: configInfo, parseMode: "html" });
+        await msg.edit({ text: html(configInfo) });
         return;
       }
 
@@ -1478,8 +1440,7 @@ ${codeTag(this.configPath)}
 
           if (!newName) {
             await msg.edit({
-              text: `❌ 请提供贴纸包名称\n用法: <code>${commandName} config sticker 贴纸包名称</code>`,
-              parseMode: "html",
+              text: html(`❌ 请提供贴纸包名称\n用法: <code>${commandName} config sticker 贴纸包名称</code>`),
             });
             return;
           }
@@ -1487,8 +1448,7 @@ ${codeTag(this.configPath)}
           // 验证贴纸包名称格式（只能包含字母、数字和下划线）
           if (!/^[a-zA-Z0-9_]+$/.test(newName)) {
             await msg.edit({
-              text: "❌ 贴纸包名称只能包含字母、数字和下划线",
-              parseMode: "html",
+              text: html("❌ 贴纸包名称只能包含字母、数字和下划线"),
             });
             return;
           }
@@ -1496,8 +1456,7 @@ ${codeTag(this.configPath)}
           // 贴纸包名称长度限制
           if (newName.length < 1 || newName.length > 64) {
             await msg.edit({
-              text: "❌ 贴纸包名称长度应在 1-64 个字符之间",
-              parseMode: "html",
+              text: html("❌ 贴纸包名称长度应在 1-64 个字符之间"),
             });
             return;
           }
@@ -1519,28 +1478,25 @@ ${codeTag(this.configPath)}
           await this.loadConfig();
 
           await msg.edit({
-            text: `✅ 贴纸包名称已设置为: ${codeTag(newName)}\n贴纸包链接: t.me/addstickers/${htmlEscape(newName)}`,
-            parseMode: "html",
+            text: html(`✅ 贴纸包名称已设置为: ${codeTag(newName)}\n贴纸包链接: t.me/addstickers/${htmlEscape(newName)}`),
           });
           break;
         }
 
         default:
           await msg.edit({
-            text: `❌ 未知的配置项: ${codeTag(subCommand)}\n\n可用配置命令:\n<code>${commandName} config sticker 贴纸包名称</code> - 设置贴纸包名称`,
-            parseMode: "html",
+            text: html(`❌ 未知的配置项: ${codeTag(subCommand)}\n\n可用配置命令:\n<code>${commandName} config sticker 贴纸包名称</code> - 设置贴纸包名称`),
           });
       }
-    } catch (error: any) {
-      console.error("处理配置命令失败:", error);
+    } catch (error: unknown) {
+      logger.error("处理配置命令失败:", error);
       await msg.edit({
-        text: `❌ 配置操作失败: ${htmlEscape(error.message || String(error))}`,
-        parseMode: "html",
+        text: html(`❌ 配置操作失败: ${htmlEscape(getErrorMessage(error) || String(error))}`),
       });
     }
   }
 
-  async handleSaveStickerToSet(msg: Api.Message) {
+  async handleSaveStickerToSet(msg: any) {
     try {
       // 确保配置路径已初始化
       if (!this.configPath || this.configPath === "") {
@@ -1559,7 +1515,7 @@ ${codeTag(this.configPath)}
             JSON.stringify(defaultConfig, null, 2),
             "utf-8",
           );
-          console.log(`已创建默认配置文件: ${this.configPath}`);
+          logger.info(`已创建默认配置文件: ${this.configPath}`);
         }
       }
 
@@ -1573,8 +1529,7 @@ ${codeTag(this.configPath)}
         this.config.stickerSetShortName.trim() === ""
       ) {
         await msg.edit({
-          text: `❌ 未配置贴纸包!\n请编辑配置文件: ${htmlEscape(this.configPath)}\n设置 stickerSetShortName`,
-          parseMode: "html",
+          text: html(`❌ 未配置贴纸包!\n请编辑配置文件: ${htmlEscape(this.configPath)}\n设置 stickerSetShortName`),
         });
         return;
       }
@@ -1597,23 +1552,29 @@ ${codeTag(this.configPath)}
       // 判断媒体类型
       let isSticker = false;
       let isPhoto = false;
-      let documentToAdd: Api.InputDocument | null = null;
+      let documentToAdd: any = null;
 
-      if (replied.media instanceof Api.MessageMediaDocument) {
-        const doc = replied.media.document as any;
+      // Check if media is a document (sticker) using type property
+      const mediaType = replied.media.type || replied.media._ || replied.media.className;
+      if (mediaType === "messageMediaDocument" || replied.media.document) {
+        const doc = replied.media.document as unknown as { attributes?: unknown[]; id?: number | string; accessHash?: number | string; fileReference?: Uint8Array } | null;
         if (doc && doc.attributes) {
           isSticker = doc.attributes.some(
-            (a: any) => a instanceof Api.DocumentAttributeSticker,
+            (a: any) => {
+              const t = a.type || a._ || a.className;
+              return t === "documentAttributeSticker" || t === "sticker";
+            },
           );
         }
         if (isSticker && doc.id && doc.accessHash) {
-          documentToAdd = new Api.InputDocument({
+          documentToAdd = {
+            _: 'inputDocument',
             id: doc.id,
             accessHash: doc.accessHash,
             fileReference: doc.fileReference || Buffer.from([]),
-          });
+          };
         }
-      } else if (replied.media instanceof Api.MessageMediaPhoto) {
+      } else if (mediaType === "messageMediaPhoto" || replied.media.photo) {
         isPhoto = true;
       }
 
@@ -1625,18 +1586,16 @@ ${codeTag(this.configPath)}
       // 检查贴纸包是否存在,不存在则创建
       let stickerSetExists = false;
       try {
-        const stickerSet = await client.invoke(
-          new Api.messages.GetStickerSet({
-            stickerset: new Api.InputStickerSetShortName({
-              shortName: this.config.stickerSetShortName,
-            }),
-            hash: 0,
-          }),
-        );
-        stickerSetExists = stickerSet instanceof Api.messages.StickerSet;
-      } catch (error: any) {
+        const stickerSet = await client.call({
+          _: 'messages.getStickerSet',
+          stickerset: {_: 'inputStickerSetShortName', shortName: this.config.stickerSetShortName},
+          hash: 0,
+        });
+        stickerSetExists = stickerSet instanceof Object && stickerSet._ === 'messages.stickerSet';
+      } catch (error: unknown) {
         // 如果贴纸包不存在,会抛出异常
-        if (error.errorMessage === "STICKERSET_INVALID") {
+        const errorMessage = getErrorMessage(error);
+        if (errorMessage === "STICKERSET_INVALID") {
           stickerSetExists = false;
         } else {
           throw error;
@@ -1652,27 +1611,23 @@ ${codeTag(this.configPath)}
       // 如果是贴纸,直接添加
       if (isSticker && documentToAdd) {
         try {
-          await client.invoke(
-            new Api.stickers.AddStickerToSet({
-              stickerset: new Api.InputStickerSetShortName({
-                shortName: this.config.stickerSetShortName,
-              }),
-              sticker: new Api.InputStickerSetItem({
-                document: documentToAdd,
-                emoji: "📝",
-              }),
-            }),
-          );
+          await client.call({
+            _: 'stickers.addStickerToSet',
+            stickerset: {_: 'inputStickerSetShortName', shortName: this.config.stickerSetShortName},
+            sticker: {
+              _: 'inputStickerSetItem',
+              document: documentToAdd,
+              emoji: "📝",
+            },
+          });
 
           await msg.edit({
-            text: `✅ 已成功添加到贴纸包!\n贴纸包: t.me/addstickers/${htmlEscape(this.config.stickerSetShortName)}`,
-            parseMode: "html",
+            text: html(`✅ 已成功添加到贴纸包!\n贴纸包: t.me/addstickers/${htmlEscape(this.config.stickerSetShortName)}`),
           });
-        } catch (error: any) {
-          console.error("添加贴纸失败:", error);
+        } catch (error: unknown) {
+          logger.error("添加贴纸失败:", error);
           await msg.edit({
-            text: `❌ 添加贴纸失败: ${htmlEscape(error.message || String(error))}`,
-            parseMode: "html",
+            text: html(`❌ 添加贴纸失败: ${htmlEscape(getErrorMessage(error) || String(error))}`),
           });
         }
         return;
@@ -1682,7 +1637,9 @@ ${codeTag(this.configPath)}
       if (isPhoto) {
         try {
           // 下载图片
-          const buffer = await downloadMediaBuffer(client, replied);
+          const buffer = await client.downloadAsBuffer(
+            replied.media as Parameters<typeof client.downloadAsBuffer>[0],
+          ).then((b) => Buffer.from(b));
           if (!Buffer.isBuffer(buffer)) {
             await msg.edit({ text: "❌ 下载图片失败" });
             return;
@@ -1690,59 +1647,48 @@ ${codeTag(this.configPath)}
 
           // 上传为文件
           const file = await client.uploadFile({
-            file: new CustomFile("sticker.png", buffer.length, "", buffer),
+            file: {
+              name: "sticker.png",
+              size: buffer.length,
+              buffer: buffer,
+            },
             workers: 1,
           });
 
-          // 创建 InputStickerSetItem
-          const stickerItem = new Api.InputStickerSetItem({
-            document: new Api.InputDocument({
-              id: BigInt(0),
-              accessHash: BigInt(0),
-              fileReference: Buffer.from([]),
-            }),
-            emoji: "📝",
-          });
-
           // 使用上传的文件
-          await client.invoke(
-            new Api.stickers.AddStickerToSet({
-              stickerset: new Api.InputStickerSetShortName({
-                shortName: this.config.stickerSetShortName,
-              }),
-              sticker: new Api.InputStickerSetItem({
-                document: file as any,
-                emoji: "📝",
-              }),
-            }),
-          );
+          await client.call({
+            _: 'stickers.addStickerToSet',
+            stickerset: {_: 'inputStickerSetShortName', shortName: this.config.stickerSetShortName},
+            sticker: {
+              _: 'inputStickerSetItem',
+              document: file,
+              emoji: "📝",
+            },
+          });
 
           await msg.edit({
-            text: `✅ 已成功添加到贴纸包!\n贴纸包: t.me/addstickers/${htmlEscape(this.config.stickerSetShortName)}`,
-            parseMode: "html",
+            text: html(`✅ 已成功添加到贴纸包!\n贴纸包: t.me/addstickers/${htmlEscape(this.config.stickerSetShortName)}`),
           });
-        } catch (error: any) {
-          console.error("处理图片失败:", error);
+        } catch (error: unknown) {
+          logger.error("处理图片失败:", error);
           await msg.edit({
-            text: `❌ 处理图片失败: ${htmlEscape(error.message || String(error))}`,
-            parseMode: "html",
+            text: html(`❌ 处理图片失败: ${htmlEscape(getErrorMessage(error) || String(error))}`),
           });
         }
         return;
       }
-    } catch (error: any) {
-      console.error("保存贴纸到贴纸包失败:", error);
+    } catch (error: unknown) {
+      logger.error("保存贴纸到贴纸包失败:", error);
       await msg.edit({
-        text: `❌ 操作失败: ${htmlEscape(error.message || String(error))}`,
-        parseMode: "html",
+        text: html(`❌ 操作失败: ${htmlEscape(getErrorMessage(error) || String(error))}`),
       });
     }
   }
 
   async createStickerSet(
     client: any,
-    msg: Api.Message,
-    replied: Api.Message,
+    msg: any,
+    replied: any,
     isSticker: boolean,
     isPhoto: boolean,
   ) {
@@ -1750,18 +1696,22 @@ ${codeTag(this.configPath)}
       // 准备第一个贴纸
       let firstSticker: any = null;
 
-      if (isSticker && replied.media instanceof Api.MessageMediaDocument) {
-        const doc = replied.media.document as any;
+      const repliedMediaType = replied.media?.type || replied.media?._ || replied.media?.className;
+      if (isSticker && (repliedMediaType === "messageMediaDocument" || replied.media?.document)) {
+        const doc = replied.media.document as unknown as { id?: number | string; accessHash?: number | string; fileReference?: Uint8Array } | null;
         if (doc && doc.id && doc.accessHash) {
-          firstSticker = new Api.InputDocument({
+          firstSticker = {
+            _: 'inputDocument',
             id: doc.id,
             accessHash: doc.accessHash,
             fileReference: doc.fileReference || Buffer.from([]),
-          });
+          };
         }
       } else if (isPhoto) {
         // 下载图片
-        const buffer = await downloadMediaBuffer(client, replied);
+        const buffer = await client.downloadAsBuffer(
+          replied.media as Parameters<typeof client.downloadAsBuffer>[0],
+        ).then((b) => Buffer.from(b));
         if (!Buffer.isBuffer(buffer)) {
           await msg.edit({ text: "❌ 下载图片失败" });
           return;
@@ -1769,7 +1719,11 @@ ${codeTag(this.configPath)}
 
         // 上传为文件
         firstSticker = await client.uploadFile({
-          file: new CustomFile("sticker.png", buffer.length, "", buffer),
+          file: {
+            name: "sticker.png",
+            size: buffer.length,
+            buffer: buffer,
+          },
           workers: 1,
         });
       }
@@ -1781,37 +1735,61 @@ ${codeTag(this.configPath)}
 
       // 获取当前用户信息
       const me = await safeGetMe(client);
-           if (!me) return;
+      if (!me) return;
 
       // 创建贴纸包
-      await client.invoke(
-        new Api.stickers.CreateStickerSet({
-          userId: me,
-          title: `${this.config!.stickerSetShortName}`,
-          shortName: this.config!.stickerSetShortName,
-          stickers: [
-            new Api.InputStickerSetItem({
-              document: firstSticker,
-              emoji: "📝",
-            }),
-          ],
-        }),
-      );
+      await client.call({
+        _: 'stickers.createStickerSet',
+        userId: me,
+        title: `${this.config!.stickerSetShortName}`,
+        shortName: this.config!.stickerSetShortName,
+        stickers: [
+          {
+            _: 'inputStickerSetItem',
+            document: firstSticker,
+            emoji: "📝",
+          },
+        ],
+      });
 
       await msg.edit({
-        text: `✅ 已创建贴纸包并添加第一个贴纸!\n贴纸包: t.me/addstickers/${htmlEscape(
+        text: html(`✅ 已创建贴纸包并添加第一个贴纸!\n贴纸包: t.me/addstickers/${htmlEscape(
           this.config!.stickerSetShortName
-        )}`,
-        parseMode: "html",
+        )}`),
       });
-    } catch (error: any) {
-      console.error("创建贴纸包失败:", error);
+    } catch (error: unknown) {
+      logger.error("创建贴纸包失败:", error);
       await msg.edit({
-        text: `❌ 创建贴纸包失败: ${htmlEscape(error.message || String(error))}`,
-        parseMode: "html",
+        text: html(`❌ 创建贴纸包失败: ${htmlEscape(getErrorMessage(error) || String(error))}`),
       });
     }
   }
 }
+
+
+  // Panel Settings Adapter
+  panelAdapter: PanelSettingsAdapter = {
+    id: "yvlu",
+    title: "语录贴纸",
+    description: "语录贴纸配置",
+    category: "插件配置",
+    icon: "💬",
+    getSchema: (): PanelSettingField[] => [
+      {
+            "key": "stickerSetShortName",
+            "label": "贴纸包短名",
+            "type": "string"
+      }
+],
+    getValues: async (): Promise<Record<string, unknown>> => {
+      const db = await JSONFilePreset<YvluConfig>(path.join(createDirectoryInAssets("yvlu"), "config.json"), defaultConfig);
+      return db.data as Record<string, unknown>;
+    },
+    setValues: async (patch: Record<string, unknown>): Promise<void> => {
+      const db = await JSONFilePreset<YvluConfig>(path.join(createDirectoryInAssets("yvlu"), "config.json"), defaultConfig);
+      Object.assign(db.data, patch);
+      await db.write();
+    },
+  };
 
 export default new YvluPlugin();

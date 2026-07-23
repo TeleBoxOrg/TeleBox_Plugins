@@ -1,17 +1,22 @@
 "use strict";
 
-import { Plugin } from "@utils/pluginBase";
-import { Api } from "teleproto";
+import { Plugin, type PanelSettingsAdapter, type PanelSettingField, type PanelFieldType } from "@utils/pluginBase";
+import type { MessageContext } from "@mtcute/dispatcher";
+import { thtml as html } from "@mtcute/html-parser";
 import { getPrefixes } from "@utils/pluginManager";
 import { createDirectoryInAssets } from "@utils/pathHelpers";
 import { JSONFilePreset } from "lowdb/node";
+import type { Low } from "lowdb";
 import * as path from "path";
 import _ from "lodash";
-
+import { logger } from "@utils/logger";
+import { getErrorMessage } from "@utils/errorHelpers";
 import { htmlEscape } from "@utils/htmlEscape";
+import { tryGetCurrentRuntime } from "@utils/runtimeAccess";
 
 const prefixes = getPrefixes();
 const mainPrefix = prefixes[0];
+
 
 // ==========================================
 // 🛠️ 内置 Pangu 核心逻辑 (无需外部依赖)
@@ -32,14 +37,14 @@ class PanguSpacer {
   );
 
   private static readonly CJK_QUOTE = new RegExp(
-    `([${PanguSpacer.CJK}])([\"\'])`, "g"
+    `([${PanguSpacer.CJK}])([\"\\'])`, "g"
   );
 
   private static readonly QUOTE_CJK = new RegExp(
-    `([\"\'])([${PanguSpacer.CJK}])`, "g"
+    `([\"\\'])([${PanguSpacer.CJK}])`, "g"
   );
 
-  private static readonly FIX_QUOTE_ANY_QUOTE = /([\"\'])\s*(.+?)\s*([\"\'])/g;
+  private static readonly FIX_QUOTE_ANY_QUOTE = /([\"\\'])\s*(.+?)\s*([\"\\'])/g;
 
   private static readonly CJK_HASH = new RegExp(
     `([${PanguSpacer.CJK}])(#(\\S+))`, "g"
@@ -71,7 +76,7 @@ class PanguSpacer {
     `([\\)\\]\\}>\u201d])([${PanguSpacer.CJK}])`, "g"
   );
 
-  private static readonly FIX_BRACKET_ANY_BRACKET = /([(\[{<>\u201c]+)(\s*)(.+?)(\s*)([)\]}>"\u201d]+)/g;
+  private static readonly FIX_BRACKET_ANY_BRACKET = /([\(\[{<\u201c]+)(\s*)(.+?)(\s*)([\)\]}>\u201d]+)/g;
 
   private static readonly CJK_ANS_CJK = new RegExp(
     `([${PanguSpacer.CJK}])([a-z0-9\`~\\!\\$\\^\\&\\*\\-\\=\\+\\\\|\\;\\,\\.\\?\\/]+)([${PanguSpacer.CJK}])`, "gi"
@@ -95,7 +100,7 @@ class PanguSpacer {
 
     // 保护 URL：简单的 URL 保护，避免破坏链接
     // 将 URL 替换为占位符 -> 处理文本 -> 还原 URL
-    const urlRegex = /https?:\/\/(www\.)?[-a-zA-Z0-9@:%._\+~#=]{1,256}\.[a-zA-Z0-9()]{1,6}\b([-a-zA-Z0-9()@:%_\+.~#?&//=]*)/g;
+    const urlRegex = /https?:\/\/(www\.)?[-a-zA-Z0-9@:%._\+~#=]{1,256}\.[a-zA-Z0-9()]{1,6}\b([-a-zA-Z0-9()@:%_\.~#?&//=]*)/g;
     const urls: string[] = [];
     let tempText = text.replace(urlRegex, (match) => {
       urls.push(match);
@@ -141,7 +146,9 @@ class PanguSpacer {
 }
 // ==========================================
 
+
 // HTML 转义函数
+
 // 帮助文档
 const help_text = `⚙️ <b>pangu - 为消息添加「盘古之白」</b>
 
@@ -179,8 +186,7 @@ interface PanguConfig {
 // 插件主体
 class PanguPlugin extends Plugin {
   cleanup(): void {
-    // 引用重置：清空实例级 db / cache / manager 引用，便于 reload 后重新初始化。
-    this.db = null;
+    // 引用重置：db 由 reload 后重新初始化自动覆盖，无需显式清空。
   }
 
   async setup(): Promise<void> {
@@ -190,7 +196,7 @@ class PanguPlugin extends Plugin {
 
   name = "pangu";
   description: string = `📝 Pangu 消息格式化插件\n\n${help_text}`;
-  private db: any;
+  private db!: Awaited<ReturnType<typeof JSONFilePreset<PanguConfig>>>;
   private prefixes: string[];
 
   constructor() {
@@ -221,8 +227,8 @@ class PanguPlugin extends Plugin {
   }
 
   // 获取会话ID
-  private getChatId(msg: Api.Message): string {
-    return msg.peerId.toString();
+  private getChatId(msg: MessageContext): string {
+    return msg.chat.id.toString();
   }
 
   // 获取会话模式
@@ -251,7 +257,7 @@ class PanguPlugin extends Plugin {
   // 更新统计
   private updateStats(): void {
     const enabledChats = Object.values(this.db.data.chats)
-      .filter(v => v === true).length;
+      .filter(v => v).length;
     this.db.data.stats.enabledChats = enabledChats;
   }
 
@@ -274,7 +280,7 @@ class PanguPlugin extends Plugin {
   }
 
   // 白名单处理
-  private async handleWhiteList(msg: Api.Message, args: string[]): Promise<void> {
+  private async handleWhiteList(msg: MessageContext, args: string[]): Promise<void> {
     const chatId = this.getChatId(msg);
     const list = this.db.data.whitelist;
     const subCommand = args[2]?.toLowerCase();
@@ -284,15 +290,9 @@ class PanguPlugin extends Plugin {
         if (!list.includes(chatId)) {
           list.push(chatId);
           await this.db.write();
-          await msg.edit({
-            text: `✅ 已将当前会话加入白名单`,
-            parseMode: "html"
-          });
+          await msg.edit({ text: html`✅ 已将当前会话加入白名单` });
         } else {
-          await msg.edit({
-            text: `ℹ️ 当前会话已在白名单中`,
-            parseMode: "html"
-          });
+          await msg.edit({ text: html`ℹ️ 当前会话已在白名单中` });
         }
         break;
 
@@ -301,42 +301,33 @@ class PanguPlugin extends Plugin {
         const removed = _.remove(list, (x: string) => x === chatId);
         if (removed.length > 0) {
           await this.db.write();
-          await msg.edit({
-            text: `✅ 已将当前会话移出白名单`,
-            parseMode: "html"
-          });
+          await msg.edit({ text: html`✅ 已将当前会话移出白名单` });
         } else {
-          await msg.edit({
-            text: `ℹ️ 当前会话不在白名单中`,
-            parseMode: "html"
-          });
+          await msg.edit({ text: html`ℹ️ 当前会话不在白名单中` });
         }
         break;
 
       case "list":
       case "ls":
         if (list.length === 0) {
-          await msg.edit({
-            text: `📝 白名单列表为空`,
-            parseMode: "html"
-          });
+          await msg.edit({ text: html`📝 白名单列表为空` });
         } else {
           let text = `📝 <b>白名单列表</b> (${list.length} 个)\n\n`;
           list.forEach((id: string, index: number) => {
             text += `${index + 1}. <code>${htmlEscape(id)}</code>\n`;
           });
-          await msg.edit({ text, parseMode: "html" });
+          await msg.edit({ text: html(text) });
         }
         break;
 
       default:
-        await msg.edit({ text: help_text, parseMode: "html" });
+        await msg.edit({ text: html(help_text) });
         break;
     }
   }
 
   // 黑名单处理
-  private async handleBlackList(msg: Api.Message, args: string[]): Promise<void> {
+  private async handleBlackList(msg: MessageContext, args: string[]): Promise<void> {
     const chatId = this.getChatId(msg);
     const list = this.db.data.blacklist;
     const subCommand = args[2]?.toLowerCase();
@@ -346,15 +337,9 @@ class PanguPlugin extends Plugin {
         if (!list.includes(chatId)) {
           list.push(chatId);
           await this.db.write();
-          await msg.edit({
-            text: `✅ 已将当前会话加入黑名单`,
-            parseMode: "html"
-          });
+          await msg.edit({ text: html`✅ 已将当前会话加入黑名单` });
         } else {
-          await msg.edit({
-            text: `ℹ️ 当前会话已在黑名单中`,
-            parseMode: "html"
-          });
+          await msg.edit({ text: html`ℹ️ 当前会话已在黑名单中` });
         }
         break;
 
@@ -363,47 +348,37 @@ class PanguPlugin extends Plugin {
         const removed = _.remove(list, (x: string) => x === chatId);
         if (removed.length > 0) {
           await this.db.write();
-          await msg.edit({
-            text: `✅ 已将当前会话移出黑名单`,
-            parseMode: "html"
-          });
+          await msg.edit({ text: html`✅ 已将当前会话移出黑名单` });
         } else {
-          await msg.edit({
-            text: `ℹ️ 当前会话不在黑名单中`,
-            parseMode: "html"
-          });
+          await msg.edit({ text: html`ℹ️ 当前会话不在黑名单中` });
         }
         break;
 
       case "list":
       case "ls":
         if (list.length === 0) {
-          await msg.edit({
-            text: `📝 黑名单列表为空`,
-            parseMode: "html"
-          });
+          await msg.edit({ text: html`📝 黑名单列表为空` });
         } else {
           let text = `📝 <b>黑名单列表</b> (${list.length} 个)\n\n`;
           list.forEach((id: string, index: number) => {
             text += `${index + 1}. <code>${htmlEscape(id)}</code>\n`;
           });
-          await msg.edit({ text, parseMode: "html" });
+          await msg.edit({ text: html(text) });
         }
         break;
 
       default:
-        await msg.edit({ text: help_text, parseMode: "html" });
+        await msg.edit({ text: html(help_text) });
         break;
     }
   }
 
   // 全局模式处理
-  private async handleGlobalMode(msg: Api.Message, args: string[]): Promise<void> {
+  private async handleGlobalMode(msg: MessageContext, args: string[]): Promise<void> {
     if (args.length === 2) {
       const globalMode = this.db.data.globalMode;
       await msg.edit({
-        text: `🌐 <b>全局模式：</b> ${globalMode ? "✅ 开启" : "❌ 关闭"}`,
-        parseMode: "html"
+        text: html`🌐 <b>全局模式：</b> ${globalMode ? "✅ 开启" : "❌ 关闭"}`
       });
       return;
     }
@@ -413,31 +388,23 @@ class PanguPlugin extends Plugin {
     if (modeStr === "on" || modeStr === "enable" || modeStr === "true") {
       this.db.data.globalMode = true;
       await this.db.write();
-      await msg.edit({
-        text: `✅ 全局模式已开启`,
-        parseMode: "html"
-      });
+      await msg.edit({ text: html`✅ 全局模式已开启` });
     } else if (modeStr === "off" || modeStr === "disable" || modeStr === "false") {
       this.db.data.globalMode = false;
       await this.db.write();
-      await msg.edit({
-        text: `❌ 全局模式已关闭`,
-        parseMode: "html"
-      });
+      await msg.edit({ text: html`❌ 全局模式已关闭` });
     } else {
       await msg.edit({
-        text: `❌ 无效的参数\n\n使用：<code>${mainPrefix}pangu global on/off</code>`,
-        parseMode: "html"
+        text: html`❌ 无效的参数\n\n使用：<code>${mainPrefix}pangu global on/off</code>`
       });
     }
   }
 
   // 测试格式化
-  private async handleTest(msg: Api.Message, text: string): Promise<void> {
+  private async handleTest(msg: MessageContext, text: string): Promise<void> {
     if (!text.trim()) {
       await msg.edit({
-        text: `❌ 请提供测试文本\n\n使用：<code>${mainPrefix}pangu 你好World123测试</code>`,
-        parseMode: "html"
+        text: html`❌ 请提供测试文本\n\n使用：<code>${mainPrefix}pangu 你好World123测试</code>`
       });
       return;
     }
@@ -446,16 +413,12 @@ class PanguPlugin extends Plugin {
     const formatted = PanguSpacer.spacing(text);
     
     await msg.edit({
-      text: `🔤 <b>Pangu 格式化测试</b>\n\n` +
-            `<b>原始文本：</b>\n<code>${htmlEscape(text)}</code>\n\n` +
-            `<b>格式化后：</b>\n<code>${htmlEscape(formatted)}</code>\n\n` +
-            `<b>状态：</b> ${text === formatted ? "无需调整" : "已优化"}`,
-      parseMode: "html"
+      text: html`🔤 <b>Pangu 格式化测试</b>\n\n<b>原始文本：</b>\n<code>${htmlEscape(text)}</code>\n\n<b>格式化后：</b>\n<code>${htmlEscape(formatted)}</code>\n\n<b>状态：</b> ${text === formatted ? "无需调整" : "已优化"}`
     });
   }
 
   // 显示状态
-  private async showStatus(msg: Api.Message): Promise<void> {
+  private async showStatus(msg: MessageContext): Promise<void> {
     const chatId = this.getChatId(msg);
     const chatMode = this.getChatMode(chatId);
     const globalMode = this.db.data.globalMode;
@@ -475,39 +438,21 @@ class PanguPlugin extends Plugin {
     }
 
     await msg.edit({
-      text: `📊 <b>Pangu 格式化状态</b>\n\n` +
-            `💬 <b>当前会话：</b> <code>${htmlEscape(chatId)}</code>\n` +
-            `🎯 <b>生效状态：</b> ${effectiveStatus}\n\n` +
-            `⚪ <b>白名单：</b> ${white ? "✅ 是" : "❌ 否"}\n` +
-            `⚫ <b>黑名单：</b> ${black ? "✅ 是" : "❌ 否"}\n` +
-            `💬 <b>会话设置：</b> ${chatMode === null ? "未设置" : (chatMode ? "✅ 开启" : "❌ 关闭")}\n` +
-            `🌐 <b>全局模式：</b> ${globalMode ? "✅ 开启" : "❌ 关闭"}\n\n` +
-            `📈 <b>统计信息：</b>\n` +
-            `• 已格式化消息：${stats.formattedMessages}\n` +
-            `• 启用会话数：${stats.enabledChats}\n` +
-            `• 最后格式化：${stats.lastFormatted ? new Date(stats.lastFormatted).toLocaleString() : "从未"}`,
-      parseMode: "html"
+      text: html`📊 <b>Pangu 格式化状态</b>\n\n💬 <b>当前会话：</b> <code>${htmlEscape(chatId)}</code>\n🎯 <b>生效状态：</b> ${effectiveStatus}\n\n⚪ <b>白名单：</b> ${white ? "✅ 是" : "❌ 否"}\n⚫ <b>黑名单：</b> ${black ? "✅ 是" : "❌ 否"}\n💬 <b>会话设置：</b> ${chatMode === null ? "未设置" : (chatMode ? "✅ 开启" : "❌ 关闭")}\n🌐 <b>全局模式：</b> ${globalMode ? "✅ 开启" : "❌ 关闭"}\n\n📈 <b>统计信息：</b>\n• 已格式化消息：${stats.formattedMessages}\n• 启用会话数：${stats.enabledChats}\n• 最后格式化：${stats.lastFormatted ? new Date(stats.lastFormatted).toLocaleString() : "从未"}`
     });
   }
 
   // 显示统计信息
-  private async showStats(msg: Api.Message): Promise<void> {
+  private async showStats(msg: MessageContext): Promise<void> {
     const stats = this.db.data.stats;
     await msg.edit({
-      text: `📈 <b>Pangu 统计信息</b>\n\n` +
-            `• 已格式化消息：${stats.formattedMessages}\n` +
-            `• 启用会话数：${stats.enabledChats}\n` +
-            `• 最后格式化：${stats.lastFormatted ? new Date(stats.lastFormatted).toLocaleString() : "从未"}\n` +
-            `• 白名单数量：${this.db.data.whitelist.length}\n` +
-            `• 黑名单数量：${this.db.data.blacklist.length}\n` +
-            `• 自定义设置会话数：${Object.keys(this.db.data.chats).length}`,
-      parseMode: "html"
+      text: html`📈 <b>Pangu 统计信息</b>\n\n• 已格式化消息：${stats.formattedMessages}\n• 启用会话数：${stats.enabledChats}\n• 最后格式化：${stats.lastFormatted ? new Date(stats.lastFormatted).toLocaleString() : "从未"}\n• 白名单数量：${this.db.data.whitelist.length}\n• 黑名单数量：${this.db.data.blacklist.length}\n• 自定义设置会话数：${Object.keys(this.db.data.chats).length}`
     });
   }
 
   // 命令处理器
-  cmdHandlers: Record<string, (msg: Api.Message, trigger?: Api.Message) => Promise<void>> = {
-    pangu: async (msg: Api.Message) => {
+  cmdHandlers: Record<string, (msg: MessageContext, trigger?: MessageContext) => Promise<void>> = {
+    pangu: async (msg: MessageContext) => {
       try {
         if (!this.db) return;
         const text = msg.text || "";
@@ -538,7 +483,7 @@ class PanguPlugin extends Plugin {
         const subCommand = firstArg;
 
         if (subCommand === "help" || subCommand === "h") {
-          await msg.edit({ text: help_text, parseMode: "html" });
+          await msg.edit({ text: html(help_text) });
           return;
         }
 
@@ -564,19 +509,13 @@ class PanguPlugin extends Plugin {
 
         if (subCommand === "on" || subCommand === "enable" || subCommand === "true") {
           await this.setChatMode(chatId, true);
-          await msg.edit({
-            text: `✅ 已在当前会话开启 pangu 格式化`,
-            parseMode: "html"
-          });
+          await msg.edit({ text: html`✅ 已在当前会话开启 pangu 格式化` });
           return;
         }
 
         if (subCommand === "off" || subCommand === "disable" || subCommand === "false") {
           await this.setChatMode(chatId, false);
-          await msg.edit({
-            text: `❌ 已在当前会话关闭 pangu 格式化`,
-            parseMode: "html"
-          });
+          await msg.edit({ text: html`❌ 已在当前会话关闭 pangu 格式化` });
           return;
         }
 
@@ -586,41 +525,34 @@ class PanguPlugin extends Plugin {
             await this.db.write();
             this.updateStats();
             
-            await msg.edit({
-              text: `🔄 已重置当前会话设置`,
-              parseMode: "html"
-            });
+            await msg.edit({ text: html`🔄 已重置当前会话设置` });
           } else {
-            await msg.edit({
-              text: `ℹ️ 当前会话未进行特殊设置`,
-              parseMode: "html"
-            });
+            await msg.edit({ text: html`ℹ️ 当前会话未进行特殊设置` });
           }
           return;
         }
 
         await msg.edit({
-          text: `❌ 未知命令: <code>${htmlEscape(subCommand)}</code>\n\n${help_text}`,
-          parseMode: "html"
+          text: html`❌ 未知命令: <code>${htmlEscape(subCommand)}</code>\n\n${help_text}`
         });
 
-      } catch (error: any) {
-        console.error(`[pangu] 命令处理错误:`, error);
+      } catch (error: unknown) {
+        logger.error(`[pangu] 命令处理错误:`, error);
         await msg.edit({
-          text: `❌ <b>处理失败:</b> ${htmlEscape(error.message || "未知错误")}`,
-          parseMode: "html"
+          text: html`❌ <b>处理失败:</b> ${htmlEscape(getErrorMessage(error) || "未知错误")}`
         });
       }
     }
   };
 
   // 消息监听器
-  listenMessageHandler = async (msg: Api.Message, options?: { isEdited?: boolean }): Promise<void> => {
+  listenMessageHandler = async (msg: MessageContext, options?: { isEdited?: boolean }): Promise<void> => {
     try {
       if (!this.db) return;
-      const savedMessage = (msg as any).savedPeerId;
+      const meId = tryGetCurrentRuntime()?.meId;
+      const isSavedMessage = meId != null && String(msg.chat.id) === meId;
       // 仅处理自己发出的消息 或 Saved Messages
-      if (!(msg.out || savedMessage)) return;
+      if (!(msg.isOutgoing || isSavedMessage)) return;
       
       // 忽略空消息
       if (!msg.text || msg.text.trim().length === 0) return;
@@ -662,17 +594,53 @@ class PanguPlugin extends Plugin {
         try {
           await msg.edit({ text: formatted });
           await this.recordFormattedMessage();
-        } catch (error: any) {
+        } catch (error: unknown) {
           // 可能是消息被删除、网络问题等，记录日志即可
-          console.error(`[pangu] 消息编辑失败:`, error.message);
+          logger.error(`[pangu] 消息编辑失败:`, getErrorMessage(error));
         }
       }
-    } catch (error: any) {
-      console.error(`[pangu] 监听器错误:`, error);
+    } catch (error: unknown) {
+      logger.error(`[pangu] 监听器错误:`, error);
     }
   };
 
   listenMessageHandlerIgnoreEdited = false;
 }
+
+
+  // Panel Settings Adapter
+  panelAdapter: PanelSettingsAdapter = {
+    id: "pangu",
+    title: "盘古格式",
+    description: "消息格式化配置",
+    category: "插件配置",
+    icon: "🔄",
+    getSchema: (): PanelSettingField[] => [
+      {
+            "key": "globalMode",
+            "label": "全局模式",
+            "type": "boolean"
+      },
+      {
+            "key": "whitelist",
+            "label": "白名单 (群组ID)",
+            "type": "json"
+      },
+      {
+            "key": "blacklist",
+            "label": "黑名单 (群组ID)",
+            "type": "json"
+      }
+],
+    getValues: async (): Promise<Record<string, unknown>> => {
+      const db = await JSONFilePreset<PanguConfig>(path.join(createDirectoryInAssets("pangu"), "config.json"), defaultConfig);
+      return db.data as Record<string, unknown>;
+    },
+    setValues: async (patch: Record<string, unknown>): Promise<void> => {
+      const db = await JSONFilePreset<PanguConfig>(path.join(createDirectoryInAssets("pangu"), "config.json"), defaultConfig);
+      Object.assign(db.data, patch);
+      await db.write();
+    },
+  };
 
 export default new PanguPlugin();

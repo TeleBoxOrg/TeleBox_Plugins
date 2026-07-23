@@ -3,9 +3,10 @@
  * 把你打的字自动转为语音，每个对话独立开关
  * 服务商主备：主失败自动回退到备
  */
-import { Plugin } from "@utils/pluginBase";
+import { Plugin, type PanelSettingsAdapter, type PanelSettingField, type PanelFieldType } from "@utils/pluginBase";
 import { getPrefixes } from "@utils/pluginManager";
-import { Api } from "teleproto";
+import type { MessageContext } from "@mtcute/dispatcher";
+import { thtml } from "@mtcute/html-parser";
 import axios from "axios";
 import { JSONFilePreset } from "lowdb/node";
 import * as path from "path";
@@ -14,10 +15,8 @@ import * as crypto from "crypto";
 import { execFile } from "child_process";
 import { promisify } from "util";
 import { createDirectoryInAssets, createDirectoryInTemp } from "@utils/pathHelpers";
-import { getGlobalClient } from "@utils/runtimeManager";
+import { getGlobalClient, tryGetCurrentRuntime } from "@utils/runtimeManager";
 import { safeGetMessages } from "@utils/safeGetMessages";
-
-import { htmlEscape } from "@utils/htmlEscape";
 
 const prefixes = getPrefixes();
 const mainPrefix = prefixes[0];
@@ -28,19 +27,18 @@ const execFileAsync = promisify(execFile);
 /* ===================== 通用工具 ===================== */
 
 /** 会话唯一键：用 chatId 区分每个会话。
- *  注意：msg.peerId.toString() 会返回 "[object Object]"（所有会话相同），
+ *  注意：msg.chat.id.toString() 会返回 "[object Object]"（所有会话相同），
  *  会导致开关变成全局生效，必须用 chatId（内部经 getPeerId 归一化为带符号 ID）。 */
-function getChatKey(msg: Api.Message): string {
-    const id = (msg as any).chatId;
+function getChatKey(msg: MessageContext): string {
+    const id = msg.chat.id;
     return id != null ? id.toString() : "";
 }
 
 /** 私聊删除命令：为双方删除；群/频道：仅自己删除 */
-async function deleteCommandMessage(msg: Api.Message) {
+async function deleteCommandMessage(msg: MessageContext) {
     try {
         const isPrivate =
-            (msg as any).isPrivate === true ||
-            (msg as any).peerId instanceof (Api as any).PeerUser;
+            msg.chat.type === "user";
         if (isPrivate) {
             await (msg as any).delete({ revoke: true });
         } else {
@@ -69,6 +67,14 @@ function cleanTextForTTS(text: string): string {
     cleanedText = cleanedText.replace(/([，。？！、,?!.])\1+/g, "$1");
     cleanedText = cleanedText.replace(/\[([^\]]+)\]\([^\)]+\)/g, "$1");
     return cleanedText.trim();
+}
+
+function htmlEscape(text: unknown): string {
+    return String(text ?? "")
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;");
 }
 
 function codeTag(text: unknown): string {
@@ -823,8 +829,7 @@ async function appendTranslations(sentMsg: any, originalText: string): Promise<v
         const translations = await translateMulti(originalText);
         if (translations.items.length === 0) return;
         await sentMsg.edit({
-            text: buildTranslatedCaption(originalText, translations),
-            parseMode: "html",
+            text: thtml(buildTranslatedCaption(originalText, translations)),
         });
     } catch (e) {
         console.error("[Say Plugin] 译文回填失败：", e);
@@ -876,22 +881,16 @@ async function synthesizeAndSend(
 
         let sentMessage: any;
         try {
-            sentMessage = await client.sendFile(peerId, {
-                file: tempFilePath,
-                voiceNote: true,
-                forceDocument: false,
-                caption: buildVoiceCaption(originalText),
-                parseMode: "html",
-                replyTo: replyToMsgId,
-                attributes: [
-                    new Api.DocumentAttributeAudio({
-                        duration: 0,
-                        voice: true,
-                        title: "Say Voice",
-                        performer: PROVIDER_LABEL[provider] || provider,
-                    }),
-                ],
-            });
+            sentMessage = await client.sendMedia(
+                peerId,
+                {
+                    type: "voice",
+                    file: tempFilePath,
+                    duration: 0,
+                    caption: thtml(buildVoiceCaption(originalText)),
+                },
+                replyToMsgId ? { replyTo: replyToMsgId } : undefined,
+            );
         } finally {
             if (fs.existsSync(tempFilePath)) {
                 try { fs.unlinkSync(tempFilePath); } catch { }
@@ -993,15 +992,15 @@ class SayPlugin extends Plugin {
     }
 
     cmdHandlers = {
-        say: async (msg: Api.Message) => {
+        say: async (msg: MessageContext) => {
             const db = await this.getDb();
             if (!db) {
-                await msg.edit({ text: "❌ 数据库初始化中，请稍后再试", parseMode: "html" });
+                await msg.edit({ text: thtml("❌ 数据库初始化中，请稍后再试") });
                 return;
             }
             const cfg: SayConfig = db.data;
 
-            const raw = (msg.message || "").trim();
+            const raw = (msg.text || "").trim();
             const parts = raw.split(/\s+/).slice(1);
             const subCmd = (parts[0] || "").toLowerCase();
 
@@ -1017,41 +1016,40 @@ class SayPlugin extends Plugin {
             if (match) textToSynthesize = match[1];
 
             // 无文本参数 → 取被回复消息的文字（媒体安全：只读 message/text，不碰 media）
-            if (!textToSynthesize && msg.replyTo) {
+            if (!textToSynthesize && msg.replyToMessage?.id) {
                 const client = await getGlobalClient();
                 if (client) {
-                    const replyToId = (msg.replyTo as any)?.replyToMsgId;
+                    const replyToId = msg.replyToMessage?.id ?? undefined;
                     if (replyToId) {
-                        const [repliedMsg] = await safeGetMessages(client, msg.peerId, { ids: [replyToId] });
+                        const [repliedMsg] = await safeGetMessages(client, msg.chat.id, { ids: [replyToId] });
                         if (repliedMsg) {
-                            textToSynthesize = repliedMsg.message || (repliedMsg as any).text || "";
+                            textToSynthesize = repliedMsg.text || "";
                         }
                     }
                 }
             }
 
             if (!textToSynthesize) {
-                await msg.edit({ text: getHelpText(), parseMode: "html" });
+                await msg.edit({ text: thtml(getHelpText()) });
                 return;
             }
 
             if (!anyProviderConfigured(cfg)) {
                 await msg.edit({
-                    text: `❌ 请先配置服务商密钥\n${mainPrefix}say key mimo <apiKey>\n${mainPrefix}say key volc <apiKey>\n${mainPrefix}say key fish <apiKey>`,
-                    parseMode: "html",
+                    text: thtml(`❌ 请先配置服务商密钥\n${mainPrefix}say key mimo &lt;apiKey&gt;\n${mainPrefix}say key volc &lt;apiKey&gt;\n${mainPrefix}say key fish &lt;apiKey&gt;`),
                 });
                 return;
             }
 
             // 回复上下文：语音引用被回复的那条消息
-            const replyToId = (msg.replyTo as any)?.replyToMsgId;
+            const replyToId = msg.replyToMessage?.id ?? undefined;
 
             const result = await synthesizeAndSend(
-                msg.peerId,
+                msg.chat.id,
                 textToSynthesize,
                 cfg,
-                async (t) => { await msg.edit({ text: t, parseMode: "html" }); },
-                replyToId,
+                async (t) => { await msg.edit({ text: thtml(t) }); },
+                replyToId ?? undefined,
             );
 
             if (result.ok) {
@@ -1061,14 +1059,14 @@ class SayPlugin extends Plugin {
                     void appendTranslations(result.sentMessage, textToSynthesize);
                 }
             } else {
-                await msg.edit({ text: `❌ 合成失败: ${htmlEscape(result.error)}`, parseMode: "html" });
+                await msg.edit({ text: thtml(`❌ 合成失败: ${htmlEscape(result.error)}`) });
             }
         },
     };
 
     /* ===================== 配置子命令 ===================== */
 
-    private async handleConfig(msg: Api.Message, parts: string[], cfg: SayConfig, db: any) {
+    private async handleConfig(msg: MessageContext, parts: string[], cfg: SayConfig, db: any) {
         const chatId = getChatKey(msg);
         const [, a1, a2, a3] = parts;
         const sub = parts[0].toLowerCase();
@@ -1078,13 +1076,13 @@ class SayPlugin extends Plugin {
             case "on": {
                 cfg.chats[chatId] = true;
                 await db.write();
-                await msg.edit({ text: `✅ 本会话已开启自动语音`, parseMode: "html" });
+                await msg.edit({ text: thtml(`✅ 本会话已开启自动语音`) });
                 return;
             }
             case "off": {
                 delete cfg.chats[chatId];
                 await db.write();
-                await msg.edit({ text: `✅ 本会话已关闭自动语音`, parseMode: "html" });
+                await msg.edit({ text: thtml(`✅ 本会话已关闭自动语音`) });
                 return;
             }
             case "status": {
@@ -1095,7 +1093,7 @@ class SayPlugin extends Plugin {
                 const backupLabel = rest.length ? rest.join(" → ") : "无";
                 await msg.edit({
                     text:
-                        `🔍 <b>本会话自动语音：</b> ${on ? "开启 ✅" : "关闭 ❌"}\n` +
+                        thtml(`🔍 <b>本会话自动语音：</b> ${on ? "开启 ✅" : "关闭 ❌"}\n` +
                         `🌐 <b>主服务商：</b> ${codeTag(cfg.primary)}（备 ${codeTag(backupLabel)}）\n` +
                         `🎵 <b>音色：</b> MiMo=${codeTag(cfg.providers.mimo.voice || "默认")} | 火山=${codeTag(cfg.providers.volc.voice || "未设")} | Fish=${codeTag(fishVoiceLabel(cfg.providers.fish.voice))}\n` +
                         `⚡ <b>语速：</b> ${codeTag(cfg.speed)}\n` +
@@ -1103,8 +1101,7 @@ class SayPlugin extends Plugin {
                         `🌍 <b>多语言译文：</b> ${cfg.translate ? "开启 ✅" : "关闭 ❌"}\n` +
                         `🌐 <b>MiMo接入：</b> ${codeTag(cfg.providers.mimo.endpoint === "tokenplan" ? "Token Plan" : "通用")}\n` +
                         `🔊 <b>火山Resource：</b> ${codeTag(cfg.providers.volc.resourceId || "seed-tts-2.0")}\n` +
-                        `🔧 <b>FFmpeg：</b> ${ffmpegOk ? "已安装 ✅" : `未安装 ❌ (${mainPrefix}say ffmpeg install)`}`,
-                    parseMode: "html",
+                        `🔧 <b>FFmpeg：</b> ${ffmpegOk ? "已安装 ✅" : `未安装 ❌ (${mainPrefix}say ffmpeg install)`}`),
                 });
                 return;
             }
@@ -1113,50 +1110,49 @@ class SayPlugin extends Plugin {
                 const target = (a1 || "").toLowerCase();
                 if (target === "mimo") {
                     if (!a2) {
-                        await msg.edit({ text: `❌ 用法: <code>${mainPrefix}say key mimo &lt;apiKey&gt;</code>`, parseMode: "html" });
+                        await msg.edit({ text: thtml(`❌ 用法: <code>${mainPrefix}say key mimo &lt;apiKey&gt;</code>`) });
                         return;
                     }
                     cfg.providers.mimo.apiKey = a2;
                     await db.write();
-                    await msg.edit({ text: `✅ MiMo Key 已设置: ${codeTag(maskKey(a2))}`, parseMode: "html" });
+                    await msg.edit({ text: thtml(`✅ MiMo Key 已设置: ${codeTag(maskKey(a2))}`) });
                     return;
                 }
                 if (target === "volc") {
                     if (!a2) {
-                        await msg.edit({ text: `❌ 用法: <code>${mainPrefix}say key volc &lt;apiKey&gt;</code>`, parseMode: "html" });
+                        await msg.edit({ text: thtml(`❌ 用法: <code>${mainPrefix}say key volc &lt;apiKey&gt;</code>`) });
                         return;
                     }
                     cfg.providers.volc.apiKey = a2;
                     await db.write();
-                    await msg.edit({ text: `✅ 火山 API Key 已设置: ${codeTag(maskKey(a2))}`, parseMode: "html" });
+                    await msg.edit({ text: thtml(`✅ 火山 API Key 已设置: ${codeTag(maskKey(a2))}`) });
                     return;
                 }
                 if (target === "fish") {
                     if (!a2) {
-                        await msg.edit({ text: `❌ 用法: <code>${mainPrefix}say key fish &lt;apiKey&gt;</code>`, parseMode: "html" });
+                        await msg.edit({ text: thtml(`❌ 用法: <code>${mainPrefix}say key fish &lt;apiKey&gt;</code>`) });
                         return;
                     }
                     cfg.providers.fish.apiKey = a2;
                     await db.write();
-                    await msg.edit({ text: `✅ Fish API Key 已设置: ${codeTag(maskKey(a2))}`, parseMode: "html" });
+                    await msg.edit({ text: thtml(`✅ Fish API Key 已设置: ${codeTag(maskKey(a2))}`) });
                     return;
                 }
-                await msg.edit({ text: `❌ 用法: <code>${mainPrefix}say key &lt;mimo|volc|fish&gt; ...</code>`, parseMode: "html" });
+                await msg.edit({ text: thtml(`❌ 用法: <code>${mainPrefix}say key &lt;mimo|volc|fish&gt; ...</code>`) });
                 return;
             }
             /* 主服务商 */
             case "provider": {
                 const p = (a1 || "").toLowerCase();
                 if (p !== "mimo" && p !== "volc" && p !== "fish") {
-                    await msg.edit({ text: `❌ 用法: <code>${mainPrefix}say provider &lt;mimo|volc|fish&gt;</code>`, parseMode: "html" });
+                    await msg.edit({ text: thtml(`❌ 用法: <code>${mainPrefix}say provider &lt;mimo|volc|fish&gt;</code>`) });
                     return;
                 }
                 cfg.primary = p;
                 await db.write();
                 const rest = (["mimo", "volc", "fish"] as ProviderName[]).filter((x) => x !== p);
                 await msg.edit({
-                    text: `✅ 主服务商: ${codeTag(p)}（备 ${codeTag(rest.join(" → "))}）`,
-                    parseMode: "html",
+                    text: thtml(`✅ 主服务商: ${codeTag(p)}（备 ${codeTag(rest.join(" → "))}）`),
                 });
                 return;
             }
@@ -1165,41 +1161,39 @@ class SayPlugin extends Plugin {
                 const target = (a1 || "").toLowerCase();
                 if (!target) {
                     await msg.edit({
-                        text: `🎵 MiMo=${codeTag(cfg.providers.mimo.voice || "默认")} | 火山=${codeTag(cfg.providers.volc.voice || "未设")} | Fish=${codeTag(fishVoiceLabel(cfg.providers.fish.voice))}\n设置: <code>${mainPrefix}say voice &lt;mimo|volc|fish&gt; &lt;音色&gt;</code>`,
-                        parseMode: "html",
+                        text: thtml(`🎵 MiMo=${codeTag(cfg.providers.mimo.voice || "默认")} | 火山=${codeTag(cfg.providers.volc.voice || "未设")} | Fish=${codeTag(fishVoiceLabel(cfg.providers.fish.voice))}\n设置: <code>${mainPrefix}say voice &lt;mimo|volc|fish&gt; &lt;音色&gt;</code>`),
                     });
                     return;
                 }
                 if (target === "mimo") {
                     if (!a2) {
-                        await msg.edit({ text: `❌ 用法: <code>${mainPrefix}say voice mimo &lt;音色&gt;</code>`, parseMode: "html" });
+                        await msg.edit({ text: thtml(`❌ 用法: <code>${mainPrefix}say voice mimo &lt;音色&gt;</code>`) });
                         return;
                     }
                     cfg.providers.mimo.voice = parts.slice(2).join(" ");
                     await db.write();
-                    await msg.edit({ text: `✅ MiMo 音色: ${codeTag(cfg.providers.mimo.voice)}`, parseMode: "html" });
+                    await msg.edit({ text: thtml(`✅ MiMo 音色: ${codeTag(cfg.providers.mimo.voice)}`) });
                     return;
                 }
                 if (target === "volc") {
                     if (!a2) {
-                        await msg.edit({ text: `❌ 用法: <code>${mainPrefix}say voice volc &lt;音色ID&gt;</code>`, parseMode: "html" });
+                        await msg.edit({ text: thtml(`❌ 用法: <code>${mainPrefix}say voice volc &lt;音色ID&gt;</code>`) });
                         return;
                     }
                     cfg.providers.volc.voice = a2;
                     await db.write();
-                    await msg.edit({ text: `✅ 火山音色: ${codeTag(cfg.providers.volc.voice)}`, parseMode: "html" });
+                    await msg.edit({ text: thtml(`✅ 火山音色: ${codeTag(cfg.providers.volc.voice)}`) });
                     return;
                 }
                 if (target === "fish") {
                     // 列出内置角色（分页）：say voice fish list [页码]
                     if ((a2 || "").toLowerCase() === "list") {
-                        await msg.edit({ text: renderFishRoleList(a3, cfg), parseMode: "html" });
+                        await msg.edit({ text: thtml(renderFishRoleList(a3, cfg)) });
                         return;
                     }
                     if (!a2) {
                         await msg.edit({
-                            text: `❌ 用法: <code>${mainPrefix}say voice fish &lt;角色名|reference_id&gt;</code>\n查看角色: <code>${mainPrefix}say voice fish list</code>`,
-                            parseMode: "html",
+                            text: thtml(`❌ 用法: <code>${mainPrefix}say voice fish &lt;角色名|reference_id&gt;</code>\n查看角色: <code>${mainPrefix}say voice fish list</code>`),
                         });
                         return;
                     }
@@ -1209,40 +1203,40 @@ class SayPlugin extends Plugin {
                     if (resolvedId) {
                         cfg.providers.fish.voice = resolvedId;
                         await db.write();
-                        await msg.edit({ text: `✅ Fish 音色: ${codeTag(arg)}（ID: ${codeTag(resolvedId)}）`, parseMode: "html" });
+                        await msg.edit({ text: thtml(`✅ Fish 音色: ${codeTag(arg)}（ID: ${codeTag(resolvedId)}）`) });
                     } else {
                         // 不是内置名 → 当作原始 reference_id 存储
                         cfg.providers.fish.voice = arg;
                         await db.write();
                         const label = FISH_ID_TO_NAME[arg] ? `（${FISH_ID_TO_NAME[arg]}）` : "";
-                        await msg.edit({ text: `✅ Fish 音色已设为 reference_id: ${codeTag(arg)}${label}`, parseMode: "html" });
+                        await msg.edit({ text: thtml(`✅ Fish 音色已设为 reference_id: ${codeTag(arg)}${label}`) });
                     }
                     return;
                 }
-                await msg.edit({ text: `❌ 用法: <code>${mainPrefix}say voice &lt;mimo|volc|fish&gt; &lt;音色&gt;</code>`, parseMode: "html" });
+                await msg.edit({ text: thtml(`❌ 用法: <code>${mainPrefix}say voice &lt;mimo|volc|fish&gt; &lt;音色&gt;</code>`) });
                 return;
             }
             /* 语速 */
             case "speed": {
                 const s = parseFloat(a1);
                 if (isNaN(s) || s < 0.5 || s > 2.0) {
-                    await msg.edit({ text: `❌ 语速须在 0.5 ~ 2.0 之间`, parseMode: "html" });
+                    await msg.edit({ text: thtml(`❌ 语速须在 0.5 ~ 2.0 之间`) });
                     return;
                 }
                 cfg.speed = s;
                 await db.write();
-                await msg.edit({ text: `✅ 语速: ${codeTag(a1)}（作用于火山）`, parseMode: "html" });
+                await msg.edit({ text: thtml(`✅ 语速: ${codeTag(a1)}（作用于火山）`) });
                 return;
             }
             /* 风格 */
             case "style": {
                 if (!a1) {
-                    await msg.edit({ text: `❌ 用法: <code>${mainPrefix}say style &lt;指令&gt;</code>（clear 清除）`, parseMode: "html" });
+                    await msg.edit({ text: thtml(`❌ 用法: <code>${mainPrefix}say style &lt;指令&gt;</code>（clear 清除）`) });
                     return;
                 }
                 cfg.style = a1 === "clear" ? "" : parts.slice(1).join(" ");
                 await db.write();
-                await msg.edit({ text: `✅ 风格: ${codeTag(cfg.style || "默认")}`, parseMode: "html" });
+                await msg.edit({ text: thtml(`✅ 风格: ${codeTag(cfg.style || "默认")}`) });
                 return;
             }
             /* 多语言译文开关 */
@@ -1251,30 +1245,28 @@ class SayPlugin extends Plugin {
                 if (v !== "on" && v !== "off") {
                     await msg.edit({
                         text:
-                            `当前多语言译文: ${cfg.translate ? "开启 ✅" : "关闭 ❌"}\n` +
+                            thtml(`当前多语言译文: ${cfg.translate ? "开启 ✅" : "关闭 ❌"}\n` +
                             `用法: <code>${mainPrefix}say translate &lt;on|off&gt;</code>\n` +
-                            `开启后语音 caption 会在原文下方追加多语言译文；非中文原文会显示 🇨🇳 中文译文`,
-                        parseMode: "html",
+                            `开启后语音 caption 会在原文下方追加多语言译文；非中文原文会显示 🇨🇳 中文译文`),
                     });
                     return;
                 }
                 cfg.translate = v === "on";
                 await db.write();
-                await msg.edit({ text: `✅ 多语言译文已${cfg.translate ? "开启" : "关闭"}`, parseMode: "html" });
+                await msg.edit({ text: thtml(`✅ 多语言译文已${cfg.translate ? "开启" : "关闭"}`) });
                 return;
             }
             /* 火山 resource id */
             case "resource": {
                 if (!a1) {
                     await msg.edit({
-                        text: `当前火山 Resource ID: ${codeTag(cfg.providers.volc.resourceId || "seed-tts-2.0")}\n用法: <code>${mainPrefix}say resource &lt;id&gt;</code>\n如 seed-tts-2.0（预置音色）/ seed-icl-2.0（复刻音色）`,
-                        parseMode: "html",
+                        text: thtml(`当前火山 Resource ID: ${codeTag(cfg.providers.volc.resourceId || "seed-tts-2.0")}\n用法: <code>${mainPrefix}say resource &lt;id&gt;</code>\n如 seed-tts-2.0（预置音色）/ seed-icl-2.0（复刻音色）`),
                     });
                     return;
                 }
                 cfg.providers.volc.resourceId = a1;
                 await db.write();
-                await msg.edit({ text: `✅ 火山 Resource ID: ${codeTag(a1)}`, parseMode: "html" });
+                await msg.edit({ text: thtml(`✅ 火山 Resource ID: ${codeTag(a1)}`) });
                 return;
             }
             /* MiMo 接入端点（通用 API / Token Plan API） */
@@ -1283,24 +1275,22 @@ class SayPlugin extends Plugin {
                 if (!a1) {
                     await msg.edit({
                         text:
-                            `当前 MiMo 接入: ${codeTag(cur === "tokenplan" ? "Token Plan" : "通用")}\n` +
+                            thtml(`当前 MiMo 接入: ${codeTag(cur === "tokenplan" ? "Token Plan" : "通用")}\n` +
                             `用法: <code>${mainPrefix}say endpoint &lt;standard|tokenplan&gt;</code>\n` +
                             `• standard — 通用 API（按量计费）\n` +
-                            `• tokenplan — Token Plan API（订阅套餐）`,
-                        parseMode: "html",
+                            `• tokenplan — Token Plan API（订阅套餐）`),
                     });
                     return;
                 }
                 const v = a1.toLowerCase();
                 if (v !== "standard" && v !== "tokenplan") {
-                    await msg.edit({ text: `❌ 用法: <code>${mainPrefix}say endpoint &lt;standard|tokenplan&gt;</code>`, parseMode: "html" });
+                    await msg.edit({ text: thtml(`❌ 用法: <code>${mainPrefix}say endpoint &lt;standard|tokenplan&gt;</code>`) });
                     return;
                 }
                 cfg.providers.mimo.endpoint = v as "standard" | "tokenplan";
                 await db.write();
                 await msg.edit({
-                    text: `✅ MiMo 接入已切换为: ${codeTag(v === "tokenplan" ? "Token Plan" : "通用")}`,
-                    parseMode: "html",
+                    text: thtml(`✅ MiMo 接入已切换为: ${codeTag(v === "tokenplan" ? "Token Plan" : "通用")}`),
                 });
                 return;
             }
@@ -1312,16 +1302,16 @@ class SayPlugin extends Plugin {
                 if (action === "install") {
                     const existing = await findFfmpeg();
                     if (existing) {
-                        await msg.edit({ text: `✅ ffmpeg 已可用，无需重复安装\n📍 ${codeTag(existing)}`, parseMode: "html" });
+                        await msg.edit({ text: thtml(`✅ ffmpeg 已可用，无需重复安装\n📍 ${codeTag(existing)}`) });
                         return;
                     }
 
                     // 1) 尝试包管理器
-                    await msg.edit({ text: "🔍 尝试通过包管理器安装...", parseMode: "html" });
+                    await msg.edit({ text: thtml("🔍 尝试通过包管理器安装...") });
                     try {
                         if (await tryPackageManagerInstall()) {
                             const p = await findFfmpeg();
-                            await msg.edit({ text: `✅ ffmpeg 通过包管理器安装成功\n📍 ${codeTag(p || "ffmpeg")}`, parseMode: "html" });
+                            await msg.edit({ text: thtml(`✅ ffmpeg 通过包管理器安装成功\n📍 ${codeTag(p || "ffmpeg")}`) });
                             return;
                         }
                     } catch { }
@@ -1329,18 +1319,17 @@ class SayPlugin extends Plugin {
                     // 2) 下载静态二进制
                     try {
                         const p = await downloadFfmpeg(async (t) => {
-                            try { await msg.edit({ text: t, parseMode: "html" }); } catch { }
+                            try { await msg.edit({ text: thtml(t) }); } catch { }
                         });
-                        await msg.edit({ text: `✅ ffmpeg 安装成功\n📍 ${codeTag(p)}`, parseMode: "html" });
+                        await msg.edit({ text: thtml(`✅ ffmpeg 安装成功\n📍 ${codeTag(p)}`) });
                     } catch (e: any) {
                         await msg.edit({
                             text:
-                                `❌ 自动安装失败: ${htmlEscape(e?.message || e)}\n\n` +
+                                thtml(`❌ 自动安装失败: ${htmlEscape(e?.message || e)}\n\n` +
                                 `请手动安装 ffmpeg：\n` +
                                 `• Linux: <code>apt install ffmpeg</code> / <code>yum install ffmpeg</code>\n` +
                                 `• macOS: <code>brew install ffmpeg</code>\n` +
-                                `• Windows: https://www.gyan.dev/ffmpeg/builds/`,
-                            parseMode: "html",
+                                `• Windows: https://www.gyan.dev/ffmpeg/builds/`),
                         });
                     }
                     return;
@@ -1356,18 +1345,16 @@ class SayPlugin extends Plugin {
                     } catch { }
                     await msg.edit({
                         text:
-                            `✅ <b>ffmpeg 可用</b>\n` +
+                            thtml(`✅ <b>ffmpeg 可用</b>\n` +
                             `📍 ${codeTag(ffmpegPath)}\n` +
-                            (version ? `🔧 ${htmlEscape(version)}` : ""),
-                        parseMode: "html",
+                            (version ? `🔧 ${htmlEscape(version)}` : "")),
                     });
                 } else {
                     await msg.edit({
                         text:
-                            `❌ <b>ffmpeg 不可用</b>\n` +
+                            thtml(`❌ <b>ffmpeg 不可用</b>\n` +
                             `MiMo TTS 需要 ffmpeg 将 WAV 转为 OPUS\n` +
-                            `使用 <code>${mainPrefix}say ffmpeg install</code> 一键安装`,
-                        parseMode: "html",
+                            `使用 <code>${mainPrefix}say ffmpeg install</code> 一键安装`),
                     });
                 }
                 return;
@@ -1377,10 +1364,11 @@ class SayPlugin extends Plugin {
 
     /* ===================== 监听所有消息（自动模式） ===================== */
 
-    listenMessageHandler = async (msg: Api.Message) => {
-        const savedMessage = (msg as any).savedPeerId;
-        // 仅处理自己发出的消息
-        if (!(msg.out || savedMessage)) return;
+    listenMessageHandler = async (msg: MessageContext) => {
+        const meId = tryGetCurrentRuntime()?.meId;
+        const isSavedMessage = meId != null && String(msg.chat.id) === meId;
+        // 仅处理自己发出的消息或 Saved Messages
+        if (!(msg.isOutgoing || isSavedMessage)) return;
         // 需要有文字（纯媒体无文字则跳过）
         if (!msg.text) return;
 
@@ -1388,7 +1376,7 @@ class SayPlugin extends Plugin {
         // 例外：网页链接预览（MessageMediaWebPage）属于纯文本消息，不算附件。
         // 这同时阻断了对插件自己发出的语音消息（带 media）的再次处理 → 防止无限循环。
         const media = (msg as any).media;
-        if (media && media.className !== "MessageMediaWebPage") return;
+        if (media && media.type !== "webPage") return;
 
         const chatId = getChatKey(msg);
 
@@ -1420,18 +1408,18 @@ class SayPlugin extends Plugin {
     };
 
     /** 处理单条自动模式消息（在串行队列中执行） */
-    private async processAutoMessage(msg: Api.Message, raw: string, cfg: SayConfig): Promise<void> {
+    private async processAutoMessage(msg: MessageContext, raw: string, cfg: SayConfig): Promise<void> {
         // 保存原文：失败时需恢复
         const originalText = msg.text;
         // 回复上下文：语音引用被回复的那条消息
-        const replyToId = (msg.replyTo as any)?.replyToMsgId;
+        const replyToId = msg.replyToMessage?.id ?? undefined;
 
         // 进度提示：编辑当前消息的文字/caption
         const progress = async (t: string) => {
             try { await msg.edit({ text: t }); } catch { }
         };
 
-        const result = await synthesizeAndSend(msg.peerId, raw, cfg, progress, replyToId);
+        const result = await synthesizeAndSend(msg.chat.id, raw, cfg, progress, replyToId ?? undefined);
         if (result.ok) {
             // 纯文本（含链接预览）：删除原消息（语音已作为新消息发送）
             await deleteCommandMessage(msg);
@@ -1448,5 +1436,63 @@ class SayPlugin extends Plugin {
 
     listenMessageHandlerIgnoreEdited = true;
 }
+
+
+  // Panel Settings Adapter
+  panelAdapter: PanelSettingsAdapter = {
+    id: "say",
+    title: "语音合成",
+    description: "文本转语音 TTS 配置",
+    category: "插件配置",
+    icon: "🔊",
+    getSchema: (): PanelSettingField[] => [
+      {
+            "key": "primary",
+            "label": "默认提供商",
+            "type": "select",
+            "options": [
+                  {
+                        "value": "mimo",
+                        "label": "MiMo"
+                  },
+                  {
+                        "value": "volc",
+                        "label": "火山引擎"
+                  },
+                  {
+                        "value": "fish",
+                        "label": "Fish Audio"
+                  }
+            ]
+      },
+      {
+            "key": "speed",
+            "label": "语速",
+            "type": "number",
+            "min": 0.5,
+            "max": 2.0,
+            "default": 1.0
+      },
+      {
+            "key": "style",
+            "label": "风格指令",
+            "type": "string"
+      },
+      {
+            "key": "translate",
+            "label": "追加译文",
+            "type": "boolean"
+      }
+],
+    getValues: async (): Promise<Record<string, unknown>> => {
+      const db = await JSONFilePreset<MimoConfig>(path.join(createDirectoryInAssets("say"), "config.json"), DEFAULT_CONFIG);
+      return db.data as Record<string, unknown>;
+    },
+    setValues: async (patch: Record<string, unknown>): Promise<void> => {
+      const db = await JSONFilePreset<MimoConfig>(path.join(createDirectoryInAssets("say"), "config.json"), DEFAULT_CONFIG);
+      Object.assign(db.data, patch);
+      await db.write();
+    },
+  };
 
 export default new SayPlugin();

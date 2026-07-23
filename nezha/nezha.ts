@@ -1,5 +1,6 @@
-import { Plugin } from "@utils/pluginBase";
-import { Api } from "teleproto";
+import { Plugin, type PanelSettingsAdapter, type PanelSettingField, type PanelFieldType } from "@utils/pluginBase";
+import type { MessageContext } from "@mtcute/dispatcher";
+import { thtml as html } from "@mtcute/html-parser";
 import { getGlobalClient } from "@utils/runtimeManager";
 import axios from "axios";
 import * as crypto from "crypto";
@@ -8,7 +9,12 @@ import * as path from "path";
 import * as yaml from "js-yaml";
 import { createDirectoryInAssets, createDirectoryInTemp } from "@utils/pathHelpers";
 
-import { htmlEscape } from "@utils/htmlEscape";
+interface NeZhaYamlConfig {
+  jwt_secret_key?: string;
+  jwtSecretKey?: string;
+}
+import { logger } from "@utils/logger";
+import { getErrorMessage } from "@utils/errorHelpers";
 
 interface NeZhaConfig {
   url: string;
@@ -102,7 +108,7 @@ function loadConfig(): NeZhaConfig | null {
       configCache = JSON.parse(content);
       return configCache;
     }
-  } catch {}
+  } catch (e: unknown) { logger.error('[nezha] loadConfig failed:', e); }
   return null;
 }
 
@@ -111,9 +117,19 @@ function saveConfig(config: NeZhaConfig): void {
     const file = getConfigPath();
     fs.writeFileSync(file, JSON.stringify(config, null, 2), "utf-8");
     configCache = config;
-  } catch (e) {
-    console.error("Failed to save nezha config:", e);
+  } catch (e: unknown) {
+    logger.error("Failed to save nezha config:", e);
   }
+}
+
+function htmlEscape(text: string): string {
+  if (typeof text !== "string") return "";
+  return text
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
 }
 
 function formatBytes(bytes: number): string {
@@ -185,9 +201,9 @@ function readSecretFromConfig(configPath: string): string | null {
       return null;
     }
     const content = fs.readFileSync(configPath, "utf-8");
-    const config = yaml.load(content) as any;
+    const config = yaml.load(content) as NeZhaYamlConfig | null | undefined;
     return config?.jwt_secret_key || config?.jwtSecretKey || null;
-  } catch {
+  } catch (_e: unknown) {
     return null;
   }
 }
@@ -218,7 +234,7 @@ async function fetchServers(config: NeZhaConfig): Promise<Server[]> {
   if (Array.isArray(response.data)) {
     return response.data;
   }
-  throw new Error((response.data as any).error || "获取服务器列表失败");
+  throw new Error((response.data as { error?: string }).error || "获取服务器列表失败");
 }
 
 function isServerOnline(server: Server): boolean {
@@ -256,8 +272,8 @@ async function fetchServiceMonitor(
         }
       }
     }
-  } catch (error: any) {
-    console.error(`[NeZha Debug] Service monitor API error for server ${serverId}:`, error.message || error);
+  } catch (error: unknown) {
+    logger.error(`[NeZha Debug] Service monitor API error for server ${serverId}:`, getErrorMessage(error) || error);
   }
   return result;
 }
@@ -284,8 +300,8 @@ async function fetchServiceMonitorFull(
     if (response.data.success && response.data.data) {
       return response.data.data;
     }
-  } catch (error: any) {
-    console.error(`[NeZha Debug] Service monitor full API error:`, error.message || error);
+  } catch (error: unknown) {
+    logger.error(`[NeZha Debug] Service monitor full API error:`, getErrorMessage(error) || error);
   }
   return [];
 }
@@ -401,8 +417,8 @@ async function downloadChart(chartConfig: object): Promise<Buffer | null> {
       }
     );
     return Buffer.from(response.data);
-  } catch (error: any) {
-    console.error("Failed to download chart:", error.message);
+  } catch (error: unknown) {
+    logger.error("Failed to download chart:", getErrorMessage(error));
     return null;
   }
 }
@@ -474,17 +490,16 @@ function formatServerInfo(
   return title;
 }
 
-const nezha = async (msg: Api.Message) => {
+const nezha = async (msg: MessageContext) => {
   try {
-    const args = msg.message.slice(1).split(" ").slice(1);
+    const args = msg.text.slice(1).split(" ").slice(1);
     const subCmd = args[0]?.toLowerCase();
 
     if (subCmd === "chart") {
       const config = loadConfig();
       if (!config) {
         await msg.edit({
-          text: "❌ 请先配置哪吒监控",
-          parseMode: "html",
+          text: html("❌ 请先配置哪吒监控"),
         });
         return;
       }
@@ -495,8 +510,7 @@ const nezha = async (msg: Api.Message) => {
 
       if (onlineServers.length === 0) {
         await msg.edit({
-          text: "❌ 没有在线的服务器",
-          parseMode: "html",
+          text: html("❌ 没有在线的服务器"),
         });
         return;
       }
@@ -515,8 +529,7 @@ const nezha = async (msg: Api.Message) => {
             .map((s) => `• <code>${s.id}</code> - ${htmlEscape(s.name)}`)
             .join("\n");
           await msg.edit({
-            text: `❌ 未找到匹配的服务器\n\n<b>在线服务器列表:</b>\n${serverList}\n\n用法: <code>nezha chart [服务器名/ID]</code>`,
-            parseMode: "html",
+            text: html`❌ 未找到匹配的服务器\n\n<b>在线服务器列表:</b>\n${serverList}\n\n用法: <code>nezha chart [服务器名/ID]</code>`,
           });
           return;
         }
@@ -529,15 +542,14 @@ const nezha = async (msg: Api.Message) => {
 
       if (monitorData.length === 0) {
         await msg.edit({
-          text: `❌ ${htmlEscape(targetServer.name)} 没有服务监控数据`,
-          parseMode: "html",
+          text: html`❌ ${htmlEscape(targetServer.name)} 没有服务监控数据`,
         });
         return;
       }
 
       await msg.edit({ text: "📈 正在生成图表..." });
       
-      console.log("[NeZha Chart Debug] monitorData sample:", JSON.stringify({
+      logger.info("[NeZha Chart Debug] monitorData sample:", JSON.stringify({
         count: monitorData.length,
         first: monitorData[0] ? {
           name: monitorData[0].monitor_name,
@@ -553,8 +565,7 @@ const nezha = async (msg: Api.Message) => {
 
       if (!chartBuffer) {
         await msg.edit({
-          text: "❌ 生成图表失败",
-          parseMode: "html",
+          text: html("❌ 生成图表失败"),
         });
         return;
       }
@@ -567,10 +578,10 @@ const nezha = async (msg: Api.Message) => {
         const client = await getGlobalClient();
         const caption = `📊 <b>${htmlEscape(targetServer.name)}</b> 服务监控\n\n监控项: ${monitorData.map((m) => htmlEscape(m.monitor_name)).join(", ")}`;
 
-        await client.sendFile(msg.chatId!, {
+        await client.sendMedia(msg.chat.id, {
+          type: "photo",
           file: tempFile,
-          caption,
-          parseMode: "html",
+          caption: html(caption),
         });
         await msg.delete({ revoke: true });
       } finally {
@@ -586,8 +597,7 @@ const nezha = async (msg: Api.Message) => {
       const config = loadConfig();
       if (!config) {
         await msg.edit({
-          text: "❌ 请先配置哪吒监控",
-          parseMode: "html",
+          text: html("❌ 请先配置哪吒监控"),
         });
         return;
       }
@@ -595,21 +605,18 @@ const nezha = async (msg: Api.Message) => {
         config.serviceMonitor = true;
         saveConfig(config);
         await msg.edit({
-          text: "✅ 服务监控已开启",
-          parseMode: "html",
+          text: html("✅ 服务监控已开启"),
         });
       } else if (toggle === "off") {
         config.serviceMonitor = false;
         saveConfig(config);
         await msg.edit({
-          text: "✅ 服务监控已关闭",
-          parseMode: "html",
+          text: html("✅ 服务监控已关闭"),
         });
       } else {
         const status = config.serviceMonitor !== false ? "开启" : "关闭";
         await msg.edit({
-          text: `📶 服务监控当前状态: <b>${status}</b>\n\n用法: <code>nezha service on/off</code>`,
-          parseMode: "html",
+          text: html`📶 服务监控当前状态: <b>${status}</b>\n\n用法: <code>nezha service on/off</code>`,
         });
       }
       return;
@@ -621,20 +628,19 @@ const nezha = async (msg: Api.Message) => {
 
       if (!url || !secretOrPath) {
         await msg.edit({
-          text: `❌ <b>设置哪吒监控</b>
-
-<b>用法:</b>
-<code>nezha set [面板地址] [JWT Secret]</code>
-<code>nezha set [面板地址] [config.yaml路径]</code>
-
-<b>示例:</b>
-<code>nezha set https://nezha.example.com your_jwt_secret</code>
-<code>nezha set https://nezha.example.com /opt/nezha/data/config.yaml</code>
-
-<b>说明:</b>
-• 可直接填写 jwt_secret_key
+          text: html`❌ <b>设置哪吒监控</b>\n\n
+\n\n
+<b>用法:</b>\n\n
+<code>nezha set [面板地址] [JWT Secret]</code>\n\n
+<code>nezha set [面板地址] [config.yaml路径]</code>\n\n
+\n\n
+<b>示例:</b>\n\n
+<code>nezha set https://nezha.example.com your_jwt_secret</code>\n\n
+<code>nezha set https://nezha.example.com /opt/nezha/data/config.yaml</code>\n\n
+\n\n
+<b>说明:</b>\n\n
+• 可直接填写 jwt_secret_key\n\n
 • 或填写 config.yaml 路径，自动读取 secret`,
-          parseMode: "html",
         });
         return;
       }
@@ -650,12 +656,11 @@ const nezha = async (msg: Api.Message) => {
         const fileSecret = readSecretFromConfig(secretOrPath);
         if (!fileSecret) {
           await msg.edit({
-            text: `❌ <b>配置文件读取失败</b>
-
-无法从 <code>${htmlEscape(secretOrPath)}</code> 读取 jwt_secret_key
-
+            text: html`❌ <b>配置文件读取失败</b>\n\n
+\n\n
+无法从 <code>${htmlEscape(secretOrPath)}</code> 读取 jwt_secret_key\n
+\n
 请检查文件路径是否正确`,
-            parseMode: "html",
           });
           return;
         }
@@ -672,22 +677,20 @@ const nezha = async (msg: Api.Message) => {
         await fetchServers(config);
         saveConfig(config);
         await msg.edit({
-          text: `✅ <b>哪吒监控配置成功</b>
-
-<b>面板地址:</b> <code>${htmlEscape(url)}</code>
-<b>认证方式:</b> ${config.configPath ? "配置文件自动读取" : "JWT Secret"}
-
+          text: html`✅ <b>哪吒监控配置成功</b>\n\n
+\n\n
+<b>面板地址:</b> <code>${htmlEscape(url)}</code>\n
+<b>认证方式:</b> ${config.configPath ? "配置文件自动读取" : "JWT Secret"}\n
+\n
 使用 <code>nezha</code> 查看服务器状态`,
-          parseMode: "html",
         });
-      } catch (error: any) {
+      } catch (error: unknown) {
         await msg.edit({
-          text: `❌ <b>配置验证失败</b>
-
-<b>错误:</b> ${htmlEscape(error.message)}
-
+          text: html`❌ <b>配置验证失败</b>\n\n
+\n\n
+<b>错误:</b> ${htmlEscape(getErrorMessage(error))}\n
+\n
 请检查面板地址和 Secret 是否正确`,
-          parseMode: "html",
         });
       }
       return;
@@ -697,16 +700,15 @@ const nezha = async (msg: Api.Message) => {
 
     if (!config) {
       await msg.edit({
-        text: `📊 <b>哪吒监控插件</b>
-
-<b>首次使用请先配置:</b>
-<code>nezha set [面板地址] [JWT Secret]</code>
-<code>nezha set [面板地址] [config.yaml路径]</code>
-
-<b>示例:</b>
-<code>nezha set https://nezha.example.com your_secret</code>
+        text: html`📊 <b>哪吒监控插件</b>\n\n
+\n\n
+<b>首次使用请先配置:</b>\n\n
+<code>nezha set [面板地址] [JWT Secret]</code>\n\n
+<code>nezha set [面板地址] [config.yaml路径]</code>\n\n
+\n\n
+<b>示例:</b>\n\n
+<code>nezha set https://nezha.example.com your_secret</code>\n\n
 <code>nezha set https://nezha.example.com /opt/nezha/data/config.yaml</code>`,
-        parseMode: "html",
       });
       return;
     }
@@ -730,8 +732,7 @@ const nezha = async (msg: Api.Message) => {
 
     if (!servers.length) {
       await msg.edit({
-        text: "📊 <b>哪吒监控</b>\n\n暂无服务器数据",
-        parseMode: "html",
+        text: html("📊 <b>哪吒监控</b>\n\n暂无服务器数据"),
       });
       return;
     }
@@ -764,18 +765,16 @@ const nezha = async (msg: Api.Message) => {
     }
 
     await msg.edit({
-      text: resultText,
-      parseMode: "html",
+      text: html(resultText),
     });
-  } catch (error: any) {
-    console.error("NeZha plugin error:", error);
+  } catch (error: unknown) {
+    logger.error("NeZha plugin error:", error);
     await msg.edit({
-      text: `❌ <b>获取失败</b>
-
-<b>错误:</b> ${htmlEscape(error.message || "未知错误")}
-
+      text: html`❌ <b>获取失败</b>\n\n
+\n\n
+<b>错误:</b> ${htmlEscape(getErrorMessage(error) || "未知错误")}\n
+\n
 请检查网络连接或重新配置`,
-      parseMode: "html",
     });
   }
 };
@@ -791,9 +790,51 @@ class NeZhaPlugin extends Plugin {
 
 支持直接填写 jwt_secret_key 或 config.yaml 路径自动读取
   `;
-  cmdHandlers: Record<string, (msg: Api.Message) => Promise<void>> = {
+  cmdHandlers: Record<string, (msg: MessageContext) => Promise<void>> = {
     nezha,
   };
 }
+
+
+  // Panel Settings Adapter
+  panelAdapter: PanelSettingsAdapter = {
+    id: "nezha",
+    title: "哪吒监控",
+    description: "服务器监控配置",
+    category: "插件配置",
+    icon: "📊",
+    getSchema: (): PanelSettingField[] => [
+      {
+            "key": "url",
+            "label": "面板地址",
+            "type": "string"
+      },
+      {
+            "key": "secret",
+            "label": "API 密钥",
+            "type": "password",
+            "secret": true
+      },
+      {
+            "key": "configPath",
+            "label": "配置文件路径",
+            "type": "string"
+      },
+      {
+            "key": "serviceMonitor",
+            "label": "服务监控",
+            "type": "boolean"
+      }
+],
+    getValues: async (): Promise<Record<string, unknown>> => {
+      const db = await JSONFilePreset<NeZhaYamlConfig>(path.join(createDirectoryInAssets("nezha"), "config.json"), {} as any);
+      return db.data as Record<string, unknown>;
+    },
+    setValues: async (patch: Record<string, unknown>): Promise<void> => {
+      const db = await JSONFilePreset<NeZhaYamlConfig>(path.join(createDirectoryInAssets("nezha"), "config.json"), {} as any);
+      Object.assign(db.data, patch);
+      await db.write();
+    },
+  };
 
 export default new NeZhaPlugin();
