@@ -3,12 +3,9 @@
  * 引用某用户/频道的消息，回复 ${mainPrefix}uai zj/fx 进行总结/分析
  * 支持消息折叠显示，保持AI回答中的HTML格式
  */
-import { Plugin, type PanelSettingsAdapter, type PanelSettingField, type PanelFieldType } from "@utils/pluginBase";
+import { Plugin } from "@utils/pluginBase";
 import { getPrefixes } from "@utils/pluginManager";
-import type { MessageContext } from "@mtcute/dispatcher";
-import type { Message } from "@mtcute/node";
-import { thtml as html } from "@mtcute/html-parser";
-import type { DisplayableEntity, EntityWithId } from "@utils/mtcuteTypes";
+import { Api } from "teleproto";
 import axios from "axios";
 import { JSONFilePreset } from "lowdb/node";
 import * as path from "path";
@@ -16,8 +13,8 @@ import { createDirectoryInAssets } from "@utils/pathHelpers";
 import { getGlobalClient } from "@utils/runtimeManager";
 import { TelegramFormatter } from "@utils/telegramFormatter";
 import { safeGetMessages } from "@utils/safeGetMessages";
-import { logger } from "@utils/logger";
-import { getErrorMessage } from "@utils/errorHelpers";
+
+import { htmlEscape } from "@utils/htmlEscape";
 
 const prefixes = getPrefixes();
 const mainPrefix = prefixes[0];
@@ -62,15 +59,6 @@ const DEFAULT_CONFIG: UAIConfig = {
 };
 
 // ========== 工具函数 ==========
-function htmlEscape(t: string): string {
-    return t
-        .replace(/&/g, "&amp;")
-        .replace(/</g, "&lt;")
-        .replace(/>/g, "&gt;")
-        .replace(/"/g, "&quot;")
-        .replace(/'/g, "&#39;");
-}
-
 // 应用折叠功能
 const applyWrap = (s: string, collapse?: boolean): string => {
     if (!collapse) return s;
@@ -187,7 +175,7 @@ async function callGemini(
     );
 
     const parts = response.data?.candidates?.[0]?.content?.parts || [];
-    return parts.map((p: { text?: string }) => p.text || "").join("");
+    return parts.map((p: any) => p.text || "").join("");
 }
 
 async function callAI(provider: Provider, prompt: string, content: string, timeout: number): Promise<string> {
@@ -201,11 +189,11 @@ async function callAI(provider: Provider, prompt: string, content: string, timeo
 type MessageData = { time: string; sender: string; text: string };
 
 // 将各种 ID 类型统一转换为字符串进行比较
-function normalizeId(id: string | number | bigint | { userId?: unknown; channelId?: unknown; chatId?: unknown; value?: unknown } | null | undefined): string {
+function normalizeId(id: any): string {
     if (id === null || id === undefined) return "";
     // 处理 BigInt
     if (typeof id === "bigint") return id.toString();
-    // 处理对象（可能是 any 等）
+    // 处理对象（可能是 Api.PeerUser 等）
     if (typeof id === "object") {
         // 尝试获取 userId、channelId 或 value
         const val = id.userId || id.channelId || id.chatId || id.value || id;
@@ -215,7 +203,7 @@ function normalizeId(id: string | number | bigint | { userId?: unknown; channelI
 }
 
 async function collectMessages(
-    chatPeerId: string | number,
+    chatPeerId: any,  // msg.peerId
     filterSenderId: string | null,  // senderId 用于过滤（数字形式的 userId）
     limit: { type: "count"; value: number } | { type: "time"; seconds: number } | { type: "today" }
 ): Promise<MessageData[]> {
@@ -228,60 +216,56 @@ async function collectMessages(
     const maxCount = limit.type === "count" ? limit.value : 10000;
 
     // 构建迭代器参数
-    const iterParams: Record<string, unknown> = { limit: maxCount };
+    const iterParams: any = { limit: maxCount };
 
     // 如果需要按用户过滤，使用 fromUser 参数（直接让 API 过滤，避免 flood wait）
     if (filterSenderId) {
         try {
             // 尝试获取用户实体
-            const userEntity = await client.resolvePeer(filterSenderId);
+            const userEntity = await client.getEntity(filterSenderId);
             iterParams.fromUser = userEntity;
-            logger.info(`[UAI] Using fromUser filter: ${filterSenderId}`);
-        } catch (e: unknown) {
-            logger.info(`[UAI] Failed to get entity for ${filterSenderId}, falling back to manual filter:`, e);
+            console.log(`[UAI] Using fromUser filter: ${filterSenderId}`);
+        } catch (e) {
+            console.log(`[UAI] Failed to get entity for ${filterSenderId}, falling back to manual filter`);
             // 如果获取实体失败，使用较小的扫描范围避免 flood
             iterParams.limit = Math.min(maxCount * 20, 3000);
         }
     }
 
-    const msgs = await client.searchMessages({ ...iterParams, chatId: chatPeerId });
+    const messageIterator = client.iterMessages(chatPeerId, iterParams);
     const normalizedFilterId = filterSenderId ? normalizeId(filterSenderId) : null;
     const needManualFilter = filterSenderId && !iterParams.fromUser;
 
-    for (const msg of msgs) {
-        if (!msg) continue;
+    for await (const msg of messageIterator) {
+        const m = msg as any;
 
         // 时间检查 - 按数量获取时不检查时间
-        // mtcute: msg.date is already a Date object (not unix timestamp)
-        if (limit.type !== "count" && msg.date.getTime() / 1000 < startTime) {
+        if (limit.type !== "count" && m.date < startTime) {
             break;
         }
 
         // 手动过滤发送者（仅当 fromUser 不可用时）
-        // mtcute: msg.sender is a User/Peer; use raw.id for numeric ID
         if (needManualFilter && normalizedFilterId) {
-            const senderObj = msg.sender as unknown as EntityWithId | null;
-            const msgSenderId = normalizeId(senderObj?.raw?.id ?? (msg.sender as unknown as EntityWithId | null)?.id);
+            const msgSenderId = normalizeId(m.senderId);
             if (msgSenderId !== normalizedFilterId) continue;
         }
 
-        if (!msg.text) continue;
+        if (!m.message) continue;
 
         // 过滤掉插件生成的分析结果消息
-        if (msg.text.startsWith("📊 分析结果") || msg.text.startsWith("📊 总结结果")) continue;
+        if (m.message.startsWith("📊 分析结果") || m.message.startsWith("📊 总结结果")) continue;
 
-        const senderUser = msg.sender as unknown as DisplayableEntity | null;
-        const sender = senderUser?.firstName || senderUser?.username || "未知";
+        const sender = m.sender?.firstName || m.sender?.username || "未知";
         messages.push({
-            time: formatDate(msg.date),
+            time: formatDate(new Date(m.date * 1000)),
             sender,
-            text: msg.text
+            text: m.message
         });
 
         if (messages.length >= maxCount) break;
     }
 
-    logger.info(`[UAI] Collected ${messages.length} messages`);
+    console.log(`[UAI] Collected ${messages.length} messages`);
     return messages.reverse();
 }
 
@@ -337,13 +321,12 @@ class UAIPlugin extends Plugin {
     cleanup(): void {
   }
 
-
     name = "uai";
     description = () => getHelpText();
 
     cmdHandlers = {
-        uai: async (msg: MessageContext) => {
-            const text = (msg.text || "").trim();
+        uai: async (msg: Api.Message) => {
+            const text = (msg.message || "").trim();
             const parts = text.split(/\s+/).slice(1);
             const subCmd = parts[0]?.toLowerCase() || "";
 
@@ -351,7 +334,7 @@ class UAIPlugin extends Plugin {
 
             // 帮助
             if (!subCmd || subCmd === "help") {
-                await msg.edit({ text: html(getHelpText()) });
+                await msg.edit({ text: getHelpText(), parseMode: "html" });
                 return;
             }
 
@@ -362,19 +345,22 @@ class UAIPlugin extends Plugin {
                     db.data.collapse = true;
                     await db.write();
                     await msg.edit({ 
-                        text: html("✅ 已开启AI回答折叠显示\n\nAI回答将显示在可折叠的块引用中"),
+                        text: "✅ 已开启AI回答折叠显示\n\nAI回答将显示在可折叠的块引用中",
+                        parseMode: "html" 
                     });
                     return;
                 } else if (action === "off") {
                     db.data.collapse = false;
                     await db.write();
                     await msg.edit({ 
-                        text: html("✅ 已关闭AI回答折叠显示\n\nAI回答将正常显示"),
+                        text: "✅ 已关闭AI回答折叠显示\n\nAI回答将正常显示",
+                        parseMode: "html" 
                     });
                     return;
                 } else {
                     await msg.edit({ 
-                        text: html`📊 当前折叠状态: <b>${db.data.collapse ? "开启" : "关闭"}</b>\n\n使用: <code>${mainPrefix}uai collapse on/off</code>`,
+                        text: `📊 当前折叠状态: <b>${db.data.collapse ? "开启" : "关闭"}</b>\n\n使用: <code>${mainPrefix}uai collapse on/off</code>`,
+                        parseMode: "html" 
                     });
                     return;
                 }
@@ -385,7 +371,7 @@ class UAIPlugin extends Plugin {
                 const [, name, baseUrl, apiKey, typeStr] = parts;
                 const type = typeStr.toLowerCase() as ApiType;
                 if (type !== "openai" && type !== "gemini") {
-                    await msg.edit({ text: html("❌ type 必须是 openai 或 gemini") });
+                    await msg.edit({ text: "❌ type 必须是 openai 或 gemini", parseMode: "html" });
                     return;
                 }
                 const authMethod: AuthMethod = type === "gemini" ? "query_param" : "bearer_token";
@@ -393,14 +379,14 @@ class UAIPlugin extends Plugin {
                 db.data.providers[name] = { name, base_url: baseUrl, api_key: apiKey, model: defaultModel, type, auth_method: authMethod };
                 if (!db.data.default_provider) db.data.default_provider = name;
                 await db.write();
-                await msg.edit({ text: html`✅ 供应商 <code>${htmlEscape(name)}</code> 已添加` });
+                await msg.edit({ text: `✅ 供应商 <code>${htmlEscape(name)}</code> 已添加`, parseMode: "html" });
                 return;
             }
 
             if (subCmd === "del" && parts[1]) {
                 const name = parts[1];
                 if (!db.data.providers[name]) {
-                    await msg.edit({ text: html("❌ 供应商不存在") });
+                    await msg.edit({ text: "❌ 供应商不存在", parseMode: "html" });
                     return;
                 }
                 delete db.data.providers[name];
@@ -408,26 +394,26 @@ class UAIPlugin extends Plugin {
                     db.data.default_provider = Object.keys(db.data.providers)[0] || undefined;
                 }
                 await db.write();
-                await msg.edit({ text: html`✅ 已删除 <code>${htmlEscape(name)}</code>` });
+                await msg.edit({ text: `✅ 已删除 <code>${htmlEscape(name)}</code>`, parseMode: "html" });
                 return;
             }
 
             if (subCmd === "set" && parts[1]) {
                 const name = parts[1];
                 if (!db.data.providers[name]) {
-                    await msg.edit({ text: html("❌ 供应商不存在") });
+                    await msg.edit({ text: "❌ 供应商不存在", parseMode: "html" });
                     return;
                 }
                 db.data.default_provider = name;
                 await db.write();
-                await msg.edit({ text: html`✅ 默认供应商: <code>${htmlEscape(name)}</code>` });
+                await msg.edit({ text: `✅ 默认供应商: <code>${htmlEscape(name)}</code>`, parseMode: "html" });
                 return;
             }
 
             if (subCmd === "list") {
                 const providers = Object.values(db.data.providers);
                 if (providers.length === 0) {
-                    await msg.edit({ text: html("📋 暂无供应商") });
+                    await msg.edit({ text: "📋 暂无供应商", parseMode: "html" });
                     return;
                 }
                 const list = providers.map(p => {
@@ -436,7 +422,8 @@ class UAIPlugin extends Plugin {
                 }).join("\n");
                 const collapseStatus = `折叠显示: ${db.data.collapse ? "✅ 开启" : "❌ 关闭"}`;
                 await msg.edit({ 
-                    text: html`📋 <b>供应商列表</b>\n\n${list}\n\n${collapseStatus}`, 
+                    text: `📋 <b>供应商列表</b>\n\n${list}\n\n${collapseStatus}`, 
+                    parseMode: "html" 
                 });
                 return;
             }
@@ -445,12 +432,12 @@ class UAIPlugin extends Plugin {
                 const name = parts[1];
                 const model = parts[2];
                 if (!db.data.providers[name]) {
-                    await msg.edit({ text: html`❌ 供应商 <code>${htmlEscape(name)}</code> 不存在` });
+                    await msg.edit({ text: `❌ 供应商 <code>${htmlEscape(name)}</code> 不存在`, parseMode: "html" });
                     return;
                 }
                 db.data.providers[name].model = model;
                 await db.write();
-                await msg.edit({ text: html`✅ <code>${htmlEscape(name)}</code> 模型已设置为 <code>${htmlEscape(model)}</code>` });
+                await msg.edit({ text: `✅ <code>${htmlEscape(name)}</code> 模型已设置为 <code>${htmlEscape(model)}</code>`, parseMode: "html" });
                 return;
             }
 
@@ -462,24 +449,24 @@ class UAIPlugin extends Plugin {
                     const name = parts[2];
                     const content = parts.slice(3).join(" ");
                     if (BUILTIN_PROMPTS[name]) {
-                        await msg.edit({ text: html`❌ <code>${htmlEscape(name)}</code> 是内置提示词，无法覆盖` });
+                        await msg.edit({ text: `❌ <code>${htmlEscape(name)}</code> 是内置提示词，无法覆盖`, parseMode: "html" });
                         return;
                     }
                     db.data.prompts[name] = content;
                     await db.write();
-                    await msg.edit({ text: html`✅ 提示词 <code>${htmlEscape(name)}</code> 已添加` });
+                    await msg.edit({ text: `✅ 提示词 <code>${htmlEscape(name)}</code> 已添加`, parseMode: "html" });
                     return;
                 }
 
                 if (action === "del" && parts[2]) {
                     const name = parts[2];
                     if (!db.data.prompts[name]) {
-                        await msg.edit({ text: html("❌ 提示词不存在") });
+                        await msg.edit({ text: "❌ 提示词不存在", parseMode: "html" });
                         return;
                     }
                     delete db.data.prompts[name];
                     await db.write();
-                    await msg.edit({ text: html`✅ 已删除 <code>${htmlEscape(name)}</code>` });
+                    await msg.edit({ text: `✅ 已删除 <code>${htmlEscape(name)}</code>`, parseMode: "html" });
                     return;
                 }
 
@@ -489,24 +476,24 @@ class UAIPlugin extends Plugin {
                         `• <code>${htmlEscape(k)}</code>: ${htmlEscape(v.substring(0, 30))}...`
                     ).join("\n");
                     const text = `📝 <b>提示词列表</b>\n\n<b>内置:</b>\n${builtinList}${customList ? `\n\n<b>自定义:</b>\n${customList}` : ""}`;
-                    await msg.edit({ text: html(text) });
+                    await msg.edit({ text, parseMode: "html" });
                     return;
                 }
 
-                await msg.edit({ text: html("❌ 用法: prompt add/del/list") });
+                await msg.edit({ text: "❌ 用法: prompt add/del/list", parseMode: "html" });
                 return;
             }
 
             // ========== 主功能：引用消息分析 ==========
             // 检查是否引用了消息
-            if (!msg.replyToMessage) {
-                await msg.edit({ text: html`❌ 请引用一条消息后使用此命令\n\n${getHelpText()}` });
+            if (!msg.replyTo) {
+                await msg.edit({ text: "❌ 请引用一条消息后使用此命令\n\n" + getHelpText(), parseMode: "html" });
                 return;
             }
 
             // 检查 AI 配置
             if (!db.data.default_provider || !db.data.providers[db.data.default_provider]) {
-                await msg.edit({ text: html`❌ 请先配置 AI 供应商\n\n使用: <code>${mainPrefix}uai add 名称 url key type</code>` });
+                await msg.edit({ text: `❌ 请先配置 AI 供应商\n\n使用: <code>${mainPrefix}uai add 名称 url key type</code>`, parseMode: "html" });
                 return;
             }
 
@@ -534,17 +521,17 @@ class UAIPlugin extends Plugin {
 
             const prompt = getPrompt(db, promptKey);
 
-            await msg.edit({ text: html("🔄 正在收集消息...") });
+            await msg.edit({ text: "🔄 正在收集消息...", parseMode: "html" });
 
             try {
                 const client = await getGlobalClient();
                 if (!client) throw new Error("客户端未初始化");
 
                 // 获取被引用的消息
-                const replyToId = msg.replyToMessage?.id;
+                const replyToId = (msg.replyTo as any)?.replyToMsgId;
                 if (!replyToId) throw new Error("无法获取引用消息");
 
-                const chatPeerId = msg.chat.id;
+                const chatPeerId = msg.peerId;  // 使用 peerId 而不是 chatId 字符串
                 const [repliedMsg] = await safeGetMessages(client, chatPeerId, { ids: [replyToId] });
                 if (!repliedMsg) throw new Error("引用的消息不存在");
 
@@ -553,32 +540,31 @@ class UAIPlugin extends Plugin {
                 let sourceName = "未知";
                 let sourceUsername: string | undefined = undefined;
 
-                // mtcute: forward.info replaces gramjs fwdFrom; access raw TL header for fromId
-                const fwdFrom = repliedMsg.forward?.raw;
+                const fwdFrom = (repliedMsg as any).fwdFrom;
                 if (fwdFrom?.fromId) {
                     // 转发消息，获取原始来源
                     const fwdId = fwdFrom.fromId;
-                    if ('channelId' in fwdId) {
+                    if (fwdId.channelId) {
                         // 转发自频道 - 不按用户过滤，改为获取该频道消息
                         const channelPeerId = `-100${fwdId.channelId}`;
-                        await msg.edit({ text: html("🔄 正在收集频道消息...") });
+                        await msg.edit({ text: "🔄 正在收集频道消息...", parseMode: "html" });
                         const messages = await collectMessages(channelPeerId, null, limit);
                         if (messages.length === 0) {
-                            await msg.edit({ text: html("❌ 没有找到消息") });
+                            await msg.edit({ text: "❌ 没有找到消息", parseMode: "html" });
                             return;
                         }
                         const content = formatMessagesForAI(messages);
-                        await msg.edit({ text: html`🤖 正在分析 ${messages.length} 条消息...` });
+                        await msg.edit({ text: `🤖 正在分析 ${messages.length} 条消息...`, parseMode: "html" });
                         const provider = db.data.providers[db.data.default_provider!];
 
                         // 获取频道信息
                         let channelName = "频道";
                         let channelUsername: string | undefined = undefined;
                         try {
-                            const channelEntity = await client.resolvePeer(channelPeerId) as { title?: string; username?: string };
-                            channelName = channelEntity.title || channelEntity.username || "频道";
-                            channelUsername = channelEntity.username;
-                        } catch (e: unknown) { logger.error('[uai] resolvePeer failed:', e); }
+                            const channelEntity = await client.getEntity(channelPeerId);
+                            channelName = (channelEntity as any).title || (channelEntity as any).username || "频道";
+                            channelUsername = (channelEntity as any).username;
+                        } catch { }
                         const displayName = channelUsername ? `@${channelUsername}` : channelName;
 
                         const userInfo = `来源: ${channelName}${channelUsername ? ` (@${channelUsername})` : ""}`;
@@ -591,32 +577,26 @@ class UAIPlugin extends Plugin {
                         const resultText = `📊 <b>${promptKey === "zj" ? "总结" : "分析"}结果</b>（${displayName}，${messages.length} 条）\n\n${foldedContent}`;
                         
                         await msg.delete({ revoke: true });
-                        await client.sendText(chatPeerId, html(resultText));
+                        await client.sendMessage(chatPeerId, { message: resultText, parseMode: "html" });
                         return;
-                    } else if ('userId' in fwdId) {
+                    } else if (fwdId.userId) {
                         sourceId = fwdId.userId.toString();
                         try {
-                            const entity = await client.resolvePeer(fwdId.userId) as { firstName?: string; username?: string };
+                            const entity = await client.getEntity(fwdId.userId) as any;
                             sourceName = entity.firstName || entity.username || "用户";
                             sourceUsername = entity.username;
-                        } catch (e: unknown) {
-                            logger.debug("uai: resolvePeer failed for forward source", e);
-                        }
+                        } catch { }
                     }
                 } else {
                     // 非转发消息，使用发送者
-                    // mtcute: msg.sender is a User/Peer; access raw.id for numeric sender ID
-                    const senderPeer = repliedMsg.sender as unknown as EntityWithId | null;
-                    const senderId = senderPeer?.raw?.id ?? (repliedMsg.sender as unknown as EntityWithId | null)?.id;
+                    const senderId = (repliedMsg as any).senderId;
                     if (senderId) {
                         sourceId = senderId.toString();
                         try {
-                            const entity = await client.resolvePeer(Number(senderId)) as DisplayableEntity;
+                            const entity = await client.getEntity(senderId) as any;
                             sourceName = entity.firstName || entity.username || "用户";
                             sourceUsername = entity.username;
-                        } catch (e: unknown) {
-                            logger.debug("uai: resolvePeer failed for sender", e);
-                        }
+                        } catch { }
                     }
                 }
 
@@ -627,16 +607,16 @@ class UAIPlugin extends Plugin {
                 const userInfo = `用户: ${sourceName}${sourceUsername ? ` (@${sourceUsername})` : ""}`;
 
                 // 收集消息 - 传入 peerId 和 senderId 字符串
-                await msg.edit({ text: html`🔄 正在收集 ${displayName} 的消息...` });
+                await msg.edit({ text: `🔄 正在收集 ${displayName} 的消息...`, parseMode: "html" });
                 const messages = await collectMessages(chatPeerId, sourceId, limit);
 
                 if (messages.length === 0) {
-                    await msg.edit({ text: html`❌ 没有找到 ${displayName} 的消息` });
+                    await msg.edit({ text: `❌ 没有找到 ${displayName} 的消息`, parseMode: "html" });
                     return;
                 }
 
                 const content = formatMessagesForAI(messages);
-                await msg.edit({ text: html`🤖 正在分析 ${messages.length} 条消息...` });
+                await msg.edit({ text: `🤖 正在分析 ${messages.length} 条消息...`, parseMode: "html" });
 
                 const provider = db.data.providers[db.data.default_provider!];
                 const result = await callAI(provider, prompt, `${userInfo}\n\n${content}`, db.data.timeout);
@@ -648,53 +628,13 @@ class UAIPlugin extends Plugin {
                 const resultText = `📊 <b>${promptKey === "zj" ? "总结" : "分析"}结果</b>（${displayName}，${messages.length} 条）\n\n${foldedContent}`;
                 
                 await msg.delete({ revoke: true });
-                await client.sendText(chatPeerId, html(resultText));
+                await client.sendMessage(chatPeerId, { message: resultText, parseMode: "html" });
 
-            } catch (err: unknown) {
-                await msg.edit({ text: html`❌ 错误: ${htmlEscape(getErrorMessage(err) || String(err))}` });
+            } catch (err: any) {
+                await msg.edit({ text: `❌ 错误: ${htmlEscape(err.message || String(err))}`, parseMode: "html" });
             }
         }
     };
 }
-
-
-  // Panel Settings Adapter
-  panelAdapter: PanelSettingsAdapter = {
-    id: "uai",
-    title: "UAI 对话",
-    description: "UAI 对话配置：提供者、预设提示词、超时",
-    category: "插件配置",
-    icon: "🤖",
-    getSchema: (): PanelSettingField[] => [
-      {
-            "key": "default_provider",
-            "label": "默认提供商",
-            "type": "string",
-            "placeholder": "如: openai"
-      },
-      {
-            "key": "timeout",
-            "label": "超时 (秒)",
-            "type": "number",
-            "min": 10,
-            "max": 300,
-            "default": 60
-      },
-      {
-            "key": "collapse",
-            "label": "折叠输出",
-            "type": "boolean"
-      }
-],
-    getValues: async (): Promise<Record<string, unknown>> => {
-      const db = await JSONFilePreset<UAIConfig>(path.join(createDirectoryInAssets("uai"), "config.json"), DEFAULT_CONFIG);
-      return db.data as Record<string, unknown>;
-    },
-    setValues: async (patch: Record<string, unknown>): Promise<void> => {
-      const db = await JSONFilePreset<UAIConfig>(path.join(createDirectoryInAssets("uai"), "config.json"), DEFAULT_CONFIG);
-      Object.assign(db.data, patch);
-      await db.write();
-    },
-  };
 
 export default new UAIPlugin();

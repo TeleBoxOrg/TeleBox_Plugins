@@ -1,9 +1,5 @@
-import {
-  Plugin
-} from "@utils/pluginBase";
-import { logger } from "@utils/logger";
-import type { MessageContext } from "@mtcute/dispatcher";
-import { thtml as html } from "@mtcute/html-parser";
+import { Plugin } from "@utils/pluginBase";
+import { Api } from "teleproto";
 import { execSync, execFile, ChildProcess, spawn } from "child_process";
 import { promisify } from "util";
 import * as path from "path";
@@ -12,7 +8,8 @@ import axios from "axios";
 import * as crypto from "crypto";
 import sharp from "sharp";
 import { safeGetReplyMessage } from "@utils/safeGetMessages";
-import { getErrorMessage } from "@utils/errorHelpers";
+import { htmlEscape } from "@utils/htmlEscape";
+
 import {
   createDirectoryInAssets,
   createDirectoryInTemp,
@@ -148,7 +145,9 @@ function sanitizeErrorMessage(error: string, server?: ServerConfig): string {
       try {
         const password = decrypt(server.credentials);
         sanitized = sanitized.replace(new RegExp(password, 'g'), '***');
-      } catch (e: unknown) { logger.warn(`[speedlink] Ignore decryption errors:`, e) }
+      } catch (e) {
+        // Ignore decryption errors
+      }
     }
   }
   
@@ -184,41 +183,44 @@ try {
   require.resolve("better-sqlite3");
   execSync("command -v sshpass");
   dependenciesInstalled = true;
-} catch (_e: unknown) {
+} catch (e: any) {
   dependenciesInstalled = false;
 }
 
-async function installDependencies(msg: MessageContext): Promise<void> {
+async function installDependencies(msg: Api.Message): Promise<void> {
   isInstalling = true;
   try {
-    logger.info("SpeedLink Plugin: Starting async dependency installation...");
+    console.log("SpeedLink Plugin: Starting async dependency installation...");
     try {
       require.resolve("better-sqlite3");
-    } catch (e: unknown) {
-      logger.info("[INSTALLING] 'better-sqlite3' not found. Installing via npm...", e);
-      await execFileAsync("npm", ["install", "better-sqlite3"], { cwd: "/root/telebox-next" });
-      logger.info("[SUCCESS] Installed 'better-sqlite3'.");
+    } catch (e: any) {
+      console.log("[INSTALLING] 'better-sqlite3' not found. Installing via npm...");
+      await execFileAsync("npm", ["install", "better-sqlite3"], { cwd: "/root/telebox" });
+      console.log("[SUCCESS] Installed 'better-sqlite3'.");
     }
     try {
       execSync("command -v sshpass");
-    } catch (e: unknown) {
-      logger.info("[INSTALLING] 'sshpass' not found. Installing via system package manager...", e);
-      if (fs.existsSync("/usr/bin/apt-get")) {
-        await execFileAsync("sudo", ["apt-get", "update"], { timeout: 120000 });
-        await execFileAsync("sudo", ["apt-get", "install", "-y", "sshpass"], { timeout: 120000 });
-      } else if (fs.existsSync("/usr/bin/yum"))
+    } catch (e: any) {
+      console.log("[INSTALLING] 'sshpass' not found. Installing via system package manager...");
+      if (fs.existsSync("/usr/bin/apt-get"))
+        await execFileAsync("sudo", ["apt-get", "update"], { timeout: 120000 }).then(() =>
+          execFileAsync("sudo", ["apt-get", "install", "-y", "sshpass"], { timeout: 120000 })
+        );
+      else if (fs.existsSync("/usr/bin/yum"))
         await execFileAsync("sudo", ["yum", "install", "-y", "sshpass"], { timeout: 120000 });
       else throw new Error("Unsupported package manager.");
-      logger.info("[SUCCESS] Installed 'sshpass'.");
+      console.log("[SUCCESS] Installed 'sshpass'.");
     }
     await msg.edit({
-      text: html`✅ <b>依赖安装完成！</b>\n\n为了使插件生效，请现在<b>重启TeleBox</b>。`
+      text: "✅ <b>依赖安装完成！</b>\n\n为了使插件生效，请现在<b>重启TeleBox</b>。",
+      parseMode: "html",
     });
     dependenciesInstalled = false;
-  } catch (error: unknown) {
-    logger.error("[FATAL] Dependency installation failed:", error);
+  } catch (error: any) {
+    console.error("[FATAL] Dependency installation failed:", error);
     await msg.edit({
       text: `❌ <b>依赖自动安装失败！</b>\n\n请检查服务器后台日志。`,
+      parseMode: "html",
     });
   } finally {
     isInstalling = false;
@@ -244,8 +246,8 @@ function loadConfig(): { timeout?: number } {
     if (fs.existsSync(CONFIG_PATH)) {
       return JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf-8'));
     }
-  } catch (e: unknown) {
-    logger.error("Failed to load config:", e);
+  } catch (e) {
+    console.error("Failed to load config:", e);
   }
   return {};
 }
@@ -253,8 +255,8 @@ function loadConfig(): { timeout?: number } {
 function saveConfig(config: any): void {
   try {
     fs.writeFileSync(CONFIG_PATH, JSON.stringify(config, null, 2), 'utf-8');
-  } catch (e: unknown) {
-    logger.error("Failed to save config:", e);
+  } catch (e) {
+    console.error("Failed to save config:", e);
   }
 }
 
@@ -266,7 +268,7 @@ if (config.timeout) {
 
 async function downloadCli(): Promise<void> {
   if (fs.existsSync(SPEEDTEST_PATH)) return;
-  logger.info("Downloading Speedtest CLI...");
+  console.log("Downloading Speedtest CLI...");
   const platform = process.platform;
   const arch = process.arch;
   let filename: string;
@@ -296,14 +298,14 @@ async function downloadCli(): Promise<void> {
     const filePath = path.join(ASSETS_DIR, file);
     if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
   });
-  logger.info("Speedtest CLI downloaded and extracted successfully.");
+  console.log("Speedtest CLI downloaded and extracted successfully.");
 }
 
 function getEncryptionKey(): string {
   if (fs.existsSync(KEY_PATH)) return fs.readFileSync(KEY_PATH, "utf-8");
   const newKey = crypto.randomBytes(16).toString("hex");
   fs.writeFileSync(KEY_PATH, newKey, "utf-8");
-  logger.info(`SpeedLink Plugin (${PLUGIN_NAME}): New encryption key generated.`);
+  console.log(`SpeedLink Plugin (${PLUGIN_NAME}): New encryption key generated.`);
   return newKey;
 }
 
@@ -331,22 +333,12 @@ function decrypt(text: string): string {
     const encryptedText = Buffer.from(textParts.join(":"), "hex");
     const decipher = crypto.createDecipheriv("aes-256-cbc", Buffer.from(ENCRYPTION_KEY), iv);
     return Buffer.concat([decipher.update(encryptedText), decipher.final()]).toString();
-  } catch (_e: unknown) {
+  } catch (error: any) {
     throw new Error("Failed to decrypt credentials. The key file may have been changed/deleted.");
   }
 }
 
 // Fixed htmlEscape function
-function htmlEscape(text: any): string {
-  // Ensure text is a string type
-  if (typeof text !== 'string') {
-    return text ? String(text) : "";
-  }
-  return text
-    .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;").replace(/'/g, "&#x27;");
-}
-
 async function unitConvert(bytes: number, isBytes: boolean = false): Promise<string> {
   const power = 1000;
   let value = bytes;
@@ -376,7 +368,7 @@ async function getIpApi(ip: string) {
         )
       : "";
     return { asInfo, ccFlag };
-  } catch (_e: unknown) {
+  } catch (error: any) {
     return { asInfo: "", ccFlag: "" };
   }
 }
@@ -394,13 +386,13 @@ async function saveSpeedtestImage(url: string): Promise<string | null> {
     try {
       await fillRoundedCorners(imagePath, filledImagePath, bgColor, borderPx);
       return filledImagePath;
-    } catch (err: unknown) {
-      logger.error("Failed to fill rounded corners:", err);
+    } catch (err: any) {
+      console.error("Failed to fill rounded corners:", err);
     }
 
     return imagePath;
-  } catch (error: unknown) {
-    logger.error("Failed to save speedtest image:", error);
+  } catch (error: any) {
+    console.error("Failed to save speedtest image:", error);
     return null;
   }
 }
@@ -457,23 +449,25 @@ sudo yum install speedtest</code></pre>
 `;
 
 // --- Main handler ---
-const speedtest = async (msg: MessageContext): Promise<void> => {
+const speedtest = async (msg: Api.Message): Promise<void> => {
   if (!dependenciesInstalled) {
     if (isInstalling)
       await msg.edit({
-        text: html`⏳ <b>依赖已在安装中...</b>`
+        text: "⏳ <b>依赖已在安装中...</b>",
+        parseMode: "html",
       });
     else {
       await msg.edit({
         text: "首次运行，正在自动安装依赖...",
+        parseMode: "html",
       });
       installDependencies(msg);
     }
     return;
   }
 
-  const args = msg.text.slice(2).split(" ").slice(1);
-  const chatId = Number(msg.chat.id?.toString());
+  const args = msg.message.slice(2).split(" ").slice(1);
+  const chatId = Number(msg.peerId?.toString());
   const allServers: ServerConfig[] = db.prepare("SELECT * FROM servers ORDER BY id").all();
 
   try {
@@ -485,7 +479,8 @@ const speedtest = async (msg: MessageContext): Promise<void> => {
         const newTimeout = parseInt(args[1]);
         if (isNaN(newTimeout) || newTimeout < 10 || newTimeout > 600) {
           await msg.edit({
-            text: html`❌ <b>无效的超时时间</b>\n\n请输入10到600之间的秒数。`
+            text: "❌ <b>无效的超时时间</b>\n\n请输入10到600之间的秒数。",
+            parseMode: "html",
           });
           return;
         }
@@ -493,11 +488,13 @@ const speedtest = async (msg: MessageContext): Promise<void> => {
         saveConfig({ ...loadConfig(), timeout: DEFAULT_TIMEOUT });
         await msg.edit({
           text: `✅ <b>超时时间已设置</b>\n\n新的超时时间: <code>${newTimeout}</code> 秒`,
+          parseMode: "html",
         });
       } else {
         const currentTimeout = DEFAULT_TIMEOUT / 1000;
         await msg.edit({
             text: `ℹ️ <b>当前超时设置</b>\n\n超时时间: <code>${currentTimeout}</code> 秒\n\n使用 <code>sl timeout &lt;秒数&gt;</code> 来修改`,
+          parseMode: "html",
         });
       }
       return;
@@ -511,19 +508,21 @@ const speedtest = async (msg: MessageContext): Promise<void> => {
         if (!name || !connection || !authMethod || !credential || !["password", "key"].includes(authMethod)) {
           await msg.edit({
             text: `❌ <b>参数错误</b>\n\n${HELP_TEXT}`,
+            parseMode: "html",
           });
           return;
         }
         const [username, hostWithPort] = connection.split("@");
 
         if (!hostWithPort) {
-          await msg.edit({ text: `❌ <b>连接格式错误</b>` });
+          await msg.edit({ text: `❌ <b>连接格式错误</b>`, parseMode: "html" });
           return;
         }
         const lastColonIndex = hostWithPort.lastIndexOf(":");
         if (lastColonIndex === -1) {
           await msg.edit({
             text: `❌ <b>连接格式错误: 缺少端口号</b>`,
+            parseMode: "html",
           });
           return;
         }
@@ -534,6 +533,7 @@ const speedtest = async (msg: MessageContext): Promise<void> => {
         if (!username || !host || isNaN(port)) {
           await msg.edit({
             text: `❌ <b>连接格式错误或端口号无效</b>`,
+            parseMode: "html",
           });
           return;
         }
@@ -545,16 +545,20 @@ const speedtest = async (msg: MessageContext): Promise<void> => {
           ).run(name, host, port, username, authMethod, storedCredential);
           await msg.edit({
             text: `✅ 服务器 <b>${htmlEscape(name)}</b> 添加成功！`,
+            parseMode: "html",
           });
-        } catch (err: unknown) {
+        } catch (err: any) {
           await msg.edit({
-            text: `❌ 添加失败: <code>${htmlEscape(getErrorMessage(err))}</code>`,
+            text: `❌ 添加失败: <code>${htmlEscape(err.message)}</code>`,
+            parseMode: "html",
           });
         }
       } else if (command === "list") {
+        // const servers: ServerConfig[] = db.prepare("SELECT * FROM servers ORDER BY id").all(); // Already fetched
         if (allServers.length === 0) {
           await msg.edit({
             text: "ℹ️ 未配置任何远程服务器。",
+            parseMode: "html",
           });
           return;
         }
@@ -563,19 +567,23 @@ const speedtest = async (msg: MessageContext): Promise<void> => {
           .join("\n");
         await msg.edit({
           text: `<b>已配置的服务器列表:</b>\n${serverList}`,
+          parseMode: "html",
         });
       } else if (command === "del") {
         const displayId = parseInt(args[1]);
         if (isNaN(displayId) || displayId < 1) {
           await msg.edit({
             text: "❌ 请提供有效的显示序号。",
+            parseMode: "html",
           });
           return;
         }
+        // const servers: ServerConfig[] = db.prepare("SELECT * FROM servers ORDER BY id").all(); // Already fetched
         const serverToDelete = allServers[displayId - 1];
         if (!serverToDelete) {
           await msg.edit({
             text: `❌ 未找到显示序号为 ${displayId} 的服务器。`,
+            parseMode: "html",
           });
           return;
         }
@@ -585,13 +593,15 @@ const speedtest = async (msg: MessageContext): Promise<void> => {
             info.changes > 0
               ? `✅ 服务器 <b>${htmlEscape(serverToDelete.name)}</b> (显示序号 ${displayId}) 已删除。`
               : `❌ 删除失败。`,
+          parseMode: "html",
         });
       } else if (command === "rename") { // --- New: Rename command
         const displayId = parseInt(args[1]);
         const newName = args.slice(2).join(" ");
         if (isNaN(displayId) || displayId < 1 || !newName) {
           await msg.edit({
-            text: html`❌ <b>参数错误</b>\n\n请使用: <code>sl rename &lt;显示序号&gt; &lt;新别名&gt;</code>`
+            text: "❌ <b>参数错误</b>\n\n请使用: <code>sl rename &lt;显示序号&gt; &lt;新别名&gt;</code>",
+            parseMode: "html",
           });
           return;
         }
@@ -599,6 +609,7 @@ const speedtest = async (msg: MessageContext): Promise<void> => {
         if (!serverToRename) {
           await msg.edit({
             text: `❌ 未找到显示序号为 ${displayId} 的服务器。`,
+            parseMode: "html",
           });
           return;
         }
@@ -606,55 +617,64 @@ const speedtest = async (msg: MessageContext): Promise<void> => {
           db.prepare("UPDATE servers SET name = ? WHERE id = ?").run(newName, serverToRename.id);
           await msg.edit({
             text: `✅ <b>重命名成功</b>\n\n原别名 <b>${htmlEscape(serverToRename.name)}</b> 已修改为 <b>${htmlEscape(newName)}</b>`,
+            parseMode: "html",
           });
-        } catch (err: unknown) {
+        } catch (err: any) {
           await msg.edit({
-            text: `❌ 重命名失败: <code>${htmlEscape(getErrorMessage(err))}</code>`,
+            text: `❌ 重命名失败: <code>${htmlEscape(err.message)}</code>`,
+            parseMode: "html",
           });
         }
       } else if (command === "backup") {
         if (!fs.existsSync(DB_PATH)) {
           await msg.edit({
             text: `❌ 数据库文件不存在，无法备份。`,
+            parseMode: "html",
           });
           return;
         }
-        await msg.edit({ text: `⚙️ 正在准备备份文件...` });
+        await msg.edit({ text: `⚙️ 正在准备备份文件...`, parseMode: "html" });
         const date = new Date().toISOString().split("T")[0];
         const backupFilename = `${PLUGIN_NAME}_backup_${date}.db`;
-        await msg.client.sendMedia("me", DB_PATH, {
+        await msg.client?.sendFile("me", {
+          file: DB_PATH,
           caption: `SpeedLink 插件服务器数据备份\n日期: ${date}`,
-          replyMarkup: undefined,
+          attributes: [new Api.DocumentAttributeFilename({ fileName: backupFilename })],
         });
         await msg.edit({
           text: `✅ 备份成功！\n\n文件已发送至您的<b>收藏夹 (Saved Messages)</b>。`,
+          parseMode: "html",
         });
       } else if (command === "restore") {
-        if (!msg.replyToMessage) {
+        if (!msg.isReply) {
           await msg.edit({
             text: `❌ <b>恢复失败</b>\n\n请回复一个备份文件来执行此命令。`,
+            parseMode: "html",
           });
           return;
         }
         if (args[1] !== "confirm") {
           await msg.edit({
             text: `⚠️ <b>请确认操作！</b>\n\n此操作将用备份文件覆盖当前的服务器列表，现有数据将丢失。\n\n请回复备份文件并使用 <code>sl restore confirm</code> 来确认。`,
+            parseMode: "html",
           });
           return;
         }
         const repliedMsg = await safeGetReplyMessage(msg);
-        if (repliedMsg?.media?.type !== 'document') {
+        if (!repliedMsg?.document) {
           await msg.edit({
             text: `❌ <b>恢复失败</b>\n\n您回复的消息不包含文件。`,
+            parseMode: "html",
           });
           return;
         }
 
         await msg.edit({
           text: `⚙️ 正在从备份文件恢复数据...`,
+          parseMode: "html",
         });
-        const buffer = repliedMsg!.media
-          ? await msg.client.downloadAsBuffer(repliedMsg!.media)
+        const buffer = repliedMsg.media
+          ? await msg.client?.downloadMedia(repliedMsg.media)
           : null;
         if (buffer) {
           if (fs.existsSync(DB_PATH)) {
@@ -663,10 +683,12 @@ const speedtest = async (msg: MessageContext): Promise<void> => {
           fs.writeFileSync(DB_PATH, buffer);
           await msg.edit({
             text: `✅ <b>恢复成功！</b>\n\n数据已从备份文件导入。请**重启TeleBox**以应用更改。`,
+            parseMode: "html",
           });
         } else {
           await msg.edit({
             text: `❌ <b>恢复失败</b>\n\n无法下载备份文件。`,
+            parseMode: "html",
           });
         }
       }
@@ -674,6 +696,7 @@ const speedtest = async (msg: MessageContext): Promise<void> => {
     }
 
     // --- Speed Test Execution Logic ---
+    // const allServers: ServerConfig[] = db.prepare("SELECT * FROM servers ORDER BY id").all(); // Already fetched
     let targetServers: (ServerConfig | null)[] = [];
 
     const isAllTest = command === "all" && args[1] !== "no";
@@ -698,17 +721,22 @@ const speedtest = async (msg: MessageContext): Promise<void> => {
       if (targetServers.length === 0) {
         await msg.edit({
           text: "❌ 未找到任何有效的服务器进行测速。",
+          parseMode: "html",
         });
         return;
       }
 
       await msg.delete();
 
-      // 注意：测速必须按顺序逐台执行（每台依赖独立的状态消息和清理），不能并行
       for (const server of targetServers) {
         if (!server) continue;
 
-        const statusMsg = await msg.client.sendText(msg.chat.id, `⚡️ [${targetServers.indexOf(server) + 1}/${targetServers.length}] 正在为 <b>${htmlEscape(server.name)}</b> 进行远程测速...`);
+        const statusMsg = await msg.client?.sendMessage(msg.peerId, {
+          message: `⚡️ [${targetServers.indexOf(server) + 1}/${
+            targetServers.length
+          }] 正在为 <b>${htmlEscape(server.name)}</b> 进行远程测速...`,
+          parseMode: "html",
+        });
 
         try {
           const speedtestArgs = ["--accept-license", "--accept-gdpr", "-f", "json"];
@@ -763,14 +791,6 @@ const speedtest = async (msg: MessageContext): Promise<void> => {
           const beijingTime = new Date(resultDate.getTime() + 8 * 60 * 60 * 1000);
           const beijingTimeString = beijingTime.toISOString().replace('T', ' ').substring(0, 19);
 
-          // 并行计算所有单位转换（独立纯函数调用）
-          const [downRate, upRate, downData, upData] = await Promise.all([
-            unitConvert(result.download.bandwidth),
-            unitConvert(result.upload.bandwidth),
-            unitConvert(result.download.bytes, true),
-            unitConvert(result.upload.bytes, true),
-          ]);
-
           const caption = [
             `<b>${htmlEscape(server.name)}</b> ${ccFlag}`,
             `<code>Name</code>  <code>${htmlEscape(result.isp)} ${asInfo}</code>`,
@@ -783,8 +803,13 @@ const speedtest = async (msg: MessageContext): Promise<void> => {
             `<code>Ping</code>  <code>⇔${result.ping.latency.toFixed(3)}ms ±${result.ping.jitter.toFixed(
               3
             )}ms</code>`,
-            `<code>Rate</code>  <code>↓${downRate} ↑${upRate}</code>`,
-            `<code>Data</code>  <code>↓${downData} ↑${upData}</code>`,
+            `<code>Rate</code>  <code>↓${await unitConvert(
+              result.download.bandwidth
+            )} ↑${await unitConvert(result.upload.bandwidth)}</code>`,
+            `<code>Data</code>  <code>↓${await unitConvert(
+              result.download.bytes,
+              true
+            )} ↑${await unitConvert(result.upload.bytes, true)}</code>`,
             `<code>Time</code>  <code>${beijingTimeString} (UTC+8)</code>`,
             `<code>Used</code>  <code>${duration}s</code>`,
             `<code>Link</code>  ${htmlEscape(result.result.url)}`,
@@ -792,27 +817,31 @@ const speedtest = async (msg: MessageContext): Promise<void> => {
 
           const imagePath = await saveSpeedtestImage(result.result.url);
           if (imagePath && fs.existsSync(imagePath)) {
-            await msg.client.sendMedia(msg.chat.id, imagePath, {
-              caption,
+            await msg.client?.sendFile(msg.peerId, {
+              file: imagePath,
+              caption: caption,
+              parseMode: "html",
             });
             fs.unlinkSync(imagePath);
           } else {
             if (statusMsg) {
-              await msg.client.editMessage({ message: statusMsg, text: caption });
+              await statusMsg.edit({ text: caption, parseMode: "html" });
             }
           }
           if (statusMsg) {
-            await msg.client.deleteMessages([statusMsg]);
+            await statusMsg.delete();
           }
-        } catch (error: unknown) {
+        } catch (error: any) {
           // Sanitize error message before displaying
-          let errorMsg = String((error as { stderr?: string }).stderr || getErrorMessage(error) || error);
+          let errorMsg = String(error.stderr || error.message || error);
           errorMsg = sanitizeErrorMessage(errorMsg, server);
           
           if (statusMsg) {
-            await msg.client.editMessage({
-              message: statusMsg,
-              text: `❌ <b>${htmlEscape(server.name)}</b> 测速失败\n\n<code>${htmlEscape(errorMsg)}</code>`,
+            await statusMsg.edit({
+              text: `❌ <b>${htmlEscape(server.name)}</b> 测速失败\n\n<code>${htmlEscape(
+                errorMsg
+              )}</code>`,
+              parseMode: "html",
             });
           }
         }
@@ -835,6 +864,7 @@ const speedtest = async (msg: MessageContext): Promise<void> => {
       if (!serverConfig) {
         await msg.edit({
           text: `❌ 未找到显示序号为 ${displayId} 的服务器。`,
+          parseMode: "html",
         });
         return;
       }
@@ -844,21 +874,25 @@ const speedtest = async (msg: MessageContext): Promise<void> => {
     } else {
       await msg.edit({
         text: `<b>指令无效</b>\n\n${HELP_TEXT}`,
+        parseMode: "html",
       });
       return;
     }
 
-    let statusMsg: import("@mtcute/node").Message | undefined;
+    let statusMsg: Api.Message | undefined;
     try {
-      statusMsg = await msg.client.sendText(msg.chat.id, initialText);
+      statusMsg = await msg.client?.sendMessage(msg.peerId, {
+        message: initialText,
+        parseMode: "html",
+      });
       await msg.delete();
-    } catch (e: unknown) {
-      logger.error("Failed to send/delete, falling back to editing original message:", e);
+    } catch (e) {
+      console.error("Failed to send/delete, falling back to editing original message:", e);
       try {
-        await msg.edit({ text: initialText });
+        await msg.edit({ text: initialText, parseMode: "html" });
         statusMsg = msg;
-      } catch (editError: unknown) {
-        logger.error("Critical: Fallback edit also failed.", editError);
+      } catch (editError) {
+        console.error("Critical: Fallback edit also failed.", editError);
       }
     }
 
@@ -898,8 +932,8 @@ const speedtest = async (msg: MessageContext): Promise<void> => {
       } else {
         if (!fs.existsSync(SPEEDTEST_PATH)) {
           const downloadingMsg = "本地 Speedtest CLI 不存在，正在为您下载...";
-          if (statusMsg) await msg.client.editMessage({ message: statusMsg, text: downloadingMsg });
-          else await msg.edit({ text: downloadingMsg });
+          if (statusMsg) await statusMsg.edit({ text: downloadingMsg, parseMode: "html" });
+          else await msg.edit({ text: downloadingMsg, parseMode: "html" });
           await downloadCli();
         }
         // Local speedtest — use execFile with argument array (no shell injection)
@@ -952,30 +986,36 @@ const speedtest = async (msg: MessageContext): Promise<void> => {
 
       const imagePath = await saveSpeedtestImage(result.result.url);
       if (imagePath && fs.existsSync(imagePath)) {
-        await msg.client.sendMedia(msg.chat.id, imagePath, {
-          caption,
+        await msg.client?.sendFile(msg.peerId, {
+          file: imagePath,
+          caption: caption,
+          parseMode: "html",
         });
         fs.unlinkSync(imagePath);
       } else {
-        await msg.client.sendText(msg.chat.id, caption);
+        await msg.client?.sendMessage(msg.peerId, {
+          message: caption,
+          parseMode: "html",
+        });
       }
-      if (statusMsg) await msg.client.deleteMessages([statusMsg]);
-    } catch (error: unknown) {
+      if (statusMsg) await statusMsg.delete();
+    } catch (error: any) {
       // Sanitize error message before displaying
-      let errorMsg = String((error as { stderr?: string }).stderr || getErrorMessage(error) || error);
+      let errorMsg = String(error.stderr || error.message || error);
       errorMsg = sanitizeErrorMessage(errorMsg, serverConfig || undefined);
       
       const errorText = `❌ <b>速度测试失败</b>\n\n<code>${htmlEscape(errorMsg)}</code>`;
       if (statusMsg) {
-        await msg.client.editMessage({ message: statusMsg, text: errorText });
+        await statusMsg.edit({ text: errorText, parseMode: "html" });
       }
     }
-  } catch (error: unknown) {
-    logger.error(`SpeedLink Plugin (${PLUGIN_NAME}) critical error:`, error);
+  } catch (error: any) {
+    console.error(`SpeedLink Plugin (${PLUGIN_NAME}) critical error:`, error);
     // Sanitize any critical errors as well
     const sanitizedError = sanitizeErrorMessage(String(error));
     await msg.edit({
       text: `❌ <b>插件发生严重错误</b>\n\n<code>${htmlEscape(sanitizedError)}</code>`,
+      parseMode: "html",
     });
   }
 };
@@ -984,77 +1024,10 @@ const speedtest = async (msg: MessageContext): Promise<void> => {
 class SpeedlinkPlugin extends Plugin {
 
   description: string = `⚡️ 网络速度测试工具 (多服务器)\n\n${HELP_TEXT}`;
-  cmdHandlers: Record<string, (msg: MessageContext) => Promise<void>> = {
+  cmdHandlers: Record<string, (msg: Api.Message) => Promise<void>> = {
     speedlink: speedtest,
     sl: speedtest,
   };
 }
-
-
-  // Panel Settings Adapter
-  panelAdapter: PanelSettingsAdapter = {
-    id: "speedlink",
-    title: "SpeedLink 服务器",
-    description: "SpeedLink 服务器连接配置",
-    category: "插件配置",
-    icon: "🔗",
-    getSchema: (): PanelSettingField[] => [
-      {
-            "key": "name",
-            "label": "服务器名称",
-            "type": "string"
-      },
-      {
-            "key": "host",
-            "label": "主机地址",
-            "type": "string"
-      },
-      {
-            "key": "port",
-            "label": "端口",
-            "type": "number",
-            "min": 1,
-            "max": 65535,
-            "default": 22
-      },
-      {
-            "key": "username",
-            "label": "用户名",
-            "type": "string"
-      },
-      {
-            "key": "auth_method",
-            "label": "认证方式",
-            "type": "select",
-            "options": [
-                  {
-                        "value": "password",
-                        "label": "密码"
-                  },
-                  {
-                        "value": "key",
-                        "label": "密钥"
-                  }
-            ]
-      },
-      {
-            "key": "credentials",
-            "label": "凭据",
-            "type": "password",
-            "secret": true
-      }
-],
-    getValues: async (): Promise<Record<string, unknown>> => {
-      const db = await JSONFilePreset<ServerConfig>(path.join(ASSETS_DIR, "secret.key");
-const CONFIG_PATH = path.join(ASSETS_DIR, "config.json"), {} as any);
-      return db.data as Record<string, unknown>;
-    },
-    setValues: async (patch: Record<string, unknown>): Promise<void> => {
-      const db = await JSONFilePreset<ServerConfig>(path.join(ASSETS_DIR, "secret.key");
-const CONFIG_PATH = path.join(ASSETS_DIR, "config.json"), {} as any);
-      Object.assign(db.data, patch);
-      await db.write();
-    },
-  };
 
 export default new SpeedlinkPlugin();
