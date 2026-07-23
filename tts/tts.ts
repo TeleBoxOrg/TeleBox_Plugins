@@ -1,7 +1,10 @@
-import { Plugin, type PanelSettingsAdapter, type PanelSettingField, type PanelFieldType } from "@utils/pluginBase";
-import type { MessageContext } from "@mtcute/dispatcher";
-import { thtml as html } from "@mtcute/html-parser";
+/**
+ * Azure TTS Plugin - 微软语音合成
+ * 使用 Azure Speech Service 将文本转换为语音
+ */
+import { Plugin } from "@utils/pluginBase";
 import { getPrefixes } from "@utils/pluginManager";
+import { Api } from "teleproto";
 import axios from "axios";
 import { JSONFilePreset } from "lowdb/node";
 import * as path from "path";
@@ -9,25 +12,25 @@ import { createDirectoryInAssets, createDirectoryInTemp } from "@utils/pathHelpe
 import { getGlobalClient } from "@utils/runtimeManager";
 import * as fs from "fs";
 import { safeGetMessages } from "@utils/safeGetMessages";
-import { logger } from "@utils/logger";
-import { getErrorMessage } from "@utils/errorHelpers";
+
+import { htmlEscape } from "@utils/htmlEscape";
 
 const prefixes = getPrefixes();
 const mainPrefix = prefixes[0];
 
 /** 私聊删除命令：为双方删除；群/频道：仅自己删除 */
-async function deleteCommandMessage(msg: MessageContext) {
+async function deleteCommandMessage(msg: Api.Message) {
     try {
-        const isPrivate = msg.chat.type === "user";
+        const isPrivate =
+            (msg as any).isPrivate === true ||
+            (msg.peerId instanceof (Api as any).PeerUser);
 
         if (isPrivate) {
-            await msg.safeDelete({ revoke: true }); // 双向删除
+            await (msg as any).delete({ revoke: true }); // 双向删除
         } else {
             await msg.delete(); // 普通删除
         }
-    } catch (e: unknown) {
-        logger.debug("tts: message delete failed, may lack permission or already deleted", e);
-    }
+    } catch { }
 }
 
 /** 清理文本（emoji/不在白名单的符号；合并连续标点） */
@@ -49,6 +52,10 @@ function cleanTextForTTS(text: string): string {
     );
     cleanedText = cleanedText.replace(broadSymbolRegex, "");
 
+    // 仅保留中文、英文、数字和常见标点
+    // const whitelistRegex = /[^\u4e00-\u9fa5a-zA-Z0-9\s，。？！、,?!.]/g;
+    // cleanedText = cleanedText.replace(whitelistRegex, "");
+
     // 合并连续标点
     cleanedText = cleanedText.replace(/([，。？！、,?!.])\1+/g, "$1");
     // 移除 markdown 链接格式 [text](url) -> text
@@ -65,15 +72,6 @@ function escapeSsmlText(text: string): string {
         .replace(/>/g, "&gt;")
         .replace(/"/g, "&quot;")
         .replace(/'/g, "&apos;");
-}
-
-function htmlEscape(text: unknown): string {
-    return String(text ?? "")
-        .replace(/&/g, "&amp;")
-        .replace(/</g, "&lt;")
-        .replace(/>/g, "&gt;")
-        .replace(/"/g, "&quot;")
-        .replace(/'/g, "&#x27;");
 }
 
 function codeTag(text: unknown): string {
@@ -134,23 +132,23 @@ class TTSPlugin extends Plugin {
     description = () => getHelpText();
 
     cmdHandlers = {
-        tts: async (msg: MessageContext) => {
-            const text = (msg.text || "").trim();
+        tts: async (msg: Api.Message) => {
+            const text = (msg.message || "").trim();
             const parts = text.split(/\s+/).slice(1);
             const subCmd = parts[0]?.toLowerCase() || "";
 
             const db = await getDB();
 
             // 帮助
-            if (!subCmd && !msg.replyToMessage) {
-                await msg.edit({ text: html(getHelpText()) });
+            if (!subCmd && !msg.replyTo) {
+                await msg.edit({ text: getHelpText(), parseMode: "html" });
                 return;
             }
 
             // 配置
             if (subCmd === "config") {
                 if (parts.length < 3) {
-                    await msg.edit({ text: html`❌ 用法: <code>${mainPrefix}tts config &lt;key&gt; &lt;region&gt;</code>` });
+                    await msg.edit({ text: `❌ 用法: <code>${mainPrefix}tts config &lt;key&gt; &lt;region&gt;</code>`, parseMode: "html" });
                     return;
                 }
                 const [, key, region] = parts;
@@ -160,20 +158,20 @@ class TTSPlugin extends Plugin {
 
                 // 遮挡 Key 显示
                 const maskedKey = key.length > 8 ? `${key.substring(0, 4)}...${key.substring(key.length - 4)}` : "***";
-                await msg.edit({ text: html`✅ 配置已更新\nKey: ${codeTag(maskedKey)}\nRegion: ${codeTag(region)}` });
+                await msg.edit({ text: `✅ 配置已更新\nKey: ${codeTag(maskedKey)}\nRegion: ${codeTag(region)}`, parseMode: "html" });
                 return;
             }
 
             // 设置语音
             if (subCmd === "voice") {
                 if (parts.length < 2) {
-                    await msg.edit({ text: html`❌ 用法: <code>${mainPrefix}tts voice &lt;VoiceName&gt;</code>` });
+                    await msg.edit({ text: `❌ 用法: <code>${mainPrefix}tts voice &lt;VoiceName&gt;</code>`, parseMode: "html" });
                     return;
                 }
                 const voice = parts[1];
                 db.data.voice = voice;
                 await db.write();
-                await msg.edit({ text: html`✅ 语音已设置为: ${codeTag(voice)}` });
+                await msg.edit({ text: `✅ 语音已设置为: ${codeTag(voice)}`, parseMode: "html" });
                 return;
             }
 
@@ -182,7 +180,8 @@ class TTSPlugin extends Plugin {
                 const { key, region, voice, style, rate } = db.data;
                 const maskedKey = key ? (key.length > 8 ? `${key.substring(0, 4)}...${key.substring(key.length - 4)}` : "***") : "未设置";
                 await msg.edit({
-                    text: html`📋 <b>当前配置</b>\n\nKey: ${codeTag(maskedKey)}\nRegion: ${codeTag(region)}\nVoice: ${codeTag(voice)}\nStyle: ${codeTag(style || "默认")}\nRate: ${codeTag(rate || "1.0")}`,
+                    text: `📋 <b>当前配置</b>\n\nKey: ${codeTag(maskedKey)}\nRegion: ${codeTag(region)}\nVoice: ${codeTag(voice)}\nStyle: ${codeTag(style || "默认")}\nRate: ${codeTag(rate || "1.0")}`,
+                    parseMode: "html"
                 });
                 return;
             }
@@ -191,12 +190,12 @@ class TTSPlugin extends Plugin {
             if (subCmd === "style") {
                 const style = parts[1];
                 if (!style) {
-                    await msg.edit({ text: html`❌ 用法: <code>${mainPrefix}tts style &lt;style&gt;</code> (使用 clear 清除)` });
+                    await msg.edit({ text: `❌ 用法: <code>${mainPrefix}tts style &lt;style&gt;</code> (使用 clear 清除)`, parseMode: "html" });
                     return;
                 }
                 db.data.style = style === "clear" ? "" : style;
                 await db.write();
-                await msg.edit({ text: html`✅ 风格已设置: ${codeTag(db.data.style || "默认")}` });
+                await msg.edit({ text: `✅ 风格已设置: ${codeTag(db.data.style || "默认")}`, parseMode: "html" });
                 return;
             }
 
@@ -205,23 +204,23 @@ class TTSPlugin extends Plugin {
                 const rateStr = parts[1];
                 const rate = parseFloat(rateStr);
                 if (isNaN(rate) || rate < 0.5 || rate > 2.0) {
-                    await msg.edit({ text: html`❌ 语速必须在 0.5 到 2.0 之间` });
+                    await msg.edit({ text: `❌ 语速必须在 0.5 到 2.0 之间`, parseMode: "html" });
                     return;
                 }
                 db.data.rate = rateStr;
                 await db.write();
-                await msg.edit({ text: html`✅ 语速已设置: ${codeTag(rateStr)}` });
+                await msg.edit({ text: `✅ 语速已设置: ${codeTag(rateStr)}`, parseMode: "html" });
                 return;
             }
 
             // 获取可用音色列表
             if (subCmd === "voices") {
                 if (!db.data.key || !db.data.region) {
-                    await msg.edit({ text: html`❌ 请先配置 Azure API Key 和 Region` });
+                    await msg.edit({ text: `❌ 请先配置 Azure API Key 和 Region`, parseMode: "html" });
                     return;
                 }
 
-                await msg.edit({ text: html`🔄 正在获取音色列表...` });
+                await msg.edit({ text: "🔄 正在获取音色列表...", parseMode: "html" });
 
                 const filter = parts[1] || "zh-CN"; // 默认只显示中文
 
@@ -240,16 +239,16 @@ class TTSPlugin extends Plugin {
 
                     // 过滤
                     if (filter.toLowerCase() !== "all") {
-                        voices = voices.filter((v: { Locale?: string; ShortName?: string }) => (v.Locale ?? "").toLowerCase().includes(filter.toLowerCase()) || (v.ShortName ?? "").toLowerCase().includes(filter.toLowerCase()));
+                        voices = voices.filter((v: any) => v.Locale.toLowerCase().includes(filter.toLowerCase()) || v.ShortName.toLowerCase().includes(filter.toLowerCase()));
                     }
 
                     if (voices.length === 0) {
-                        await msg.edit({ text: html`❌ 未找到匹配 "${codeTag(filter)}" 的音色` });
+                        await msg.edit({ text: `❌ 未找到匹配 "${codeTag(filter)}" 的音色`, parseMode: "html" });
                         return;
                     }
 
                     // 格式化输出
-                    const lines = voices.map((v: { ShortName?: string; LocalName?: string; Gender?: string }) => {
+                    const lines = voices.map((v: any) => {
                         const gender = v.Gender === "Female" ? "👩" : (v.Gender === "Male" ? "👨" : "👤");
                         return `${gender} ${codeTag(v.ShortName)} (${htmlEscape(v.LocalName)})`;
                     });
@@ -261,23 +260,23 @@ class TTSPlugin extends Plugin {
                         const buffer = Buffer.from(lines.join("\n"));
                         const client = await getGlobalClient();
                         if (!client) {
-                            await msg.edit({ text: html`❌ 客户端不可用` });
+                            await msg.edit({ text: "❌ 客户端不可用", parseMode: "html" });
                             return;
                         }
-                        await client.sendMedia(msg.chat.id, {
-                            type: "document",
+                        await client.sendFile(msg.peerId, {
                             file: buffer,
-                            fileName: `voices_${filter}.txt`,
-                            caption: html`📋 <b>可用音色列表</b> (${htmlEscape(filter)}) - 共 ${voices.length} 个`,
+                            attributes: [new Api.DocumentAttributeFilename({ fileName: `voices_${filter}.txt` })],
+                            caption: `📋 <b>可用音色列表</b> (${htmlEscape(filter)}) - 共 ${voices.length} 个`,
+                            parseMode: "html"
                         });
                         await deleteCommandMessage(msg);
                     } else {
-                        await msg.edit({ text: html(resultText) });
+                        await msg.edit({ text: resultText, parseMode: "html" });
                     }
 
-                } catch (error: unknown) {
-                    logger.error("[TTS Plugin] Voices Error:", error);
-                    await msg.edit({ text: html`❌ 获取列表失败: ${htmlEscape(getErrorMessage(error))}` });
+                } catch (error: any) {
+                    console.error("[TTS Plugin] Voices Error:", error);
+                    await msg.edit({ text: `❌ 获取列表失败: ${htmlEscape(error.message)}`, parseMode: "html" });
                 }
                 return;
             }
@@ -290,14 +289,14 @@ class TTSPlugin extends Plugin {
             }
 
             // 如果只有命令没有文本，且引用了消息，使用引用消息的文本
-            if (!textToSynthesize && msg.replyToMessage) {
+            if (!textToSynthesize && msg.replyTo) {
                 const client = await getGlobalClient();
                 if (client) {
-                    const replyToId = msg.replyToMessage.id;
+                    const replyToId = (msg.replyTo as any)?.replyToMsgId;
                     if (replyToId) {
-                        const [repliedMsg] = await safeGetMessages(client, msg.chat.id, { ids: [replyToId] });
-                        if (repliedMsg && repliedMsg.text) {
-                            textToSynthesize = repliedMsg.text;
+                        const [repliedMsg] = await safeGetMessages(client, msg.peerId, { ids: [replyToId] });
+                        if (repliedMsg && repliedMsg.message) {
+                            textToSynthesize = repliedMsg.message;
                         }
                     }
                 }
@@ -305,16 +304,16 @@ class TTSPlugin extends Plugin {
 
             // 如果既没有文本参数也没有引用文本，显示帮助
             if (!textToSynthesize) {
-                await msg.edit({ text: html(getHelpText()) });
+                await msg.edit({ text: getHelpText(), parseMode: "html" });
                 return;
             }
 
             if (!db.data.key || !db.data.region) {
-                await msg.edit({ text: html`❌ 请先配置 Azure API Key 和 Region\n使用: <code>${mainPrefix}tts config &lt;key&gt; &lt;region&gt;</code>` });
+                await msg.edit({ text: `❌ 请先配置 Azure API Key 和 Region\n使用: <code>${mainPrefix}tts config &lt;key&gt; &lt;region&gt;</code>`, parseMode: "html" });
                 return;
             }
 
-            await msg.edit({ text: html`🔄 正在合成语音...` });
+            await msg.edit({ text: "🔄 正在合成语音...", parseMode: "html" });
 
             const { key, region, voice, format, style, rate } = db.data;
 
@@ -322,7 +321,7 @@ class TTSPlugin extends Plugin {
                 // 清理文本
                 let cleanText = cleanTextForTTS(textToSynthesize);
                 if (!cleanText) {
-                    await msg.edit({ text: html`❌ 文本为空或仅包含特殊字符` });
+                    await msg.edit({ text: "❌ 文本为空或仅包含特殊字符", parseMode: "html" });
                     return;
                 }
 
@@ -361,7 +360,7 @@ class TTSPlugin extends Plugin {
                 });
 
                 if (response.status === 200 && response.data) {
-                    await msg.edit({ text: html`⬆️ 正在上传...` });
+                    await msg.edit({ text: "⬆️ 正在上传..." });
 
                     const client = await getGlobalClient();
                     if (!client) throw new Error("Client not available");
@@ -375,10 +374,18 @@ class TTSPlugin extends Plugin {
 
                     try {
                         // 发送语音
-                        await client.sendMedia(msg.chat.id, {
-                            type: "voice",
+                        await client.sendFile(msg.peerId, {
                             file: tempFilePath,
-                            duration: 0,
+                            voiceNote: true,
+                            forceDocument: false,
+                            attributes: [
+                                new Api.DocumentAttributeAudio({
+                                    duration: 0,
+                                    voice: true,
+                                    title: "TTS Audio",
+                                    performer: "Azure TTS"
+                                })
+                            ]
                         });
 
                         await deleteCommandMessage(msg); // 尝试删除命令消息
@@ -391,117 +398,13 @@ class TTSPlugin extends Plugin {
                     throw new Error(`API returned status ${response.status}`);
                 }
 
-            } catch (error: unknown) {
-                logger.error("[TTS Plugin] Error:", error);
-                const errMsg = error !== null && error !== undefined && typeof error === "object" && "response" in error
-                    ? `API Error: ${(error as { response: { status: number; statusText: string } }).response.status} ${(error as { response: { status: number; statusText: string } }).response.statusText}`
-                    : getErrorMessage(error);
-                await msg.edit({ text: html`❌ 合成失败: ${htmlEscape(errMsg)}` });
+            } catch (error: any) {
+                console.error("[TTS Plugin] Error:", error);
+                const errMsg = error.response ? `API Error: ${error.response.status} ${error.response.statusText}` : (error.message || "Unknown error");
+                await msg.edit({ text: `❌ 合成失败: ${htmlEscape(errMsg)}`, parseMode: "html" });
             }
         }
     };
-  
-  // Panel Settings Adapter
-  panelAdapter: PanelSettingsAdapter = {
-    id: "tts",
-    title: "TTS 语音合成",
-    description: "微软 Azure TTS 配置：Key、Region、语音、风格、语速",
-    category: "插件配置",
-    icon: "🗣️",
-    getSchema: (): PanelSettingField[] => [
-      {
-        key: "key",
-        label: "Azure Speech Key",
-        type: "password",
-        secret: true,
-        description: "从 Azure Portal 获取",
-        required: true,
-      },
-      {
-        key: "region",
-        label: "Region 区域",
-        type: "select",
-        options: [
-          { value: "eastus", label: "East US (东部美国)" },
-          { value: "eastasia", label: "East Asia (东亚)" },
-          { value: "southeastasia", label: "Southeast Asia (东南亚)" },
-          { value: "northeurope", label: "North Europe (北欧)" },
-          { value: "westus2", label: "West US 2 (美国西部 2)" },
-          { value: "centralus", label: "Central US (美国中部)" },
-        ],
-        default: "eastus",
-        description: "Azure 语音服务区域",
-      },
-      {
-        key: "voice",
-        label: "语音角色",
-        type: "string",
-        placeholder: "zh-CN-XiaoxiaoNeural",
-        default: "zh-CN-XiaoxiaoNeural",
-        description: "如 zh-CN-XiaoxiaoNeural, zh-CN-YunyangNeural 等",
-      },
-      {
-        key: "style",
-        label: "语音风格",
-        type: "string",
-        placeholder: "cheerful / sad / chat / clear 等",
-        description: "需语音角色支持，如 Xiaoxiao 支持 cheerful, sad, angry, fearful 等",
-      },
-      {
-        key: "rate",
-        label: "语速",
-        type: "string",
-        placeholder: "1.0 (0.5~2.0)",
-        default: "1.0",
-        description: "0.5(慢) ~ 2.0(快)，默认 1.0",
-      },
-      {
-        key: "format",
-        label: "输出格式",
-        type: "select",
-        options: [
-          { value: "audio-48khz-192kbitrate-mono-mp3", label: "MP3 48kHz 192kbps (默认)" },
-          { value: "audio-24khz-160kbitrate-mono-mp3", label: "MP3 24kHz 160kbps" },
-          { value: "audio-16khz-128kbitrate-mono-mp3", label: "MP3 16kHz 128kbps" },
-          { value: "riff-48khz-16bit-mono-pcm", label: "WAV 48kHz 16bit PCM" },
-          { value: "riff-24khz-16bit-mono-pcm", label: "WAV 24kHz 16bit PCM" },
-          { value: "riff-16khz-16bit-mono-pcm", label: "WAV 16kHz 16bit PCM" },
-        ],
-        default: "audio-48khz-192kbitrate-mono-mp3",
-      },
-    ],
-    getValues: async () => {
-      const db = await getDB();
-      return {
-        key: db.data.key ? maskSecret(db.data.key) : "",
-        region: db.data.region || "eastus",
-        voice: db.data.voice || "zh-CN-XiaoxiaoNeural",
-        style: db.data.style || "",
-        rate: db.data.rate || "1.0",
-        format: db.data.format || "audio-48khz-192kbitrate-mono-mp3",
-      };
-    },
-    setValues: async (patch: Record<string, unknown>) => {
-      const db = await getDB();
-      const fields: (keyof TTSConfig)[] = ["key", "region", "voice", "style", "rate", "format"];
-      for (const f of fields) {
-        if (patch[f] !== undefined) {
-          if (f === "key" && String(patch[f]).includes("••••••••")) {
-            // keep existing key
-          } else {
-            (db.data as any)[f] = patch[f];
-          }
-        }
-      }
-      await db.write();
-    },
-  };
-}
-
-function maskSecret(val: string, visibleChars = 4): string {
-  if (!val) return "(未配置)";
-  if (val.length <= visibleChars * 2) return "••••••••";
-  return `${val.slice(0, visibleChars)}••••••${val.slice(-visibleChars)}`;
 }
 
 export default new TTSPlugin();
