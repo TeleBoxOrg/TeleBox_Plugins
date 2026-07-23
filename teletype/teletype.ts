@@ -1,22 +1,29 @@
-import { Plugin } from "@utils/pluginBase";
-import { Api } from "teleproto";
+import { Plugin, type PanelSettingsAdapter, type PanelSettingField, type PanelFieldType } from "@utils/pluginBase";
 import { getGlobalClient } from "@utils/runtimeManager";
 import { getPrefixes } from "@utils/pluginManager";
+import type { MessageContext } from "@mtcute/dispatcher";
+import { thtml as html } from "@mtcute/html-parser";
 import { JSONFilePreset } from "lowdb/node";
+import type { Low } from "lowdb";
 import { createDirectoryInAssets } from "@utils/pathHelpers";
 import * as path from "path";
 
 import { safeGetMe } from "@utils/authGuards";
+import { logger } from "@utils/logger";
+import { getErrorMessage } from "@utils/errorHelpers";
 import { htmlEscape } from "@utils/htmlEscape";
+
+type TeletypeDbData = { autoMode: boolean; enabledUsers: string[] };
 
 const prefixes = getPrefixes();
 const mainPrefix = prefixes[0];
+
 
 class TeletypePlugin extends Plugin {
 
   private readonly PLUGIN_NAME = "teletype";
   private readonly PLUGIN_VERSION = "1.1.0";
-  private db: any = null;
+  private db!: Awaited<ReturnType<typeof JSONFilePreset<{ autoMode: boolean; enabledUsers: string[] }>>>;
   
   private readonly HELP_TEXT = `⌨️ <b>打字机效果插件</b>
 
@@ -47,19 +54,19 @@ class TeletypePlugin extends Plugin {
     try {
       const dbPath = path.join(createDirectoryInAssets(this.PLUGIN_NAME), "config.json");
       this.db = await JSONFilePreset(dbPath, {
-        autoMode: false,
+        autoMode: false as boolean,
         enabledUsers: [] as string[]
       });
-    } catch (error) {
-      console.error(`[${this.PLUGIN_NAME}] 数据库初始化失败:`, error);
+    } catch (error: unknown) {
+      logger.error(`[${this.PLUGIN_NAME}] 数据库初始化失败:`, error);
       this.db = {
         data: { autoMode: false, enabledUsers: [] },
         write: async () => {}
-      };
+      } as unknown as Awaited<ReturnType<typeof JSONFilePreset<TeletypeDbData>>>;
     }
   }
   
-  private async handleTeletype(msg: Api.Message): Promise<void> {
+  private async handleTeletype(msg: MessageContext): Promise<void> {
     const client = await getGlobalClient();
     if (!client) return;
     
@@ -89,12 +96,12 @@ class TeletypePlugin extends Plugin {
           }
       }
       
-    } catch (error: any) {
+    } catch (error: unknown) {
       await this.handleError(msg, error);
     }
   }
   
-  private parseArguments(msg: Api.Message): { subCommand?: string, args: string[], text?: string } {
+  private parseArguments(msg: MessageContext): { subCommand?: string, args: string[], text?: string } {
     const text = msg.text || "";
     const parts = text.trim().split(/\s+/);
     
@@ -110,19 +117,18 @@ class TeletypePlugin extends Plugin {
     return { args: remainingParts, text: parts.slice(1).join(' ') };
   }
   
-  private async showUsage(msg: Api.Message): Promise<void> {
+  private async showUsage(msg: MessageContext): Promise<void> {
     await msg.edit({
-      text: `❌ <b>参数错误</b>\n\n${this.HELP_TEXT}`,
-      parseMode: "html"
+      text: html(`❌ <b>参数错误</b>\n\n${this.HELP_TEXT}`)
     });
   }
   
-  private async enableAutoMode(msg: Api.Message): Promise<void> {
+  private async enableAutoMode(msg: MessageContext): Promise<void> {
     if (!this.db) await this.initDatabase();
     
-    const userId = msg.senderId?.toString();
+    const userId = msg.sender?.id.toString();
     if (!userId) {
-      await msg.edit({ text: "❌ <b>无法获取用户ID</b>", parseMode: "html" });
+      await msg.edit({ text: html("❌ <b>无法获取用户ID</b>") });
       return;
     }
     
@@ -138,15 +144,14 @@ class TeletypePlugin extends Plugin {
     await this.db.write();
     
     await msg.edit({
-      text: "✅ <b>自动打字机模式已开启</b>",
-      parseMode: "html"
+      text: html("✅ <b>自动打字机模式已开启</b>")
     });
   }
   
-  private async disableAutoMode(msg: Api.Message): Promise<void> {
+  private async disableAutoMode(msg: MessageContext): Promise<void> {
     if (!this.db) await this.initDatabase();
     
-    const userId = msg.senderId?.toString();
+    const userId = msg.sender?.id.toString();
     if (userId && this.db.data.enabledUsers) {
       this.db.data.enabledUsers = this.db.data.enabledUsers.filter((id: string) => id !== userId);
     }
@@ -155,30 +160,28 @@ class TeletypePlugin extends Plugin {
     await this.db.write();
     
     await msg.edit({
-      text: "❌ <b>自动打字机模式已关闭</b>",
-      parseMode: "html"
+      text: html("❌ <b>自动打字机模式已关闭</b>")
     });
   }
   
-  private async showStatus(msg: Api.Message): Promise<void> {
+  private async showStatus(msg: MessageContext): Promise<void> {
     if (!this.db) await this.initDatabase();
     
-    const userId = msg.senderId?.toString();
+    const userId = msg.sender?.id.toString();
     const isEnabled = userId && this.db.data.enabledUsers ? 
       this.db.data.enabledUsers.includes(userId) : false;
     const status = isEnabled ? "🟢 开启" : "🔴 关闭";
     
     await msg.edit({
-      text: `📊 <b>状态</b>\n\n自动模式: ${status}`,
-      parseMode: "html"
+      text: html(`📊 <b>状态</b>\n\n自动模式: ${status}`)
     });
   }
   
-  private async handleAutoTeletype(msg: Api.Message): Promise<void> {
+  private async handleAutoTeletype(msg: MessageContext): Promise<void> {
     if (!this.db) await this.initDatabase();
     if (!this.db?.data?.autoMode) return;
     
-    const userId = msg.senderId?.toString();
+    const userId = msg.sender?.id.toString();
     if (!userId || !this.db.data.enabledUsers?.includes(userId)) return;
     
     const text = msg.text || "";
@@ -192,12 +195,12 @@ class TeletypePlugin extends Plugin {
     
     const self = await safeGetMe(client);
   if (!self) return;
-    if (!msg.senderId?.eq(self.id)) return;
+    if (msg.sender?.id !== self.id) return;
     
     try {
       await this.executeTeletype(msg, text);
-    } catch (error: any) {
-      console.error(`[${this.PLUGIN_NAME}] Auto teletype error:`, error);
+    } catch (error: unknown) {
+      logger.error(`[${this.PLUGIN_NAME}] Auto teletype error:`, error);
     }
   }
   
@@ -205,45 +208,37 @@ class TeletypePlugin extends Plugin {
     return [".", "。", "!"];
   }
   
-  private async executeTeletype(msg: Api.Message, text: string): Promise<void> {
+  private async executeTeletype(msg: MessageContext, text: string): Promise<void> {
     const interval = 50;
     const cursor = "█";
     let buffer = "";
     
-    let currentMsg = await msg.edit({
-      text: cursor,
-      parseMode: "html"
+    await msg.edit({
+      text: html(cursor)
     });
-    
-    if (!currentMsg) return;
     
     await this.sleep(interval);
     
+    // 注意：必须按顺序逐字符编辑消息以实现打字机效果，不能并行
     for (const character of text) {
       buffer += character;
       const bufferWithCursor = `${htmlEscape(buffer)}${cursor}`;
       
       try {
-        currentMsg = await currentMsg?.edit({
-          text: bufferWithCursor,
-          parseMode: "html"
+        await msg.edit({
+          text: html(bufferWithCursor)
         });
-        
-        if (!currentMsg) return;
         
         await this.sleep(interval);
         
-        if (buffer.length > 0 && currentMsg) {
-          currentMsg = await currentMsg.edit({
-            text: htmlEscape(buffer),
-            parseMode: "html"
+        if (buffer.length > 0) {
+          await msg.edit({
+            text: html(htmlEscape(buffer))
           });
-          
-          if (!currentMsg) return;
         }
         
-      } catch (error: any) {
-        if (!error.message?.includes("MESSAGE_NOT_MODIFIED")) {
+      } catch (error: unknown) {
+        if (!getErrorMessage(error).includes("MESSAGE_NOT_MODIFIED")) {
           throw error;
         }
         continue;
@@ -254,37 +249,34 @@ class TeletypePlugin extends Plugin {
     
     const finalText = htmlEscape(text);
     try {
-      if (currentMsg) {
-        await currentMsg.edit({
-          text: finalText,
-          parseMode: "html"
-        });
-      }
-    } catch (error: any) {
-      if (!error.message?.includes("MESSAGE_NOT_MODIFIED")) {
+      await msg.edit({
+        text: html(finalText)
+      });
+    } catch (error: unknown) {
+      if (!getErrorMessage(error).includes("MESSAGE_NOT_MODIFIED")) {
         throw error;
       }
     }
   }
   
-  private async handleError(msg: Api.Message, error: any): Promise<void> {
-    console.error(`[${this.PLUGIN_NAME}] Error:`, error);
+  private async handleError(msg: MessageContext, error: unknown): Promise<void> {
+    logger.error(`[${this.PLUGIN_NAME}] Error:`, error);
     
-    if (error.message?.includes("MESSAGE_NOT_MODIFIED")) {
+    const errMsg = getErrorMessage(error);
+    if (errMsg?.includes("MESSAGE_NOT_MODIFIED")) {
       return;
     }
     
     let errorMessage = "❌ <b>操作失败:</b> ";
     
-    if (error.message?.includes("MESSAGE_TOO_LONG")) {
+    if (errMsg?.includes("MESSAGE_TOO_LONG")) {
       errorMessage += "消息过长";
     } else {
-      errorMessage += htmlEscape(error.message || "未知错误");
+      errorMessage += htmlEscape(getErrorMessage(error) || "未知错误");
     }
     
     await msg.edit({
-      text: errorMessage,
-      parseMode: "html"
+      text: html(errorMessage)
     });
   }
   
@@ -292,5 +284,31 @@ class TeletypePlugin extends Plugin {
     return new Promise(resolve => setTimeout(resolve, ms));
   }
 }
+
+
+  // Panel Settings Adapter
+  panelAdapter: PanelSettingsAdapter = {
+    id: "teletype",
+    title: "电传打字",
+    description: "电传打字机配置",
+    category: "插件配置",
+    icon: "⌨️",
+    getSchema: (): PanelSettingField[] => [
+      {
+            "key": "enabled",
+            "label": "启用",
+            "type": "boolean"
+      }
+],
+    getValues: async (): Promise<Record<string, unknown>> => {
+      const db = await JSONFilePreset<any>(path.join(createDirectoryInAssets("teletype"), "config.json"), {} as any);
+      return db.data as Record<string, unknown>;
+    },
+    setValues: async (patch: Record<string, unknown>): Promise<void> => {
+      const db = await JSONFilePreset<any>(path.join(createDirectoryInAssets("teletype"), "config.json"), {} as any);
+      Object.assign(db.data, patch);
+      await db.write();
+    },
+  };
 
 export default new TeletypePlugin();
