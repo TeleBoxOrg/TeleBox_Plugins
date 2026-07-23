@@ -1,7 +1,4 @@
-import { Plugin, type PanelSettingsAdapter, type PanelSettingField, type PanelFieldType } from "@utils/pluginBase";
-import type { MessageContext } from "@mtcute/dispatcher";
-import { thtml as html } from "@mtcute/html-parser";
-import { getGlobalClient } from "@utils/runtimeManager";
+import { Plugin } from "@utils/pluginBase";
 import sharp from "sharp";
 import axios from "axios";
 import {
@@ -11,15 +8,17 @@ import {
 import { getPrefixes } from "@utils/pluginManager";
 import path from "path";
 import fs from "fs";
+import { Api, utils } from "teleproto";
+import type { EntityLike } from "teleproto/define";
+import bigInteger from "big-integer";
 import { encode, UnencodedFrame } from "modern-gif";
 import { execFile } from "child_process";
 import { promisify } from "util";
 import { safeGetReplyMessage } from "@utils/safeGetMessages";
-import { logger } from "@utils/logger";
-import { getErrorMessage } from "@utils/errorHelpers";
+
 import { htmlEscape } from "@utils/htmlEscape";
 
-const execAsync = promisify(execFile);
+const execFileAsync = promisify(execFile);
 
 // 由于gif可能很多帧，最好缓存在本地，而不是每次都远程拿不同的帧数
 const ASSET_PATH = createDirectoryInAssets("eatgif");
@@ -89,6 +88,49 @@ async function loadGifDetailConfig(url: string): Promise<EatGifConfig> {
   return res.data;
 }
 
+/**
+ * 头像始终是小文件，直接通过其所属 DC 请求单个 upload.GetFile chunk。
+ * 避免 teleproto downloadProfilePhoto 进入 MediaScheduler 的 5 × 15 秒重试链。
+ */
+export async function downloadAvatarDirect(
+  client: NonNullable<Api.Message["client"]>,
+  entityLike: EntityLike,
+): Promise<Buffer | undefined> {
+  const entity = entityLike instanceof Api.User ||
+    entityLike instanceof Api.Chat ||
+    entityLike instanceof Api.Channel
+    ? entityLike
+    : await client.getEntity(entityLike);
+  if (!("photo" in entity)) return undefined;
+  const photo = entity.photo;
+  if (
+    !photo ||
+    photo instanceof Api.UserProfilePhotoEmpty ||
+    photo instanceof Api.ChatPhotoEmpty
+  ) {
+    return undefined;
+  }
+
+  const result = await client.invoke(
+    new Api.upload.GetFile({
+      location: new Api.InputPeerPhotoFileLocation({
+        peer: utils.getInputPeer(entity),
+        photoId: photo.photoId,
+        big: false,
+      }),
+      offset: bigInteger.zero,
+      limit: 512 * 1024,
+      precise: true,
+    }),
+    photo.dcId,
+  );
+
+  if (!(result instanceof Api.upload.File)) return undefined;
+  return Buffer.isBuffer(result.bytes) && result.bytes.length > 0
+    ? result.bytes
+    : undefined;
+}
+
 // 由于很多帧，每个帧又有不同的mask等配置，最好就是缓存
 async function assetBufferFor(filePath: string): Promise<Buffer> {
   const localPath = path.join(ASSET_PATH, filePath);
@@ -108,7 +150,7 @@ class EatGifPlugin extends Plugin {
   description: string = `生成头像融合动图\n\n${help_text}`;
   cmdHandlers: Record<
     string,
-    (msg: MessageContext, trigger?: MessageContext) => Promise<void>
+    (msg: Api.Message, trigger?: Api.Message) => Promise<void>
   > = {
     eatgif: async (msg, trigger) => {
       await this.handleEatGif(msg, trigger);
@@ -116,8 +158,8 @@ class EatGifPlugin extends Plugin {
     // eatgif2
   };
 
-  private async handleEatGif(msg: MessageContext, trigger?: MessageContext) {
-    const firstLine = (msg.text || "").split(/\r?\n/g)[0] || "";
+  private async handleEatGif(msg: Api.Message, trigger?: Api.Message) {
+    const firstLine = (msg.message || msg.text || "").split(/\r?\n/g)[0] || "";
     const parts = firstLine.trim().split(/\s+/) || [];
     const [, ...args] = parts;
     const sub = (args[0] || "").toLowerCase();
@@ -126,12 +168,12 @@ class EatGifPlugin extends Plugin {
       await ensureConfig();
 
       if (!sub || sub === "list" || sub === "ls") {
-        await msg.edit({ text: html(this.listAllStickers()) });
+        await msg.edit({ text: this.listAllStickers(), parseMode: "html" });
         return;
       }
 
       if (sub === "help" || sub === "h") {
-        await msg.edit({ text: html(help_text) });
+        await msg.edit({ text: help_text, parseMode: "html" });
         return;
       }
 
@@ -144,24 +186,27 @@ class EatGifPlugin extends Plugin {
         const text = `❌ 未找到 <code>${htmlEscape(
           sub
         )}</code>\n\n${this.listAllStickers()}`;
-        await msg.edit({ text: html(text) });
+        await msg.edit({ text, parseMode: "html" });
         return;
       }
 
-      if (!msg.replyToMessage && !trigger?.replyToMessage) {
+      if (!msg.isReply && !trigger?.isReply) {
         await msg.edit({
-          text: html`💡 请先回复一个用户的消息再执行\n\n使用：<code>${commandName} list</code> 查看表情列表`,
+          text: `💡 请先回复一个用户的消息再执行\n\n使用：<code>${commandName} list</code> 查看表情列表`,
+          parseMode: "html",
         });
         return;
       }
 
       await msg.edit({
-        text: html`⏳ 正在生成 <b>${htmlEscape(config[sub].desc)}</b>...`,
+        text: `⏳ 正在生成 <b>${htmlEscape(config[sub].desc)}</b>...`,
+        parseMode: "html",
       });
       await this.generateGif(sub, { msg, trigger });
-    } catch (e: unknown) {
+    } catch (e: any) {
       await msg.edit({
-        text: html`❌ 失败：${htmlEscape(getErrorMessage(e) || String(e))}`,
+        text: `❌ 失败：${htmlEscape(e?.message || String(e))}`,
+        parseMode: "html",
       });
     }
   }
@@ -175,15 +220,15 @@ class EatGifPlugin extends Plugin {
     return header + items.join("\n");
   }
 
-  private async clearRes(msg: MessageContext): Promise<void> {
+  private async clearRes(msg: Api.Message): Promise<void> {
     fs.rmSync(ASSET_PATH, { recursive: true, force: true });
     await loadGifListConfig(baseConfigURL);
-    await msg.edit({ text: html`🧹 已清理缓存并刷新配置` });
+    await msg.edit({ text: "🧹 已清理缓存并刷新配置", parseMode: "html" });
   }
 
   private async generateGif(
     gifName: string,
-    params: { msg: MessageContext; trigger?: MessageContext }
+    params: { msg: Api.Message; trigger?: Api.Message }
   ) {
     const { msg, trigger } = params;
     const gifConfig = await loadGifDetailConfig(config[gifName].url);
@@ -191,13 +236,13 @@ class EatGifPlugin extends Plugin {
     // 由于要生成很多张图片，最好就是保存 self.avatar 以及 you.avatar 不断调用
     const meAvatarBuffer = await this.getSelfAvatarBuffer(msg, trigger);
     if (!meAvatarBuffer) {
-      await msg.edit({ text: html`无法获取自己的头像` });
+      await msg.edit({ text: "无法获取自己的头像" });
       await msg.deleteWithDelay(2000);
       return;
     }
     const youAvatarBuffer = await this.getYouAvatarBuffer(msg, trigger);
     if (!youAvatarBuffer) {
-      await msg.edit({ text: html`无法获取对方的头像` });
+      await msg.edit({ text: "无法获取对方的头像" });
       await msg.deleteWithDelay(2000);
       return;
     }
@@ -214,7 +259,7 @@ class EatGifPlugin extends Plugin {
     const result = await Promise.all(tasks);
 
     if (result.length === 0 || result.every((r) => !r)) {
-      await msg.edit({ text: html`合成动图失败` });
+      await msg.edit({ text: "合成动图失败" });
       return;
     }
 
@@ -242,44 +287,25 @@ class EatGifPlugin extends Plugin {
     fs.writeFileSync(gifPath, Buffer.from(output));
 
     try {
-      await msg.edit({ text: html`⏳ 正在转换为 webm 格式...` });
-      await execAsync("ffmpeg", [
-        "-y", "-i", gifPath,
-        "-c:v", "libvpx-vp9",
-        "-b:v", "0",
-        "-crf", "41",
-        "-pix_fmt", "yuva420p",
-        "-auto-alt-ref", "0",
-        webmPath,
-      ]);
-
-      const client = await getGlobalClient();
-      if (!client) throw new Error("Client not available");
-
-      const replyMsg = trigger ? (await safeGetReplyMessage(trigger)) || (await safeGetReplyMessage(msg)) : await safeGetReplyMessage(msg);
-
-      await client.sendMedia(msg.chat.id, {
-        type: "document",
+      await msg.edit({ text: "⏳ 正在转换为 webm 格式..." });
+      await execFileAsync('ffmpeg', ['-y', '-i', gifPath, '-c:v', 'libvpx-vp9', '-b:v', '0', '-crf', '41', '-pix_fmt', 'yuva420p', '-auto-alt-ref', '0', webmPath]);
+      await msg.client?.sendFile(msg.peerId, {
         file: webmPath,
-        fileName: "sticker.webm",
-      }, {
-        replyTo: replyMsg?.id,
+        attributes: [
+          new Api.DocumentAttributeSticker({
+            alt: "✨",
+            stickerset: new Api.InputStickerSetEmpty(),
+          }),
+        ],
+        replyTo: await safeGetReplyMessage(msg),
       });
-    } catch (e: unknown) {
-      logger.info("exec ffmpeg error", e);
-      await msg.edit({ text: html`生成 webm 失败 ${String(e)}` });
-
-      const client = await getGlobalClient();
-      if (client) {
-        const replyMsg = trigger ? (await safeGetReplyMessage(trigger)) || (await safeGetReplyMessage(msg)) : await safeGetReplyMessage(msg);
-        await client.sendMedia(msg.chat.id, {
-          type: "document",
-          file: gifPath,
-          fileName: "sticker.gif",
-        }, {
-          replyTo: replyMsg?.id,
-        });
-      }
+    } catch (e) {
+      console.log("exec ffmpeg error", e);
+      await msg.edit({ text: `生成 webm 失败 ${e}` });
+      await msg.client?.sendFile(msg.peerId, {
+        file: gifPath,
+        replyTo: await safeGetReplyMessage(msg),
+      });
     }
 
     await msg.delete();
@@ -347,14 +373,14 @@ class EatGifPlugin extends Plugin {
 
     const { width: iconWidth, height: iconHeight } = await iconSharp.metadata();
 
-    const left = Math.max(0, Math.floor((iconWidth! - maskWidth!) / 2));
-    const top = Math.max(0, Math.floor((iconHeight! - maskHeight!) / 2));
+    const left = Math.max(0, Math.floor((iconWidth - maskWidth) / 2));
+    const top = Math.max(0, Math.floor((iconHeight - maskHeight) / 2));
 
     let cropped = iconSharp.extract({
       left,
       top,
-      width: maskWidth!,
-      height: maskHeight!,
+      width: maskWidth,
+      height: maskHeight,
     });
 
     let iconMasked = await cropped
@@ -374,117 +400,34 @@ class EatGifPlugin extends Plugin {
     };
   }
   // 获取头像等数据
-  private async downloadProfilePhoto(userId: number): Promise<Buffer | undefined> {
-    const client = await getGlobalClient();
-    if (!client) return undefined;
-    try {
-      // TL-layer: resolvePeer returns high-level type but getFullUser needs raw InputUser
-      const peer = await client.resolvePeer(userId);
-      const fullUser = await client.call({
-        _: 'users.getFullUser',
-        id: peer,
-      } as never);
-      // TL-layer: access raw userFull.photo (TypeUserProfilePhoto) which has photoId
-      const fullUserAny = fullUser as unknown as { fullUser?: { photo?: { _?: string; photoId?: bigint } } };
-      const photo = fullUserAny?.fullUser?.photo;
-      if (!photo || photo._ !== 'userProfilePhoto') return undefined;
-      // TL-layer: inputPeerPhotoFileLocation needs raw peer object
-      const location = {
-        _: 'inputPeerPhotoFileLocation' as const,
-        big: false,
-        peer: peer,
-        photo_id: photo.photoId,
-      } as never;
-      const buffer = await client.downloadAsBuffer(location);
-      return Buffer.from(buffer);
-    } catch (err: unknown) {
-      logger.error("[eatgif] downloadProfilePhoto failed:", err);
-      return undefined;
-    }
-  }
-
   private async getSelfAvatarBuffer(
-    msg: MessageContext,
-    trigger?: MessageContext
+    msg: Api.Message,
+    trigger?: Api.Message
   ): Promise<Buffer | undefined> {
-    const meId = trigger?.sender || msg.sender;
+    const meId = trigger?.fromId || msg.fromId;
     if (!meId) {
       return;
     }
-    return this.downloadProfilePhoto(meId.id);
+    const client = msg.client;
+    if (!client) return;
+    const meEntity = trigger?.sender ?? msg.sender ?? meId;
+    return downloadAvatarDirect(client, meEntity);
   }
 
   private async getYouAvatarBuffer(
-    msg: MessageContext,
-    trigger?: MessageContext
+    msg: Api.Message,
+    trigger?: Api.Message
   ): Promise<Buffer | undefined> {
     let replyTo = await safeGetReplyMessage(msg);
     if (!replyTo) {
       replyTo = await safeGetReplyMessage(trigger);
     }
-    if (!replyTo?.sender?.id) return;
-    return this.downloadProfilePhoto(replyTo.sender.id);
+    if (!replyTo?.senderId) return;
+    const client = msg.client;
+    if (!client) return;
+    return downloadAvatarDirect(client, replyTo.sender ?? replyTo.senderId);
   }
 
 }
-
-
-  // Panel Settings Adapter
-  panelAdapter: PanelSettingsAdapter = {
-    id: "eatgif",
-    title: "吃 GIF",
-    description: "吃 GIF 动图配置",
-    category: "插件配置",
-    icon: "🎬",
-    getSchema: (): PanelSettingField[] => [
-      {
-            "key": "x",
-            "label": "X 坐标偏移",
-            "type": "number",
-            "min": -100,
-            "max": 100,
-            "default": 0
-      },
-      {
-            "key": "y",
-            "label": "Y 坐标偏移",
-            "type": "number",
-            "min": -100,
-            "max": 100,
-            "default": 0
-      },
-      {
-            "key": "mask",
-            "label": "遮罩形状",
-            "type": "string",
-            "default": "circle"
-      },
-      {
-            "key": "rotate",
-            "label": "旋转角度",
-            "type": "number",
-            "min": -360,
-            "max": 360,
-            "default": 0
-      },
-      {
-            "key": "brightness",
-            "label": "亮度",
-            "type": "number",
-            "min": 0,
-            "max": 200,
-            "default": 100
-      }
-],
-    getValues: async (): Promise<Record<string, unknown>> => {
-      const db = await JSONFilePreset<RoleConfig>(path.join(createDirectoryInAssets("eatgif"), "config.json"), {} as any);
-      return db.data as Record<string, unknown>;
-    },
-    setValues: async (patch: Record<string, unknown>): Promise<void> => {
-      const db = await JSONFilePreset<RoleConfig>(path.join(createDirectoryInAssets("eatgif"), "config.json"), {} as any);
-      Object.assign(db.data, patch);
-      await db.write();
-    },
-  };
 
 export default new EatGifPlugin();

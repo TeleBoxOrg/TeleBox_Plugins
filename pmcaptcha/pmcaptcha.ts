@@ -1,30 +1,22 @@
-import { TelegramClient, thtml as html } from "@mtcute/node";
-import { Long } from "@mtcute/core";
-import type { MessageContext } from "@mtcute/dispatcher";
+//@ts-nocheck
+import { Api, TelegramClient } from "teleproto";
+import { CustomFile } from "teleproto/client/uploads";
 import path from "path";
 import fs from "fs";
 import { execSync } from "child_process";
 import { JSONFilePreset } from "lowdb/node";
 import { createDirectoryInAssets } from "@utils/pathHelpers";
-import { Plugin, type PanelSettingsAdapter, type PanelSettingField, type PanelFieldType, type Plugin, type PanelSettingsAdapter, type PanelSettingField, type PanelFieldTypeRuntimeContext } from "@utils/pluginBase";
+import { Plugin, type PluginRuntimeContext } from "@utils/pluginBase";
 import { getCurrentGeneration, tryGetCurrentGenerationContext } from "@utils/runtimeManager";
 import type { GenerationContext } from "@utils/generationContext";
 import { getPrefixes } from "@utils/pluginManager";
+import bigInt from "big-integer";
 import { safeGetMessages } from "@utils/safeGetMessages";
 
 import { safeGetMe } from "@utils/authGuards";
-import { hasRawType } from "@utils/entityTypeGuards";
-import { logger } from "@utils/logger";
-// ClientAdapter removed – use TelegramClient directly
-const PLUGIN_VERSION = "5.0.6";
+import { htmlEscape } from "@utils/htmlEscape";
 
-function htmlEscape(value: any): string {
-  return String(value ?? "")
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;");
-}
+const PLUGIN_VERSION = "5.0.7";
 
 function codeTag(value: any): string {
   return `<code>${htmlEscape(value)}</code>`;
@@ -36,11 +28,11 @@ function attrEscape(value: any): string {
 
 // ─── 日志 ─────────────────────────────────────────────────────────────────────
 
-enum LogLevel { DEBUG = 0, INFO = 1, WARN = 2, ERROR = 3 }
+enum LogLevel { INFO = 1, WARN = 2, ERROR = 3 }
 
 function log(level: LogLevel, message: string, data?: any) {
   const prefix = `[PMCaptcha] [${new Date().toISOString()}] [${LogLevel[level]}]`;
-  data ? logger.info(`${prefix} ${message}`, data) : logger.info(`${prefix} ${message}`);
+  data ? console.log(`${prefix} ${message}`, data) : console.log(`${prefix} ${message}`);
 }
 
 // ─── 枚举 ─────────────────────────────────────────────────────────────────────
@@ -127,6 +119,13 @@ const K = {
   CAP_KEYWORD:      "captcha_text_keyword",
   CAP_PROMPT:       "captcha_prompt",
   CAP_PASS_ACTIONS: "captcha_pass_actions",
+  // ── 自动过白规则 ──
+  INITIATIVE:       "auto_initiative",        // 主动对话过白开关
+  HISTORY_COUNT:    "auto_history_count",      // 聊天记录过白阈值（-1=禁用）
+  GROUPS_IN_COMMON: "auto_groups_in_common",   // 共同群过白阈值（-1=禁用）
+  WL_WORDS:         "auto_whitelist_words",    // 白名单关键词列表
+  BL_WORDS:         "auto_blacklist_words",    // 黑名单关键词列表
+  PREMIUM:          "auto_premium",            // Premium 用户策略: "allow"|"ban"|"only"|"none"
 } as const;
 
 const D = {
@@ -148,6 +147,24 @@ const DEFAULT_CONFIG = {
   [K.CAP_KEYWORD]:     "我同意",
   [K.CAP_PROMPT]:      "",
   [K.CAP_PASS_ACTIONS]: [] as PassAction[],
+  // ── 自动过白规则默认值 ──
+  [K.INITIATIVE]:       true,              // 默认启用主动对话过白
+  [K.HISTORY_COUNT]:    -1 as number,      // -1 = 禁用聊天记录过白
+  [K.GROUPS_IN_COMMON]: -1 as number,      // -1 = 禁用共同群过白
+  [K.WL_WORDS]:         [] as string[],    // 白名单关键词列表
+  [K.BL_WORDS]:         [] as string[],    // 黑名单关键词列表
+  [K.PREMIUM]:          "none" as string,  // Premium 策略: allow|ban|only|none
+};
+
+/** Premium 用户策略枚举 */
+type PremiumStrategy = "allow" | "ban" | "only" | "none";
+const PREMIUM_STRATEGIES: PremiumStrategy[] = ["allow", "ban", "only", "none"];
+
+const PREMIUM_LABEL: Record<PremiumStrategy, string> = {
+  allow: "允许（Premium 用户自动通过）",
+  ban:   "封禁（拒绝 Premium 用户）",
+  only:  "仅限（仅允许 Premium 用户）",
+  none:  "无（不做特殊处理）",
 };
 
 const DEFAULT_DATA = {
@@ -198,7 +215,7 @@ async function initDb() {
     ]);
     dbReady = true;
     log(LogLevel.INFO, `Config DB ready | Data DB: ${path.join(dataDir, "pmcaptcha_data.json")}`);
-  } catch (e: unknown) {
+  } catch (e) {
     log(LogLevel.ERROR, "DB init failed", e);
   }
 }
@@ -262,6 +279,16 @@ const cfg = {
   verified:    () => get<VerifiedRecord[]>(D.VERIFIED, []),
   failed:      () => get<FailedRecord[]>(D.FAILED, []),
   passActions: () => get<PassAction[]>(K.CAP_PASS_ACTIONS, []),
+  // ── 自动过白规则访问器 ──
+  initiative:      () => get<boolean>(K.INITIATIVE, true),
+  historyCount:    () => get<number>(K.HISTORY_COUNT, -1),
+  groupsInCommon:  () => get<number>(K.GROUPS_IN_COMMON, -1),
+  wlWords:         () => get<string[]>(K.WL_WORDS, []),
+  blWords:         () => get<string[]>(K.BL_WORDS, []),
+  premium:         (): PremiumStrategy => {
+    const v = get<string>(K.PREMIUM, "none");
+    return PREMIUM_STRATEGIES.includes(v as PremiumStrategy) ? v as PremiumStrategy : "none";
+  },
 };
 
 // ─── 白名单 ───────────────────────────────────────────────────────────────────
@@ -306,52 +333,86 @@ const rec = {
 
 // ─── 用户信息缓存 ─────────────────────────────────────────────────────────────
 
-const nameCache     = new Map<number, string>();
-const usernameCache = new Map<number, string>();
+const nameCache      = new Map<number, string>();
+const usernameCache  = new Map<number, string>();
+const inputPeerCache = new Map<number, Api.TypeInputPeer>();
 let _selfId: number | null = null;
 
 async function getSelfId(client: TelegramClient): Promise<number> {
   if (_selfId !== null) return _selfId;
   const me = await safeGetMe(client);
-  _selfId = me ? Number(me.id) : 0;
+  _selfId = me ? Number((me as any).id) : 0;
   return _selfId!;
 }
 
 function cacheUserFromSender(sender: any): void {
   if (!sender?.id) return;
   const id       = Number(sender.id);
-  const name     = [sender.firstName, sender.lastName].filter(Boolean).join(" ").trim() || sender.title || "Unknown";
-  const username = sender.username;
+  const name     = [sender.firstName, sender.lastName].filter(Boolean).join(" ").trim() || "Unknown";
+  const username = sender.username as string | undefined;
   nameCache.set(id, name);
   if (username) usernameCache.set(id, username);
+
+  // A new private sender may not be in teleproto's entity cache yet. Preserve the
+  // access hash carried by the update so replies/actions can address that user.
+  if (sender.accessHash !== undefined && sender.accessHash !== null) {
+    inputPeerCache.set(id, new Api.InputPeerUser({
+      userId: sender.id,
+      accessHash: sender.accessHash,
+    }));
+  }
+}
+
+function cacheInputPeer(userId: number, peer: any): void {
+  if (userId > 0 && peer instanceof Api.InputPeerUser) {
+    inputPeerCache.set(userId, peer);
+  }
+}
+
+async function resolveInputPeer(client: TelegramClient, userId: number): Promise<Api.TypeInputPeer> {
+  const cached = inputPeerCache.get(userId);
+  if (cached) return cached;
+
+  const peer = await client.getInputEntity(bigInt(userId));
+  cacheInputPeer(userId, peer);
+  return peer;
+}
+
+function peerTarget(userId: number): Api.TypeInputPeer | number {
+  return inputPeerCache.get(userId) ?? userId;
+}
+
+async function cachePeerFromMessage(message: Api.Message, userId: number): Promise<void> {
+  const directPeer = (message as any).inputChat;
+  if (directPeer) cacheInputPeer(userId, directPeer);
+  if (inputPeerCache.has(userId)) return;
+
+  try {
+    const peer = await (message as any).getInputChat?.();
+    cacheInputPeer(userId, peer);
+  } catch {}
 }
 
 async function fetchUserInfo(client: TelegramClient, userId: number): Promise<any | null> {
   try {
-    const e = await client.getChat(userId);
+    const e = await client.getEntity(userId) as any;
     cacheUserFromSender(e);
     return e;
-  } catch (e: unknown) { log(LogLevel.WARN, `fetchUserInfo: getChat failed for ${userId}`, e); }
+  } catch {}
 
   try {
-    const input = await client.resolvePeer(userId);
-    if (hasRawType(input, 'inputPeerUser')) {
-      const inputUser = input as { userId?: number; accessHash?: bigint | number };
-      const res = await client.call({
-        _: 'users.getUsers',
-        id: [{ _: 'inputUser', userId: inputUser.userId ?? 0, accessHash: Long.fromBigInt(BigInt(inputUser.accessHash ?? 0)) }]
-      }) as unknown as unknown[];
+    const input = await client.getInputEntity(bigInt(userId));
+    if (input instanceof Api.InputPeerUser) {
+      const res = await client.invoke(new Api.users.GetUsers({
+        id: [new Api.InputUser({ userId: input.userId, accessHash: input.accessHash })]
+      })) as any[];
       const user = res?.[0];
-      if (user && !hasRawType(user, 'userEmpty')) {
+      if (user && !(user instanceof Api.UserEmpty)) {
         cacheUserFromSender(user);
         return user;
       }
     }
-  } catch (error: unknown) {
-    if (!(error instanceof Error) || !error.message.includes("AUTH_KEY_UNREGISTERED")) {
-      throw error;
-    }
-  }
+  } catch {}
 
   return null;
 }
@@ -371,7 +432,7 @@ function userLink(id: number, name: string): string {
 }
 
 function isBotFromSender(sender: any): boolean {
-  return !!sender?.bot || !!sender?.raw?.bot;
+  return !!(sender as any)?.bot;
 }
 
 async function isBot(client: TelegramClient, userId: number): Promise<boolean> {
@@ -383,106 +444,93 @@ async function isBot(client: TelegramClient, userId: number): Promise<boolean> {
 
 async function archiveChat(client: TelegramClient, userId: number) {
   try {
-    const peer = await client.resolvePeer(userId);
-    await client.call({
-      _: 'folders.editPeerFolders',
-      folderPeers: [{ _: 'inputFolderPeer', peer, folderId: 1 }]
-    });
-  } catch (e: unknown) { log(LogLevel.ERROR, `archive failed ${userId}`, e); }
+    const peer = await resolveInputPeer(client, userId);
+    await client.invoke(new Api.folders.EditPeerFolders({
+      folderPeers: [new Api.InputFolderPeer({ peer, folderId: 1 })]
+    }));
+  } catch (e) { log(LogLevel.ERROR, `archive failed ${userId}`, e); }
 }
 
 async function muteChat(client: TelegramClient, userId: number) {
   try {
-    const peer = await client.resolvePeer(userId);
-    await client.call({
-      _: 'account.updateNotifySettings',
-      peer: { _: 'inputNotifyPeer', peer },
-      settings: { _: 'inputPeerNotifySettings', muteUntil: 2147483647, showPreviews: false, silent: true }
-    });
-  } catch (e: unknown) { log(LogLevel.ERROR, `mute failed ${userId}`, e); }
+    const peer = await resolveInputPeer(client, userId);
+    await client.invoke(new Api.account.UpdateNotifySettings({
+      peer: new Api.InputNotifyPeer({ peer }),
+      settings: new Api.InputPeerNotifySettings({ muteUntil: 2147483647, showPreviews: false, silent: true })
+    }));
+  } catch (e) { log(LogLevel.ERROR, `mute failed ${userId}`, e); }
 }
 
 async function blockUser(client: TelegramClient, userId: number) {
   try {
-    const peer = await client.resolvePeer(userId);
-    await client.call({ _: 'contacts.block', id: peer });
+    const peer = await resolveInputPeer(client, userId);
+    await client.invoke(new Api.contacts.Block({ id: peer }));
     log(LogLevel.INFO, `Blocked ${userId}`);
-  } catch (e: unknown) { log(LogLevel.ERROR, `block failed ${userId}`, e); }
+  } catch (e) { log(LogLevel.ERROR, `block failed ${userId}`, e); }
 }
 
 async function deleteHistory(client: TelegramClient, userId: number) {
   try {
-    const peer = await client.resolvePeer(userId);
-    await client.call({ _: 'messages.deleteHistory', peer, revoke: false, maxId: 0 });
+    const peer = await resolveInputPeer(client, userId);
+    await client.invoke(new Api.messages.DeleteHistory({ peer, revoke: false, maxId: 0 }));
     log(LogLevel.INFO, `Deleted history ${userId}`);
-  } catch (e: unknown) { log(LogLevel.ERROR, `delete history failed ${userId}`, e); }
+  } catch (e) { log(LogLevel.ERROR, `delete history failed ${userId}`, e); }
 }
 
 async function reportSpam(client: TelegramClient, userId: number) {
   try {
-    const peer = await client.resolvePeer(userId);
-    await client.call({
-      _: 'account.reportPeer',
-      peer, reason: { _: 'inputReportReasonSpam' }, message: "spam"
-    });
+    const peer = await resolveInputPeer(client, userId);
+    await client.invoke(new Api.account.ReportPeer({
+      peer, reason: new Api.InputReportReasonSpam(), message: "spam"
+    }));
     log(LogLevel.INFO, `Reported ${userId}`);
-  } catch (e: unknown) { log(LogLevel.ERROR, `report failed ${userId}`, e); }
+  } catch (e) { log(LogLevel.ERROR, `report failed ${userId}`, e); }
 }
 
 async function unmuteChat(client: TelegramClient, userId: number) {
   try {
-    const peer = await client.resolvePeer(userId);
-    await client.call({
-      _: 'account.updateNotifySettings',
-      peer: { _: 'inputNotifyPeer', peer },
-      settings: { _: 'inputPeerNotifySettings', muteUntil: 0, showPreviews: true, silent: false }
-    });
-  } catch (e: unknown) { log(LogLevel.ERROR, `unmute failed ${userId}`, e); }
+    const peer = await resolveInputPeer(client, userId);
+    await client.invoke(new Api.account.UpdateNotifySettings({
+      peer: new Api.InputNotifyPeer({ peer }),
+      settings: new Api.InputPeerNotifySettings({ muteUntil: 0, showPreviews: true, silent: false })
+    }));
+  } catch (e) { log(LogLevel.ERROR, `unmute failed ${userId}`, e); }
 }
 
 async function unarchiveChat(client: TelegramClient, userId: number) {
   try {
-    const peer = await client.resolvePeer(userId);
-    await client.call({
-      _: 'folders.editPeerFolders',
-      folderPeers: [{ _: 'inputFolderPeer', peer, folderId: 0 }]
-    });
-  } catch (e: unknown) { log(LogLevel.ERROR, `unarchive failed ${userId}`, e); }
+    const peer = await resolveInputPeer(client, userId);
+    await client.invoke(new Api.folders.EditPeerFolders({
+      folderPeers: [new Api.InputFolderPeer({ peer, folderId: 0 })]
+    }));
+  } catch (e) { log(LogLevel.ERROR, `unarchive failed ${userId}`, e); }
 }
 
 async function runFailActions(client: TelegramClient, userId: number) {
   await archiveChat(client, userId);
   await muteChat(client, userId);
 
-  const actions = cfg.failActions();
-  const tasks: Promise<void>[] = [];
-  for (const a of actions) {
-    if (a === FailAction.BLOCK)  tasks.push(blockUser(client, userId));
+  for (const a of cfg.failActions()) {
+    if (a === FailAction.BLOCK)  await blockUser(client, userId);
     if (a === FailAction.DELETE) {
-      tasks.push((async () => {
-        try {
-          const peer = await client.resolvePeer(userId);
-          await client.call({ _: 'messages.deleteHistory' as const, peer, revoke: true, maxId: 0 });
-          log(LogLevel.INFO, `Deleted history (revoke both sides) ${userId}`);
-        } catch (e: unknown) { log(LogLevel.ERROR, `delete failed ${userId}`, e); }
-      })());
+      try {
+        const peer = await resolveInputPeer(client, userId);
+        await client.invoke(new Api.messages.DeleteHistory({ peer, revoke: true, maxId: 0 }));
+        log(LogLevel.INFO, `Deleted history (revoke both sides) ${userId}`);
+      } catch (e) { log(LogLevel.ERROR, `delete failed ${userId}`, e); }
     }
-    if (a === FailAction.REPORT)  tasks.push(reportSpam(client, userId));
-    if (a === FailAction.MUTE)    tasks.push(muteChat(client, userId));
-    if (a === FailAction.ARCHIVE) tasks.push(archiveChat(client, userId));
+    if (a === FailAction.REPORT)  await reportSpam(client, userId);
+    if (a === FailAction.MUTE)    await muteChat(client, userId);
+    if (a === FailAction.ARCHIVE) await archiveChat(client, userId);
   }
-  await Promise.all(tasks);
 }
 
 async function runPassActions(client: TelegramClient, userId: number) {
-  const actions = cfg.passActions();
-  const tasks: Promise<void>[] = [];
-  for (const a of actions) {
-    if (a === PassAction.UNMUTE)    tasks.push(unmuteChat(client, userId));
-    if (a === PassAction.UNARCHIVE) tasks.push(unarchiveChat(client, userId));
+  for (const a of cfg.passActions()) {
+    if (a === PassAction.UNMUTE)    await unmuteChat(client, userId);
+    if (a === PassAction.UNARCHIVE) await unarchiveChat(client, userId);
     if (a === PassAction.WL)        wl.add(userId);
   }
-  await Promise.all(tasks);
 }
 
 // ─── 图片验证码生成 ───────────────────────────────────────────────────────────
@@ -497,7 +545,7 @@ async function tryGetCanvas(): Promise<any> {
     _canvas = await import("canvas");
     log(LogLevel.INFO, "canvas module loaded");
     return _canvas;
-  } catch (e: unknown) { log(LogLevel.DEBUG, "canvas not available, will try install", e); }
+  } catch {}
 
   if (_canvasInstalling) {
     const deadline = Date.now() + 60_000;
@@ -513,7 +561,7 @@ async function tryGetCanvas(): Promise<any> {
   try {
     execSync("npm install canvas", { stdio: "pipe" });
     log(LogLevel.INFO, "canvas installed successfully");
-  } catch (e: unknown) {
+  } catch (e) {
     log(LogLevel.ERROR, "canvas install failed", e);
     _canvas = false;
     _canvasInstalling = false;
@@ -523,12 +571,12 @@ async function tryGetCanvas(): Promise<any> {
   try {
     const canvasId = require.resolve("canvas");
     if (require.cache[canvasId]) delete require.cache[canvasId];
-  } catch (e: unknown) { log(LogLevel.DEBUG, "canvas not in cache", e); }
+  } catch {}
 
   try {
     _canvas = await import("canvas");
     log(LogLevel.INFO, "canvas dynamically loaded after install");
-  } catch (e: unknown) {
+  } catch (e) {
     log(LogLevel.ERROR, "canvas load failed after install", e);
     _canvas = false;
   }
@@ -697,10 +745,10 @@ function drainCaptchaStates(): void {
 
 async function cleanupCaptchaMessages(client: TelegramClient, userId: number, state: CaptchaState) {
   if (!isStateCurrent(state)) return;
-  await Promise.all(state.msgIds.map(id => {
-    if (!isStateCurrent(state)) return Promise.resolve();
-    return client.deleteMessagesById(userId, [id]).catch(() => { /* msg already deleted */ });
-  }));
+  for (const id of state.msgIds) {
+    if (!isStateCurrent(state)) return;
+    try { await client.deleteMessages(peerTarget(userId), [id], { revoke: false }); } catch {}
+  }
 }
 
 // ─── 消息重建（用于实时刷新）─────────────────────────────────────────────────
@@ -770,34 +818,24 @@ function rebuildImgCaption(state: CaptchaState): string {
  * 图片模式更新 caption，文字模式更新消息正文。
  */
 async function refreshActiveCaptchas(client: TelegramClient): Promise<void> {
-  const entries = Array.from(states.entries()).filter(([, state]) => state.msgIds[0]);
-  await Promise.all(
-    entries.map(async ([userId, state]) => {
-      try {
-        const promptMsgId = state.msgIds[0];
-        const isImg = state.mode === CaptchaMode.IMG_DIGIT || state.mode === CaptchaMode.IMG_MIXED;
-        if (isImg) {
-          const newCaption = rebuildImgCaption(state);
-          await client.editMessage({
-            chatId: userId,
-            message: promptMsgId,
-            text: newCaption,
-          });
-        } else {
-          const newText = rebuildCaptchaText(state);
-          if (newText) {
-            await client.editMessage({
-              chatId: userId,
-              message: promptMsgId,
-              text: newText,
-            });
-          }
+  for (const [userId, state] of states.entries()) {
+    const promptMsgId = state.msgIds[0];
+    if (!promptMsgId) continue;
+    try {
+      const isImg = state.mode === CaptchaMode.IMG_DIGIT || state.mode === CaptchaMode.IMG_MIXED;
+      if (isImg) {
+        const newCaption = rebuildImgCaption(state);
+        await client.editMessage(peerTarget(userId), { message: promptMsgId, text: newCaption });
+      } else {
+        const newText = rebuildCaptchaText(state);
+        if (newText) {
+          await client.editMessage(peerTarget(userId), { message: promptMsgId, text: newText, parseMode: "html" });
         }
-      } catch (e: unknown) {
-        log(LogLevel.WARN, `refreshActiveCaptchas: failed to update msg for ${userId}`, e);
       }
-    })
-  );
+    } catch (e) {
+      log(LogLevel.WARN, `refreshActiveCaptchas: failed to update msg for ${userId}`, e);
+    }
+  }
 }
 
 // ─── 发送验证 ─────────────────────────────────────────────────────────────────
@@ -905,7 +943,7 @@ async function sendCaptcha(client: TelegramClient, userId: number): Promise<void
         const text = custom
           ? htmlEscape(custom).replace("{question}", htmlEscape(q))
           : `🔒 <b>人机验证</b>\n\n请回复以下算式的答案：\n\n${codeTag(`${q} = ?`)}${footer}`;
-        const m = await client.sendText(userId, html(text));
+        const m = await client.sendMessage(peerTarget(userId), { message: text, parseMode: "html" });
         msgIds.push(m.id);
         break;
       }
@@ -919,7 +957,7 @@ async function sendCaptcha(client: TelegramClient, userId: number): Promise<void
           question = qa.question;
           isQA     = true;
           const text = `🔒 <b>人机验证</b>\n\n请回答以下问题：\n\n<b>${htmlEscape(qa.question)}</b>${footer}`;
-          const m = await client.sendText(userId, html(text));
+          const m = await client.sendMessage(peerTarget(userId), { message: text, parseMode: "html" });
           msgIds.push(m.id);
         } else {
           answer   = kw;
@@ -928,7 +966,7 @@ async function sendCaptcha(client: TelegramClient, userId: number): Promise<void
           const text = custom
             ? htmlEscape(custom).replace("{keyword}", htmlEscape(kw))
             : `🔒 <b>人机验证</b>\n\n请回复以下关键词以证明你不是机器人：\n\n${codeTag(kw)}${footer}`;
-          const m = await client.sendText(userId, html(text));
+          const m = await client.sendMessage(peerTarget(userId), { message: text, parseMode: "html" });
           msgIds.push(m.id);
         }
         break;
@@ -942,8 +980,8 @@ async function sendCaptcha(client: TelegramClient, userId: number): Promise<void
         if (!img) {
           log(LogLevel.WARN, `canvas unavailable for user ${userId}`);
           try {
-            await client.sendText(userId, "❌ 验证服务暂时不可用，请稍后再试。");
-          } catch (e: unknown) { log(LogLevel.DEBUG, `pmcaptcha: user blocked bot, sendText failed for ${userId}`, e); }
+            await client.sendMessage(peerTarget(userId), { message: "❌ 验证服务暂时不可用，请稍后再试。" });
+          } catch {}
           return;
         }
 
@@ -960,10 +998,9 @@ async function sendCaptcha(client: TelegramClient, userId: number): Promise<void
         }
 
         const caption = custom ? htmlEscape(custom) : buildImgCaption();
-        const photoMsg = await client.sendMedia(userId, {
-          type: "photo",
-          file: img.buffer,
-          caption: html(caption)
+        const photoMsg = await client.sendMessage(peerTarget(userId), {
+          message: caption,
+          file: new CustomFile("captcha.png", img.buffer.length, "", img.buffer)
         });
         msgIds.push(photoMsg.id);
         break;
@@ -975,7 +1012,10 @@ async function sendCaptcha(client: TelegramClient, userId: number): Promise<void
       const { question: q, answer: ans } = mathQuestion();
       answer   = ans;
       question = q;
-      const m = await client.sendText(userId, html(`🔒 <b>人机验证</b>（降级）\n\n请回复以下算式的答案：\n\n${codeTag(`${q} = ?`)}`));
+      const m = await client.sendMessage(peerTarget(userId), {
+          message: `🔒 <b>人机验证</b>（降级）\n\n请回复以下算式的答案：\n\n${codeTag(`${q} = ?`)}`,
+        parseMode: "html"
+      });
       msgIds.push(m.id);
     }
 
@@ -998,8 +1038,8 @@ async function sendCaptcha(client: TelegramClient, userId: number): Promise<void
           await cleanupCaptchaMessages(client, userId, st);
           if (!isStateCurrent(state)) return;
           try {
-            await client.sendText(userId, html("⏰ 验证超时，对话已被限制。"));
-          } catch (e: unknown) { log(LogLevel.DEBUG, `pmcaptcha: user blocked bot, sendText failed for ${userId}`, e); }
+            await client.sendMessage(peerTarget(userId), { message: "⏰ 验证超时，对话已被限制。", parseMode: "html" });
+          } catch {}
           if (!isStateCurrent(state)) return;
           await runFailActions(client, userId);
         }, { label: `pmcaptcha-timeout:${userId}` }).catch((error) => {
@@ -1011,7 +1051,7 @@ async function sendCaptcha(client: TelegramClient, userId: number): Promise<void
     states.set(userId, state);
     log(LogLevel.INFO, `Captcha sent (${mode}, timeout=${timeout}s) → user ${userId}`);
 
-  } catch (e: unknown) {
+  } catch (e) {
     log(LogLevel.ERROR, `Failed to send captcha to ${userId}`, e);
   }
 }
@@ -1044,7 +1084,7 @@ async function handleReply(client: TelegramClient, userId: number, input: string
     log(LogLevel.WARN, `handleReply: empty answer for user ${userId}`);
     removeCaptchaState(userId);
     await cleanupCaptchaMessages(client, userId, state);
-    try { await client.sendText(userId, html("❌ 验证状态异常，请联系对方重置。")); } catch (e: unknown) { log(LogLevel.DEBUG, `pmcaptcha: user blocked bot, sendText failed for ${userId}`, e); }
+    try { await client.sendMessage(peerTarget(userId), { message: "❌ 验证状态异常，请联系对方重置。", parseMode: "html" }); } catch {}
     return;
   }
 
@@ -1067,8 +1107,8 @@ async function handleReply(client: TelegramClient, userId: number, input: string
     await runPassActions(client, userId);
     if (!isStateCurrent(state)) return;
     try {
-      await client.sendText(userId, html("✅ 验证通过！欢迎与我对话。"));
-    } catch (e: unknown) { log(LogLevel.DEBUG, `pmcaptcha: user blocked bot, sendText failed for ${userId}`, e); }
+      await client.sendMessage(peerTarget(userId), { message: "✅ 验证通过！欢迎与我对话。", parseMode: "html" });
+    } catch {}
     return;
   }
 
@@ -1085,42 +1125,271 @@ async function handleReply(client: TelegramClient, userId: number, input: string
     rec.delVerified(userId);
     log(LogLevel.INFO, `User ${userId} failed captcha (max tries)`);
     try {
-      await client.sendText(userId, html("❌ 验证失败次数过多，对话已被限制。"));
-    } catch (e: unknown) { log(LogLevel.DEBUG, `pmcaptcha: user blocked bot, sendText failed for ${userId}`, e); }
+      await client.sendMessage(peerTarget(userId), { message: "❌ 验证失败次数过多，对话已被限制。", parseMode: "html" });
+    } catch {}
     if (!isStateCurrent(state)) return;
     await runFailActions(client, userId);
   } else {
     const hint = remaining === Infinity ? "请重试。" : `请重试（剩余次数：${remaining}）`;
     try {
-      const hintMsg = await client.sendText(userId, html(`❌ 答案错误，${htmlEscape(hint)}`));
+      const hintMsg = await client.sendMessage(peerTarget(userId), { message: `❌ 答案错误，${htmlEscape(hint)}`, parseMode: "html" });
       if (!isStateCurrent(state)) return;
       state.msgIds.push(hintMsg.id);
-    } catch (e: unknown) { log(LogLevel.DEBUG, `pmcaptcha: user blocked bot, sendText failed for ${userId}`, e); }
+    } catch {}
+  }
+}
+
+// ─── 自动过白规则检查 ─────────────────────────────────────────────────────────
+
+/** 结果类型：pass=自动通过, block=自动拦截, skip=继续下一规则 */
+type AutoRuleResult = "pass" | "block" | "skip";
+
+/**
+ * 1. 主动对话过白 (initiative)
+ *    当我方主动发起私聊时，对方自动加入白名单。
+ *    此规则在 message.out 分支中已内置处理，此处仅作为占位标识。
+ *    实际逻辑在 messageListener 的 message.out 分支中。
+ */
+
+/**
+ * 2. 聊天记录过白 (chat_history)
+ *    用户历史消息数 >= N 时自动通过
+ */
+async function checkChatHistory(client: TelegramClient, userId: number, currentMsgId: number): Promise<AutoRuleResult> {
+  const threshold = cfg.historyCount();
+  if (threshold <= 0) return "skip"; // 禁用
+
+  try {
+    // 获取与该用户的聊天记录（排除当前消息）
+    const messages = await client.getMessages(peerTarget(userId), { limit: threshold + 1 });
+    let count = 0;
+    for (const msg of messages) {
+      if (msg.id !== currentMsgId) count++;
+    }
+    if (count >= threshold) {
+      wl.add(userId);
+      log(LogLevel.INFO, `Auto-pass user ${userId} by chat_history (${count} >= ${threshold})`);
+      return "pass";
+    }
+  } catch (e) {
+    log(LogLevel.WARN, `checkChatHistory failed for ${userId}`, e);
+  }
+  return "skip";
+}
+
+/**
+ * 3. 共同群过白 (groups_in_common)
+ *    用户与自己的共同群 >= N 个时自动通过
+ */
+async function checkGroupsInCommon(client: TelegramClient, userId: number): Promise<AutoRuleResult> {
+  const threshold = cfg.groupsInCommon();
+  if (threshold < 0) return "skip"; // 禁用
+
+  try {
+    const result = await client.invoke(
+      new Api.users.GetFullUser({ id: peerTarget(userId) })
+    ) as any;
+    const commonChatsCount = result?.fullUser?.commonChatsCount ?? 0;
+    if (commonChatsCount >= threshold) {
+      wl.add(userId);
+      log(LogLevel.INFO, `Auto-pass user ${userId} by groups_in_common (${commonChatsCount} >= ${threshold})`);
+      return "pass";
+    }
+  } catch (e) {
+    log(LogLevel.WARN, `checkGroupsInCommon failed for ${userId}`, e);
+  }
+  return "skip";
+}
+
+/**
+ * 4. 关键词过白 (word_filter)
+ *    消息包含白名单关键词 → 自动通过
+ *    消息包含黑名单关键词 → 自动拦截
+ */
+async function checkWordFilter(client: TelegramClient, userId: number, message: Api.Message): Promise<AutoRuleResult> {
+  const text = message.text || (message as any).caption || "";
+  if (!text) return "skip";
+
+  // 白名单关键词检查
+  const wlWords = cfg.wlWords();
+  if (wlWords.length > 0) {
+    for (const word of wlWords) {
+      if (text.includes(word)) {
+        wl.add(userId);
+        log(LogLevel.INFO, `Auto-pass user ${userId} by whitelist word: "${word}"`);
+        return "pass";
+      }
+    }
+  }
+
+  // 黑名单关键词检查
+  const blWords = cfg.blWords();
+  if (blWords.length > 0) {
+    for (const word of blWords) {
+      if (text.includes(word)) {
+        log(LogLevel.INFO, `Auto-block user ${userId} by blacklist word: "${word}"`);
+        return "block";
+      }
+    }
+  }
+
+  return "skip";
+}
+
+/**
+ * 5. Premium 用户处理 (premium)
+ *    allow: Premium 用户自动通过
+ *    ban:   Premium 用户自动拦截
+ *    only:  仅允许 Premium 用户（非 Premium 自动拦截）
+ *    none:  不做特殊处理
+ */
+async function checkPremium(client: TelegramClient, userId: number, message: Api.Message): Promise<AutoRuleResult> {
+  const strategy = cfg.premium();
+  if (strategy === "none") return "skip";
+
+  // 获取用户 premium 状态
+  const sender = (message as any).sender ?? (message as any)._sender;
+  let isPremium = false;
+  if (sender) {
+    isPremium = !!(sender.premium);
+  } else {
+    try {
+      const result = await client.invoke(
+        new Api.users.GetFullUser({ id: peerTarget(userId) })
+      ) as any;
+      isPremium = !!(result?.users?.[0]?.premium);
+    } catch (e) {
+      log(LogLevel.WARN, `checkPremium: cannot get premium status for ${userId}`, e);
+      return "skip";
+    }
+  }
+
+  switch (strategy) {
+    case "allow":
+      if (isPremium) {
+        wl.add(userId);
+        log(LogLevel.INFO, `Auto-pass Premium user ${userId} (strategy=allow)`);
+        return "pass";
+      }
+      return "skip";
+
+    case "ban":
+      if (isPremium) {
+        log(LogLevel.INFO, `Auto-block Premium user ${userId} (strategy=ban)`);
+        return "block";
+      }
+      return "skip";
+
+    case "only":
+      if (!isPremium) {
+        log(LogLevel.INFO, `Auto-block non-Premium user ${userId} (strategy=only)`);
+        return "block";
+      }
+      wl.add(userId);
+      log(LogLevel.INFO, `Auto-pass Premium user ${userId} (strategy=only)`);
+      return "pass";
+
+    default:
+      return "skip";
+  }
+}
+
+/**
+ * 执行所有自动过白规则（按优先级顺序）
+ * 返回 true 表示已处理（通过或拦截），messageListener 应直接返回
+ * 返回 false 表示继续走验证码流程
+ */
+async function runAutoRules(client: TelegramClient, userId: number, message: Api.Message): Promise<boolean> {
+  // 规则 1: initiative 已在 message.out 分支中处理
+
+  // 规则 2: 聊天记录过白
+  const historyResult = await checkChatHistory(client, userId, message.id);
+  if (historyResult === "pass") return true;
+  if (historyResult === "block") {
+    await executeBlockActions(client, userId);
+    return true;
+  }
+
+  // 规则 3: 共同群过白
+  const groupsResult = await checkGroupsInCommon(client, userId);
+  if (groupsResult === "pass") return true;
+  if (groupsResult === "block") {
+    await executeBlockActions(client, userId);
+    return true;
+  }
+
+  // 规则 4: 关键词过白 / 黑名单拦截
+  const wordResult = await checkWordFilter(client, userId, message);
+  if (wordResult === "pass") return true;
+  if (wordResult === "block") {
+    await executeBlockActions(client, userId);
+    return true;
+  }
+
+  // 规则 5: Premium 用户策略
+  const premiumResult = await checkPremium(client, userId, message);
+  if (premiumResult === "pass") return true;
+  if (premiumResult === "block") {
+    await executeBlockActions(client, userId);
+    return true;
+  }
+
+  return false; // 所有规则都未触发，继续正常验证流程
+}
+
+/**
+ * 执行自动拦截操作（黑名单/Premium ban 等触发时）
+ * 复用 captcha 失败的操作逻辑
+ */
+async function executeBlockActions(client: TelegramClient, userId: number) {
+  try {
+    await archiveChat(client, userId);
+    await muteChat(client, userId);
+    const actions = cfg.failActions();
+    for (const action of actions) {
+      switch (action) {
+        case FailAction.BLOCK:
+          try { await client.invoke(new Api.contacts.Block({ id: peerTarget(userId) })); } catch {}
+          break;
+        case FailAction.REPORT:
+          try { await client.invoke(new Api.account.ReportPeer({ peer: peerTarget(userId), reason: new Api.InputReportReasonSpam(), message: "" })); } catch {}
+          break;
+        case FailAction.DELETE:
+          try { await client.invoke(new Api.messages.DeleteHistory({ peer: peerTarget(userId), maxId: 0, justClear: false, revoke: true })); } catch {}
+          break;
+      }
+    }
+    const name = await getDisplayName(client, userId).catch(() => String(userId));
+    rec.addFailed(userId, name, "max_tries", usernameCache.get(userId));
+    log(LogLevel.INFO, `Auto-block actions executed for user ${userId}`);
+  } catch (e) {
+    log(LogLevel.ERROR, `executeBlockActions failed for ${userId}`, e);
   }
 }
 
 // ─── 消息监听 ─────────────────────────────────────────────────────────────────
 
-async function messageListener(message: MessageContext) {
+async function messageListener(message: Api.Message) {
   if (!getActiveLifecycle()) return;
   if (!(await waitDb())) return;
   try {
-    const client = message.client as unknown as TelegramClient;
-    if (message.chat.type !== 'user') return;
+    const client = message.client as TelegramClient;
+    if (!message.isPrivate) return;
     if (!cfg.pluginOn())    return;
 
     // ── 新增：跳过 Telegram 官方服务号 ─────────────────
     const TELEGRAM_OFFICIAL_IDS = [777000];   // 官方账号 ID 列表（可扩展）
-    const senderId = Number(message.sender.id);
+    const senderId = Number(message.senderId);
     if (TELEGRAM_OFFICIAL_IDS.includes(senderId)) {
       log(LogLevel.INFO, `Skipping Telegram official service ID ${senderId}`);
       return;
     }
     // ─────────────────────────────────────────────────
 
-    if (message.isOutgoing) {
+    if (message.out) {
       const selfId   = await getSelfId(client);
-      const targetId = Number(message.chat.id);
+      const peerId   = (message.peerId as any)?.userId;
+      const targetId = peerId ? Number(peerId) : 0;
       if (targetId > 0 && targetId !== selfId) {
         // 同样跳过官方账号的自动标记
         if (TELEGRAM_OFFICIAL_IDS.includes(targetId)) {
@@ -1133,7 +1402,7 @@ async function messageListener(message: MessageContext) {
         }
         const alreadyVerified = cfg.verified().some(r => r.id === targetId);
         if (!alreadyVerified && !wl.has(targetId)) {
-          const sender = message.sender ?? (message as { _sender?: unknown })._sender;
+          const sender = (message as any).sender ?? (message as any)._sender;
           if (sender) cacheUserFromSender(sender);
           const name = await getDisplayName(client, targetId).catch(() => String(targetId));
           rec.addVerified(targetId, name, usernameCache.get(targetId));
@@ -1143,7 +1412,7 @@ async function messageListener(message: MessageContext) {
       return;
     }
 
-    const userId = Number(message.sender.id);
+    const userId = Number(message.senderId);
     if (!userId || userId <= 0) return;
 
     const selfId = await getSelfId(client);
@@ -1152,8 +1421,12 @@ async function messageListener(message: MessageContext) {
     // 再次检查官方 ID（覆盖可能遗漏的场景）
     if (TELEGRAM_OFFICIAL_IDS.includes(userId)) return;
 
-    const sender = message.sender;
+    let sender = (message as any).sender ?? (message as any)._sender;
+    if (!sender) {
+      try { sender = await (message as any).getSender?.(); } catch {}
+    }
     if (sender) cacheUserFromSender(sender);
+    await cachePeerFromMessage(message, userId);
 
     const botFlag = sender ? isBotFromSender(sender) : await isBot(client, userId);
     if (botFlag) return;
@@ -1167,12 +1440,15 @@ async function messageListener(message: MessageContext) {
 
     if (cfg.verified().some(r => r.id === userId)) return;
 
+    // ── 运行自动过白规则 ──
+    if (await runAutoRules(client, userId, message)) return;
+
     await archiveChat(client, userId);
     await muteChat(client, userId);
     if (cfg.captchaOn()) {
       await sendCaptcha(client, userId);
     }
-  } catch (e: unknown) {
+  } catch (e) {
     log(LogLevel.ERROR, "Listener error", e);
   }
 }
@@ -1182,19 +1458,19 @@ async function messageListener(message: MessageContext) {
 async function resolveUser(client: TelegramClient, arg: string): Promise<number | null> {
   if (/^\d+$/.test(arg)) {
     const id = parseInt(arg);
-    fetchUserInfo(client, id).catch(() => { /* fetchUserInfo failed, will use ID only */ });
+    fetchUserInfo(client, id).catch(() => {});
     return id > 0 ? id : null;
   }
   try {
     const username = arg.replace(/^@/, "");
-    const res = await client.call({ _: 'contacts.resolveUsername', username }) as unknown as { users?: unknown[] };
+    const res = await client.invoke(new Api.contacts.ResolveUsername({ username })) as any;
     const user = res?.users?.[0];
-    if (user && !hasRawType(user, 'userEmpty')) {
+    if (user && !(user instanceof Api.UserEmpty)) {
       cacheUserFromSender(user);
-      return Number((user as { id?: unknown }).id);
+      return Number(user.id);
     }
     return null;
-  } catch (e: unknown) { logger.debug('[pmcaptcha] resolveUser failed for arg:', e); return null; }
+  } catch { return null; }
 }
 
 function fmtTime(iso: string): string {
@@ -1284,10 +1560,26 @@ function helpText(section?: string): string {
 • <code>${p}pmc record del failed <ID>/all</code>
   删除失败记录</blockquote>
 
+<b>🤖 自动过白规则：</b>
+<blockquote expandable>优先级顺序依次检查（有规则触发即停止）：
+1️⃣ 主动对话 — 我方主动发起私聊时对方自动通过
+2️⃣ 聊天记录 — 用户历史消息数 ≥ N 时自动通过
+3️⃣ 共同群 — 用户与自己的共同群 ≥ N 个时自动通过
+4️⃣ 关键词 — 消息包含白名单词自动通过，黑名单词自动拦截
+5️⃣ Premium — 根据策略自动通过/拦截 Premium 用户
+
+• <code>${p}pmc set initiative on/off</code> — 启用/禁用主动对话过白
+• <code>${p}pmc set history &lt;N&gt;</code> — 聊天记录过白（-1=禁用）
+• <code>${p}pmc set groups &lt;N&gt;</code> — 共同群过白（-1=禁用）
+• <code>${p}pmc set wl-words &lt;词1 词2…&gt;</code> — 白名单关键词
+• <code>${p}pmc set bl-words &lt;词1 词2…&gt;</code> — 黑名单关键词
+• <code>${p}pmc set premium allow/ban/only/none</code> — Premium 策略</blockquote>
+
 <b>ℹ️ 使用说明：</b>
 • 验证失败默认执行静音+归档
 • 我方主动发起对话时对方自动通过验证
-• 支持中/英文设置（如：屏蔽/block）`,
+• 支持中/英文设置（如：屏蔽/block）
+• 自动过白规则按优先级检查，任何规则触发立即处理`,
 
     basic: `<b>🔒 基础命令</b>
 
@@ -1317,13 +1609,11 @@ function helpText(section?: string): string {
 
     set: `<b>⚙️ 参数设置</b>
 
-<blockquote expandable><b>超时 / 次数</b>
+<blockquote expandable><b>验证参数</b>
 • <code>${p}pmc set time &lt;秒&gt;</code>
   验证超时（0 = 不限时，默认 30）
 • <code>${p}pmc set tries &lt;次&gt;</code>
   最大尝试次数（0 = 不限，默认 3）
-
-<b>文字模式</b>
 • <code>${p}pmc set keyword &lt;关键词&gt;</code>
   文字模式关键词（默认"我同意"）
 • <code>${p}pmc set prompt &lt;文本&gt;</code>
@@ -1331,31 +1621,33 @@ function helpText(section?: string): string {
   └ math 模式：<code>{question}</code> → 题目占位符
   └ text 模式：<code>{keyword}</code> → 关键词占位符
 
-<b>失败操作</b>（可复选，空格分隔）
-• <code>${p}pmc set fail block</code> / <code>屏蔽</code>
-  屏蔽用户
-• <code>${p}pmc set fail delete</code> / <code>删除</code>
-  双方撤回全部对话
-• <code>${p}pmc set fail report</code> / <code>举报</code>
-  举报为垃圾信息
-• <code>${p}pmc set fail mute</code> / <code>静音</code>
-  永久静音（失败时已默认执行）
-• <code>${p}pmc set fail archive</code> / <code>归档</code>
-  归档（失败时已默认执行）
-• <code>${p}pmc set fail none</code> / <code>无</code>
-  清除所有额外操作
-  ✏️ 示例：<code>${p}pmc set fail 屏蔽 举报</code>
+<b>失败/通过操作</b>（可复选，空格分隔）
+• <code>${p}pmc set fail block</code> / <code>屏蔽</code> — 屏蔽用户
+• <code>${p}pmc set fail delete</code> / <code>删除</code> — 双方撤回全部对话
+• <code>${p}pmc set fail report</code> / <code>举报</code> — 举报为垃圾信息
+• <code>${p}pmc set fail mute</code> / <code>静音</code> — 永久静音（默认已执行）
+• <code>${p}pmc set fail archive</code> / <code>归档</code> — 归档（默认已执行）
+• <code>${p}pmc set pass unmute</code> / <code>取消静音</code> — 验证通过后取消静音
+• <code>${p}pmc set pass unarchive</code> / <code>取消归档</code> — 验证通过后取消归档
+• <code>${p}pmc set pass wl</code> / <code>白名单</code> — 验证通过后加入白名单
+  ✏️ 示例：<code>${p}pmc set fail 屏蔽 举报</code>、<code>${p}pmc set pass 取消静音</code>
   ℹ️ 修改后正在进行中的验证消息实时更新
 
-<b>通过操作</b>（可复选）
-• <code>${p}pmc set pass unmute</code> / <code>取消静音</code>
-  通过后取消静音
-• <code>${p}pmc set pass unarchive</code> / <code>取消归档</code>
-  通过后取消归档
-• <code>${p}pmc set pass wl</code> / <code>白名单</code>
-  通过后加入白名单
-• <code>${p}pmc set pass none</code> / <code>无</code>
-  清除所有通过操作</blockquote>`,
+<b>自动过白规则</b>（优先级依次检查）
+• <code>${p}pmc set initiative on/off</code>
+  主动对话过白（默认 on）— 我方主动发起私聊时对方自动通过
+• <code>${p}pmc set history &lt;数字&gt;</code>
+  聊天记录过白（-1=禁用）— 用户历史消息数 ≥ N 时自动通过
+• <code>${p}pmc set groups &lt;数字&gt;</code>
+  共同群过白（-1=禁用）— 用户与自己的共同群 ≥ N 个时自动通过
+• <code>${p}pmc set wl-words &lt;词1 词2…&gt;</code>
+  白名单关键词 — 消息包含这些词时自动通过（none清空）
+• <code>${p}pmc set bl-words &lt;词1 词2…&gt;</code>
+  黑名单关键词 — 消息包含这些词时自动拦截（none清空）
+• <code>${p}pmc set premium allow/ban/only/none</code>
+  Premium 用户策略
+  └ allow: Premium 用户自动通过 / ban: Premium 用户自动拦截
+  └ only: 仅允许 Premium 用户 / none: 不做特殊处理（默认）</blockquote>`,
 
     wl: `<b>👥 白名单管理</b>
 
@@ -1394,11 +1686,11 @@ function helpText(section?: string): string {
 
 // ─── 指令处理器（统一入口）────────────────────────────────────────────────────
 
-const pmcaptcha = async (message: MessageContext) => {
+const pmcaptcha = async (message: Api.Message) => {
   if (!getActiveLifecycle()) return;
   if (!(await waitDb())) return;
-  const client  = message.client as unknown as TelegramClient;
-  const args    = message.text.slice(1).split(/\s+/).slice(1);
+  const client  = message.client as TelegramClient;
+  const args    = message.message.slice(1).split(/\s+/).slice(1);
   const command = (args[0] || "help").toLowerCase();
 
   // ── on / off：启用 / 禁用插件 ────────────────────────────────────────────────
@@ -1408,23 +1700,31 @@ const pmcaptcha = async (message: MessageContext) => {
     set(K.ENABLED, enabling);
     // ⚠️ 不再自动关闭 captcha_enabled，保留验证配置状态
     try {
-      const tmp = await client.sendText(message.chat.id, html(enabling
-        ? "✅ <b>PMCaptcha 已启用</b>"
-        : `🚫 <b>PMCaptcha 已禁用</b>\n验证配置已保留，下次启用后自动恢复`));
-      try { await message.delete(); } catch (e: unknown) { log(LogLevel.DEBUG, "pmcaptcha: message already deleted", e); }
+      const tmp = await client.sendMessage(message.peerId, {
+        message: enabling
+          ? "✅ <b>PMCaptcha 已启用</b>"
+          : `🚫 <b>PMCaptcha 已禁用</b>\n验证配置已保留，下次启用后自动恢复`,
+        parseMode: "html"
+      });
+      try { await message.delete(); } catch {}
       getActiveLifecycle()?.setTimeout(() => {
-        void (tmp as { delete?: () => Promise<unknown> }).delete?.().catch(() => undefined);
+        void tmp.delete().catch(() => undefined);
       }, 3000, { label: "pmcaptcha-command-cleanup" });
-    } catch (e: unknown) { log(LogLevel.ERROR, "pmc on/off error", e); }
+    } catch (e) { log(LogLevel.ERROR, "pmc on/off error", e); }
     return;
   }
 
   const edit = async (text: string) => {
     try {
-      await message.edit({text});
-    } catch (e: unknown) {
+      await client.editMessage(message.peerId, {
+        message:     message.id,
+        text,
+        parseMode:   "html",
+        linkPreview: false
+      });
+    } catch (e: any) {
       if (String(e).includes("Could not find the input entity")) {
-        try { await message.replyText(html(text), { disableWebPreview: true } as { disableWebPreview?: boolean }); } catch (e: unknown) { log(LogLevel.DEBUG, "pmcaptcha: user blocked bot, replyText failed", e); }
+        try { await message.reply({ message: text, parseMode: "html", linkPreview: false }); } catch {}
       } else {
         throw e;
       }
@@ -1453,16 +1753,38 @@ const pmcaptcha = async (message: MessageContext) => {
         const pa  = cfg.passActions();
         const rawMode = get<string>(K.CAP_MODE, CaptchaMode.MATH);
         const modeInvalid = !(Object.values(CaptchaMode) as string[]).includes(rawMode);
+        
+        // 自动过白规则状态
+        const autoRulesStatus = [
+          cfg.initiative() ? "✅ 主动对话" : undefined,
+          cfg.historyCount() > 0 ? `✅ 聊天记录(${cfg.historyCount()})` : undefined,
+          cfg.groupsInCommon() > 0 ? `✅ 共同群(${cfg.groupsInCommon()})` : undefined,
+          cfg.wlWords().length > 0 ? `✅ 白词(${cfg.wlWords().length})` : undefined,
+          cfg.blWords().length > 0 ? `✅ 黑词(${cfg.blWords().length})` : undefined,
+          cfg.premium() !== "none" ? `✅ Premium` : undefined,
+        ].filter(Boolean).join(" | ");
+        
         await edit(
           `📊 <b>PMCaptcha v${PLUGIN_VERSION}</b>\n\n` +
+          `<b>核心设置</b>\n` +
           `• 插件：${cfg.pluginOn() ? "✅ 启用" : "🚫 禁用"}\n` +
           `• 验证：${cfg.captchaOn() ? "✅ 开启" : "❌ 关闭（默认）"}\n` +
           `• 模式：${htmlEscape(modeLabel(cfg.mode()))}${modeInvalid ? " ⚠️ 原设置无效已自动降级" : ""}\n` +
           `• 超时：${htmlEscape(cfg.timeout() > 0 ? cfg.timeout() + " 秒" : "不限")}\n` +
-          `• 最大次数：${htmlEscape(cfg.maxTries() > 0 ? cfg.maxTries() + " 次" : "不限")}\n` +
+          `• 最大次数：${htmlEscape(cfg.maxTries() > 0 ? cfg.maxTries() + " 次" : "不限")}\n\n` +
+          `<b>动作配置</b>\n` +
           `• 失败操作：${htmlEscape(fa.length ? fa.map(a => FAIL_ACTION_LABEL[a] ?? a).join("、") : "仅归档静音")}\n` +
           `• 通过操作：${htmlEscape(pa.length ? pa.map(a => PASS_ACTION_LABEL[a] ?? a).join("、") : "无")}\n` +
-          `• 文字关键词：${codeTag(cfg.keyword())}\n` +
+          `• 文字关键词：${codeTag(cfg.keyword())}\n\n` +
+          `<b>自动过白规则</b>\n` +
+          `${autoRulesStatus || "（全部禁用）"}\n` +
+          `• 主动对话：${cfg.initiative() ? "✅" : "❌"}\n` +
+          `• 聊天记录：${cfg.historyCount() > 0 ? `✅ ≥${cfg.historyCount()}条` : "❌"}\n` +
+          `• 共同群：${cfg.groupsInCommon() > 0 ? `✅ ≥${cfg.groupsInCommon()}个` : "❌"}\n` +
+          `• 白名单词：${cfg.wlWords().length} 个\n` +
+          `• 黑名单词：${cfg.blWords().length} 个\n` +
+          `• Premium策略：${PREMIUM_LABEL[cfg.premium()]}\n\n` +
+          `<b>统计信息</b>\n` +
           `• 白名单：${htmlEscape(cfg.whitelist().length)} 人\n` +
           `• 待验证：${htmlEscape(states.size)} 人\n` +
           `• 通过记录：${htmlEscape(cfg.verified().length)}\n` +
@@ -1539,14 +1861,21 @@ const pmcaptcha = async (message: MessageContext) => {
 
         if (!param) {
           await edit(
-            `❌ 用法：<code>${mainPrefix}pmc set &lt;三级命令&gt; &lt;值&gt;</code>\n\n` +
-            `三级命令：\n` +
+            `❌ 用法：<code>${mainPrefix}pmc set &lt;参数&gt; &lt;值&gt;</code>\n\n` +
+            `<b>验证参数</b>\n` +
             `<code>time</code>     — 验证超时秒数（0=不限，默认 30）\n` +
             `<code>tries</code>    — 最大尝试次数（0=不限，默认 3）\n` +
             `<code>keyword</code>  — 文字模式关键词\n` +
             `<code>prompt</code>   — 自定义提示语（留空恢复默认）\n` +
             `<code>fail</code>     — 失败操作（支持中文，如：屏蔽/删除/举报/静音/归档）\n` +
             `<code>pass</code>     — 通过操作（支持中文，如：取消静音/取消归档/白名单）\n\n` +
+            `<b>自动过白规则</b>\n` +
+            `<code>initiative</code> — 主动对话过白 (on/off)\n` +
+            `<code>history</code>    — 聊天记录过白 (数字 或 -1禁用)\n` +
+            `<code>groups</code>     — 共同群过白 (数字 或 -1禁用)\n` +
+            `<code>wl-words</code>   — 白名单关键词 (空格分隔 或 none清空)\n` +
+            `<code>bl-words</code>   — 黑名单关键词 (空格分隔 或 none清空)\n` +
+            `<code>premium</code>    — Premium用户策略 (allow/ban/only/none)\n\n` +
             ``
           );
           break;
@@ -1685,6 +2014,131 @@ const pmcaptcha = async (message: MessageContext) => {
             break;
           }
 
+          // ── 自动过白规则：主动对话 ────────────────────────────────────
+          case "initiative": {
+            const v = args[2]?.toLowerCase();
+            if (!v || !["on", "off"].includes(v)) {
+              await edit(
+                `当前设置：${cfg.initiative() ? "✅ 启用" : "❌ 禁用"}\n\n` +
+                `用法：<code>${mainPrefix}pmc set initiative on/off</code>\n\n` +
+                `说明：启用后，当我方主动发起私聊时，对方自动加入白名单`
+              );
+              break;
+            }
+            set(K.INITIATIVE, v === "on");
+            await edit(`✅ 主动对话过白：${v === "on" ? "✅ 已启用" : "❌ 已禁用"}`);
+            break;
+          }
+
+          // ── 自动过白规则：聊天记录 ────────────────────────────────────
+          case "history": {
+            const n = parseInt(args[2] ?? "");
+            if (isNaN(n) || n < -1) {
+              await edit(
+                `当前设置：${cfg.historyCount() > 0 ? cfg.historyCount() + " 条" : "❌ 禁用"}\n\n` +
+                `用法：<code>${mainPrefix}pmc set history &lt;数字&gt;</code>\n` +
+                `<code>${mainPrefix}pmc set history -1</code> — 禁用此规则\n\n` +
+                `说明：用户历史消息数 ≥ 指定值时自动通过验证`
+              );
+              break;
+            }
+            set(K.HISTORY_COUNT, n);
+            await edit(
+              n > 0
+                ? `✅ 聊天记录过白：历史消息数 ≥ <b>${n}</b> 条时自动通过`
+                : `❌ 聊天记录过白：已禁用`
+            );
+            break;
+          }
+
+          // ── 自动过白规则：共同群 ───────────────────────────────────────
+          case "groups": {
+            const n = parseInt(args[2] ?? "");
+            if (isNaN(n) || n < -1) {
+              await edit(
+                `当前设置：${cfg.groupsInCommon() > 0 ? cfg.groupsInCommon() + " 个" : "❌ 禁用"}\n\n` +
+                `用法：<code>${mainPrefix}pmc set groups &lt;数字&gt;</code>\n` +
+                `<code>${mainPrefix}pmc set groups -1</code> — 禁用此规则\n\n` +
+                `说明：与用户共同所在的群 ≥ 指定值时自动通过验证`
+              );
+              break;
+            }
+            set(K.GROUPS_IN_COMMON, n);
+            await edit(
+              n > 0
+                ? `✅ 共同群过白：共同群数 ≥ <b>${n}</b> 个时自动通过`
+                : `❌ 共同群过白：已禁用`
+            );
+            break;
+          }
+
+          // ── 自动过白规则：关键词白名单 ─────────────────────────────────
+          case "wl-words": case "wl_words": {
+            const words = args.slice(2).filter(Boolean);
+            if (!words.length) {
+              const current = cfg.wlWords();
+              await edit(
+                `当前白名单关键词：${current.length > 0 ? current.map(w => codeTag(w)).join(" ") : "（无）"}\n\n` +
+                `用法：<code>${mainPrefix}pmc set wl-words &lt;关键词1&gt; &lt;关键词2&gt; …</code>\n` +
+                `<code>${mainPrefix}pmc set wl-words none</code> — 清空\n\n` +
+                `说明：消息包含这些关键词时自动通过验证`
+              );
+              break;
+            }
+            if (words.some(w => w.toLowerCase() === "none")) {
+              set(K.WL_WORDS, []);
+              await edit("✅ 白名单关键词已清空");
+              break;
+            }
+            set(K.WL_WORDS, words);
+            await edit(`✅ 白名单关键词已设置：${words.map(w => codeTag(w)).join(" ")}`);
+            break;
+          }
+
+          // ── 自动过白规则：关键词黑名单 ─────────────────────────────────
+          case "bl-words": case "bl_words": {
+            const words = args.slice(2).filter(Boolean);
+            if (!words.length) {
+              const current = cfg.blWords();
+              await edit(
+                `当前黑名单关键词：${current.length > 0 ? current.map(w => codeTag(w)).join(" ") : "（无）"}\n\n` +
+                `用法：<code>${mainPrefix}pmc set bl-words &lt;关键词1&gt; &lt;关键词2&gt; …</code>\n` +
+                `<code>${mainPrefix}pmc set bl-words none</code> — 清空\n\n` +
+                `说明：消息包含这些关键词时自动拦截并执行失败操作`
+              );
+              break;
+            }
+            if (words.some(w => w.toLowerCase() === "none")) {
+              set(K.BL_WORDS, []);
+              await edit("✅ 黑名单关键词已清空");
+              break;
+            }
+            set(K.BL_WORDS, words);
+            await edit(`✅ 黑名单关键词已设置：${words.map(w => codeTag(w)).join(" ")}`);
+            break;
+          }
+
+          // ── 自动过白规则：Premium 用户策略 ────────────────────────────
+          case "premium": {
+            const strategy = args[2]?.toLowerCase() as PremiumStrategy | undefined;
+            if (!strategy || !PREMIUM_STRATEGIES.includes(strategy)) {
+              const current = cfg.premium();
+              await edit(
+                `当前策略：<b>${PREMIUM_LABEL[current]}</b>\n\n` +
+                `用法：<code>${mainPrefix}pmc set premium &lt;策略&gt;</code>\n\n` +
+                `可用策略：\n` +
+                `<code>allow</code> — Premium 用户自动通过\n` +
+                `<code>ban</code>   — Premium 用户自动拦截\n` +
+                `<code>only</code>  — 仅允许 Premium 用户（非 Premium 用户自动拦截）\n` +
+                `<code>none</code>  — 不做特殊处理（默认）`
+              );
+              break;
+            }
+            set(K.PREMIUM, strategy);
+            await edit(`✅ Premium 用户策略：<b>${PREMIUM_LABEL[strategy]}</b>`);
+            break;
+          }
+
           // ── 已废弃参数友好提示 ───────────────────────────────────────────
           case "ext-timeout": case "exttimeout":
             await edit(`❌ ext-timeout 已移除，请使用 <code>${mainPrefix}pmc set time</code>`);
@@ -1703,7 +2157,8 @@ const pmcaptcha = async (message: MessageContext) => {
           default:
             await edit(
               `❌ 未知三级命令：${codeTag(param)}\n\n` +
-              `可用：<code>time</code>、<code>tries</code>、<code>keyword</code>、<code>prompt</code>、<code>fail</code>、<code>pass</code>\n\n` +
+              `验证：<code>time</code>、<code>tries</code>、<code>keyword</code>、<code>prompt</code>、<code>fail</code>、<code>pass</code>\n` +
+              `规则：<code>initiative</code>、<code>history</code>、<code>groups</code>、<code>wl-words</code>、<code>bl-words</code>、<code>premium</code>\n\n` +
               ``
             );
         }
@@ -1717,11 +2172,11 @@ const pmcaptcha = async (message: MessageContext) => {
       case "add": {
         // 二级命令 add：快捷白名单添加（等同 .pmc wl add）
         let tid: number | null = null;
-        if (message.replyToMessage?.id) {
+        if (message.replyTo?.replyToMsgId) {
           try {
-            const r = await safeGetMessages(client, message.chat.id, { ids: [message.replyToMessage.id] });
-            if (r[0]?.sender?.id) tid = Number(r[0].sender.id);
-          } catch (e: unknown) { log(LogLevel.DEBUG, "pmcaptcha: reply fetch failed", e); }
+            const r = await safeGetMessages(client, message.peerId, { ids: [message.replyTo.replyToMsgId] });
+            if (r[0]?.senderId) tid = Number(r[0].senderId);
+          } catch {}
         }
         if (!tid && args[1]) tid = await resolveUser(client, args[1]);
         if (!tid || tid <= 0) {
@@ -1731,7 +2186,6 @@ const pmcaptcha = async (message: MessageContext) => {
           );
           break;
         }
-        // 顺序执行：先检查是否为机器人，再获取名称并添加
         if (await isBot(client, tid)) { await edit("❌ 无法将机器人加入白名单"); break; }
         wl.add(tid);
         const name = await getDisplayName(client, tid);
@@ -1765,11 +2219,12 @@ const pmcaptcha = async (message: MessageContext) => {
         if (!sub) {
           const list = cfg.whitelist();
           if (!list.length) { await edit("📋 <b>白名单为空</b>"); break; }
-          const rows = (await Promise.all(list.map(async (id) => {
-            if (await isBot(client, id)) return null;
-            const name = await getDisplayName(client, id);
-            return `• ${userLink(id, name)}`;
-          }))).filter((r): r is string => r !== null);
+          const rows: string[] = [];
+          for (const id of list) {
+            if (await isBot(client, id)) continue;
+            const name     = await getDisplayName(client, id);
+            rows.push(`• ${userLink(id, name)}`);
+          }
           if (!rows.length) { await edit("📋 <b>白名单为空</b>"); break; }
           await edit(`📋 <b>白名单 (${rows.length})</b>\n\n${rows.join("\n")}`);
           break;
@@ -1778,15 +2233,14 @@ const pmcaptcha = async (message: MessageContext) => {
         // wl add
         if (sub === "add") {
           let tid: number | null = null;
-          if (message.replyToMessage?.id) {
+          if (message.replyTo?.replyToMsgId) {
             try {
-              const r = await safeGetMessages(client, message.chat.id, { ids: [message.replyToMessage.id] });
-              if (r[0]?.sender?.id) tid = Number(r[0].sender.id);
-            } catch (e: unknown) { log(LogLevel.DEBUG, "pmcaptcha: reply fetch failed", e); }
+              const r = await safeGetMessages(client, message.peerId, { ids: [message.replyTo.replyToMsgId] });
+              if (r[0]?.senderId) tid = Number(r[0].senderId);
+            } catch {}
           }
           if (!tid && args[2]) tid = await resolveUser(client, args[2]);
           if (!tid || tid <= 0) { await edit("❌ 请提供有效的用户 ID / 用户名，或回复用户消息"); break; }
-          // 顺序执行：先检查是否为机器人，再获取名称并添加
           if (await isBot(client, tid)) { await edit("❌ 无法将机器人加入白名单"); break; }
           wl.add(tid);
           const name = await getDisplayName(client, tid);
@@ -1900,13 +2354,14 @@ const pmcaptcha = async (message: MessageContext) => {
           const list = cfg.verified();
           if (!list.length) { await edit("📋 <b>验证通过记录为空</b>"); break; }
           const wlSet = new Set(cfg.whitelist());
-          const rows = (await Promise.all(list.map(async (r) => {
-            if (wlSet.has(r.id)) return null;
-            if (await isBot(client, r.id)) return null;
+          const rows: string[] = [];
+          for (const r of list) {
+            if (wlSet.has(r.id)) continue;           // 白名单优先级更高，不重复显示
+            if (await isBot(client, r.id)) continue;
             if (r.username) usernameCache.set(r.id, r.username);
             const name = await getDisplayName(client, r.id).catch(() => r.name);
-            return `• ${userLink(r.id, name)}\n  <i>${htmlEscape(fmtTime(r.time))}</i>`;
-          }))).filter((r): r is string => r !== null);
+            rows.push(`• ${userLink(r.id, name)}\n  <i>${htmlEscape(fmtTime(r.time))}</i>`);
+          }
           if (!rows.length) { await edit("📋 <b>验证通过记录为空</b>"); break; }
           await edit(`✅ <b>验证通过 (${rows.length})</b>\n\n${rows.join("\n\n")}`);
           break;
@@ -1918,14 +2373,15 @@ const pmcaptcha = async (message: MessageContext) => {
           if (!list.length) { await edit("📋 <b>验证失败记录为空</b>"); break; }
           const wlSet       = new Set(cfg.whitelist());
           const verifiedSet = new Set(cfg.verified().map(v => v.id));
-          const rows = (await Promise.all(list.map(async (r) => {
-            if (wlSet.has(r.id)) return null;
-            if (verifiedSet.has(r.id)) return null;
-            if (await isBot(client, r.id)) return null;
+          const rows: string[] = [];
+          for (const r of list) {
+            if (wlSet.has(r.id))       continue;    // 白名单优先级最高
+            if (verifiedSet.has(r.id)) continue;    // 已通过验证，优先级高于失败
+            if (await isBot(client, r.id)) continue;
             if (r.username) usernameCache.set(r.id, r.username);
             const name = await getDisplayName(client, r.id).catch(() => r.name);
-            return `• ${userLink(r.id, name)} — ${htmlEscape(rLbl[r.reason])}\n  <i>${htmlEscape(fmtTime(r.time))}</i>`;
-          }))).filter((r): r is string => r !== null);
+            rows.push(`• ${userLink(r.id, name)} — ${htmlEscape(rLbl[r.reason])}\n  <i>${htmlEscape(fmtTime(r.time))}</i>`);
+          }
           if (!rows.length) { await edit("📋 <b>验证失败记录为空</b>"); break; }
           await edit(`❌ <b>验证失败 (${rows.length})</b>\n\n${rows.join("\n\n")}`);
           break;
@@ -1956,9 +2412,9 @@ const pmcaptcha = async (message: MessageContext) => {
           `可用命令：<code>${mainPrefix}pmc</code> / <code>${mainPrefix}pmcaptcha</code>`
         );
     }
-  } catch (e: unknown) {
+  } catch (e) {
     log(LogLevel.ERROR, "Command error", e);
-    try { await edit(`❌ 命令执行失败: ${htmlEscape(e)}`); } catch (e: unknown) { log(LogLevel.DEBUG, "pmcaptcha: edit failed", e); }
+    try { await edit(`❌ 命令执行失败: ${htmlEscape(e)}`); } catch {}
   }
 };
 
@@ -1984,6 +2440,7 @@ class PMCaptchaPlugin extends Plugin {
     drainCaptchaStates();
     runtimeLifecycle = null;
     runtimeGeneration = 0;
+    inputPeerCache.clear();
   }
 
   name        = "pmcaptcha";
@@ -2034,85 +2491,4 @@ class PMCaptchaPlugin extends Plugin {
 }
 
 const plugin = new PMCaptchaPlugin();
-
-  // Panel Settings Adapter
-  panelAdapter: PanelSettingsAdapter = {
-    id: "pmcaptcha",
-    title: "私聊验证",
-    description: "私聊验证码配置",
-    category: "插件配置",
-    icon: "🛡️",
-    getSchema: (): PanelSettingField[] => [
-      {
-            "key": "plugin_enabled",
-            "label": "启用插件",
-            "type": "boolean"
-      },
-      {
-            "key": "captcha_enabled",
-            "label": "启用验证码",
-            "type": "boolean"
-      },
-      {
-            "key": "captcha_mode",
-            "label": "验证码模式",
-            "type": "select",
-            "options": [
-                  {
-                        "value": "math",
-                        "label": "数学计算"
-                  },
-                  {
-                        "value": "text",
-                        "label": "文字关键词"
-                  },
-                  {
-                        "value": "img_digit",
-                        "label": "图片数字"
-                  },
-                  {
-                        "value": "img_mixed",
-                        "label": "图片字母数字混合"
-                  }
-            ]
-      },
-      {
-            "key": "captcha_timeout",
-            "label": "验证超时 (秒)",
-            "type": "number",
-            "min": 10,
-            "max": 300,
-            "default": 30
-      },
-      {
-            "key": "captcha_max_tries",
-            "label": "最大尝试次数",
-            "type": "number",
-            "min": 1,
-            "max": 10,
-            "default": 3
-      },
-      {
-            "key": "captcha_text_keyword",
-            "label": "文字验证关键词",
-            "type": "string",
-            "default": "我同意"
-      },
-      {
-            "key": "captcha_prompt",
-            "label": "自定义提示",
-            "type": "textarea"
-      }
-],
-    getValues: async (): Promise<Record<string, unknown>> => {
-      const db = await JSONFilePreset<any>(path.join(createDirectoryInAssets("pmcaptcha"), "config.json"), DEFAULT_CONFIG);
-      return db.data as Record<string, unknown>;
-    },
-    setValues: async (patch: Record<string, unknown>): Promise<void> => {
-      const db = await JSONFilePreset<any>(path.join(createDirectoryInAssets("pmcaptcha"), "config.json"), DEFAULT_CONFIG);
-      Object.assign(db.data, patch);
-      await db.write();
-    },
-  };
-
 export default plugin;

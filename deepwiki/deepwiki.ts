@@ -1,11 +1,7 @@
-import { Plugin, type PanelSettingsAdapter, type PanelSettingField, type PanelFieldType, type Plugin, type PanelSettingsAdapter, type PanelSettingField, type PanelFieldTypeRuntimeContext } from "@utils/pluginBase";
-import type { MessageContext } from "@mtcute/dispatcher";
-import type { Message } from "@mtcute/core";
-import { getGlobalClient } from "@utils/runtimeManager";
-import { thtml as html } from "@mtcute/html-parser";
+import { Plugin, type PluginRuntimeContext } from "@utils/pluginBase";
+import { Api } from "teleproto";
 import { getPrefixes } from "@utils/pluginManager";
 import { JSONFilePreset } from "lowdb/node";
-import { Low } from "lowdb";
 import { createDirectoryInAssets } from "@utils/pathHelpers";
 import { TelegramFormatter } from "@utils/telegramFormatter";
 import { TelegraphFormatter } from "@utils/telegraphFormatter";
@@ -15,9 +11,7 @@ import path from "path";
 import axios from "axios";
 import http from "http";
 import https from "https";
-import { safeGetReplyMessage } from "@utils/safeGetMessages";
-import { getMessageText as getMessageTextFromGuard, getMessageReplyToId } from "@utils/entityTypeGuards";
-import { logger } from "@utils/logger";
+import { safeGetMessages } from "@utils/safeGetMessages";
 
 type RepoEntry = {
   tag: string;
@@ -66,30 +60,60 @@ const MAX_TURNS_PER_TAG = 50;
 const escapeHtml = (text: string): string =>
   text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 
-const getMessageText = (m?: { text?: string; message?: string } | null): string => {
+const getMessageText = (m?: Api.Message | null): string => {
   if (!m) return "";
-  const text = m.text ?? m.message ?? "";
+  const text = (m as any).message ?? (m as any).text ?? "";
   return typeof text === "string" ? text : "";
 };
 
-const getRepliedMessageText = async (msg: MessageContext): Promise<string> => {
+const getRepliedMessageText = async (msg: Api.Message): Promise<string> => {
   try {
-    const replied = await safeGetReplyMessage(msg);
+    const getter = (msg as any).getReplyMessage;
+    if (typeof getter === "function") {
+      const replied = await getter.call(msg);
+      return getMessageText(replied).trim();
+    }
+  } catch {}
+
+  try {
+    const replyToMsgId =
+      (msg as any)?.replyTo?.replyToMsgId ??
+      (msg as any)?.replyToMsgId ??
+      (msg as any)?.replyTo?.replyToMsg?.id;
+    if (!replyToMsgId) return "";
+    const peer = (msg.chatId || msg.peerId) as any;
+    const res = await safeGetMessages(msg.client as any, peer, { ids: [replyToMsgId] });
+    const replied = Array.isArray(res) ? res[0] : res;
     return getMessageText(replied).trim();
-  } catch (e: unknown) { logger.warn('[deepwiki] get replied message text failed:', e) }
+  } catch {}
 
   return "";
 };
 
-const getRepliedMessageId = async (msg: MessageContext): Promise<number | undefined> => {
+const getRepliedMessageId = async (msg: Api.Message): Promise<number | undefined> => {
   try {
-    const replyToId = getMessageReplyToId(msg);
-    if (typeof replyToId === "number") return replyToId;
+    const typedMsg = msg as Api.Message & {
+      replyTo?: { replyToMsgId?: number; replyToTopId?: number; replyToMsg?: { id?: number } };
+      replyToMsgId?: number;
+    };
+    const id =
+      typedMsg.replyTo?.replyToTopId ??
+      typedMsg.replyTo?.replyToMsgId ??
+      typedMsg.replyToMsgId ??
+      typedMsg.replyTo?.replyToMsg?.id;
 
-    const replied = await safeGetReplyMessage(msg);
-    const rid = (replied as { id?: number })?.id;
-    if (typeof rid === "number") return rid;
-  } catch (e: unknown) { logger.warn('[deepwiki] get replied message id failed:', e) }
+    if (typeof id === "number") return id;
+
+    const getter = (msg as any).getReplyMessage;
+    if (typeof getter === "function") {
+      const replied = await getter.call(msg);
+      const typedReply = replied as Api.Message & {
+        replyTo?: { replyToTopId?: number };
+      };
+      const rid = typedReply.replyTo?.replyToTopId ?? typedReply.id;
+      if (typeof rid === "number") return rid;
+    }
+  } catch {}
 
   return undefined;
 };
@@ -101,45 +125,55 @@ class UserError extends Error {
   }
 }
 
-const requireUser = (cond: unknown, msg: string) => {
+const requireUser = (cond: any, msg: string) => {
   if (!cond) throw new UserError(msg);
 };
 
 class MessageSender {
-  static async sendOrEdit(msg: MessageContext, text: string, parseMode: "markdown" | "html" = "html"): Promise<Message | undefined> {
+  static async sendOrEdit(msg: Api.Message, text: string, parseMode: "html" | "markdown" = "html"): Promise<Api.Message | undefined> {
     try {
-      return await msg.edit({ text: html(text), disableWebPreview: true });
-    } catch (_e: unknown) {
-      return await msg.replyText(html(text), { disableWebPreview: true });
+      return await msg.edit({ text, parseMode, linkPreview: false } as any);
+    } catch {
+      return await msg.reply({ message: text, parseMode, linkPreview: false } as any);
     }
   }
 
   static async sendNew(
-    msg: MessageContext,
+    msg: Api.Message,
     text: string,
-    parseMode: "markdown" | "html" = "html",
+    parseMode: "html" | "markdown" = "html",
     replyToId?: number,
     linkPreview: boolean = false
-  ): Promise<Message | undefined> {
+  ): Promise<Api.Message | undefined> {
     const topicRootId = getTopicRootId(msg);
-    const replyTo = replyToId ?? topicRootId;
+    const replyTo =
+      replyToId && topicRootId && replyToId !== topicRootId
+        ? new Api.InputReplyToMessage({
+            replyToMsgId: replyToId,
+            topMsgId: topicRootId,
+          })
+        : replyToId ?? topicRootId;
 
-    const client = await getGlobalClient();
-    return await client.sendText(msg.chat.id, html(text), {
+    return await (msg.client as any).sendMessage(msg.chatId || msg.peerId, {
+      message: text,
+      parseMode,
       ...(replyTo ? { replyTo } : {}),
-      disableWebPreview: !linkPreview,
+      linkPreview,
     });
   }
 }
 
-const getTopicRootId = (msg: MessageContext): number | undefined => {
-  const replyTo = (msg as { replyToMessage?: { threadId?: number; id?: number } }).replyToMessage;
-  return replyTo?.threadId ?? replyTo?.id;
+const getTopicRootId = (msg: Api.Message): number | undefined => {
+  const typedMsg = msg as Api.Message & {
+    replyTo?: { replyToTopId?: number; replyToMsgId?: number };
+    replyToMsgId?: number;
+  };
+  return typedMsg.replyTo?.replyToTopId ?? typedMsg.replyTo?.replyToMsgId ?? typedMsg.replyToMsgId;
 };
 
 class DeepWikiStore {
-  private dbMain!: Low<MainDB>;
-  private dbCtx!: Low<CtxDB>;
+  private dbMain: any;
+  private dbCtx: any;
 
   private gk(chatKey: string): string {
     return chatKey || "unknown";
@@ -217,10 +251,8 @@ class DeepWikiStore {
 
   async getChatState(chatKey: string): Promise<ChatState> {
     this.ensureReady();
-    const [main, ctx] = await Promise.all([
-      this.ensureMainChat(chatKey),
-      this.ensureCtxChat(chatKey),
-    ]);
+    const main = await this.ensureMainChat(chatKey);
+    const ctx = await this.ensureCtxChat(chatKey);
     await this.dbMain.read();
     return {
       currentTag: main.currentTag || "",
@@ -338,21 +370,21 @@ class DeepWikiStore {
 }
 
 class DeepWikiMcp {
-  private client: Client | null = null;
+  private client: any | null = null;
   private connecting: Promise<void> | null = null;
   private repoKey: string | null = null;
   private questionKey: string | null = null;
   private closed = false;
 
-  private extractText(result: unknown): string {
-    const parts = (result as { content?: unknown })?.content;
+  private extractText(result: any): string {
+    const parts = result?.content;
     if (!Array.isArray(parts)) {
       if (typeof result === "string") return result;
-      if (typeof (result as { text?: string })?.text === "string") return (result as { text: string }).text;
+      if (typeof result?.text === "string") return result.text;
       return String(result ?? "");
     }
-    const texts = (parts as Array<{ type?: string; text?: string }>)
-      .map((p) => {
+    const texts = parts
+      .map((p: any) => {
         if (p?.type === "text" && typeof p?.text === "string") return p.text;
         if (typeof p?.text === "string") return p.text;
         return "";
@@ -378,9 +410,9 @@ class DeepWikiMcp {
       const transport = new StreamableHTTPClientTransport(new URL("https://mcp.deepwiki.com/mcp"));
       const client = new Client({ name: "telebox-deepwiki", version: "1.0.0" });
       try {
-        await client.connect(transport);
-      } catch (error: unknown) {
-        await client.close().catch((e) => logger.debug('[deepwiki] close failed:', e));
+        await client.connect(transport as any);
+      } catch (error) {
+        await client.close().catch(() => undefined);
         throw error;
       }
       if (this.closed) {
@@ -413,7 +445,7 @@ class DeepWikiMcp {
       this.questionKey = questionKey;
     }
 
-    const result = await this.client!.callTool({
+    const result = await this.client.callTool({
       name: "ask_question",
       arguments: {
         repoName: repoKey,
@@ -434,7 +466,7 @@ class DeepWikiMcp {
     this.questionKey = null;
 
     if (this.connecting) {
-      await this.connecting.catch((e) => logger.debug('[deepwiki] connecting failed:', e));
+      await this.connecting.catch(() => undefined);
     }
 
     const connectedClient = activeClient ?? this.client;
@@ -487,7 +519,7 @@ const parseRepoFromUrl = (raw: string): { repo: string; canonicalUrl: string } |
         };
       }
     }
-  } catch (_e: unknown) {
+  } catch {
     return null;
   }
   return null;
@@ -576,20 +608,19 @@ const buildQAHtml = (headerLines: string[], question: string, answerMarkdown: st
   return header ? `${header}\n${qBlock}${aBlock}` : `${qBlock}${aBlock}`;
 };
 
-const toIdString = (v: unknown): string => {
+const toIdString = (v: any): string => {
   try {
     if (v === null || v === undefined) return "";
     if (typeof v === "string") return v;
     if (typeof v === "number" || typeof v === "bigint") return String(v);
-    if (typeof v === "object" && v !== null) {
-      const obj = v as { channelId?: unknown; chatId?: unknown; userId?: unknown; id?: unknown };
-      if (obj.channelId !== undefined) return String(obj.channelId);
-      if (obj.chatId !== undefined) return String(obj.chatId);
-      if (obj.userId !== undefined) return String(obj.userId);
-      if (obj.id !== undefined) return String(obj.id);
+    if (typeof v === "object") {
+      if (v.channelId !== undefined) return String(v.channelId);
+      if (v.chatId !== undefined) return String(v.chatId);
+      if (v.userId !== undefined) return String(v.userId);
+      if (v.id !== undefined) return String(v.id);
     }
     return String(v);
-  } catch (_e: unknown) {
+  } catch {
     return "";
   }
 };
@@ -655,9 +686,9 @@ class DeepWikiPlugin extends Plugin {
     return prefixes[0] || "";
   }
 
-  private getChatKey(msg: MessageContext): string {
-    const chatId = (msg as { chat?: { id?: number } }).chat?.id;
-    const peerId = (msg as { chat?: { id?: number } }).chat?.id;
+  private getChatKey(msg: Api.Message): string {
+    const chatId = (msg as any).chatId;
+    const peerId = (msg as any).peerId;
     const baseKey = toIdString(chatId) || toIdString(peerId) || "unknown";
     const topicRootId = getTopicRootId(msg);
     return topicRootId ? `${baseKey}:topic:${topicRootId}` : baseKey;
@@ -686,9 +717,9 @@ class DeepWikiPlugin extends Plugin {
     );
   }
 
-  private formatError(err: unknown): string {
+  private formatError(err: any): string {
     if (err instanceof UserError) return `🚫 ${err.message}`;
-    const msg = typeof (err as { message?: unknown })?.message === "string" ? (err as { message: string }).message : String(err);
+    const msg = typeof err?.message === "string" ? err.message : String(err);
     return `❌ <b>错误:</b> ${escapeHtml(msg)}`;
   }
 
@@ -732,7 +763,7 @@ class DeepWikiPlugin extends Plugin {
   }
 
   private async sendAnswerOrTelegraph(
-    msg: MessageContext,
+    msg: Api.Message,
     replyToId: number | undefined,
     headerLines: string[],
     question: string,
@@ -740,8 +771,8 @@ class DeepWikiPlugin extends Plugin {
     collapseSafe: boolean
   ): Promise<void> {
     const signature = `<i>🍀Powered by DeepWiki</i>`;
-    const qaHtml = buildQAHtml(headerLines, question, answerMarkdown, collapseSafe);
-    const finalHtml = qaHtml.length + `\n${signature}`.length <= MAX_TG_LEN ? `${qaHtml}\n${signature}` : `${qaHtml}`;
+    const html = buildQAHtml(headerLines, question, answerMarkdown, collapseSafe);
+    const finalHtml = html.length + `\n${signature}`.length <= MAX_TG_LEN ? `${html}\n${signature}` : `${html}`;
 
     if (finalHtml.length <= MAX_TG_LEN) {
       await MessageSender.sendNew(msg, finalHtml, "html", replyToId, false);
@@ -769,18 +800,16 @@ class DeepWikiPlugin extends Plugin {
 
   description = async (): Promise<string> => this.helpText();
 
-  cmdHandlers: Record<string, (msg: MessageContext, trigger?: MessageContext) => Promise<void>> = {
-    deepwiki: async (msg: MessageContext, trigger?: MessageContext) => {
+  cmdHandlers: Record<string, (msg: Api.Message, trigger?: Api.Message) => Promise<void>> = {
+    deepwiki: async (msg: Api.Message, trigger?: Api.Message) => {
       await this.initOnce();
       const chatKey = this.getChatKey(msg);
       const raw = getMessageText(msg).trim();
       const args = raw.split(/\s+/).slice(1);
       const original = trigger || msg;
 
-      const [repliedText, repliedMsgId] = await Promise.all([
-        getRepliedMessageText(msg),
-        getRepliedMessageId(msg),
-      ]);
+      const repliedText = await getRepliedMessageText(msg);
+      const repliedMsgId = await getRepliedMessageId(msg);
 
       try {
         if (args.length === 0 && !repliedText) {
@@ -955,13 +984,13 @@ class DeepWikiPlugin extends Plugin {
 
         const headerLines = [`<b>项目:</b> <code>${escapeHtml(entry.repo)}</code>`, ctxLine];
 
-        const replyToId = repliedMsgId ?? (original as { id?: number }).id;
+        const replyToId = repliedMsgId ?? (original as any).id;
         await this.sendAnswerOrTelegraph(msg, replyToId, headerLines, combinedQuestion, answer, true);
 
         try {
           await original.delete();
-        } catch (e: unknown) { logger.warn('[deepwiki] delete original msg failed:', e) }
-      } catch (err: unknown) {
+        } catch {}
+      } catch (err: any) {
         await MessageSender.sendOrEdit(original, this.formatError(err), "html");
       }
     },
@@ -971,42 +1000,5 @@ class DeepWikiPlugin extends Plugin {
     await this.cleanup();
   }
 }
-
-
-  // Panel Settings Adapter
-  panelAdapter: PanelSettingsAdapter = {
-    id: "deepwiki",
-    title: "DeepWiki",
-    description: "DeepWiki 配置",
-    category: "插件配置",
-    icon: "📚",
-    getSchema: (): PanelSettingField[] => [
-      {
-            "key": "apiKey",
-            "label": "API 密钥",
-            "type": "password",
-            "secret": true
-      },
-      {
-            "key": "baseUrl",
-            "label": "API 地址",
-            "type": "string"
-      },
-      {
-            "key": "defaultModel",
-            "label": "默认模型",
-            "type": "string"
-      }
-],
-    getValues: async (): Promise<Record<string, unknown>> => {
-      const db = await JSONFilePreset<any>(path.join(createDirectoryInAssets("deepwiki"), "config.json"), {} as any);
-      return db.data as Record<string, unknown>;
-    },
-    setValues: async (patch: Record<string, unknown>): Promise<void> => {
-      const db = await JSONFilePreset<any>(path.join(createDirectoryInAssets("deepwiki"), "config.json"), {} as any);
-      Object.assign(db.data, patch);
-      await db.write();
-    },
-  };
 
 export default new DeepWikiPlugin();

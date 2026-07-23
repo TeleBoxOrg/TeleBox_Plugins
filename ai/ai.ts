@@ -1,6 +1,5 @@
-import { Plugin, type PanelSettingsAdapter, type PanelSettingField, type PanelFieldType } from "@utils/pluginBase";
-import type { MessageContext } from "@mtcute/dispatcher";
-import type { ClientWithDownload, ClientWithGetMessages } from "@utils/clientInternals";
+import { Plugin } from "@utils/pluginBase";
+import { Api } from "teleproto";
 import { getPrefixes } from "@utils/pluginManager";
 import type { Low } from "lowdb";
 import { JSONFilePreset } from "lowdb/node";
@@ -19,10 +18,9 @@ import sharp from "sharp";
 import http from "http";
 import https from "https";
 import { promisify } from "util";
-import { logger } from "@utils/logger";
 import { safeGetReplyMessage } from "@utils/safeGetMessages";
+
 import { htmlEscape } from "@utils/htmlEscape";
-import { tryGetCurrentRuntime } from "@utils/runtimeAccess";
 
 interface ProviderConfig {
   tag: string;
@@ -97,7 +95,7 @@ interface FeatureHandler {
   readonly name: string;
   readonly command: string;
   readonly description: string;
-  execute(msg: MessageContext, args: string[], prefixes: string[]): Promise<any>;
+  execute(msg: Api.Message, args: string[], prefixes: string[]): Promise<void>;
 }
 
 interface Middleware {
@@ -348,11 +346,13 @@ const PROVIDER_HOST_TYPES: Record<string, ProviderType> = {
   ...mapHostsToProviderType(["127.0.0.1", "api.abjj.de"], "local-cliproxy"),
 };
 
+const DEFAULT_PROVIDER_PROFILE: ProviderProfile =
+  PROVIDER_PROFILES[DEFAULT_PROVIDER_TYPE];
+
 const getProviderHost = (url: string): string | null => {
   try {
     return new URL(url).hostname;
-  } catch (e: unknown) {
-    logger.warn('[ai] 解析域名失败:', e);
+  } catch {
     return null;
   }
 };
@@ -361,8 +361,7 @@ const isHttpUrl = (url: string): boolean => {
   try {
     const u = new URL(url);
     return u.protocol === "http:" || u.protocol === "https:";
-  } catch (e: unknown) {
-    logger.warn('[ai] URL验证失败:', e);
+  } catch {
     return false;
   }
 };
@@ -421,8 +420,7 @@ const matchModelRule = (model: string, rule: ModelMatchRule): boolean => {
   if (rule.type === "regex") {
     try {
       return new RegExp(rule.value).test(model);
-    } catch (e: unknown) {
-      logger.warn('[ai] 正则表达式无效:', e);
+    } catch {
       return false;
     }
   }
@@ -491,12 +489,22 @@ const resolveResponsesEndpointUrl = (
   return resolveEndpointUrl(responsesBaseUrl, "responses");
 };
 
-const getMessageText = (m?: { message?: string; text?: string } | null): string => {
+const getMessageText = (m?: Api.Message | null): string => {
   if (!m) return "";
-  const text = m.message ?? m.text ?? "";
+  const text = (m as any).message ?? (m as any).text ?? "";
   return typeof text === "string" ? text : "";
 };
 
+const buildUserContent = (
+  text: string,
+  images: AIContentPart[],
+): string | AIContentPart[] => {
+  if (images.length === 0) return text;
+  const parts: AIContentPart[] = [];
+  if (text.trim()) parts.push({ type: "text", text });
+  parts.push(...images);
+  return parts;
+};
 
 const buildResponsesInputContent = (
   text: string,
@@ -531,26 +539,25 @@ const buildResponsesInputContent = (
   return parts;
 };
 
-const extractErrorMessage = (error: unknown): string => {
-  const err = error as { message?: string; cause?: unknown; config?: { signal?: { reason?: unknown } }; name?: string; code?: string; response?: { status?: number; data?: { error?: { message?: string }; message?: string } } };
-  const msgText = typeof err?.message === "string" ? err.message : "";
+const extractErrorMessage = (error: any): string => {
+  const msgText = typeof error?.message === "string" ? error.message : "";
   const reasonText =
-    typeof err?.cause === "string"
-      ? err.cause
-      : err?.cause
-        ? String(err.cause)
-        : err?.config?.signal?.reason
-          ? String(err.config.signal.reason)
+    typeof error?.cause === "string"
+      ? error.cause
+      : error?.cause
+        ? String(error.cause)
+        : error?.config?.signal?.reason
+          ? String(error.config.signal.reason)
           : "";
 
   if ((msgText + reasonText).includes("请求超时")) return "请求超时";
-  if (err?.name === "AbortError" || msgText.toLowerCase().includes("aborted"))
+  if (error?.name === "AbortError" || msgText.toLowerCase().includes("aborted"))
     return "操作已取消";
-  if (err?.code === "ECONNABORTED") return "请求超时";
-  if (err?.response?.status === 429) return "请求过于频繁，请稍后重试";
+  if (error?.code === "ECONNABORTED") return "请求超时";
+  if (error?.response?.status === 429) return "请求过于频繁，请稍后重试";
   return (
-    err?.response?.data?.error?.message ||
-    err?.response?.data?.message ||
+    error?.response?.data?.error?.message ||
+    error?.response?.data?.message ||
     msgText ||
     "未知错误"
   );
@@ -576,11 +583,11 @@ const PROCESSING_TEXT: Record<ProcessingKind, string> = {
   video: "🎬 <b>正在处理 video 任务</b>",
 };
 
-const formatErrorForDisplay = (error: unknown): string => {
+const formatErrorForDisplay = (error: any): string => {
   if (
     error instanceof UserError ||
-    (error instanceof Error && error.name === "AbortError") ||
-    (error instanceof Error &&
+    error?.name === "AbortError" ||
+    (typeof error?.message === "string" &&
       error.message.toLowerCase().includes("aborted"))
   ) {
     const extracted = extractErrorMessage(error);
@@ -592,19 +599,21 @@ const formatErrorForDisplay = (error: unknown): string => {
 };
 
 const sendProcessing = async (
-  msg: MessageContext,
+  msg: Api.Message,
   kind: ProcessingKind,
 ): Promise<void> => {
   await MessageSender.sendOrEdit(msg, PROCESSING_TEXT[kind], {
+    parseMode: "html",
   });
 };
 
 const sendErrorMessage = async (
-  msg: MessageContext,
-  error: unknown,
-  trigger?: MessageContext,
+  msg: Api.Message,
+  error: any,
+  trigger?: Api.Message,
 ): Promise<void> => {
   await MessageSender.sendOrEdit(trigger || msg, formatErrorForDisplay(error), {
+    parseMode: "html",
   });
 };
 
@@ -626,8 +635,7 @@ const normalizeDownloadedMedia = async (
       const stat = await fs.promises.stat(downloaded);
       if (!stat.isFile()) return null;
       return await fs.promises.readFile(downloaded);
-    } catch (e: unknown) {
-      logger.warn('[ai] 读取媒体文件失败:', e);
+    } catch {
       return null;
     }
   }
@@ -644,14 +652,13 @@ const getImageExtensionForMime = (mimeType: string): string => {
 const extractFirstFrame = async (buffer: Buffer): Promise<Buffer | null> => {
   try {
     return await sharp(buffer, { animated: true }).png().toBuffer();
-  } catch (e: unknown) {
-    logger.warn('[ai] 提取动画首帧失败:', e);
+  } catch {
     return null;
   }
 };
 
-const getDocumentThumb = (doc: any): any | undefined => {
-  const thumbs = doc.thumbnails || doc.thumbs || [];
+const getDocumentThumb = (doc: Api.Document): Api.TypePhotoSize | undefined => {
+  const thumbs = doc.thumbs || [];
   if (thumbs.length === 0) return undefined;
   return thumbs[thumbs.length - 1];
 };
@@ -682,7 +689,7 @@ const resolveImageInputs = async (
         resolved.push({ data: image.data, mimeType: image.mimeType });
         if (!allowFailures) break;
       }
-    } catch (error: unknown) {
+    } catch (error) {
       if (!allowFailures) throw error;
     }
   }
@@ -702,27 +709,25 @@ const resolveImagePart = async (
 };
 
 const collectImagePartsFromSingleMessage = async (
-  msg: MessageContext,
-  out?: AIContentPart[],
-): Promise<AIContentPart[]> => {
-  const localParts: AIContentPart[] = [];
-  if (!msg.media || !msg.client) return localParts;
+  msg: Api.Message,
+  out: AIContentPart[],
+): Promise<void> => {
+  if (!msg.media || !msg.client) return;
 
-  const target = out ?? localParts;
-
-  if ((msg.media as unknown as { type?: string })?.type === 'photo') {
-    const downloaded = await (msg.client as unknown as ClientWithDownload).downloadMedia(msg.media);
+  if (msg.media instanceof Api.MessageMediaPhoto) {
+    const downloaded = await msg.client.downloadMedia(msg);
     const buffer = await normalizeDownloadedMedia(downloaded);
-    if (!buffer) return localParts;
+    if (!buffer) return;
     const dataUrl = `data:image/jpeg;base64,${buffer.toString("base64")}`;
-    target.push({ type: "image_url", image_url: { url: dataUrl } });
-    return localParts;
+    out.push({ type: "image_url", image_url: { url: dataUrl } });
+    return;
   }
 
   if (
-    ['document', 'video', 'sticker', 'audio', 'voice'].includes((msg.media as unknown as { type?: string })?.type ?? '')
+    msg.media instanceof Api.MessageMediaDocument &&
+    msg.media.document instanceof Api.Document
   ) {
-    const doc = msg.media as unknown as { mimeType?: string; attributes?: unknown[] };
+    const doc = msg.media.document;
     const docMime = doc.mimeType || "";
     const isAnimated =
       docMime === "image/gif" ||
@@ -730,64 +735,61 @@ const collectImagePartsFromSingleMessage = async (
       docMime === "application/x-tgsticker" ||
       docMime === "application/x-tg-sticker" ||
       doc.attributes?.some(
-        (attr: any) => attr?.type === 'animated' || attr?._ === 'documentAttributeAnimated',
+        (attr) => attr instanceof Api.DocumentAttributeAnimated,
       );
 
     const thumb = getDocumentThumb(doc);
 
     if (!isAnimated && docMime.startsWith("image/")) {
-      const downloaded = await (msg.client as unknown as ClientWithDownload).downloadMedia(msg.media);
+      const downloaded = await msg.client.downloadMedia(msg);
       const buffer = await normalizeDownloadedMedia(downloaded);
-      if (!buffer) return localParts;
+      if (!buffer) return;
       const dataUrl = `data:${docMime};base64,${buffer.toString("base64")}`;
-      target.push({ type: "image_url", image_url: { url: dataUrl } });
-      return localParts;
+      out.push({ type: "image_url", image_url: { url: dataUrl } });
+      return;
     }
 
     let frameBuffer: Buffer | null = null;
 
     if (thumb) {
-      const downloaded = await (msg.client as unknown as ClientWithDownload).downloadMedia(msg.media, { thumb });
+      const downloaded = await msg.client.downloadMedia(msg, { thumb });
       const buffer = await normalizeDownloadedMedia(downloaded);
       if (buffer) {
         try {
           frameBuffer = await sharp(buffer).png().toBuffer();
-        } catch (e: unknown) {
-          logger.warn('[ai] 转换PNG失败，使用原始buffer:', e);
+        } catch {
           frameBuffer = buffer;
         }
       }
     }
 
     if (!frameBuffer) {
-      const downloaded = await (msg.client as unknown as ClientWithDownload).downloadMedia(msg.media);
+      const downloaded = await msg.client.downloadMedia(msg);
       const buffer = await normalizeDownloadedMedia(downloaded);
       if (buffer) {
         try {
           frameBuffer = await extractFirstFrame(buffer);
-        } catch (e: unknown) {
-          logger.warn('[ai] 提取首帧失败:', e);
+        } catch {
           frameBuffer = null;
         }
       }
     }
 
-    if (!frameBuffer) return localParts;
+    if (!frameBuffer) return;
 
     const dataUrl = `data:image/png;base64,${frameBuffer.toString("base64")}`;
-    target.push({ type: "image_url", image_url: { url: dataUrl } });
+    out.push({ type: "image_url", image_url: { url: dataUrl } });
   }
-  return localParts;
 };
 
 const getMessageImageParts = async (
-  msg?: any,
+  msg?: Api.Message,
 ): Promise<AIContentPart[]> => {
   if (!msg?.client) return [];
 
   const parts: AIContentPart[] = [];
 
-  const rawGroupedId = msg.groupedId;
+  const rawGroupedId = (msg as any).groupedId;
   const groupedId = rawGroupedId ? rawGroupedId.toString() : undefined;
 
   if (!groupedId) {
@@ -795,14 +797,13 @@ const getMessageImageParts = async (
     return parts;
   }
 
-  const peer = msg.chat.id;
-  const sameGroupMessages: MessageContext[] = [];
+  const peer = msg.chatId || msg.peerId;
+  const sameGroupMessages: Api.Message[] = [];
 
-  const messages = await (msg.client as unknown as ClientWithGetMessages).getMessages(peer, { limit: 50 });
-  for (const m of messages) {
-    if (!(m as unknown as { client?: unknown })?.client) continue;
+  for await (const m of msg.client.iterMessages(peer, { limit: 50 })) {
+    if (!(m instanceof Api.Message)) continue;
 
-    const g = (m as unknown as { groupedId?: string | number }).groupedId;
+    const g = (m as any).groupedId;
     if (!g) continue;
 
     if (g.toString() !== groupedId) continue;
@@ -812,30 +813,25 @@ const getMessageImageParts = async (
 
   sameGroupMessages.sort((a, b) => Number(a.id) - Number(b.id));
 
-  // 并行收集各消息的图片部分
-  const partialResults = await Promise.all(
-    sameGroupMessages.map((m) => collectImagePartsFromSingleMessage(m)),
-  );
-  for (const partial of partialResults) {
-    parts.push(...partial);
+  for (const m of sameGroupMessages) {
+    await collectImagePartsFromSingleMessage(m, parts);
   }
 
   return parts;
 };
 
-const getGroupedMessageIds = async (msg: MessageContext): Promise<number[]> => {
+const getGroupedMessageIds = async (msg: Api.Message): Promise<number[]> => {
   if (!msg?.client) return [];
-  const rawGroupedId = msg.groupedId;
+  const rawGroupedId = (msg as any).groupedId;
   const groupedId = rawGroupedId ? rawGroupedId.toString() : undefined;
   if (!groupedId) return [];
 
-  const peer = msg.chat.id;
+  const peer = msg.chatId || msg.peerId;
   const ids: number[] = [];
 
-  const messages = await (msg.client as unknown as ClientWithGetMessages).getMessages(peer, { limit: 50 });
-  for (const m of messages) {
-    if (!(m as unknown as { client?: unknown })?.client) continue;
-    const g = (m as unknown as { groupedId?: string | number }).groupedId;
+  for await (const m of msg.client.iterMessages(peer, { limit: 50 })) {
+    if (!(m instanceof Api.Message)) continue;
+    const g = (m as any).groupedId;
     if (!g) continue;
     if (g.toString() !== groupedId) continue;
     ids.push(Number(m.id));
@@ -846,18 +842,18 @@ const getGroupedMessageIds = async (msg: MessageContext): Promise<number[]> => {
   return Array.from(new Set(ids)).sort((a, b) => a - b);
 };
 
-const deleteMessageOrGroup = async (msg: MessageContext): Promise<void> => {
+const deleteMessageOrGroup = async (msg: Api.Message): Promise<void> => {
   try {
     if (!msg?.client) return;
-    const peer = msg.chat.id;
+    const peer = msg.chatId || msg.peerId;
     const ids = await getGroupedMessageIds(msg);
 
     if (ids.length > 1) {
-      await msg.client.deleteMessagesById(peer, ids, { revoke: true });
+      await msg.client.deleteMessages(peer, ids, { revoke: true });
       return;
     }
     await msg.delete();
-  } catch (e: unknown) { logger.warn('[ai] delete msg failed:', e) }
+  } catch {}
 };
 
 const getHeaderContentType = (headers: unknown): string | undefined => {
@@ -941,8 +937,7 @@ const videoHasAudioTrack = async (filePath: string): Promise<boolean> => {
     const info = JSON.parse(stdout);
     const streams = info.streams || [];
     return streams.length > 0;
-  } catch (e: unknown) {
-    logger.warn('[ai] 流检测失败:', e);
+  } catch {
     return false;
   }
 };
@@ -976,8 +971,7 @@ const ensureVideoHasAudio = async (
     ]);
 
     return outputPath;
-  } catch (e: unknown) {
-    logger.warn('[ai] 音频转码失败，返回原始路径:', e);
+  } catch {
     return inputPath;
   }
 };
@@ -1044,7 +1038,7 @@ const retryWithFixedDelay = async <T>(
     token?.throwIfAborted();
     try {
       return await operation();
-    } catch (error: unknown) {
+    } catch (error: any) {
       lastError = error;
       if (token?.aborted) throw error;
       if (!isRetryableError(error)) throw error;
@@ -1055,25 +1049,24 @@ const retryWithFixedDelay = async <T>(
   throw lastError;
 };
 
-const isRetryableError = (error: unknown): boolean => {
+const isRetryableError = (error: any): boolean => {
   if (!error) return false;
-  if (error instanceof Error && error.name === "AbortError") return false;
+  if (error.name === "AbortError") return false;
   if (
-    error instanceof Error &&
+    typeof error.message === "string" &&
     error.message.toLowerCase().includes("aborted")
   )
     return false;
 
-  const err = error as { response?: { status?: number }; isAxiosError?: boolean; code?: string };
-  const status = err?.response?.status;
+  const status = error.response?.status;
   if (typeof status === "number") {
     if (status === 429) return true;
     if (status >= 500 && status <= 599) return true;
     return false;
   }
 
-  if (err.isAxiosError && !err.response) return true;
-  if (typeof err.code === "string") return true;
+  if (error.isAxiosError && !error.response) return true;
+  if (typeof error.code === "string") return true;
 
   return false;
 };
@@ -1132,22 +1125,22 @@ const pollTask = async <T>(
 };
 
 interface MessageOptions {
-  disableWebPreview?: boolean;
+  parseMode?: string;
+  linkPreview?: boolean;
 }
 
-const getEditErrorText = (error: unknown): string => {
-  const err = error as { errorMessage?: string; message?: string };
+const getEditErrorText = (error: any): string => {
   const parts = [
-    typeof err?.errorMessage === "string" ? err.errorMessage : "",
-    typeof err?.message === "string" ? err.message : "",
+    typeof error?.errorMessage === "string" ? error.errorMessage : "",
+    typeof error?.message === "string" ? error.message : "",
   ].filter(Boolean);
   return parts.join(" ");
 };
 
-const isMessageNotModifiedError = (error: unknown): boolean =>
+const isMessageNotModifiedError = (error: any): boolean =>
   getEditErrorText(error).includes("MESSAGE_NOT_MODIFIED");
 
-const shouldFallbackToReplyOnEditError = (error: unknown): boolean => {
+const shouldFallbackToReplyOnEditError = (error: any): boolean => {
   const text = getEditErrorText(error);
   return (
     text.includes("MESSAGE_ID_INVALID") ||
@@ -1155,50 +1148,53 @@ const shouldFallbackToReplyOnEditError = (error: unknown): boolean => {
   );
 };
 
-const getTopicRootId = (msg: MessageContext): number | undefined => {
-  // Access reply info via raw TL object for compatibility
-  const rawReply = msg.replyToMessage;
-  return rawReply?.threadId ?? rawReply?.id ?? undefined;
+const getTopicRootId = (msg: Api.Message): number | undefined => {
+  const typedMsg = msg as Api.Message & {
+    replyTo?: { replyToTopId?: number; replyToMsgId?: number };
+    replyToMsgId?: number;
+  };
+  return typedMsg.replyTo?.replyToTopId ?? typedMsg.replyTo?.replyToMsgId ?? typedMsg.replyToMsgId;
 };
 
 class MessageSender {
   static async sendOrEdit(
-    msg: MessageContext,
+    msg: Api.Message,
     text: string,
     options?: MessageOptions,
-  ): Promise<any> {
+  ): Promise<Api.Message> {
     try {
       const edited = await msg.edit({ text, ...options });
       if (edited) return edited;
-    } catch (error: unknown) {
+    } catch (error: any) {
       if (isMessageNotModifiedError(error)) {
         return msg;
       }
       if (shouldFallbackToReplyOnEditError(error)) {
-        const replied = await msg.replyText(text, options as Record<string, unknown>);
+        const replied = await msg.reply({ message: text, ...options });
         if (replied) return replied;
       }
       throw error;
     }
 
-    const replied = await msg.replyText(text, options as Record<string, unknown>);
+    const replied = await msg.reply({ message: text, ...options });
     if (replied) return replied;
     throw new Error("消息发送失败");
   }
 
   static async sendNew(
-    msg: MessageContext,
+    msg: Api.Message,
     text: string,
     options?: MessageOptions,
     replyToId?: number,
-  ): Promise<any> {
+  ): Promise<Api.Message> {
     if (!msg.client) {
       throw new Error("客户端未初始化");
     }
 
     const topicRootId = getTopicRootId(msg);
     const replyTo = replyToId ?? topicRootId;
-    return await msg.client.sendText(msg.chat.id, text, {
+    return await msg.client.sendMessage(msg.chatId || msg.peerId, {
+      message: text,
       ...(options || {}),
       ...(replyTo ? { replyTo } : {}),
     });
@@ -1254,12 +1250,12 @@ class MessageUtils {
   }
 
   async sendLongMessage(
-    msg: MessageContext,
+    msg: Api.Message,
     text: string,
     replyToId?: number,
     token?: AbortToken,
     options?: { poweredByTag?: string },
-  ): Promise<any> {
+  ): Promise<Api.Message> {
     token?.throwIfAborted();
 
     const configManager = await this.configManagerPromise;
@@ -1351,7 +1347,7 @@ class MessageUtils {
   }
 
   async sendImages(
-    msg: MessageContext,
+    msg: Api.Message,
     images: AIImage[],
     prompt: string,
     replyToId?: number,
@@ -1371,7 +1367,7 @@ class MessageUtils {
   }
 
   async sendVideos(
-    msg: MessageContext,
+    msg: Api.Message,
     videos: AIVideo[],
     prompt: string,
     replyToId?: number,
@@ -1394,7 +1390,7 @@ class MessageUtils {
   }
 
   private async sendMedia<T extends AIImage | AIVideo>(
-    msg: MessageContext,
+    msg: Api.Message,
     mediaItems: T[],
     prompt: string,
     replyToId: number | undefined,
@@ -1416,7 +1412,7 @@ class MessageUtils {
   ): Promise<void> {
     if (!mediaItems.length) return;
 
-    const peerId = msg.chat.id;
+    const peerId = msg.chatId || msg.peerId;
     const promptText = htmlEscape(prompt);
     const promptBlock = options.collapse
       ? `<blockquote expandable>${promptText}</blockquote>`
@@ -1452,26 +1448,13 @@ class MessageUtils {
 
         const topicRootId = getTopicRootId(msg);
         const replyTo = replyToId ?? topicRootId;
-        // mtcute 公开 API 是 sendMedia，没有 sendFile
-        const isVideo =
-          options.directory === "ai_videos" || Boolean(options.prepareForSend);
-        const mediaType = !options.previewEnabled
-          ? "document"
-          : isVideo
-            ? "video"
-            : "photo";
-        await msg.client.sendMedia(
-          peerId,
-          {
-            type: mediaType,
-            file: pathToSend,
-            fileName: path.basename(pathToSend),
-            caption,
-          },
-          {
-            ...(replyTo ? { replyTo } : {}),
-          },
-        );
+        await msg.client.sendFile(peerId, {
+          file: pathToSend,
+          forceDocument: !options.previewEnabled,
+          caption,
+          parseMode: "html",
+          ...(replyTo ? { replyTo } : {}),
+        });
       } finally {
         const cleanupTargets = options.prepareForSend
           ? [rawPath, finalPath]
@@ -1523,16 +1506,17 @@ class MessageUtils {
   }
 
   private async sendHtml(
-    msg: MessageContext,
-    text: string,
+    msg: Api.Message,
+    html: string,
     replyToId?: number,
-    disableWebPreview?: boolean,
-  ): Promise<any> {
+    linkPreview?: boolean,
+  ): Promise<Api.Message> {
     return await MessageSender.sendNew(
       msg,
-      text,
+      html,
       {
-        ...(disableWebPreview === undefined ? {} : { disableWebPreview }),
+        parseMode: "html",
+        ...(linkPreview === undefined ? {} : { linkPreview }),
       },
       replyToId,
     );
@@ -1719,7 +1703,8 @@ class ConfigManager {
   }
 
   private async notifyListeners(newConfig: DB): Promise<void> {
-    await Promise.all(this.listeners.map((listener) => listener.onConfigChanged(newConfig)));
+    for (const listener of this.listeners)
+      await listener.onConfigChanged(newConfig);
   }
 }
 
@@ -1745,8 +1730,7 @@ const applyAuthConfig = (
       const u = new URL(url);
       if (!u.searchParams.has("key")) u.searchParams.set("key", config.key);
       return { url: u.toString(), headers };
-    } catch (e: unknown) {
-      logger.warn('[ai] URL解析失败，返回原始URL:', e);
+    } catch {
       return { url, headers };
     }
   }
@@ -1803,8 +1787,7 @@ const normalizeOpenAIBaseUrl = (url: string): string => {
     u.pathname = "/v1";
     u.search = "";
     return u.toString();
-  } catch (e: unknown) {
-    logger.warn('[ai] 规范化v1 API URL失败:', e);
+  } catch {
     return url;
   }
 };
@@ -1822,8 +1805,7 @@ const normalizeGeminiBaseUrl = (url: string): string => {
     u.search = "";
     u.hash = "";
     return u.toString();
-  } catch (e: unknown) {
-    logger.warn('[ai] 规范化Gemini Base URL失败:', e);
+  } catch {
     return url;
   }
 };
@@ -2210,7 +2192,7 @@ const parseOpenAIResponsePayloads = (raw: string): any[] => {
 
     try {
       payloads.push(JSON.parse(body));
-    } catch (e: unknown) { logger.warn('[ai] JSON parse failed:', e) }
+    } catch {}
   }
 
   if (payloads.length > 0 || sawDataLine) return payloads;
@@ -2218,8 +2200,7 @@ const parseOpenAIResponsePayloads = (raw: string): any[] => {
   try {
     const parsed = JSON.parse(raw);
     return Array.isArray(parsed) ? parsed : [parsed];
-  } catch (e: unknown) {
-    logger.warn('[ai] JSON解析失败:', e);
+  } catch {
     return [];
   }
 };
@@ -2443,7 +2424,7 @@ class TimeoutMiddleware implements Middleware {
 
     if (timeoutController.signal.aborted)
       controller.abort(timeoutController.signal.reason);
-    else {
+    else
       timeoutController.signal.addEventListener(
         "abort",
         () => controller.abort(timeoutController.signal.reason),
@@ -2451,11 +2432,10 @@ class TimeoutMiddleware implements Middleware {
           once: true,
         },
       );
-    }
 
     if (externalToken) {
       if (externalToken.aborted) controller.abort(externalToken.reason);
-      else {
+      else
         externalToken.signal.addEventListener(
           "abort",
           () => controller.abort(externalToken.reason),
@@ -2463,7 +2443,6 @@ class TimeoutMiddleware implements Middleware {
             once: true,
           },
         );
-      }
     }
 
     return {
@@ -3169,7 +3148,7 @@ class AIService implements ConfigChangeListener {
     model: string,
     prompt: string,
     images: AIContentPart[],
-    _imageMode: VideoImageMode,
+    imageMode: VideoImageMode,
     modeConfig: ProviderModeConfig,
     token?: AbortToken,
   ): Promise<AIVideo[]> {
@@ -3776,7 +3755,7 @@ abstract class BaseFeatureHandler implements FeatureHandler {
   abstract readonly command: string;
   abstract readonly description: string;
   abstract execute(
-    msg: MessageContext,
+    msg: Api.Message,
     args: string[],
     prefixes: string[],
   ): Promise<void>;
@@ -3797,10 +3776,11 @@ abstract class BaseFeatureHandler implements FeatureHandler {
   }
 
   protected async editMessage(
-    msg: MessageContext,
+    msg: Api.Message,
     text: string,
+    parseMode: string = "html",
   ): Promise<void> {
-    await MessageSender.sendOrEdit(msg, text);
+    await MessageSender.sendOrEdit(msg, text, { parseMode });
   }
 }
 
@@ -3814,7 +3794,7 @@ class ConfigFeature extends BaseFeatureHandler {
   }
 
   async execute(
-    msg: MessageContext,
+    msg: Api.Message,
     args: string[],
     _prefixes: string[],
   ): Promise<void> {
@@ -3907,14 +3887,12 @@ class ConfigFeature extends BaseFeatureHandler {
   }
 
   private async addConfig(
-    msg: MessageContext,
+    msg: Api.Message,
     args: string[],
     configManager: ConfigManager,
   ): Promise<void> {
-    const meId = tryGetCurrentRuntime()?.meId;
-    const isSavedMessage = meId != null && String(msg.chat.id) === meId;
     requireUser(
-      isSavedMessage,
+      !!(msg as any).savedPeerId,
       "出于安全考虑，禁止在公开场景添加/修改 API 密钥",
     );
     const { tag, url, key, type } = this.parseAddConfigArgs(args);
@@ -3946,7 +3924,7 @@ class ConfigFeature extends BaseFeatureHandler {
   }
 
   private async setStream(
-    msg: MessageContext,
+    msg: Api.Message,
     args: string[],
     configManager: ConfigManager,
   ): Promise<void> {
@@ -3970,7 +3948,7 @@ class ConfigFeature extends BaseFeatureHandler {
   }
 
   private async setResponses(
-    msg: MessageContext,
+    msg: Api.Message,
     args: string[],
     configManager: ConfigManager,
   ): Promise<void> {
@@ -3994,7 +3972,7 @@ class ConfigFeature extends BaseFeatureHandler {
   }
 
   private async setProviderType(
-    msg: MessageContext,
+    msg: Api.Message,
     args: string[],
     configManager: ConfigManager,
   ): Promise<void> {
@@ -4016,7 +3994,7 @@ class ConfigFeature extends BaseFeatureHandler {
   }
 
   private async deleteConfig(
-    msg: MessageContext,
+    msg: Api.Message,
     args: string[],
     configManager: ConfigManager,
   ): Promise<void> {
@@ -4055,7 +4033,7 @@ class ModelFeature extends BaseFeatureHandler {
   }
 
   async execute(
-    msg: MessageContext,
+    msg: Api.Message,
     args: string[],
     _prefixes: string[],
   ): Promise<void> {
@@ -4133,7 +4111,7 @@ class PromptFeature extends BaseFeatureHandler {
   }
 
   async execute(
-    msg: MessageContext,
+    msg: Api.Message,
     args: string[],
     _prefixes: string[],
   ): Promise<void> {
@@ -4183,7 +4161,7 @@ class CollapseFeature extends BaseFeatureHandler {
   }
 
   async execute(
-    msg: MessageContext,
+    msg: Api.Message,
     args: string[],
     _prefixes: string[],
   ): Promise<void> {
@@ -4222,7 +4200,7 @@ class TelegraphFeature extends BaseFeatureHandler {
   }
 
   async execute(
-    msg: MessageContext,
+    msg: Api.Message,
     args: string[],
     _prefixes: string[],
   ): Promise<void> {
@@ -4257,7 +4235,7 @@ class TelegraphFeature extends BaseFeatureHandler {
   }
 
   private async showTelegraphStatus(
-    msg: MessageContext,
+    msg: Api.Message,
     config: DB,
   ): Promise<void> {
     let status =
@@ -4277,7 +4255,7 @@ class TelegraphFeature extends BaseFeatureHandler {
   }
 
   private async enableTelegraph(
-    msg: MessageContext,
+    msg: Api.Message,
     configManager: ConfigManager,
   ): Promise<void> {
     await configManager.updateConfig((cfg) => {
@@ -4287,7 +4265,7 @@ class TelegraphFeature extends BaseFeatureHandler {
   }
 
   private async disableTelegraph(
-    msg: MessageContext,
+    msg: Api.Message,
     configManager: ConfigManager,
   ): Promise<void> {
     await configManager.updateConfig((cfg) => {
@@ -4297,7 +4275,7 @@ class TelegraphFeature extends BaseFeatureHandler {
   }
 
   private async setTelegraphLimit(
-    msg: MessageContext,
+    msg: Api.Message,
     args: string[],
     configManager: ConfigManager,
   ): Promise<void> {
@@ -4312,7 +4290,7 @@ class TelegraphFeature extends BaseFeatureHandler {
   }
 
   private async deleteTelegraphItem(
-    msg: MessageContext,
+    msg: Api.Message,
     args: string[],
     configManager: ConfigManager,
   ): Promise<void> {
@@ -4351,7 +4329,7 @@ class TimeoutFeature extends BaseFeatureHandler {
   }
 
   async execute(
-    msg: MessageContext,
+    msg: Api.Message,
     args: string[],
     _prefixes: string[],
   ): Promise<void> {
@@ -4406,9 +4384,9 @@ class QuestionFeature extends BaseFeatureHandler {
   }
 
   private async runQuestion(
-    msg: MessageContext,
+    msg: Api.Message,
     question: string,
-    trigger?: MessageContext,
+    trigger?: Api.Message,
   ): Promise<void> {
     this.cancelCurrentOperation();
 
@@ -4424,7 +4402,7 @@ class QuestionFeature extends BaseFeatureHandler {
   }
 
   async execute(
-    msg: MessageContext,
+    msg: Api.Message,
     args: string[],
     _prefixes: string[],
   ): Promise<void> {
@@ -4432,7 +4410,7 @@ class QuestionFeature extends BaseFeatureHandler {
     await this.runQuestion(msg, question);
   }
 
-  async askFromReply(msg: MessageContext, trigger?: MessageContext): Promise<void> {
+  async askFromReply(msg: Api.Message, trigger?: Api.Message): Promise<void> {
     const replyMsg = await safeGetReplyMessage(msg);
     requireUser(!!replyMsg, "至少需要一条提示");
     const question = getMessageText(replyMsg).trim();
@@ -4440,9 +4418,9 @@ class QuestionFeature extends BaseFeatureHandler {
   }
 
   async handleQuestion(
-    msg: MessageContext,
+    msg: Api.Message,
     question: string,
-    _trigger?: MessageContext,
+    trigger?: Api.Message,
     token?: AbortToken,
   ): Promise<void> {
     const config = await this.getConfig();
@@ -4519,7 +4497,7 @@ class QuestionFeature extends BaseFeatureHandler {
   }
 
   private async handleLongContentWithTelegraph(
-    msg: MessageContext,
+    msg: Api.Message,
     question: string,
     rawAnswer: string,
     replyToId?: number,
@@ -4547,7 +4525,7 @@ class QuestionFeature extends BaseFeatureHandler {
     await MessageSender.sendNew(
       msg,
       questionBlock + answerBlock,
-      { disableWebPreview: true },
+      { parseMode: "html", linkPreview: false },
       replyToId,
     );
 
@@ -4578,7 +4556,7 @@ class SearchFeature extends BaseFeatureHandler {
   }
 
   async execute(
-    msg: MessageContext,
+    msg: Api.Message,
     args: string[],
     _prefixes: string[],
   ): Promise<void> {
@@ -4683,7 +4661,7 @@ class SearchFeature extends BaseFeatureHandler {
         await MessageSender.sendNew(
           msg,
           qBlock + aBlock,
-          { disableWebPreview: true },
+          { parseMode: "html", linkPreview: false },
           replyToId,
         );
 
@@ -4733,7 +4711,7 @@ class ImageFeature extends BaseFeatureHandler {
   }
 
   async execute(
-    msg: MessageContext,
+    msg: Api.Message,
     args: string[],
     _prefixes: string[],
   ): Promise<void> {
@@ -4766,10 +4744,8 @@ class ImageFeature extends BaseFeatureHandler {
 
     const promptInput = args.slice(1).join(" ").trim();
     const replyText = getMessageText(replyMsg).trim();
-    const [replyImageParts, messageImageParts] = await Promise.all([
-      getMessageImageParts(replyMsg),
-      getMessageImageParts(msg),
-    ]);
+    const replyImageParts = await getMessageImageParts(replyMsg);
+    const messageImageParts = await getMessageImageParts(msg);
     const imageParts = [...replyImageParts, ...messageImageParts];
 
     const hasPrompt = !!promptInput || !!replyText;
@@ -4812,7 +4788,7 @@ class ImageFeature extends BaseFeatureHandler {
           try {
             const pngBuffer = await sharp(inputImage.data).png().toBuffer();
             inputImage = { data: pngBuffer, mimeType: "image/png" };
-          } catch (e: unknown) { logger.warn('[ai] image convert to png failed:', e) }
+          } catch {}
         }
         images = await this.aiService.editImage(prompt, inputImage, token);
       } else {
@@ -4846,7 +4822,7 @@ class VideoFeature extends BaseFeatureHandler {
   }
 
   async execute(
-    msg: MessageContext,
+    msg: Api.Message,
     args: string[],
     _prefixes: string[],
   ): Promise<void> {
@@ -5129,9 +5105,9 @@ class AIPlugin extends Plugin {
 
   cmdHandlers: Record<
     string,
-    (msg: MessageContext, trigger?: MessageContext) => Promise<void>
+    (msg: Api.Message, trigger?: Api.Message) => Promise<void>
   > = {
-    ai: async (msg: MessageContext, trigger?: MessageContext) => {
+    ai: async (msg: Api.Message, trigger?: Api.Message) => {
       try {
         const prefixes = getPrefixes();
         const args = getMessageText(msg).trim().split(/\s+/).slice(1);
@@ -5145,6 +5121,7 @@ class AIPlugin extends Plugin {
         if (sub === "help" || sub === "?") {
           const description = await this.description();
           await MessageSender.sendOrEdit(trigger || msg, description, {
+            parseMode: "html",
           });
           return;
         }
@@ -5152,7 +5129,7 @@ class AIPlugin extends Plugin {
 
         if (handler) await handler.execute(msg, args, prefixes);
         else await this.questionFeature.execute(msg, args, prefixes);
-      } catch (error: unknown) {
+      } catch (error: any) {
         await sendErrorMessage(msg, error, trigger);
       }
     },
@@ -5171,126 +5148,5 @@ class AIPlugin extends Plugin {
     await configManager.destroy();
   }
 }
-
-
-  // Panel Settings Adapter
-  panelAdapter: PanelSettingsAdapter = {
-    id: "ai",
-    title: "AI 对话",
-    description: "AI 对话配置：提供商、超时、折叠",
-    category: "插件配置",
-    icon: "🧠",
-    getSchema: (): PanelSettingField[] => [
-      {
-            "key": "currentChatTag",
-            "label": "当前聊天Tag",
-            "type": "string"
-      },
-      {
-            "key": "currentChatModel",
-            "label": "当前聊天模型",
-            "type": "string"
-      },
-      {
-            "key": "currentSearchTag",
-            "label": "当前搜索Tag",
-            "type": "string"
-      },
-      {
-            "key": "currentSearchModel",
-            "label": "当前搜索模型",
-            "type": "string"
-      },
-      {
-            "key": "currentImageTag",
-            "label": "当前图片Tag",
-            "type": "string"
-      },
-      {
-            "key": "currentImageModel",
-            "label": "当前图片模型",
-            "type": "string"
-      },
-      {
-            "key": "currentVideoTag",
-            "label": "当前视频Tag",
-            "type": "string"
-      },
-      {
-            "key": "currentVideoModel",
-            "label": "当前视频模型",
-            "type": "string"
-      },
-      {
-            "key": "imagePreview",
-            "label": "图片预览",
-            "type": "boolean"
-      },
-      {
-            "key": "videoPreview",
-            "label": "视频预览",
-            "type": "boolean"
-      },
-      {
-            "key": "videoAudio",
-            "label": "视频音频",
-            "type": "boolean"
-      },
-      {
-            "key": "videoDuration",
-            "label": "视频时长 (秒)",
-            "type": "number",
-            "min": 1,
-            "max": 600,
-            "default": 30
-      },
-      {
-            "key": "prompt",
-            "label": "系统提示词",
-            "type": "textarea"
-      },
-      {
-            "key": "collapse",
-            "label": "折叠输出",
-            "type": "boolean"
-      },
-      {
-            "key": "timeout",
-            "label": "超时 (秒)",
-            "type": "number",
-            "min": 10,
-            "max": 600,
-            "default": 120
-      },
-      {
-            "key": "telegraphToken",
-            "label": "Telegraph Token",
-            "type": "password",
-            "secret": true
-      },
-      {
-            "key": "telegraph.enabled",
-            "label": "Telegraph 发布",
-            "type": "boolean"
-      },
-      {
-            "key": "telegraph.limit",
-            "label": "Telegraph 长度限制",
-            "type": "number",
-            "min": 1000,
-            "max": 50000,
-            "default": 10000
-      }
-],
-    getValues: async (): Promise<Record<string, unknown>> => {
-      const db = await JSONFilePreset<ProviderConfig>(path.join(createDirectoryInAssets("ai"), "config.json"), {} as any);
-      return db.data as Record<string, unknown>;
-    },
-    setValues: async (patch: Record<string, unknown>): Promise<void> => {
-      const db = await JSONFilePreset<ProviderConfig>(path.join(createDirectoryInAssets("ai"), "config.json"), {} as any);
-      Object.assign(db.data, patch);
-      await db.write();
-    },
-  };
 
 export default new AIPlugin();

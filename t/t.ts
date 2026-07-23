@@ -1,7 +1,6 @@
-import { Plugin, type PanelSettingsAdapter, type PanelSettingField, type PanelFieldType } from "@utils/pluginBase";
+import { Plugin } from "@utils/pluginBase";
 import { getPrefixes } from "@utils/pluginManager";
-import type { MessageContext } from "@mtcute/dispatcher";
-import { getGlobalClient } from "@utils/runtimeManager";
+import { Api } from "teleproto";
 import * as fs from "fs/promises";
 import axios from "axios";
 import { execFile } from "child_process";
@@ -9,8 +8,6 @@ import { promisify } from "util";
 import path from "path";
 import { createDirectoryInAssets, resolvePluginAssetFile } from "@utils/pathHelpers";
 import { safeGetReplyMessage } from "@utils/safeGetMessages";
-import { logger } from "@utils/logger";
-import { getErrorMessage } from "@utils/errorHelpers";
 
 const prefixes = getPrefixes();
 const mainPrefix = prefixes[0];
@@ -59,7 +56,7 @@ async function loadUserData(): Promise<AllUserData> {
     }
     if (changed) await saveUserData(parsed);
     return parsed;
-  } catch (_e: unknown) {
+  } catch {
     const initial: AllUserData = {
       users: {},
       roles: getInitialRoles(),
@@ -112,13 +109,13 @@ function cleanTextForTTS(text: string): string {
   let cleanedText = text;
   const broadSymbolRegex = new RegExp(
     "[" +
-      "\\u{1F600}-\\u{1F64F}" +
-      "\\u{1F300}-\\u{1F5FF}" +
-      "\\u{1F680}-\\u{1F6FF}" +
-      "\\u{2600}-\\u{26FF}" +
-      "\\u{2700}-\\u{27BF}" +
-      "\\u{FE0F}" +
-      "\\u{200D}" +
+      "\u{1F600}-\u{1F64F}" +
+      "\u{1F300}-\u{1F5FF}" +
+      "\u{1F680}-\u{1F6FF}" +
+      "\u{2600}-\u{26FF}" +
+      "\u{2700}-\u{27BF}" +
+      "\u{FE0F}" +
+      "\u{200D}" +
       "]",
     "gu"
   );
@@ -152,21 +149,22 @@ async function generateMusic(
     );
     await fs.writeFile(rawFile, res.data);
 
-    const cmd: string[] = ["-y", "-i", rawFile];
+    const args: string[] = ["-y", "-i", rawFile];
 
     if (meta.cover) {
       const coverPath = path.join(cacheDir, `${meta.album}.jpg`);
       try { await fs.access(coverPath); }
-      catch (_e: unknown) {
+      catch {
         const coverRes = await axios.get(meta.cover, { responseType: "arraybuffer" });
         await fs.writeFile(coverPath, coverRes.data);
       }
 
-      cmd.push(
+      args.push(
         "-i", coverPath,
         "-map", "0:a",
         "-map", "1:v",
-        "-c:a", "libmp3lame", "-q:a", "2",
+        "-c:a", "libmp3lame",
+        "-q:a", "2",
         "-c:v", "mjpeg",
         "-id3v2_version", "3",
         "-disposition:v", "attached_pic",
@@ -174,24 +172,23 @@ async function generateMusic(
         "-metadata:s:v", "comment=Cover (front)"
       );
     } else {
-      cmd.push("-c:a", "libmp3lame", "-q:a", "2");
+      args.push("-c:a", "libmp3lame", "-q:a", "2");
     }
 
-    // 使用 execFile 参数数组（shell: false），meta.title/artist/album 为用户输入/可枚举，杜绝命令注入。
-    cmd.push(
+    args.push(
       "-metadata", `title=${meta.title}`,
       "-metadata", `artist=${meta.artist}`,
       "-metadata", `album=${meta.album}`,
       finalFile
     );
 
-    await execFileAsync("ffmpeg", cmd, { shell: false });
+    await execFileAsync("ffmpeg", args, { shell: false });
     return finalFile;
-  } catch (e: unknown) {
-    logger.error("生成音乐失败:", getErrorMessage(e) || String(e));
+  } catch (e: any) {
+    console.error("生成音乐失败:", e.message || e);
     return null;
   } finally {
-    try { await fs.unlink(rawFile); } catch (e: unknown) { logger.error('[t] cleanup raw file failed:', e); }
+    try { await fs.unlink(rawFile); } catch {}
   }
 }
 
@@ -209,28 +206,31 @@ async function generateSpeechSimple(
       responseType: "arraybuffer",
     });
     await fs.writeFile(mp3File, res.data);
-    // 使用 execFile 参数数组（shell: false），杜绝路径命令注入。
     await execFileAsync("ffmpeg", ["-y", "-i", mp3File, "-c:a", "libopus", "-b:a", "64k", "-vbr", "on", oggFile], { shell: false });
     return { oggFile, mp3File };
-  } catch (_e: unknown) {
+  } catch {
     return null;
   }
 }
 
 /** 私聊删除命令：为双方删除；群/频道：仅自己删除 */
-async function deleteCommandMessage(msg: MessageContext) {
+async function deleteCommandMessage(msg: Api.Message) {
   try {
-    if (msg.chat.type === 'user') {
-      await msg.delete({ revoke: true });
+    const isPrivate =
+      (msg as any).isPrivate === true ||
+      (msg.peerId instanceof (Api as any).PeerUser);
+
+    if (isPrivate) {
+      await (msg as any).delete({ revoke: true }); // 双向删除
     } else {
-      await msg.delete();
+      await msg.delete(); // 普通删除
     }
-  } catch (e: unknown) { logger.error('[t] generateSpeech failed:', e); }
+  } catch {}
 }
 
 // 文字转语音主处理
-async function tts(msg: MessageContext) {
-  const userId = msg.sender.id?.toString();
+async function tts(msg: Api.Message) {
+  const userId = msg.senderId?.toString();
   if (!userId) return;
   const userData = await loadUserData();
   const cfg = userData.users[userId];
@@ -261,22 +261,24 @@ async function tts(msg: MessageContext) {
     const cover = userData.covers?.[cfg.defaultRole];
 
     // 优先被你回复的那条消息
-    const rep = msg.replyToMessage?.id ? await safeGetReplyMessage(msg) : null;
+    const rep = msg.replyTo?.replyToMsgId ? await safeGetReplyMessage(msg) : null;
     const replyToId = rep?.id ?? msg.id;
 
     const file = await generateMusic(cleanTextForTTS(text), cfg.defaultRoleId, cfg.apiKey, { title, artist, album, cover });
     if (file) {
-      const client = await getGlobalClient();
-      if (!client) return;
-      await client.sendMedia(msg.chat.id, {
-        type: 'document',
-        file: file,
-        fileName: file,
+      await msg.client?.sendFile(msg.peerId, {
+        file,
         caption: `${title} - ${artist}`,
-      }, {
         replyTo: replyToId,
+        attributes: [
+          new (Api as any).DocumentAttributeAudio({
+            duration: 0,
+            title,
+            performer: artist,
+          }),
+        ],
       });
-      try { await fs.unlink(file); } catch (e: unknown) { logger.error('[t] cleanup file failed:', e); }
+      try { await fs.unlink(file); } catch {}
       await deleteCommandMessage(msg); // 发送后删命令
     } else {
       await msg.edit({ text: "❌ 生成失败" });
@@ -287,7 +289,7 @@ async function tts(msg: MessageContext) {
   // 普通语音：.t 文本 或 仅 .t（取被回复消息的文本）
   let text = parts.join(" ");
   let replyToId = msg.id;
-  if (msg.replyToMessage?.id) {
+  if (msg.replyTo?.replyToMsgId) {
     const rep = await safeGetReplyMessage(msg);
     if (rep?.text) text = text || rep.text;
     if (rep?.id) replyToId = rep.id;
@@ -299,15 +301,12 @@ async function tts(msg: MessageContext) {
 
   const r = await generateSpeechSimple(cleanTextForTTS(text), cfg.defaultRoleId, cfg.apiKey);
   if (r) {
-    const client = await getGlobalClient();
-    if (!client) return;
-    await client.sendMedia(msg.chat.id, {
-      type: 'voice',
+    await msg.client?.sendFile(msg.peerId, {
       file: r.oggFile,
-    }, {
       replyTo: replyToId,
+      attributes: [new (Api as any).DocumentAttributeAudio({ duration: 0, voice: true })],
     });
-    try { await Promise.all([fs.unlink(r.oggFile), fs.unlink(r.mp3File)]); } catch (e: unknown) { logger.error('[t] cleanup audio files failed:', e); }
+    try { await fs.unlink(r.oggFile); await fs.unlink(r.mp3File); } catch {}
     await deleteCommandMessage(msg); // 发送后删命令
   } else {
     await msg.edit({ text: "❌ 生成失败" });
@@ -315,8 +314,8 @@ async function tts(msg: MessageContext) {
 }
 
 // 角色/Key 设置 
-async function ttsSet(msg: MessageContext) {
-  const userId = msg.sender.id?.toString();
+async function ttsSet(msg: Api.Message) {
+  const userId = msg.senderId?.toString();
   if (!userId) return;
 
   const args = msg.text?.trim().split(/\s+/).slice(1) || []; // 去掉命令名后的参数
@@ -389,8 +388,8 @@ async function ttsSet(msg: MessageContext) {
   }
 }
 
-async function setApiKey(msg: MessageContext) {
-  const userId = msg.sender.id?.toString();
+async function setApiKey(msg: Api.Message) {
+  const userId = msg.senderId?.toString();
   if (!userId) return;
   const [, apiKey] = msg.text?.split(/\s+/).filter(Boolean) || [];
   if (!apiKey) {
@@ -422,42 +421,5 @@ class TTSPlugin extends Plugin {
 `;
   cmdHandlers = { t: tts, ts: ttsSet, tk: setApiKey };
 }
-
-
-  // Panel Settings Adapter
-  panelAdapter: PanelSettingsAdapter = {
-    id: "t",
-    title: "TTS 语音",
-    description: "TTS 语音合成配置",
-    category: "插件配置",
-    icon: "🔊",
-    getSchema: (): PanelSettingField[] => [
-      {
-            "key": "apiKey",
-            "label": "API 密钥",
-            "type": "password",
-            "secret": true
-      },
-      {
-            "key": "defaultRole",
-            "label": "默认角色",
-            "type": "string"
-      },
-      {
-            "key": "defaultRoleId",
-            "label": "默认角色 ID",
-            "type": "string"
-      }
-],
-    getValues: async (): Promise<Record<string, unknown>> => {
-      const db = await JSONFilePreset<UserConfig>(path.join(createDirectoryInAssets("t"), "config.json"), {} as any);
-      return db.data as Record<string, unknown>;
-    },
-    setValues: async (patch: Record<string, unknown>): Promise<void> => {
-      const db = await JSONFilePreset<UserConfig>(path.join(createDirectoryInAssets("t"), "config.json"), {} as any);
-      Object.assign(db.data, patch);
-      await db.write();
-    },
-  };
 
 export default new TTSPlugin();
