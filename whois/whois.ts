@@ -1,23 +1,27 @@
-import { Plugin } from "@utils/pluginBase";
+import { Plugin, type PanelSettingsAdapter, type PanelSettingField, type PanelFieldType } from "@utils/pluginBase";
 import { getGlobalClient } from "@utils/runtimeManager";
 import { getPrefixes } from "@utils/pluginManager";
 import { createDirectoryInAssets } from "@utils/pathHelpers";
-import { Api } from "teleproto";
+import type { MessageContext } from "@mtcute/dispatcher";
+import { thtml as html } from "@mtcute/html-parser";
 import axios from "axios";
 import { JSONFilePreset } from "lowdb/node";
 import path from "path";
 import dayjs from "dayjs";
 import relativeTime from "dayjs/plugin/relativeTime";
-import { safeGetMessages } from "@utils/safeGetMessages";
+import { safeGetReplyMessage } from "@utils/safeGetMessages";
 import "dayjs/locale/zh-cn";
-
+import { logger } from "@utils/logger";
+import { getErrorMessage, getErrorCode } from "@utils/errorHelpers";
 import { htmlEscape } from "@utils/htmlEscape";
 
 // 配置 dayjs
 dayjs.extend(relativeTime);
 dayjs.locale('zh-cn');
 
+
 // 必需工具函数
+
 // 解析 namebeta.com 的 SSE 流式响应，返回各事件对象
 function parseSSEResponse(raw: string): Array<{type: string; data: any}> {
   const events: Array<{type: string; data: any}> = [];
@@ -27,7 +31,7 @@ function parseSSEResponse(raw: string): Array<{type: string; data: any}> {
     try {
       const json = JSON.parse(trimmed.slice(6));
       events.push(json);
-    } catch { /* skip malformed lines */ }
+    } catch (e: unknown) { logger.warn('解析行失败', e) }
   }
   return events;
 }
@@ -107,7 +111,7 @@ class WhoisPlugin extends Plugin {
   private db?: Awaited<ReturnType<typeof JSONFilePreset<WhoisDB>>>;
   private pluginDir: string;
   
-  cmdHandlers: Record<string, (msg: Api.Message) => Promise<void>> = {
+  cmdHandlers: Record<string, (msg: MessageContext) => Promise<void>> = {
     "whois": this.handleWhois.bind(this),
   };
   
@@ -131,19 +135,18 @@ class WhoisPlugin extends Plugin {
     
     try {
       this.db = await JSONFilePreset<WhoisDB>(dbPath, defaultData);
-    } catch (error) {
-      console.error("[whois] 数据库初始化失败:", error);
+    } catch (error: unknown) {
+      logger.error("[whois] 数据库初始化失败:", error);
     }
   }
 
-  private async handleWhois(msg: Api.Message): Promise<void> {
+  private async handleWhois(msg: MessageContext): Promise<void> {
     const client = await getGlobalClient();
     
     if (!client) {
       await msg.edit({
-        text: "❌ <b>客户端未初始化</b>",
-        parseMode: "html",
-        linkPreview: false
+        text: html("❌ <b>客户端未初始化</b>"),
+        disableWebPreview: true
       });
       return;
     }
@@ -158,9 +161,8 @@ class WhoisPlugin extends Plugin {
       // 明确请求帮助时才显示
       if (sub === "help" || sub === "h") {
         await msg.edit({
-        text: help_text,
-        parseMode: "html",
-        linkPreview: false
+        text: html(help_text),
+        disableWebPreview: true
       });
         return;
       }
@@ -186,27 +188,20 @@ class WhoisPlugin extends Plugin {
       let domain = '';
       
       // 检查是否有回复消息
-      if (msg.replyTo && 'replyToMsgId' in msg.replyTo && msg.replyTo.replyToMsgId) {
+      if (msg.replyToMessage?.id) {
         try {
-          const replyMsgId = msg.replyTo.replyToMsgId;
-          const messages = await safeGetMessages(client, msg.peerId!, {
-            ids: [replyMsgId]
-          });
-          
-          if (messages && messages.length > 0) {
-            const replyMsg = messages[0];
-            if (replyMsg.message) {
-              // 提取域名的正则表达式
-              const urlRegex = /(?:https?:\/\/)?(?:www\.)?([a-zA-Z0-9][a-zA-Z0-9-]{0,61}[a-zA-Z0-9]?(?:\.[a-zA-Z]{2,})+)/gi;
-              const matches = replyMsg.message.match(urlRegex);
-              if (matches && matches.length > 0) {
-                // 清理域名
-                domain = matches[0].replace(/^https?:\/\//i, '').replace(/^www\./i, '').split('/')[0];
-              }
+          const replyMsg = await safeGetReplyMessage(msg);
+          if (replyMsg && replyMsg.text) {
+            // 提取域名的正则表达式
+            const urlRegex = /(?:https?:\/\/)?(?:www\.)?([a-zA-Z0-9][a-zA-Z0-9-]{0,61}[a-zA-Z0-9]?(?:\.[a-zA-Z]{2,})+)/gi;
+            const matches = replyMsg.text.match(urlRegex);
+            if (matches && matches.length > 0) {
+              // 清理域名
+              domain = matches[0].replace(/^https?:\/\//i, '').replace(/^www\./i, '').split('/')[0];
             }
           }
-        } catch (error) {
-          console.error('[whois] 获取回复消息失败:', error);
+        } catch (error: unknown) {
+          logger.error('[whois] 获取回复消息失败:', error);
         }
       }
       
@@ -219,9 +214,8 @@ class WhoisPlugin extends Plugin {
       // 无参数时显示错误提示
       if (!domain) {
         await msg.edit({
-        text: `❌ <b>请指定域名</b>\n\n💡 用法: <code>${mainPrefix}whois &lt;域名&gt;</code>\n或回复包含域名的消息后使用 <code>${mainPrefix}whois</code>`,
-        parseMode: "html",
-        linkPreview: false
+        text: html(help_text),
+        disableWebPreview: true
       });
         return;
       }
@@ -230,9 +224,8 @@ class WhoisPlugin extends Plugin {
       const domainRegex = /^[a-zA-Z0-9][a-zA-Z0-9-]{0,61}[a-zA-Z0-9]?(?:\.[a-zA-Z]{2,})+$/;
       if (!domainRegex.test(domain)) {
         await msg.edit({
-        text: `❌ <b>域名格式无效</b>\n\n<b>输入的域名：</b> <code>${htmlEscape(domain)}</code>\n\n💡 请输入有效的域名，例如：\n• example.com\n• google.com\n• github.io`,
-        parseMode: "html",
-        linkPreview: false
+        text: html(`❌ <b>域名格式无效</b>\n\n<b>输入的域名：</b> <code>${htmlEscape(domain)}</code>\n\n💡 请输入有效的域名，例如：\n• example.com\n• google.com\n• github.io`),
+        disableWebPreview: true
       });
         return;
       }
@@ -246,9 +239,8 @@ class WhoisPlugin extends Plugin {
       
       // 渐进式状态反馈
       await msg.edit({
-        text: `🔍 <b>正在查询域名信息...</b>\n\n<b>域名：</b> <code>${htmlEscape(domain)}</code>`,
-        parseMode: "html",
-        linkPreview: false
+        text: html(`🔍 <b>正在查询域名信息...</b>\n\n<b>域名：</b> <code>${htmlEscape(domain)}</code>`),
+        disableWebPreview: true
       });
       
       // namebeta.com 返回 SSE 流式响应，需获取原始文本并解析
@@ -266,9 +258,8 @@ class WhoisPlugin extends Plugin {
         
         if (!whoisData) {
           await msg.edit({
-        text: `❌ <b>查询失败</b>\n\n<b>域名：</b> <code>${htmlEscape(domain)}</code>\n\n💡 可能的原因：\n• 域名不存在或未注册\n• 域名格式不正确\n• WHOIS 信息不可用\n\n📖 请检查域名拼写是否正确`,
-        parseMode: "html",
-        linkPreview: false
+        text: html(`❌ <b>查询失败</b>\n\n<b>域名：</b> <code>${htmlEscape(domain)}</code>\n\n💡 可能的原因：\n• 域名不存在或未注册\n• 域名格式不正确\n• WHOIS 信息不可用\n\n📖 请检查域名拼写是否正确`),
+        disableWebPreview: true
       });
           return;
         }
@@ -320,35 +311,37 @@ class WhoisPlugin extends Plugin {
         
       } else {
         await msg.edit({
-        text: `❌ <b>API 服务器错误</b>\n\n<b>状态码：</b> ${apiResponse.status}\n\n💡 请稍后重试`,
-        parseMode: "html",
-        linkPreview: false
+        text: html(`❌ <b>API 服务器错误</b>\n\n<b>状态码：</b> ${apiResponse.status}\n\n💡 请稍后重试`),
+        disableWebPreview: true
       });
       }
       
-    } catch (error: any) {
-      console.error("[whois] 插件执行失败:", error);
-      
+    } catch (error: unknown) {
+      logger.error("[whois] 插件执行失败:", error);
+
       let errorMessage = `❌ <b>查询失败</b>\n\n`;
-      
-      if (error.code === 'ECONNABORTED' || error.code === 'ETIMEDOUT') {
+
+      const errCode = getErrorCode(error);
+      const errResponse = (error as { response?: { status: number } }).response;
+      const errRequest = (error as { request?: unknown }).request;
+
+      if (errCode === 'ECONNABORTED' || errCode === 'ETIMEDOUT') {
         errorMessage += `<b>错误：</b> 请求超时\n\n💡 请检查网络连接后重试`;
-      } else if (error.response?.status === 429) {
+      } else if (errResponse?.status === 429) {
         errorMessage += `<b>错误：</b> 请求过于频繁\n\n💡 请稍后再试`;
-      } else if (error.response?.status === 403) {
+      } else if (errResponse?.status === 403) {
         errorMessage += `<b>错误：</b> API 访问被拒绝\n\n💡 可能需要更换 API 服务`;
-      } else if (error.response) {
-        errorMessage += `<b>错误代码：</b> ${error.response.status}\n<b>错误信息：</b> ${htmlEscape(error.message)}\n\n💡 请稍后重试`;
-      } else if (error.request) {
+      } else if (errResponse) {
+        errorMessage += `<b>错误代码：</b> ${errResponse.status}\n<b>错误信息：</b> ${htmlEscape(getErrorMessage(error))}\n\n💡 请稍后重试`;
+      } else if (errRequest) {
         errorMessage += `<b>错误：</b> 无法连接到 API 服务器\n\n💡 请检查网络连接`;
       } else {
-        errorMessage += `<b>错误信息：</b> ${htmlEscape(error.message || '未知错误')}\n\n💡 请稍后重试`;
+        errorMessage += `<b>错误信息：</b> ${htmlEscape(getErrorMessage(error) || '未知错误')}\n\n💡 请稍后重试`;
       }
       
       await msg.edit({
-        text: errorMessage,
-        parseMode: "html",
-        linkPreview: false
+        text: html(errorMessage),
+        disableWebPreview: true
       });
     }
   }
@@ -392,7 +385,7 @@ class WhoisPlugin extends Plugin {
     await this.db.write();
   }
   
-  private async displayWhoisResult(msg: Api.Message, record: WhoisRecord, fromCache: boolean) {
+  private async displayWhoisResult(msg: MessageContext, record: WhoisRecord, fromCache: boolean) {
     let formattedOutput = `✅ <b>WHOIS 查询结果</b>`;
     
     if (fromCache) {
@@ -424,9 +417,7 @@ class WhoisPlugin extends Plugin {
         } else if (daysUntilExpiry < 90) {
           formattedOutput += ` <i>（${daysUntilExpiry} 天后过期）</i>`;
         }
-      } catch (e) {
-        // 日期解析失败，忽略
-      }
+      } catch (e: unknown) { logger.warn(`[whois] 日期解析失败，忽略:`, e) }
       formattedOutput += `\n`;
     }
     if (record.updatedDate) {
@@ -454,35 +445,31 @@ class WhoisPlugin extends Plugin {
     }
     
     await msg.edit({
-        text: formattedOutput,
-        parseMode: "html",
-        linkPreview: false
+        text: html(formattedOutput),
+        disableWebPreview: true
       });
   }
   
-  private async handleBatchQuery(msg: Api.Message, domains: string[]) {
+  private async handleBatchQuery(msg: MessageContext, domains: string[]) {
     if (domains.length === 0) {
       await msg.edit({
-        text: `❌ <b>请提供要查询的域名</b>\n\n💡 使用示例：<code>${mainPrefix}whois batch google.com github.com</code>`,
-        parseMode: "html",
-        linkPreview: false
+        text: html(`❌ <b>请提供要查询的域名</b>\n\n💡 使用示例：<code>${mainPrefix}whois batch google.com github.com</code>`),
+        disableWebPreview: true
       });
       return;
     }
     
     if (domains.length > 10) {
       await msg.edit({
-        text: `❌ <b>批量查询限制</b>\n\n每次最多查询 10 个域名，您提供了 ${domains.length} 个`,
-        parseMode: "html",
-        linkPreview: false
+        text: html(`❌ <b>批量查询限制</b>\n\n每次最多查询 10 个域名，您提供了 ${domains.length} 个`),
+        disableWebPreview: true
       });
       return;
     }
     
     await msg.edit({
-        text: `🔍 <b>批量查询中...</b>\n\n<b>域名数量：</b> ${domains.length}`,
-        parseMode: "html",
-        linkPreview: false
+        text: html(`🔍 <b>批量查询中...</b>\n\n<b>域名数量：</b> ${domains.length}`),
+        disableWebPreview: true
       });
     
     const results: string[] = [];
@@ -494,9 +481,8 @@ class WhoisPlugin extends Plugin {
       
       // 更新进度
       await msg.edit({
-        text: `🔍 <b>批量查询中...</b>\n\n<b>进度：</b> ${i + 1}/${domains.length}\n<b>当前域名：</b> <code>${htmlEscape(domain)}</code>`,
-        parseMode: "html",
-        linkPreview: false
+        text: html(`🔍 <b>批量查询中...</b>\n\n<b>进度：</b> ${i + 1}/${domains.length}\n<b>当前域名：</b> <code>${htmlEscape(domain)}</code>`),
+        disableWebPreview: true
       });
       
       try {
@@ -538,7 +524,7 @@ class WhoisPlugin extends Plugin {
           results.push(`❌ <code>${htmlEscape(domain)}</code> - 查询失败`);
           failCount++;
         }
-      } catch (error) {
+      } catch (_e: unknown) {
         results.push(`❌ <code>${htmlEscape(domain)}</code> - 查询失败`);
         failCount++;
       }
@@ -554,22 +540,20 @@ class WhoisPlugin extends Plugin {
     output += `<b>成功：</b> ${successCount}\n`;
     output += `<b>失败：</b> ${failCount}\n\n`;
     output += `<b>查询结果：</b>\n`;
-    output += results.join('\n');
+    output += results.join("\n");
     output += `\n\n💡 使用 <code>${mainPrefix}whois history</code> 查看详细信息`;
     
     await msg.edit({
-        text: output,
-        parseMode: "html",
-        linkPreview: false
+        text: html(output),
+        disableWebPreview: true
       });
   }
   
-  private async showHistory(msg: Api.Message) {
+  private async showHistory(msg: MessageContext) {
     if (!this.db) {
       await msg.edit({
-        text: "❌ <b>数据库未初始化</b>",
-        parseMode: "html",
-        linkPreview: false
+        text: html("❌ <b>数据库未初始化</b>"),
+        disableWebPreview: true
       });
       return;
     }
@@ -577,9 +561,8 @@ class WhoisPlugin extends Plugin {
     const history = this.db.data.history;
     if (history.length === 0) {
       await msg.edit({
-        text: `📭 <b>暂无查询历史</b>\n\n💡 使用 <code>${mainPrefix}whois &lt;域名&gt;</code> 开始查询`,
-        parseMode: "html",
-        linkPreview: false
+        text: html(`📭 <b>暂无查询历史</b>\n\n💡 使用 <code>${mainPrefix}whois &lt;域名&gt;</code> 开始查询`),
+        disableWebPreview: true
       });
       return;
     }
@@ -602,9 +585,7 @@ class WhoisPlugin extends Plugin {
           } else if (daysUntilExpiry < 30) {
             output += `   ⚠️ <b>${daysUntilExpiry} 天后过期</b>\n`;
           }
-        } catch (e) {
-          // 忽略日期解析错误
-        }
+        } catch (e: unknown) { logger.warn(`[whois] 忽略日期解析错误:`, e) }
       }
       output += `\n`;
     });
@@ -616,18 +597,16 @@ class WhoisPlugin extends Plugin {
     output += `💡 使用 <code>${mainPrefix}whois clear</code> 清除历史记录`;
     
     await msg.edit({
-        text: output,
-        parseMode: "html",
-        linkPreview: false
+        text: html(output),
+        disableWebPreview: true
       });
   }
   
-  private async clearHistory(msg: Api.Message) {
+  private async clearHistory(msg: MessageContext) {
     if (!this.db) {
       await msg.edit({
-        text: "❌ <b>数据库未初始化</b>",
-        parseMode: "html",
-        linkPreview: false
+        text: html("❌ <b>数据库未初始化</b>"),
+        disableWebPreview: true
       });
       return;
     }
@@ -637,9 +616,8 @@ class WhoisPlugin extends Plugin {
     
     if (historyCount === 0 && cacheCount === 0) {
       await msg.edit({
-        text: "📭 <b>没有需要清除的记录</b>",
-        parseMode: "html",
-        linkPreview: false
+        text: html("📭 <b>没有需要清除的记录</b>"),
+        disableWebPreview: true
       });
       return;
     }
@@ -650,12 +628,40 @@ class WhoisPlugin extends Plugin {
     await this.db.write();
     
     await msg.edit({
-        text: `🗑️ <b>清除完成</b>\n\n• 清除历史记录：${historyCount} 条\n• 清除缓存：${cacheCount} 个域名`,
-        parseMode: "html",
-        linkPreview: false
+        text: html(`🗑️ <b>清除完成</b>\n\n• 清除历史记录：${historyCount} 条\n• 清除缓存：${cacheCount} 个域名`),
+        disableWebPreview: true
       });
   }
 
 }
+
+
+  // Panel Settings Adapter
+  panelAdapter: PanelSettingsAdapter = {
+    id: "whois",
+    title: "Whois 查询",
+    description: "域名 Whois 查询配置",
+    category: "插件配置",
+    icon: "🔎",
+    getSchema: (): PanelSettingField[] => [
+      {
+            "key": "timeout",
+            "label": "超时 (秒)",
+            "type": "number",
+            "min": 5,
+            "max": 60,
+            "default": 15
+      }
+],
+    getValues: async (): Promise<Record<string, unknown>> => {
+      const db = await JSONFilePreset<any>(path.join(createDirectoryInAssets("whois"), "config.json"), {} as any);
+      return db.data as Record<string, unknown>;
+    },
+    setValues: async (patch: Record<string, unknown>): Promise<void> => {
+      const db = await JSONFilePreset<any>(path.join(createDirectoryInAssets("whois"), "config.json"), {} as any);
+      Object.assign(db.data, patch);
+      await db.write();
+    },
+  };
 
 export default new WhoisPlugin();

@@ -1,15 +1,61 @@
 
-import { Plugin } from "@utils/pluginBase";
-import { Api } from "teleproto";
+import { Plugin, type PanelSettingsAdapter, type PanelSettingField, type PanelFieldType } from "@utils/pluginBase";
+import type { MessageContext } from "@mtcute/dispatcher";
+import { thtml as html } from "@mtcute/html-parser";
 import { getPrefixes } from "@utils/pluginManager";
 import { JSONFilePreset } from "lowdb/node";
 import * as path from "path";
 import { resolvePluginAssetFile } from "@utils/pathHelpers";
 import axios from "axios";
-
+import { logger } from "@utils/logger";
+import { getErrorMessage } from "@utils/errorHelpers";
 import { htmlEscape } from "@utils/htmlEscape";
 
-// HTML转义函数
+// GitHub API types
+interface GitHubRepoPermissions {
+  push?: boolean;
+  admin?: boolean;
+  maintain?: boolean;
+}
+
+interface GitHubRepo {
+  full_name: string;
+  permissions?: GitHubRepoPermissions;
+}
+
+interface GitHubPullRequest {
+  number: number;
+  title: string;
+  user?: { login?: string };
+  mergeable?: boolean;
+  mergeable_state?: string;
+  state?: string;
+  html_url?: string;
+  body?: string;
+  head?: { sha?: string; ref?: string };
+  base?: { sha?: string; ref?: string };
+}
+
+interface GitHubPullRequestDetail {
+  number: number;
+  title: string;
+  user: string;
+  mergeable?: boolean;
+  state?: string;
+}
+
+interface GitHubApiError {
+  message?: string;
+}
+
+function extractGitHubApiError(error: unknown): string | undefined {
+  if (error && typeof error === 'object' && 'response' in error) {
+    const response = (error as { response?: { data?: GitHubApiError } }).response;
+    if (response?.data?.message) return response.data.message;
+  }
+  return undefined;
+}
+
 // Telegram 长消息处理
 const MAX_MESSAGE_LENGTH = 4096;
 function splitMessage(text: string): string[] {
@@ -27,15 +73,16 @@ function splitMessage(text: string): string[] {
   if (current) parts.push(current);
   return parts.length ? parts : [text];
 }
-async function sendLongMessage(msg: Api.Message, text: string) {
+async function sendLongMessage(msg: MessageContext, text: string) {
   const parts = splitMessage(text);
   if (parts.length === 1) {
-    await msg.edit({ text: parts[0], parseMode: "html" });
+    await msg.edit({ text: html(parts[0]) });
     return;
   }
-  await msg.edit({ text: parts[0] + `\n\n📄 (1/${parts.length})`, parseMode: "html" });
+  await msg.edit({ text: html(parts[0] + `\n\n📄 (1/${parts.length})`) });
+  // 注意：消息必须按顺序逐条发送，不能并行（每条消息依赖前一条发送完成以保持顺序）
   for (let i = 1; i < parts.length; i++) {
-    await msg.reply({ message: parts[i] + `\n\n📄 (${i + 1}/${parts.length})`, parseMode: "html" });
+    await msg.replyText(html(parts[i] + `\n\n📄 (${i + 1}/${parts.length})`));
   }
 }
 
@@ -71,7 +118,7 @@ const DEFAULT_CONFIG: Record<string, string> = {
 
 // 配置管理器
 class ConfigManager {
-  private static db: any = null;
+  private static db: Awaited<ReturnType<typeof JSONFilePreset<Record<string, string>>>> | null = null;
   private static initialized = false;
 
   private static async init(): Promise<void> {
@@ -86,13 +133,13 @@ class ConfigManager {
           { dir: "git", fileName: "config.json" },
         ],
       });
-      this.db = await JSONFilePreset<Record<string, any>>(
+      this.db = await JSONFilePreset<Record<string, string>>(
         configPath,
         { ...DEFAULT_CONFIG }
       );
       this.initialized = true;
-    } catch (error) {
-      console.error("[git] 初始化配置失败:", error);
+    } catch (error: unknown) {
+      logger.error("[git] 初始化配置失败:", error);
     }
   }
 
@@ -108,8 +155,8 @@ class ConfigManager {
       this.db.data[key] = value;
       await this.db.write();
       return true;
-    } catch (error) {
-      console.error(`[git] 设置配置失败 ${key}:`, error);
+    } catch (error: unknown) {
+      logger.error(`[git] 设置配置失败 ${key}:`, error);
       return false;
     }
   }
@@ -117,8 +164,10 @@ class ConfigManager {
 
 // 统一创建 GitHub API 客户端
 async function getApi() {
-  const baseURL = await ConfigManager.get(CONFIG_KEYS.API_BASE_URL);
-  const token = await ConfigManager.get(CONFIG_KEYS.TOKEN);
+  const [baseURL, token] = await Promise.all([
+    ConfigManager.get(CONFIG_KEYS.API_BASE_URL),
+    ConfigManager.get(CONFIG_KEYS.TOKEN),
+  ]);
   if (!token) throw new Error("请先使用 `login` 命令登录");
 
   return axios.create({
@@ -136,7 +185,7 @@ class GitManagerPlugin extends Plugin {
   description: string = `通过Git API管理PR\n\n${help_text}`;
 
   cmdHandlers = {
-    [pluginName]: async (msg: Api.Message) => {
+    [pluginName]: async (msg: MessageContext) => {
       const lines = msg.text?.trim()?.split(/\r?\n/g) || [];
       const parts = lines?.[0]?.trim()?.split(/\s+/g) || [];
       const [, ...args] = parts;
@@ -178,18 +227,18 @@ class GitManagerPlugin extends Plugin {
             await this.handleMergeAll(msg, args.slice(1));
             break;
           default:
-            await msg.edit({ text: `❌ <b>未知子命令:</b> <code>${htmlEscape(sub)}</code>\n\n${help_text}`, parseMode: "html" });
+            await msg.edit({ text: html`❌ <b>未知子命令:</b> <code>${htmlEscape(sub)}</code>\n\n${help_text}` });
         }
-      } catch (error: any) {
-        console.error('[git] 插件执行失败:', error);
-        await msg.edit({ text: `❌ <b>操作失败:</b> ${htmlEscape(error.message)}`, parseMode: "html" });
+      } catch (error: unknown) {
+        logger.error('[git] 插件执行失败:', error);
+        await msg.edit({ text: html`❌ <b>操作失败:</b> ${htmlEscape(getErrorMessage(error))}` });
       }
     },
   };
 
-  private async handleLogin(msg: Api.Message, args: string[]) {
+  private async handleLogin(msg: MessageContext, args: string[]) {
     if (args.length < 3) {
-        await msg.edit({ text: `❌ <b>参数不足</b>\n\n<b>格式:</b> <code>${mainPrefix}${pluginName} login &lt;邮箱&gt; &lt;用户名&gt; &lt;Token&gt;</code>`, parseMode: "html" });
+        await msg.edit({ text: html`❌ <b>参数不足</b>\n\n<b>格式:</b> <code>${mainPrefix}${pluginName} login &lt;邮箱&gt; &lt;用户名&gt; &lt;Token&gt;</code>` });
       return;
     }
 
@@ -198,19 +247,19 @@ class GitManagerPlugin extends Plugin {
     await ConfigManager.set(CONFIG_KEYS.USERNAME, username);
     await ConfigManager.set(CONFIG_KEYS.TOKEN, token);
 
-    await msg.edit({ text: "✅ <b>登录信息已保存</b>", parseMode: "html" });
+    await msg.edit({ text: html`✅ <b>登录信息已保存</b>` });
   }
 
-  private async handleRepos(msg: Api.Message) {
-    await msg.edit({ text: "🔄 正在获取仓库列表...", parseMode: "html" });
+  private async handleRepos(msg: MessageContext) {
+    await msg.edit({ text: "🔄 正在获取仓库列表..." });
     const api = await getApi();
     const response = await api.get(`/user/repos`, { params: { per_page: 100 } });
 
-    const repos = (response.data as any[])
-      .filter((r: any) => r?.permissions?.push || r?.permissions?.admin || r?.permissions?.maintain)
-      .map((r: any) => r.full_name);
+    const repos = (response.data as GitHubRepo[])
+      .filter((r) => r?.permissions?.push || r?.permissions?.admin || r?.permissions?.maintain)
+      .map((r) => r.full_name);
     if (!repos.length) {
-      await msg.edit({ text: "ℹ️ 未找到有编辑权限的仓库。", parseMode: "html" });
+      await msg.edit({ text: "ℹ️ 未找到有编辑权限的仓库。" });
       return;
     }
 
@@ -218,12 +267,12 @@ class GitManagerPlugin extends Plugin {
     await sendLongMessage(msg, `🗂️ <b>有编辑权限的仓库:</b>\n\n${repoList}`);
   }
 
-  private async handlePRs(msg: Api.Message, args: string[]) {
+  private async handlePRs(msg: MessageContext, args: string[]) {
     if (args.length < 1) {
       throw new Error("参数不足，需要提供仓库名");
     }
     const repoName = args[0];
-    await msg.edit({ text: `🔄 正在获取 <code>${htmlEscape(repoName)}</code> 的PR列表...`, parseMode: "html" });
+    await msg.edit({ text: html`🔄 正在获取 <code>${htmlEscape(repoName)}</code> 的PR列表...` });
 
     const parts = repoName.split("/");
     if (parts.length !== 2) {
@@ -236,38 +285,39 @@ class GitManagerPlugin extends Plugin {
       params: { state: "open", per_page: 50 }
     });
 
-    const list: any[] = response.data || [];
+    const list: GitHubPullRequest[] = response.data || [];
     if (!list.length) {
-      await msg.edit({ text: `ℹ️ 仓库 <code>${htmlEscape(repoName)}</code> 中没有待处理的PR。`, parseMode: "html" });
+      await msg.edit({ text: html`ℹ️ 仓库 <code>${htmlEscape(repoName)}</code> 中没有待处理的PR。` });
       return;
     }
 
-    // 获取可合并状态（可能为 null），尽量标注
-    const details = [] as { number: number; title: string; user: string; mergeable?: boolean; state?: string }[];
-    for (const item of list) {
-      try {
-        const pr = await api.get(`/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/pulls/${item.number}`);
-        details.push({
-          number: item.number,
-          title: item.title || "",
-          user: item?.user?.login || "",
-          mergeable: pr.data?.mergeable,
-          state: pr.data?.mergeable_state
-        });
-      } catch {
-        details.push({ number: item.number, title: item.title || "", user: item?.user?.login || "" });
-      }
-    }
+    // 获取可合并状态（可能为 null），尽量标注（并行请求）
+    const details = (await Promise.all(
+      list.map(async (item) => {
+        try {
+          const pr = await api.get(`/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/pulls/${item.number}`);
+          return {
+            number: item.number,
+            title: item.title || "",
+            user: item?.user?.login || "",
+            mergeable: pr.data?.mergeable,
+            state: pr.data?.mergeable_state
+          };
+        } catch (_e: unknown) {
+          return { number: item.number, title: item.title || "", user: item?.user?.login || "" };
+        }
+      })
+    )) as GitHubPullRequestDetail[];
 
     const prList = details.map((pr) => {
-      const flag = pr.mergeable === true ? "✅ 可合并" : pr.mergeable === false ? `⛔ 不可合并(${pr.state || "unknown"})` : "❓ 未知";
+      const flag = pr.mergeable ? "✅ 可合并" : pr.mergeable === false ? `⛔ 不可合并(${pr.state || "unknown"})` : "❓ 未知";
       return `• <b>#${pr.number}</b>: ${htmlEscape(pr.title)}\n  作者: <code>${htmlEscape(pr.user)}</code> | 状态: ${flag}`;
     }).join("\n\n");
 
     await sendLongMessage(msg, `📬 <b>待处理的PR:</b>\n\n${prList}`);
   }
 
-  private async handleMerge(msg: Api.Message, args: string[]) {
+  private async handleMerge(msg: MessageContext, args: string[]) {
     if (args.length < 2) {
       throw new Error("参数不足，需要提供仓库名和PR编号");
     }
@@ -277,7 +327,7 @@ class GitManagerPlugin extends Plugin {
       throw new Error("PR编号必须是数字");
     }
 
-    await msg.edit({ text: `🔄 正在合并 <code>${htmlEscape(repoName)}</code> 中的 PR #${prNumber}...`, parseMode: "html" });
+    await msg.edit({ text: html`🔄 正在合并 <code>${htmlEscape(repoName)}</code> 中的 PR #${prNumber}...` });
 
     const parts = repoName.split("/");
     if (parts.length !== 2) {
@@ -288,19 +338,22 @@ class GitManagerPlugin extends Plugin {
     const api = await getApi();
     try {
       await api.put(`/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/pulls/${prNumber}/merge`);
-      await msg.edit({ text: `✅ 成功合并 PR #${prNumber}`, parseMode: "html" });
-    } catch (error: any) {
-      const errorMsg = error.response?.data?.message || error.message;
+      await msg.edit({ text: `✅ 成功合并 PR #${prNumber}` });
+    } catch (error: unknown) {
+      const errObj = error as Record<string, unknown>;
+      const resp = errObj.response as Record<string, unknown> | undefined;
+      const data = resp?.data as Record<string, unknown> | undefined;
+      const errorMsg = (typeof data?.message === "string" ? data.message : undefined) || getErrorMessage(error);
       throw new Error(`合并失败: ${errorMsg}`);
     }
   }
 
-  private async handleMergeAll(msg: Api.Message, args: string[]) {
+  private async handleMergeAll(msg: MessageContext, args: string[]) {
     if (args.length < 1) {
       throw new Error("参数不足，需要提供仓库名");
     }
     const repoName = args[0];
-    await msg.edit({ text: `🔄 正在准备批量合并 <code>${htmlEscape(repoName)}</code> 的PR...`, parseMode: "html" });
+    await msg.edit({ text: html`🔄 正在准备批量合并 <code>${htmlEscape(repoName)}</code> 的PR...` });
 
     const parts = repoName.split("/");
     if (parts.length !== 2) {
@@ -315,27 +368,24 @@ class GitManagerPlugin extends Plugin {
       params: { state: "open", per_page: 100 }
     });
 
-    const prsList: any[] = prsResponse.data || [];
+    const prsList: GitHubPullRequest[] = prsResponse.data || [];
     if (!prsList.length) {
-      await msg.edit({ text: `ℹ️ 仓库 <code>${htmlEscape(repoName)}</code> 中没有待处理的PR。`, parseMode: "html" });
+      await msg.edit({ text: html`ℹ️ 仓库 <code>${htmlEscape(repoName)}</code> 中没有待处理的PR。` });
       return;
     }
 
-    // 2. 筛选可合并的PR
-    const mergeablePRs = [];
-    for (const item of prsList) {
+    // 2. 筛选可合并的PR（并行请求）
+    const mergeablePRs = (await Promise.all(
+      prsList.map(async (item) => {
         try {
-            const pr = await api.get(`/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/pulls/${item.number}`);
-            if (pr.data?.mergeable) {
-                mergeablePRs.push(item);
-            }
-        } catch (e) {
-            // 忽略获取详情失败的PR
-        }
-    }
+          const pr = await api.get(`/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/pulls/${item.number}`);
+          return pr.data?.mergeable ? item : null;
+        } catch (e: unknown) { logger.warn(`[git_PR] 忽略获取详情失败的PR:`, e); return null; }
+      })
+    )).filter((item): item is NonNullable<typeof item> => item !== null);
 
     if (mergeablePRs.length === 0) {
-      await msg.edit({ text: `ℹ️ 仓库 <code>${htmlEscape(repoName)}</code> 中没有可自动合并的PR。`, parseMode: "html" });
+      await msg.edit({ text: html`ℹ️ 仓库 <code>${htmlEscape(repoName)}</code> 中没有可自动合并的PR。` });
       return;
     }
 
@@ -352,8 +402,8 @@ class GitManagerPlugin extends Plugin {
         await api.put(`/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/pulls/${pr.number}/merge`);
         report += `✅ <b>#${pr.number}</b>: ${htmlEscape(pr.title)} - <b>成功</b>\n`;
         successCount++;
-      } catch (error: any) {
-        const errorMsg = error.response?.data?.message || error.message;
+      } catch (error: unknown) {
+        const errorMsg = extractGitHubApiError(error) || getErrorMessage(error);
         report += `❌ <b>#${pr.number}</b>: ${htmlEscape(pr.title)} - <b>失败:</b> ${htmlEscape(errorMsg)}\n`;
         failCount++;
       }
@@ -365,5 +415,48 @@ class GitManagerPlugin extends Plugin {
     await sendLongMessage(msg, report);
   }
 }
+
+
+  // Panel Settings Adapter
+  panelAdapter: PanelSettingsAdapter = {
+    id: "git_PR",
+    title: "Git PR 管理",
+    description: "GitHub/GitLab PR 管理配置",
+    category: "插件配置",
+    icon: "🔀",
+    getSchema: (): PanelSettingField[] => [
+      {
+            "key": "token",
+            "label": "Access Token",
+            "type": "password",
+            "secret": true
+      },
+      {
+            "key": "baseUrl",
+            "label": "Git 实例地址",
+            "type": "string",
+            "default": "https://api.github.com"
+      },
+      {
+            "key": "defaultOwner",
+            "label": "默认仓库所有者",
+            "type": "string"
+      },
+      {
+            "key": "defaultRepo",
+            "label": "默认仓库名",
+            "type": "string"
+      }
+],
+    getValues: async (): Promise<Record<string, unknown>> => {
+      const db = await JSONFilePreset<any>(path.join(createDirectoryInAssets("git_PR"), "config.json"), DEFAULT_CONFIG);
+      return db.data as Record<string, unknown>;
+    },
+    setValues: async (patch: Record<string, unknown>): Promise<void> => {
+      const db = await JSONFilePreset<any>(path.join(createDirectoryInAssets("git_PR"), "config.json"), DEFAULT_CONFIG);
+      Object.assign(db.data, patch);
+      await db.write();
+    },
+  };
 
 export default new GitManagerPlugin();

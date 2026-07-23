@@ -1,16 +1,17 @@
 // plugins/sendat.ts
-import { Plugin } from "@utils/pluginBase";
-import { Api } from "teleproto";
+import { thtml as html } from "@mtcute/html-parser";
+import { Plugin, type PanelSettingsAdapter, type PanelSettingField, type PanelFieldType, type Plugin, type PanelSettingsAdapter, type PanelSettingField, type PanelFieldTypeRuntimeContext } from "@utils/pluginBase";
+import type { MessageContext } from "@mtcute/dispatcher";
 import { getGlobalClient } from "@utils/runtimeManager";
 import { cronManager } from "@utils/cronManager";
 import { JSONFilePreset } from "lowdb/node";
 import { createDirectoryInAssets } from "@utils/pathHelpers";
 import * as path from "path";
-import * as fs from "fs";
+import { logger } from "@utils/logger";
+import { getErrorMessage } from "@utils/errorHelpers";
+import { SudoDB } from "@utils/sudoDB";
+import { htmlEscape } from "@utils/htmlEscape"; 
 
-import { htmlEscape } from "@utils/htmlEscape";
-
-// HTML转义函数（必需）
 // 任务接口
 interface SendTaskData {
   task_id: number;
@@ -208,7 +209,7 @@ class SendTask {
       desc += ` [已暂停]`;
     }
 
-    desc += `\n消息: ${this.msg.substring(0, 50)}${this.msg.length > 50 ? '...' : ''}`;
+    desc += `\n消息: ${htmlEscape(this.msg.substring(0, 50))}${this.msg.length > 50 ? '...' : ''}`;
     
     return desc;
   }
@@ -216,19 +217,25 @@ class SendTask {
 
 class SendTaskManager {
   private tasks: SendTask[] = [];
-  private db: any = null;
+  private db: Awaited<ReturnType<typeof JSONFilePreset<{ tasks: SendTaskData[] }>>> | null = null;
   private dbPath: string;
 
   constructor() {
     const assetsDir = createDirectoryInAssets("sendat");
     this.dbPath = path.join(assetsDir, "tasks.json");
-    this.initDB();
   }
 
-  private async initDB(): Promise<void> {
+  async initDB(): Promise<void> {
     this.db = await JSONFilePreset<{ tasks: SendTaskData[] }>(this.dbPath, { tasks: [] });
     this.tasks = this.db.data.tasks.map((data: SendTaskData) => new SendTask(data));
-    this.registerAllTasks();
+  }
+
+  registerAllTasks(): void {
+    this.tasks.forEach(task => {
+      if (!task.pause) {
+        this.registerTask(task);
+      }
+    });
   }
 
   private async saveToDB(): Promise<void> {
@@ -319,13 +326,13 @@ class SendTaskManager {
     if (cronManager.has(taskName)) {
       cronManager.del(taskName);
     }
-    
+
     if (task.interval) {
       if (task.cron) {
         // 定时任务（每天固定时间）
         const cronExpression = `${task.second} ${task.minute} ${task.hour} * * *`;
         cronManager.set(taskName, cronExpression, async () => {
-            await this.executeTask(task);
+          await this.executeTask(task);
         });
       } else {
         // 间隔任务
@@ -380,10 +387,7 @@ class SendTaskManager {
       const client = await getGlobalClient();
       if (!client) return;
 
-      await client.sendMessage(task.cid, {
-        message: task.msg,
-        parseMode: "html"
-      });
+      await client.sendText(task.cid, html(task.msg));
 
       task.current_count += 1;
       
@@ -394,25 +398,23 @@ class SendTaskManager {
       } else {
         await this.saveToDB();
       }
-    } catch (error) {
-      console.error(`[sendat] 执行任务 ${task.task_id} 失败:`, error);
+    } catch (error: unknown) {
+      logger.error(`[sendat] 执行任务 ${task.task_id} 失败:`, error);
     }
   }
 
-  // 注册所有任务
-  private registerAllTasks(): void {
-    this.tasks.forEach(task => {
-      if (!task.pause) {
-        this.registerTask(task);
-      }
-    });
-  }
 }
 
 // 插件主类
 class SendAtPlugin extends Plugin {
   private taskManager: SendTaskManager;
-  private readonly helpText: string = `⏰ <b>定时发送消息插件</b>
+  private readonly helpText!: string;
+
+  constructor() {
+    super();
+    this.taskManager = new SendTaskManager();
+    
+    this.helpText = `⏰ <b>定时发送消息插件</b>
 
 <b>使用方法：</b>
 <code>.sendat 时间 | 消息内容</code> - 添加定时任务
@@ -430,19 +432,15 @@ class SendAtPlugin extends Plugin {
 
 <b>支持的时间单位：</b>
 seconds, minutes, hours, date, times`;
-
-  description = this.helpText;
-
-  constructor() {
-    super();
-    this.taskManager = new SendTaskManager();
   }
 
-  cmdHandlers = {
-    sendat: async (msg: Api.Message) => {
-      await this.handleSendAtCommand(msg);
-    }
-  };
+  get description() { return this.helpText; }
+
+  async setup(context: PluginRuntimeContext): Promise<void> {
+    await this.taskManager.initDB();
+    if (context.signal.aborted) return;
+    this.taskManager.registerAllTasks();
+  }
 
   cleanup(): void {
     // Remove all cron tasks registered by this plugin to prevent zombies on reload
@@ -454,18 +452,13 @@ seconds, minutes, hours, date, times`;
     }
   }
 
-  private async isSudoUser(userId?: number): Promise<boolean> {
-    if (!userId) return false;
-    const { SudoDB } = await import("@utils/sudoDB");
-    const sudoDB = new SudoDB();
-    try {
-      return sudoDB.has(userId);
-    } finally {
-      sudoDB.close();
+  cmdHandlers = {
+    sendat: async (msg: MessageContext) => {
+      await this.handleSendAtCommand(msg);
     }
-  }
+  };
 
-  private async handleSendAtCommand(msg: Api.Message): Promise<void> {
+  private async handleSendAtCommand(msg: MessageContext): Promise<void> {
     const client = await getGlobalClient();
     if (!client) return;
 
@@ -477,7 +470,7 @@ seconds, minutes, hours, date, times`;
     try {
       // 显示帮助
       if (!subCommand || subCommand === 'help' || subCommand === 'h') {
-        await msg.edit({ text: this.helpText, parseMode: "html" });
+        await msg.edit({ text: this.helpText });
         return;
       }
 
@@ -508,26 +501,28 @@ seconds, minutes, hours, date, times`;
       // 添加新任务
       await this.handleAddTask(msg);
 
-    } catch (error: any) {
+    } catch (error: unknown) {
       await msg.edit({
-        text: `❌ <b>错误：</b>${htmlEscape(error.message)}`,
-        parseMode: "html"
+        text: html(`❌ <b>错误：</b>${htmlEscape(getErrorMessage(error))}`)
       });
     }
   }
 
-  private async handleListTasks(msg: Api.Message, showAll: boolean): Promise<void> {
-    const chatId = msg.chatId?.toJSNumber() || 0;
+  private async handleListTasks(msg: MessageContext, showAll: boolean): Promise<void> {
+    const chatId = msg.chat?.id ?? 0;
     let tasks: SendTask[];
 
     if (showAll) {
       // 检查管理员权限
-      const userId = msg.senderId?.toJSNumber();
+      const sudoDBInstance = new SudoDB();
+      const userId = msg.sender?.id;
       
-      if (!(await this.isSudoUser(userId))) {
-        await msg.edit({ text: "❌ 只有管理员可以查看所有任务", parseMode: "html" });
+      if (!userId || !sudoDBInstance.ls().some(u => u.uid === userId)) {
+        sudoDBInstance.close();
+        await msg.edit({ text: "❌ 只有管理员可以查看所有任务" });
         return;
       }
+      sudoDBInstance.close();
       tasks = this.taskManager.getAllTasks();
     } else {
       tasks = this.taskManager.getUserTasks(chatId);
@@ -535,8 +530,7 @@ seconds, minutes, hours, date, times`;
 
     if (tasks.length === 0) {
       await msg.edit({ 
-        text: showAll ? "📝 没有已注册的任务" : "📝 您没有已注册的任务",
-        parseMode: "html" 
+        text: showAll ? "📝 没有已注册的任务" : "📝 您没有已注册的任务" 
       });
       return;
     }
@@ -547,80 +541,83 @@ seconds, minutes, hours, date, times`;
       response += `• ${task.getDescription()}\n\n`;
     });
 
-    await msg.edit({ text: response, parseMode: "html" });
+    await msg.edit({ text: html(response) });
   }
 
-  private async handleRemoveTask(msg: Api.Message, taskIdStr: string): Promise<void> {
+  private async handleRemoveTask(msg: MessageContext, taskIdStr: string): Promise<void> {
     const taskId = parseInt(taskIdStr);
     if (isNaN(taskId)) {
-      await msg.edit({ text: "❌ 请输入有效的任务ID", parseMode: "html" });
+      await msg.edit({ text: "❌ 请输入有效的任务ID" });
       return;
     }
 
     const task = this.taskManager.getTask(taskId);
     if (!task) {
-      await msg.edit({ text: "❌ 任务不存在", parseMode: "html" });
+      await msg.edit({ text: "❌ 任务不存在" });
       return;
     }
 
     // 权限检查：只能删除自己的任务或者是管理员
-    const chatId = msg.chatId?.toJSNumber() || 0;
-    const userId = msg.senderId?.toJSNumber();
+    const chatId = msg.chat?.id ?? 0;
+    const sudoDBInstance = new SudoDB();
+    const userId = msg.sender?.id;
 
-    if (task.cid !== chatId && !(await this.isSudoUser(userId))) {
-      await msg.edit({ text: "❌ 只能删除自己的任务", parseMode: "html" });
+    if (task.cid !== chatId && (!userId || !sudoDBInstance.ls().some(u => u.uid === userId))) {
+      sudoDBInstance.close();
+      await msg.edit({ text: "❌ 只能删除自己的任务" });
       return;
     }
+    sudoDBInstance.close();
 
     const success = await this.taskManager.removeTask(taskId);
     if (success) {
-      await msg.edit({ text: `✅ 已删除任务 #${taskId}`, parseMode: "html" });
+      await msg.edit({ text: `✅ 已删除任务 #${taskId}` });
     } else {
-      await msg.edit({ text: "❌ 删除任务失败", parseMode: "html" });
+      await msg.edit({ text: "❌ 删除任务失败" });
     }
   }
 
-  private async handlePauseTask(msg: Api.Message, taskIdStr: string): Promise<void> {
+  private async handlePauseTask(msg: MessageContext, taskIdStr: string): Promise<void> {
     const taskId = parseInt(taskIdStr);
     if (isNaN(taskId)) {
-      await msg.edit({ text: "❌ 请输入有效的任务ID", parseMode: "html" });
+      await msg.edit({ text: "❌ 请输入有效的任务ID" });
       return;
     }
 
     const success = await this.taskManager.pauseTask(taskId);
     if (success) {
-      await msg.edit({ text: `⏸️ 已暂停任务 #${taskId}`, parseMode: "html" });
+      await msg.edit({ text: `⏸️ 已暂停任务 #${taskId}` });
     } else {
-      await msg.edit({ text: "❌ 暂停任务失败", parseMode: "html" });
+      await msg.edit({ text: "❌ 暂停任务失败" });
     }
   }
 
-  private async handleResumeTask(msg: Api.Message, taskIdStr: string): Promise<void> {
+  private async handleResumeTask(msg: MessageContext, taskIdStr: string): Promise<void> {
     const taskId = parseInt(taskIdStr);
     if (isNaN(taskId)) {
-      await msg.edit({ text: "❌ 请输入有效的任务ID", parseMode: "html" });
+      await msg.edit({ text: "❌ 请输入有效的任务ID" });
       return;
     }
 
     const success = await this.taskManager.resumeTask(taskId);
     if (success) {
-      await msg.edit({ text: `▶️ 已恢复任务 #${taskId}`, parseMode: "html" });
+      await msg.edit({ text: `▶️ 已恢复任务 #${taskId}` });
     } else {
-      await msg.edit({ text: "❌ 恢复任务失败", parseMode: "html" });
+      await msg.edit({ text: "❌ 恢复任务失败" });
     }
   }
 
-  private async handleAddTask(msg: Api.Message): Promise<void> {
+  private async handleAddTask(msg: MessageContext): Promise<void> {
     const text = msg.text || "";
     const commandMatch = text.match(/^[.!。]sendat\s+(.+)/i);
     
     if (!commandMatch) {
-      await msg.edit({ text: "❌ 命令格式错误", parseMode: "html" });
+      await msg.edit({ text: "❌ 命令格式错误" });
       return;
     }
 
     const taskContent = commandMatch[1].trim();
-    const chatId = msg.chatId?.toJSNumber() || 0;
+    const chatId = msg.chat?.id ?? 0;
 
     const task = new SendTask({
       task_id: this.taskManager.getNextTaskId(),
@@ -640,13 +637,44 @@ seconds, minutes, hours, date, times`;
       await this.taskManager.addTask(task);
       
       await msg.edit({ 
-        text: `✅ <b>已添加任务 #${task.task_id}</b>\n\n${task.getDescription()}`,
-        parseMode: "html" 
+        text: html(`✅ <b>已添加任务 #${task.task_id}</b>\n\n${task.getDescription()}`)
       });
-    } catch (error: any) {
-      throw new Error(`添加任务失败: ${error.message}`);
+    } catch (error: unknown) {
+      throw new Error(`添加任务失败: ${getErrorMessage(error)}`);
     }
   }
 }
+
+
+  // Panel Settings Adapter
+  panelAdapter: PanelSettingsAdapter = {
+    id: "sendat",
+    title: "定时发送",
+    description: "定时消息发送配置",
+    category: "插件配置",
+    icon: "📅",
+    getSchema: (): PanelSettingField[] => [
+      {
+            "key": "timezone",
+            "label": "时区",
+            "type": "string",
+            "default": "Asia/Shanghai"
+      },
+      {
+            "key": "defaultChat",
+            "label": "默认发送 Chat ID",
+            "type": "string"
+      }
+],
+    getValues: async (): Promise<Record<string, unknown>> => {
+      const db = await JSONFilePreset<any>(path.join(createDirectoryInAssets("sendat"), "config.json"), {} as any);
+      return db.data as Record<string, unknown>;
+    },
+    setValues: async (patch: Record<string, unknown>): Promise<void> => {
+      const db = await JSONFilePreset<any>(path.join(createDirectoryInAssets("sendat"), "config.json"), {} as any);
+      Object.assign(db.data, patch);
+      await db.write();
+    },
+  };
 
 export default new SendAtPlugin();

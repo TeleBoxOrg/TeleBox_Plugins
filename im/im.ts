@@ -1,23 +1,29 @@
 import { getPrefixes } from "@utils/pluginManager";
-import { Plugin } from "@utils/pluginBase";
+import { Plugin, type PanelSettingsAdapter, type PanelSettingField, type PanelFieldType } from "@utils/pluginBase";
 import { getGlobalClient } from "@utils/runtimeManager";
 import { createDirectoryInAssets } from "@utils/pathHelpers";
 import { banUser } from "@utils/banUtils";
-import { Api, TelegramClient } from "teleproto";
+import { safeGetReplyMessage } from "@utils/safeGetMessages";
+import { hasRawType, getMessageMedia } from "@utils/entityTypeGuards";
+import type { MessageContext } from "@mtcute/dispatcher";
+import type { TelegramClient } from "@mtcute/node";
+import type { Chat } from "@mtcute/core";
+import { thtml as html } from "@mtcute/html-parser";
 // 使用简化的事件类型定义
 interface NewMessageEvent {
-  message: Api.Message;
+  message: MessageContext;
 }
 
 interface EditedMessageEvent {
-  message: Api.Message;
+  message: MessageContext;
 }
+
 import { JSONFilePreset } from "lowdb/node";
 import * as path from "path";
 import * as crypto from "crypto";
-
+import { logger } from "@utils/logger";
+import { getErrorMessage } from "@utils/errorHelpers";
 import { htmlEscape } from "@utils/htmlEscape";
-
 // ==================== 类型定义 ====================
 type Action = "delete" | "ban";
 
@@ -71,29 +77,23 @@ const HELP_TEXT = `<b>🖼️ 图片监控插件 (image_monitor)</b>
 • 回复图片/媒体/贴纸使用 <code>.im [delete|ban]</code> - 快速添加（图片MD5/文件MD5/贴纸ID），未指定时使用默认操作`;
 
 // ==================== 工具函数 ====================
-async function getPeerId(client: TelegramClient, msg: Api.Message, chatIdStr?: string): Promise<string | null> {
-    try {
-        if (!chatIdStr) {
-            if (msg.peerId instanceof Api.PeerChannel) return `-100${msg.peerId.channelId}`;
-            if (msg.peerId instanceof Api.PeerChat) return `-${msg.peerId.chatId}`;
-            if (msg.peerId instanceof Api.PeerUser) return `${msg.peerId.userId}`;
-            return null;
-        }
 
-        const peer = chatIdStr;
-        const resolved = await client.getInputEntity(peer);
-        if (resolved instanceof Api.InputPeerChannel) {
-            return `-100${resolved.channelId}`;
+async function getPeerId(client: TelegramClient, msg: MessageContext, chatIdStr?: string): Promise<string | null> {
+    try {
+        const peer: any = chatIdStr ? chatIdStr : msg.chat.id;
+        const resolved = await client.resolvePeer(peer);
+        if (hasRawType(resolved, "inputPeerChannel")) {
+            return `-100${(resolved as { channelId?: number }).channelId}`;
         }
-        if (resolved instanceof Api.InputPeerChat) {
-            return `-${resolved.chatId}`;
+        if (hasRawType(resolved, "inputPeerChat")) {
+            return `-${(resolved as { chatId?: number }).chatId}`;
         }
-        if (resolved instanceof Api.InputPeerUser) {
-            return `${resolved.userId}`;
+        if (hasRawType(resolved, "inputPeerUser")) {
+            return `${(resolved as { userId?: number }).userId}`;
         }
         return null;
-    } catch (e) {
-        console.error(`[${PLUGIN_NAME}] Could not resolve peer:`, e);
+    } catch (e: unknown) {
+        logger.error(`[${PLUGIN_NAME}] Could not resolve peer:`, e);
         return null;
     }
 }
@@ -114,26 +114,24 @@ function clearTrackedTimer(timer: ReturnType<typeof setTimeout>): void {
 
 // ==================== 消息管理器 ====================
 class MessageManager {
-  static async edit(msg: Api.Message, text: string, options: { parseMode?: "html" | "md", deleteAfter?: number } = {}): Promise<void> {
-    const { parseMode = "html", deleteAfter = 10 } = options;
+  static async edit(msg: MessageContext, text: string, options: { parseMode?: "html" | "md", deleteAfter?: number } = {}): Promise<void> {
+    const { deleteAfter = 10 } = options;
     try {
-      await msg.edit({ text, parseMode });
+      await msg.edit({ text: html(text) });
       if (deleteAfter > 0) {
         const timer = setTimeout(() => {
           clearTrackedTimer(timer);
-          msg.delete({ revoke: true }).catch(() => {});
+          msg.delete({ revoke: true }).catch(() => { /* msg may already be deleted */ });
         }, deleteAfter * 1000);
         trackTimer(timer);
       }
-    } catch (e) {
-      // Ignore errors if message was deleted or something
-    }
+    } catch (e: unknown) { logger.warn(`[im] Ignore errors if message was deleted or something:`, e) }
   }
 }
 
 // ==================== 配置管理器 ====================
 class ConfigManager {
-  private static db: any = null;
+  private static db: Awaited<ReturnType<typeof JSONFilePreset<Config>>> | null = null;
 
   static async init() {
     if (this.db) return;
@@ -147,16 +145,16 @@ class ConfigManager {
     await this.init();
     // 再次保证标准化（防止外部意外写入）
     this.normalize();
-    return this.db.data;
+    return this.db!.data;
   }
 
   static async saveConfig() {
     await this.init();
-    await this.db.write();
+    await this.db!.write();
   }
 
   private static normalize() {
-    const data = this.db?.data as any;
+    const data = this.db?.data as { monitoredChats?: unknown; bannedStickerIds?: Record<string, string>; defaultAction?: string } | undefined;
     if (!data) return;
     // 兼容旧版 monitoredChats: (string|number)[] -> MonitoredChat[]
     if (Array.isArray(data.monitoredChats)) {
@@ -182,7 +180,7 @@ class ConfigManager {
 class ImageMonitorPlugin extends Plugin {
   description: string = HELP_TEXT;
 
-  cmdHandlers: Record<string, (msg: Api.Message) => Promise<void>> = {
+  cmdHandlers: Record<string, (msg: MessageContext) => Promise<void>> = {
     im: this.handleConfigCommand.bind(this),
   };
 
@@ -193,11 +191,11 @@ class ImageMonitorPlugin extends Plugin {
 
   private async initialize() {
     await ConfigManager.init();
-    console.log("[image_monitor] Plugin initialized");
+    logger.info("[image_monitor] Plugin initialized");
   }
 
   // 消息监听器 - TeleBox会自动调用这个方法
-  listenMessageHandler = async (msg: Api.Message, options?: { isEdited?: boolean }) => {
+  listenMessageHandler = async (msg: MessageContext, options?: { isEdited?: boolean }) => {
     const client = await getGlobalClient();
     if (!client) return;
 
@@ -209,10 +207,10 @@ class ImageMonitorPlugin extends Plugin {
     const subCommand = commandParts[1]?.toLowerCase();
 
     // 检查是否为有效的.im命令（必须以正确前缀开头）
-    const isValidImCommand = prefixes.some(prefix => command === `${prefix}im`);
+    const isValidImCommand = prefixes.some((prefix: string) => command === `${prefix}im`);
     
-    if (msg.isReply && isValidImCommand) {
-        const repliedMsg = await msg.getReplyMessage();
+    if (msg.replyToMessage?.id && isValidImCommand) {
+        const repliedMsg = await safeGetReplyMessage(msg);
         if (!repliedMsg) {
             await MessageManager.edit(msg, "❌ 未找到被回复的消息。");
             return;
@@ -222,31 +220,32 @@ class ImageMonitorPlugin extends Plugin {
         if (!config.bannedStickerIds) config.bannedStickerIds = {};
         const action = (subCommand === 'ban' || subCommand === 'delete') ? subCommand as Action : config.defaultAction;
 
-        const media = repliedMsg.media;
+        const media = (repliedMsg as { media?: { raw?: unknown } }).media?.raw ?? (repliedMsg as { media?: unknown }).media;
         if (!media) {
             await MessageManager.edit(msg, "❌ 该回复不是图片、媒体或贴纸。请回复包含图片/媒体/贴纸的消息后再使用 <code>.im</code>。");
             return;
         }
 
         try {
-            if (media instanceof Api.MessageMediaDocument) {
-                const docRaw = media.document;
-                if (docRaw instanceof Api.Document) {
-                    const isSticker = Array.isArray(docRaw.attributes) && docRaw.attributes.some(a => a instanceof Api.DocumentAttributeSticker);
+            if (hasRawType(media, "messageMediaDocument")) {
+                const docRaw = (media as { document?: unknown }).document;
+                if (docRaw && hasRawType(docRaw, "document")) {
+                    const isSticker = Array.isArray((docRaw as { attributes?: unknown[] }).attributes) && (docRaw as { attributes?: unknown[] }).attributes!.some((a: unknown) => hasRawType(a, "documentAttributeSticker"));
                     if (isSticker) {
-                        const stickerId = String(docRaw.id);
+                        const stickerId = String((docRaw as { id?: unknown }).id);
                         config.bannedStickerIds[stickerId] = action;
                         await ConfigManager.saveConfig();
                         await MessageManager.edit(msg, `✅ 已添加贴纸ID: <code>${htmlEscape(stickerId)}</code>，操作: <code>${action}</code>`);
                         return;
                     }
-                    if (docRaw.size && Number(docRaw.size) > MAX_FILE_SIZE) {
+                    const docSize = (docRaw as { size?: unknown }).size;
+                    if (docSize && Number(docSize) > MAX_FILE_SIZE) {
                         await MessageManager.edit(msg, "❌ 文件过大，已超过限制。" );
                         return;
                     }
                 }
                 await MessageManager.edit(msg, "⏳ 正在计算文件MD5...", { deleteAfter: 0 });
-                const buffer = await client.downloadMedia(media, {});
+                const buffer = Buffer.from(await client.downloadAsBuffer(media as never));
                 if (!buffer) {
                     await MessageManager.edit(msg, "❌ 下载媒体失败。");
                     return;
@@ -258,9 +257,9 @@ class ImageMonitorPlugin extends Plugin {
                 return;
             }
 
-            if (media instanceof Api.MessageMediaPhoto) {
+            if (hasRawType(media, "messageMediaPhoto")) {
                 await MessageManager.edit(msg, "⏳ 正在计算图片MD5...", { deleteAfter: 0 });
-                const buffer = await client.downloadMedia(media, {});
+                const buffer = Buffer.from(await client.downloadAsBuffer(media as never));
                 if (!buffer) {
                     await MessageManager.edit(msg, "❌ 下载图片失败。");
                     return;
@@ -273,9 +272,9 @@ class ImageMonitorPlugin extends Plugin {
             }
 
             await MessageManager.edit(msg, "❌ 不支持的媒体类型。请回复图片、媒体或贴纸。");
-        } catch (error: any) {
-            console.error(`[${PLUGIN_NAME}] Failed to process replied media:`, error);
-            await MessageManager.edit(msg, `❌ 处理媒体时出错: ${htmlEscape(error.message)}`);
+        } catch (error: unknown) {
+            logger.error(`[${PLUGIN_NAME}] Failed to process replied media:`, error);
+            await MessageManager.edit(msg, `❌ 处理媒体时出错: ${htmlEscape(getErrorMessage(error))}`);
         }
         return;
     }
@@ -297,13 +296,15 @@ class ImageMonitorPlugin extends Plugin {
   // 不忽略编辑消息
   ignoreEdited = false
 
-  private async handleConfigCommand(msg: Api.Message): Promise<void> {
+  private async handleConfigCommand(msg: MessageContext): Promise<void> {
     const client = await getGlobalClient();
     if (!client) return;
 
     const args = msg.text?.split(" ").slice(1) || [];
     const subCommand = args[0]?.toLowerCase();
     const config = await ConfigManager.getConfig();
+
+
 
     try {
       switch (subCommand) {
@@ -319,14 +320,14 @@ class ImageMonitorPlugin extends Plugin {
           break;
         case "addchat": {
           const chatIdStr = args[1];
-          const peerIdentifier = chatIdStr || msg.peerId;
+          const peerIdentifier: any = chatIdStr || msg.chat.id;
           try {
             const peerId = await getPeerId(client, msg, chatIdStr);
             if (!peerId) {
               await MessageManager.edit(msg, "❌ 无法解析群组ID或用户名。");
               return;
             }
-            const entity: any = await client.getEntity(peerIdentifier);
+            const entity = await client.getChat(peerIdentifier).catch(() => null);
             let chatName: string;
             if (entity && 'username' in entity && entity.username) {
               chatName = `@${entity.username}`;
@@ -337,27 +338,27 @@ class ImageMonitorPlugin extends Plugin {
             }
 
             if (!config.monitoredChats.some(c => c.id === peerId)) {
-              config.monitoredChats.push({ id: peerId, name: chatName, username: entity?.username });
+              config.monitoredChats.push({ id: peerId, name: chatName, username: entity?.username ?? undefined });
               await ConfigManager.saveConfig();
               await MessageManager.edit(msg, `✅ 已添加监控群组: <code>${htmlEscape(chatName)}</code> (<code>${peerId}</code>)`);
             } else {
               await MessageManager.edit(msg, `ℹ️ 群组 <code>${htmlEscape(chatName)}</code> 已在监控列表中。`);
             }
-          } catch (e) {
+          } catch (_e: unknown) {
             await MessageManager.edit(msg, "❌ 无法解析群组ID或用户名。");
           }
           break;
         }
         case "delchat": {
           const chatIdStr = args[1];
-          const peerIdentifier = chatIdStr || msg.peerId;
+          const peerIdentifier: any = chatIdStr || msg.chat.id;
           try {
             const peerId = await getPeerId(client, msg, chatIdStr);
             if (!peerId) {
               await MessageManager.edit(msg, "❌ 无法解析群组ID或用户名。");
               return;
             }
-            const entity: any = await client.getEntity(peerIdentifier);
+            const entity = await client.getChat(peerIdentifier).catch(() => null);
             let chatName: string;
             if (entity && 'username' in entity && entity.username) {
               chatName = `@${entity.username}`;
@@ -376,7 +377,7 @@ class ImageMonitorPlugin extends Plugin {
             } else {
               await MessageManager.edit(msg, `ℹ️ 群组 <code>${htmlEscape(chatName)}</code> 不在监控列表中。`);
             }
-          } catch (e) {
+          } catch (_e: unknown) {
             await MessageManager.edit(msg, "❌ 无法解析群组ID或用户名。");
           }
           break;
@@ -446,15 +447,15 @@ class ImageMonitorPlugin extends Plugin {
           await MessageManager.edit(msg, HELP_TEXT, { deleteAfter: 30 });
           break;
       }
-    } catch (error: any) {
-        console.error(`[${PLUGIN_NAME}] Command failed:`, error);
-        await MessageManager.edit(msg, `❌ 命令执行失败: ${htmlEscape(error.message)}`);
+    } catch (error: unknown) {
+        logger.error(`[${PLUGIN_NAME}] Command failed:`, error);
+        await MessageManager.edit(msg, `❌ 命令执行失败: ${htmlEscape(getErrorMessage(error))}`);
     }
   }
 
   private async handleNewMessage(event: NewMessageEvent): Promise<void> {
     const config = await ConfigManager.getConfig();
-    if (!config.enabled || !event.message.peerId) return;
+    if (!config.enabled || !event.message.chat) return;
 
     const client = await getGlobalClient();
     if (!client) return;
@@ -463,14 +464,14 @@ class ImageMonitorPlugin extends Plugin {
     const chatId = await getPeerId(client, msg);
 
         if (chatId && config.monitoredChats.some(c => c.id === chatId)) {
-        console.log(`[${PLUGIN_NAME}] Processing new message ${msg.id} in chat ${chatId}`);
+        logger.info(`[${PLUGIN_NAME}] Processing new message ${msg.id} in chat ${chatId}`);
         await this.processImageMessage(msg, client, config);
     }
   }
 
   private async handleEditedMessage(event: EditedMessageEvent): Promise<void> {
     const config = await ConfigManager.getConfig();
-    if (!config.enabled || !event.message.peerId) return;
+    if (!config.enabled || !event.message.chat) return;
 
     const client = await getGlobalClient();
     if (!client) return;
@@ -479,64 +480,67 @@ class ImageMonitorPlugin extends Plugin {
     const chatId = await getPeerId(client, msg);
 
         if (chatId && config.monitoredChats.some(c => c.id === chatId)) {
-        console.log(`[${PLUGIN_NAME}] Processing edited message ${msg.id} in chat ${chatId}`);
+        logger.info(`[${PLUGIN_NAME}] Processing edited message ${msg.id} in chat ${chatId}`);
         await this.processImageMessage(msg, client, config);
     }
   }
 
-  private async processImageMessage(msg: Api.Message, client: TelegramClient, config: Config): Promise<void> {
-    let media: Api.MessageMediaPhoto | Api.MessageMediaDocument | undefined;
+  private async processImageMessage(msg: MessageContext, client: TelegramClient, config: Config): Promise<void> {
+    let media: any;
     let fileSize: number | undefined;
 
-    if (!msg.media) return;
+    const rawMedia: unknown = (msg as { media?: { raw?: unknown } }).media?.raw ?? (msg as { media?: unknown }).media;
+    if (!rawMedia) return;
 
-    if (msg.media instanceof Api.MessageMediaDocument) {
-        const docRaw = msg.media.document;
-        if (docRaw instanceof Api.Document) {
-            const isSticker = Array.isArray(docRaw.attributes) && docRaw.attributes.some(a => a instanceof Api.DocumentAttributeSticker);
+    if (hasRawType(rawMedia, "messageMediaDocument")) {
+        const docRaw = (rawMedia as { document?: unknown }).document;
+        if (docRaw && hasRawType(docRaw, "document")) {
+            const isSticker = Array.isArray((docRaw as { attributes?: unknown[] }).attributes) && (docRaw as { attributes?: unknown[] }).attributes!.some((a: unknown) => hasRawType(a, "documentAttributeSticker"));
             if (isSticker) {
-                const stickerId = String(docRaw.id);
+                const stickerId = String((docRaw as { id?: unknown }).id);
                 const action = config.bannedStickerIds?.[stickerId];
                 if (action) {
                     try {
                         if (action === 'delete') {
                             await msg.delete({ revoke: true });
                         } else if (action === 'ban') {
-                            const senderId = msg.senderId;
+                            const senderId = msg.sender?.id;
                             if (senderId) {
-                                await banUser(client, await msg.getInputChat(), senderId);
+                                await banUser(client, msg.chat.id, senderId);
                                 await msg.delete({ revoke: true });
                             }
                         }
-                    } catch (err: any) {
-                        if (err.message?.includes('CHAT_ADMIN_REQUIRED')) {
-                            console.error(`[${PLUGIN_NAME}] Action failed in chat ${msg.chatId}: Bot is not an admin or lacks permissions.`);
-                        } else if (err.message?.includes('USER_ID_INVALID')) {
-                            console.error(`[${PLUGIN_NAME}] Action failed in chat ${msg.chatId}: Invalid user ID.`);
+                    } catch (err: unknown) {
+                        const errMsg = err instanceof Error ? err.message : String(err);
+                        if (errMsg.includes('CHAT_ADMIN_REQUIRED')) {
+                            logger.error(`[${PLUGIN_NAME}] Action failed in chat ${msg.chat.id}: Bot is not an admin or lacks permissions.`);
+                        } else if (errMsg.includes('USER_ID_INVALID')) {
+                            logger.error(`[${PLUGIN_NAME}] Action failed in chat ${msg.chat.id}: Invalid user ID.`);
                         } else {
-                            console.error(`[${PLUGIN_NAME}] Action failed for message ${msg.id}:`, err);
+                            logger.error(`[${PLUGIN_NAME}] Action failed for message ${msg.id}:`, err);
                         }
                     }
                     return;
                 }
                 return; // 是贴纸但不在封禁列表，直接返回，不作为普通图片处理
             }
-            if (docRaw.mimeType?.startsWith("image/")) {
-                fileSize = docRaw.size ? Number(docRaw.size) : undefined;
-                media = msg.media;
+            const docSizeRaw = docRaw as { mimeType?: string; size?: unknown };
+            if (docSizeRaw.mimeType?.startsWith("image/")) {
+                fileSize = docSizeRaw.size ? Number(docSizeRaw.size) : undefined;
+                media = rawMedia;
             } else {
                 return;
             }
         }
-    } else if (msg.media instanceof Api.MessageMediaPhoto) {
-        media = msg.media;
-        const photo = media.photo as Api.Photo;
+    } else if (hasRawType(rawMedia, "messageMediaPhoto")) {
+        media = rawMedia;
+        const photo = (media as { photo?: { sizes?: unknown[] } }).photo;
         const sizes: number[] = [];
-        for (const s of photo.sizes) {
-            if (s instanceof Api.PhotoSize) {
-                sizes.push(s.size);
-            } else if (s instanceof Api.PhotoSizeProgressive) {
-                sizes.push(Math.max(...s.sizes));
+        for (const s of photo?.sizes ?? []) {
+            if (hasRawType(s, "photoSize")) {
+                sizes.push((s as { size?: number }).size ?? 0);
+            } else if (hasRawType(s, "photoSizeProgressive")) {
+                sizes.push(Math.max(...((s as { sizes?: number[] }).sizes ?? [])));
             }
         }
         if (sizes.length > 0) {
@@ -549,7 +553,7 @@ class ImageMonitorPlugin extends Plugin {
     }
 
     try {
-        const buffer = await client.downloadMedia(media, {});
+        const buffer = Buffer.from(await client.downloadAsBuffer(media as never));
         if (!buffer) {
             return;
         }
@@ -560,25 +564,26 @@ class ImageMonitorPlugin extends Plugin {
                 if (action === 'delete') {
                     await msg.delete({ revoke: true });
                 } else if (action === 'ban') {
-                    const senderId = msg.senderId;
+                    const senderId = msg.sender?.id;
                     if (senderId) {
-                        await banUser(client, await msg.getInputChat(), senderId);
+                        await banUser(client, msg.chat.id, senderId);
                         await msg.delete({ revoke: true });
                     }
                 }
-            } catch (err: any) {
-                if (err.message?.includes('CHAT_ADMIN_REQUIRED')) {
-                    console.error(`[${PLUGIN_NAME}] Action failed in chat ${msg.chatId}: Bot is not an admin or lacks permissions.`);
-                } else if (err.message?.includes('USER_ID_INVALID')) {
-                    console.error(`[${PLUGIN_NAME}] Action failed in chat ${msg.chatId}: Invalid user ID.`);
-                } else {
-                    console.error(`[${PLUGIN_NAME}] Action failed for message ${msg.id}:`, err);
+            } catch (err: unknown) {
+                        const errMsg = err instanceof Error ? err.message : String(err);
+                        if (errMsg.includes('CHAT_ADMIN_REQUIRED')) {
+                            logger.error(`[${PLUGIN_NAME}] Action failed in chat ${msg.chat.id}: Bot is not an admin or lacks permissions.`);
+                        } else if (errMsg.includes('USER_ID_INVALID')) {
+                            logger.error(`[${PLUGIN_NAME}] Action failed in chat ${msg.chat.id}: Invalid user ID.`);
+                        } else {
+                            logger.error(`[${PLUGIN_NAME}] Action failed for message ${msg.id}:`, err);
+                        }
+                    }
                 }
+            } catch (error: unknown) {
+                logger.error(`[${PLUGIN_NAME}] Failed to process media in message ${msg.id}:`, error);
             }
-        }
-    } catch (error: any) {
-        console.error(`[${PLUGIN_NAME}] Failed to process media in message ${msg.id}:`, error);
-    }
   }
 
   cleanup(): void {
@@ -588,5 +593,46 @@ class ImageMonitorPlugin extends Plugin {
     pendingTimers.clear();
   }
 }
+
+
+  // Panel Settings Adapter
+  panelAdapter: PanelSettingsAdapter = {
+    id: "im",
+    title: "图片监控",
+    description: "图片监控配置：启用、监控群组、默认操作",
+    category: "插件配置",
+    icon: "🖼️",
+    getSchema: (): PanelSettingField[] => [
+      {
+            "key": "enabled",
+            "label": "启用监控",
+            "type": "boolean"
+      },
+      {
+            "key": "defaultAction",
+            "label": "默认操作",
+            "type": "select",
+            "options": [
+                  {
+                        "value": "delete",
+                        "label": "删除"
+                  },
+                  {
+                        "value": "ban",
+                        "label": "封禁"
+                  }
+            ]
+      }
+],
+    getValues: async (): Promise<Record<string, unknown>> => {
+      const db = await JSONFilePreset<Config>(path.join(createDirectoryInAssets("image_monitor"), "config.json"), DEFAULT_CONFIG);
+      return db.data as Record<string, unknown>;
+    },
+    setValues: async (patch: Record<string, unknown>): Promise<void> => {
+      const db = await JSONFilePreset<Config>(path.join(createDirectoryInAssets("image_monitor"), "config.json"), DEFAULT_CONFIG);
+      Object.assign(db.data, patch);
+      await db.write();
+    },
+  };
 
 export default new ImageMonitorPlugin();

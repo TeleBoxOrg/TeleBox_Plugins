@@ -1,14 +1,19 @@
 // 文件名: plugins/gif.ts
-import { Plugin } from "@utils/pluginBase";
+import { Plugin, type PanelSettingsAdapter, type PanelSettingField, type PanelFieldType } from "@utils/pluginBase";
 import { getGlobalClient, getCurrentGeneration } from "@utils/runtimeManager";
 import { getPrefixes } from "@utils/pluginManager";
 import { createDirectoryInAssets } from "@utils/pathHelpers";
-import { Api } from "teleproto";
+import type { MessageContext } from "@mtcute/dispatcher";
+import type { Message, TelegramClient, MessageMedia, Video, Document, InputMediaSticker } from "@mtcute/node";
+import type { FileLocation } from "@mtcute/core";
+import { thtml as html } from "@mtcute/html-parser";
 import fs from "fs";
 import path from "path";
 import { execFile } from "child_process";
 import { promisify } from "util";
 import { safeGetReplyMessage } from "@utils/safeGetMessages";
+import { logger } from "@utils/logger";
+import { getErrorMessage } from "@utils/errorHelpers";
 
 const prefixes = getPrefixes();
 const mainPrefix = prefixes[0];
@@ -28,7 +33,7 @@ interface GifConverterConfig {
 }
 
 class GifConverter {
-  private client: any;
+  private client: TelegramClient;
   private tempDir: string;
   private config: GifConverterConfig = {
     maxFileSize: 50,    // 50MB 限制
@@ -55,7 +60,7 @@ class GifConverter {
     "🔥", "✨", "🌟", "💫", "💥", "💢", "💦", "💨", "👈", "👉"
   ];
 
-  constructor(client: any) {
+  constructor(client: TelegramClient) {
     this.client = client;
     this.tempDir = path.join(process.cwd(), "temp", "gif");
   }
@@ -68,8 +73,8 @@ class GifConverter {
     }
   }
 
-  public async handle(msg: Api.Message) {
-    const args = msg.message.substring(4).trim().toLowerCase();
+  public async handle(msg: MessageContext) {
+    const args = (msg.text || "").substring(4).trim().toLowerCase();
     
     // 检查是否有帮助参数
     if (args === "help" || args === "h") {
@@ -87,7 +92,7 @@ class GifConverter {
     const repliedMsg = await safeGetReplyMessage(msg);
     if (!repliedMsg) {
       await msg.edit({
-        text: "❌ 请回复一个包含 GIF 或视频的消息后使用此命令。\n\n💡 请回复 GIF 或视频后再试。"
+        text: html("❌ 请回复一个包含 GIF 或视频的消息后使用此命令。\n\n💡 请回复 GIF 或视频后再试。")
       });
       return;
     }
@@ -95,22 +100,23 @@ class GifConverter {
     // 检查消息类型
     if (!this.isValidMedia(repliedMsg)) {
       await msg.edit({
-        text: "❌ 回复的消息不包含 GIF 或视频文件。\n\n支持的格式：GIF、MP4、AVI、MOV、WEBM 等视频格式。"
+        text: html("❌ 回复的消息不包含 GIF 或视频文件。\n\n支持的格式：GIF、MP4、AVI、MOV、WEBM 等视频格式。")
       });
       return;
     }
 
     try {
       await this.convertToSticker(msg, repliedMsg);
-    } catch (error: any) {
-      console.error("GIF转贴纸失败:", error);
+    } catch (error: unknown) {
+      const errorMessage = getErrorMessage(error);
+      logger.error("GIF转贴纸失败:", error);
       await msg.edit({
-        text: `❌ 转换失败：${error.message}\n\n💡 请检查支持的格式和限制。`
+        text: html(`❌ 转换失败：${errorMessage}\n\n💡 请检查支持的格式和限制。`)
       });
     }
   }
 
-  private async showHelp(msg: Api.Message) {
+  private async showHelp(msg: MessageContext) {
     const prefixes = await getPrefixes();
     const prefix = prefixes[0] || ".";
     
@@ -137,10 +143,10 @@ class GifConverter {
 • 过长或过大的视频会被自动裁剪和压缩
 • 建议使用时长较短的 GIF 或视频以获得最佳效果`;
 
-    await msg.edit({ text: helpText });
+    await msg.edit({ text: html(helpText) });
   }
 
-  private async clearTempFiles(msg: Api.Message) {
+  private async clearTempFiles(msg: MessageContext) {
     try {
       const files = fs.readdirSync(this.tempDir);
       let deletedCount = 0;
@@ -150,58 +156,59 @@ class GifConverter {
         try {
           fs.unlinkSync(filePath);
           deletedCount++;
-        } catch (e) {
-          // 忽略删除失败的文件
-        }
+        } catch (e: unknown) { logger.warn(`[gif] 忽略删除失败的文件:`, e) }
       }
 
       await msg.edit({
-        text: `✅ 已清理 ${deletedCount} 个临时文件。`
+        text: html(`✅ 已清理 ${deletedCount} 个临时文件。`)
       });
-    } catch (error: any) {
+    } catch (error: unknown) {
+      const errorMessage = getErrorMessage(error);
       await msg.edit({
-        text: `⚠️ 清理临时文件时出错：${error.message}`
+        text: html(`⚠️ 清理临时文件时出错：${errorMessage}`)
       });
     }
   }
 
-  private isValidMedia(msg: Api.Message): boolean {
-    // 检查是否为 GIF
-    if (msg.gif) return true;
+  private isValidMedia(msg: Message): boolean {
+    const media = msg.media;
+    if (!media) return false;
 
-    // 检查是否为视频
-    if (msg.video) {
+    // 使用类型收窄访问 media 属性
+    if (media.type === "video") {
+      const video = media as Video;
+      // 检查是否为 GIF 动图
+      if (video.isAnimation) return true;
+
+      // 检查视频 MIME 类型
       const videoMimeTypes = [
         "video/mp4", "video/avi", "video/mov", "video/webm", 
         "video/mkv", "video/flv", "video/wmv", "video/3gp"
       ];
-      return videoMimeTypes.includes(msg.video.mimeType || "");
+      return videoMimeTypes.includes(video.mimeType || "");
     }
 
     // 检查文档类型（可能是 GIF 文档）
-    if (msg.document) {
-      const doc = msg.document;
+    if (media.type === "document") {
+      const doc = media as Document;
       if (doc.mimeType === "image/gif") return true;
-      
-      // 检查文件名扩展名
-      const filenameAttr = doc.attributes?.find(
-        (attr: any) => attr.className === "DocumentAttributeFilename"
-      );
-      if (filenameAttr && (filenameAttr as any).fileName) {
-        const filename = (filenameAttr as any).fileName.toLowerCase();
-        return filename.endsWith(".gif") || 
-               filename.endsWith(".mp4") || 
-               filename.endsWith(".webm") ||
-               filename.endsWith(".mov") ||
-               filename.endsWith(".avi");
+
+      const fileName = (doc.fileName || "").toLowerCase();
+      if (fileName) {
+        return fileName.endsWith(".gif") || 
+               fileName.endsWith(".mp4") || 
+               fileName.endsWith(".webm") ||
+               fileName.endsWith(".mov") ||
+               fileName.endsWith(".avi");
       }
     }
 
     return false;
   }
 
-  private async convertToSticker(msg: Api.Message, sourceMsg: Api.Message) {
-    const statusMsg = await msg.edit({ text: "🔄 正在分析媒体文件..." });
+  private async convertToSticker(msg: MessageContext, sourceMsg: Message) {
+    await msg.edit({ text: html("🔄 正在分析媒体文件...") });
+    const statusMsg = msg;
 
     // 检查文件大小
     const fileSize = this.getFileSize(sourceMsg);
@@ -210,14 +217,15 @@ class GifConverter {
     }
 
     // 检查视频时长（如果是视频）
-    if (sourceMsg.video) {
+    const mediaType = sourceMsg.media?.type;
+    if (mediaType === "video") {
       const duration = this.getVideoDuration(sourceMsg);
       if (duration > this.config.maxDuration) {
         throw new Error(`视频过长 (${duration}秒)，最大支持 ${this.config.maxDuration}秒`);
       }
     }
 
-    await statusMsg?.edit({ text: "📥 正在下载文件..." });
+    await statusMsg?.edit({ text: html("📥 正在下载文件...") });
 
     // 下载源文件
     const timestamp = Date.now();
@@ -225,23 +233,25 @@ class GifConverter {
     const outputFile = path.join(this.tempDir, `sticker_${timestamp}.webm`);
 
     try {
-      await this.client.downloadMedia(sourceMsg.media!, { outputFile: inputFile });
+      const downloadTarget = sourceMsg.media as Video | Document | null;
+      if (!downloadTarget) throw new Error("无法获取媒体文件");
+      await this.client.downloadToFile(inputFile, downloadTarget);
 
-      await statusMsg?.edit({ text: "🎬 正在转换为贴纸格式..." });
+      await statusMsg?.edit({ text: html("🎬 正在转换为贴纸格式...") });
 
       // 使用 FFmpeg 转换为贴纸格式
       await this.convertWithFFmpeg(inputFile, outputFile);
 
-      await statusMsg?.edit({ text: "📤 正在发送贴纸..." });
+      await statusMsg?.edit({ text: html("📤 正在发送贴纸...") });
       await this.sendAsSticker(msg, outputFile);
-      await statusMsg?.edit({ text: "✅ 贴纸转换完成！" });
+      await statusMsg?.edit({ text: html("✅ 贴纸转换完成！") });
       
       // 延迟删除状态消息 (generation-safe)
       const gen1 = getCurrentGeneration();
       const t1 = setTimeout(() => {
         pendingTimers.delete(t1);
         if (getCurrentGeneration() !== gen1) return;
-        statusMsg?.delete().catch(() => {});
+        statusMsg?.delete().catch(() => { /* msg may already be deleted or bot lacks permission */ });
       }, 2000);
       pendingTimers.add(t1);
 
@@ -251,20 +261,20 @@ class GifConverter {
     }
   }
 
-  private getFileSize(msg: Api.Message): number {
-    if (msg.gif) return Number(msg.gif.size) || 0;
-    if (msg.video) return Number(msg.video.size) || 0;
-    if (msg.document) return Number(msg.document.size) || 0;
-    return 0;
+  private getFileSize(msg: Message): number {
+    const media = msg.media;
+    if (!media) return 0;
+    // fileSize is on the raw TL object; use type-safe access via FileLocation
+    const fileLoc = media as Video | Document | null;
+    const rawSize = fileLoc && 'raw' in fileLoc ? (fileLoc.raw as { size?: number })?.size : undefined;
+    return Number(rawSize) || 0;
   }
 
-  private getVideoDuration(msg: Api.Message): number {
-    if (!msg.video) return 0;
-    
-    const videoAttr = msg.video.attributes?.find(
-      (attr: any) => attr.className === "DocumentAttributeVideo"
-    );
-    return (videoAttr as any)?.duration || 0;
+  private getVideoDuration(msg: Message): number {
+    const media = msg.media;
+    if (!media || media.type !== "video") return 0;
+    const video = media as Video;
+    return Number(video.duration) || 0;
   }
 
   private async convertWithFFmpeg(inputFile: string, outputFile: string): Promise<void> {
@@ -294,8 +304,9 @@ class GifConverter {
         await this.convertWithLowerQuality(inputFile, outputFile);
       }
 
-    } catch (error: any) {
-      console.error("FFmpeg转换失败:", error);
+    } catch (error: unknown) {
+      const errorMessage = getErrorMessage(error);
+      logger.error("FFmpeg转换失败:", error);
       throw new Error(`视频转换失败，请检查 FFmpeg 是否已安装`);
     }
   }
@@ -316,65 +327,50 @@ class GifConverter {
     ]);
   }
 
-  private async sendAsSticker(originalMsg: Api.Message, stickerFile: string): Promise<void> {
+  private async sendAsSticker(originalMsg: MessageContext, stickerFile: string): Promise<void> {
     try {
-      // 读取文件统计信息
-      const stats = fs.statSync(stickerFile);
-      
       // 使用正确的贴纸属性发送
-      await this.client.sendFile(originalMsg.chatId!, {
+      const media: InputMediaSticker = {
+        type: "sticker",
         file: stickerFile,
-        attributes: [
-          new Api.DocumentAttributeVideo({
-            duration: this.config.maxDuration,
-            w: this.config.maxWidth,
-            h: this.config.maxHeight,
-            supportsStreaming: false,
-            roundMessage: false
-          }),
-          new Api.DocumentAttributeAnimated(),
-          new Api.DocumentAttributeSticker({
-            alt: this.getRandomEmoji(),
-            stickerset: new Api.InputStickerSetEmpty()
-          })
-        ],
-        mimeType: "video/webm",
-        forceDocument: false,
-        asSticker: true, // 关键：作为贴纸发送
-        caption: undefined // 贴纸不需要标题
-      });
+        fileMime: "video/webm",
+        alt: this.getRandomEmoji(),
+      };
+      await this.client.sendMedia(originalMsg.chat.id, media);
 
-    } catch (error: any) {
-      throw new Error(`发送贴纸失败: ${error.message}`);
+    } catch (error: unknown) {
+      const errorMessage = getErrorMessage(error);
+      throw new Error(`发送贴纸失败: ${errorMessage}`);
     }
   }
 
-  private async autoAddToStickerPack(originalMsg: Api.Message, stickerFile: string, statusMsg: Api.Message): Promise<void> {
+  private async autoAddToStickerPack(originalMsg: MessageContext, stickerFile: string, statusMsg: MessageContext): Promise<void> {
     try {
       // 获取 @Stickers 机器人
-      const stickersBot = await this.client.getEntity("@Stickers");
+      const stickersBot = await this.client.getChat("@Stickers");
       
-      await statusMsg.edit({ text: "📤 正在发送文件到 @Stickers 机器人..." });
+      await statusMsg.edit({ text: html("📤 正在发送文件到 @Stickers 机器人...") });
       
       // 发送 WebM 文件到 @Stickers 机器人
-      await this.client.sendFile(stickersBot, {
+      await this.client.sendMedia(stickersBot.id, {
+        type: "document",
         file: stickerFile,
-        caption: "🎉 新贴纸"
+        caption: html("🎉 新贴纸"),
       });
       
       // 等待机器人回复
       await this.sleep(2000);
-      await statusMsg.edit({ text: "🤖 正在与 @Stickers 机器人交互..." });
+      await statusMsg.edit({ text: html("🤖 正在与 @Stickers 机器人交互...") });
       
       // 发送命令添加到贴纸包
       await this.handleStickerBotInteraction(stickersBot, statusMsg);
       
       // 最终发送贴纸到原始聊天
-      await statusMsg.edit({ text: "✨ 正在发送最终贴纸..." });
+      await statusMsg.edit({ text: html("✨ 正在发送最终贴纸...") });
       await this.sendAsSticker(originalMsg, stickerFile);
       
       await statusMsg.edit({ 
-        text: "✅ 成功！贴纸已自动添加到贴纸包并发送。" 
+        text: html("✅ 成功！贴纸已自动添加到贴纸包并发送。") 
       });
       
       // 延迟删除状态消息 (generation-safe)
@@ -382,14 +378,15 @@ class GifConverter {
       const t2 = setTimeout(() => {
         pendingTimers.delete(t2);
         if (getCurrentGeneration() !== gen2) return;
-        statusMsg.delete().catch(() => {});
+        statusMsg.delete().catch(() => { /* msg may already be deleted or bot lacks permission */ });
       }, 3000);
       pendingTimers.add(t2);
       
-    } catch (error: any) {
-      console.error("自动添加贴纸包失败:", error);
+    } catch (error: unknown) {
+      const errorMessage = getErrorMessage(error);
+      logger.error("自动添加贴纸包失败:", error);
       await statusMsg.edit({ 
-        text: `⚠️ 自动添加失败，正在直接发送贴纸...\n\n错误: ${error.message}` 
+        text: html(`⚠️ 自动添加失败，正在直接发送贴纸...\n\n错误: ${errorMessage}`) 
       });
       
       // 失败后直接发送贴纸
@@ -398,39 +395,33 @@ class GifConverter {
       const t3 = setTimeout(() => {
         pendingTimers.delete(t3);
         if (getCurrentGeneration() !== gen3) return;
-        statusMsg.delete().catch(() => {});
+        statusMsg.delete().catch(() => { /* msg may already be deleted or bot lacks permission */ });
       }, 5000);
       pendingTimers.add(t3);
     }
   }
   
-  private async handleStickerBotInteraction(stickersBot: any, statusMsg: Api.Message): Promise<void> {
+  private async handleStickerBotInteraction(stickersBot: { id: number }, statusMsg: MessageContext): Promise<void> {
     // 等待机器人的回复
     await this.sleep(3000);
     
     // 发送命令创建或添加到贴纸包
-    await statusMsg.edit({ text: "📝 正在创建/更新贴纸包..." });
+    await statusMsg.edit({ text: html("📝 正在创建/更新贴纸包...") });
     
     // 发送 /addsticker 命令
-    await this.client.sendMessage(stickersBot, {
-      message: `/addsticker`
-    });
+    await this.client.sendText(stickersBot.id, `/addsticker`);
     
     await this.sleep(2000);
     
     // 发送贴纸包名称
-    await this.client.sendMessage(stickersBot, {
-      message: this.config.defaultStickerPackName
-    });
+    await this.client.sendText(stickersBot.id, this.config.defaultStickerPackName);
     
     await this.sleep(2000);
     
     // 发送表情
-    await this.client.sendMessage(stickersBot, {
-      message: this.config.defaultEmoji
-    });
+    await this.client.sendText(stickersBot.id, this.config.defaultEmoji);
     
-    await statusMsg.edit({ text: "✨ 贴纸包操作完成！" });
+    await statusMsg.edit({ text: html("✨ 贴纸包操作完成！") });
   }
   
   private getRandomEmoji(): string {
@@ -448,14 +439,14 @@ class GifConverter {
         if (fs.existsSync(file)) {
           fs.unlinkSync(file);
         }
-      } catch (e) {
-        console.warn(`清理文件失败: ${file}`, e);
+      } catch (e: unknown) {
+        logger.warn(`清理文件失败: ${file}`, e);
       }
     });
   }
 }
 
-const gif = async (msg: Api.Message) => {
+const gif = async (msg: MessageContext) => {
   const client = await getGlobalClient();
   if (!client) {
     return;
@@ -511,7 +502,7 @@ class GifStickerPlugin extends Plugin {
 • macOS: \`brew install ffmpeg\`
 • Windows: 下载官方二进制文件`;
 
-  cmdHandlers: Record<string, (msg: Api.Message) => Promise<void>> = {
+  cmdHandlers: Record<string, (msg: MessageContext) => Promise<void>> = {
     gif,
   };
 
@@ -523,4 +514,81 @@ class GifStickerPlugin extends Plugin {
   }
 }
 
-export default new GifStickerPlugin();
+
+  // Panel Settings Adapter
+  panelAdapter: PanelSettingsAdapter = {
+    id: "gif",
+    title: "GIF 转换",
+    description: "视频/GIF 转贴纸配置",
+    category: "插件配置",
+    icon: "🎞️",
+    getSchema: (): PanelSettingField[] => [
+      {
+            "key": "maxFileSize",
+            "label": "最大文件大小 (MB)",
+            "type": "number",
+            "min": 1,
+            "max": 50,
+            "default": 20
+      },
+      {
+            "key": "maxDuration",
+            "label": "最大时长 (秒)",
+            "type": "number",
+            "min": 1,
+            "max": 60,
+            "default": 10
+      },
+      {
+            "key": "maxWidth",
+            "label": "最大宽度",
+            "type": "number",
+            "min": 100,
+            "max": 1920,
+            "default": 512
+      },
+      {
+            "key": "maxHeight",
+            "label": "最大高度",
+            "type": "number",
+            "min": 100,
+            "max": 1920,
+            "default": 512
+      },
+      {
+            "key": "quality",
+            "label": "质量 (1-31)",
+            "type": "number",
+            "min": 1,
+            "max": 31,
+            "default": 15
+      },
+      {
+            "key": "autoAddToStickerPack",
+            "label": "自动加入贴纸包",
+            "type": "boolean"
+      },
+      {
+            "key": "defaultStickerPackName",
+            "label": "默认贴纸包名",
+            "type": "string"
+      },
+      {
+            "key": "defaultEmoji",
+            "label": "默认表情",
+            "type": "string",
+            "default": "😀"
+      }
+],
+    getValues: async (): Promise<Record<string, unknown>> => {
+      const db = await JSONFilePreset<GifConverterConfig>(path.join(createDirectoryInAssets("gif"), "config.json"), {} as any);
+      return db.data as Record<string, unknown>;
+    },
+    setValues: async (patch: Record<string, unknown>): Promise<void> => {
+      const db = await JSONFilePreset<GifConverterConfig>(path.join(createDirectoryInAssets("gif"), "config.json"), {} as any);
+      Object.assign(db.data, patch);
+      await db.write();
+    },
+  };
+
+export default GifStickerPlugin;

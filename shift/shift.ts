@@ -1,4 +1,4 @@
-import { Plugin } from "@utils/pluginBase";
+import { Plugin, type PanelSettingsAdapter, type PanelSettingField, type PanelFieldType } from "@utils/pluginBase";
 import path from "path";
 import Database from "better-sqlite3";
 import { createDirectoryInAssets } from "@utils/pathHelpers";
@@ -6,51 +6,84 @@ import {
   getGlobalClient,
   tryGetCurrentGenerationContext,
 } from "@utils/runtimeManager";
-import { TelegramClient } from "teleproto";
-import { NewMessage, NewMessageEvent } from "teleproto/events";
-import { Api } from "teleproto/tl";
+import { thtml as html } from "@mtcute/html-parser";
+import { TelegramClient } from "@mtcute/node";
+import type { Chat, Peer } from "@mtcute/core";
 import { safeGetMessages } from "@utils/safeGetMessages";
+import type { ClientWithGetMessages } from "@utils/clientInternals";
+import type { DisplayableEntity } from "@utils/mtcuteTypes";
 import {
   safeForwardMessage,
-  parseEntityId,
-  withEntityAccess,
   getEntityWithHash,
 } from "@utils/entityHelpers";
 import { getPrefixes } from "@utils/pluginManager";
 import { JSONFilePreset } from "lowdb/node";
+import type { Low } from "lowdb";
 import * as fs from "fs";
-
+import { logger } from "@utils/logger";
+import { getErrorMessage } from "@utils/errorHelpers";
+import type { MessageContext } from "@mtcute/dispatcher";
 import { htmlEscape } from "@utils/htmlEscape";
 
+// SQLite row types for better-sqlite3 (returns unknown by default)
+interface ShiftRuleRow {
+  source_id: number;
+  target_id: number;
+  options: string;
+  target_type: string;
+  paused: number;
+  created_at: number | string;
+  filters: string;
+  source_display?: string;
+  target_display?: string;
+}
+
+interface ShiftStatsRow {
+  stats_key: string;
+  stats_data: string;
+}
+
+// Extended client interface for getMessages method not in standard mtcute types
+// (now imported from @utils/clientInternals)
+
+/** mtcute treats pure-digit strings as usernames; numeric IDs must be numbers. */
+function toPeerId(value: Peer | string | number): Peer | string | number {
+  if (typeof value === "number" || (typeof value === "object" && value)) return value;
+  const trimmed = String(value).trim();
+  if (/^-?\d+$/.test(trimmed)) return Number(trimmed);
+  return value;
+}
+
 async function formatEntity(
-  target: any,
+  target: Peer | string | number,
   mention?: boolean,
   throwErrorIfFailed?: boolean
 ) {
   const client = await getGlobalClient();
   if (!client) throw new Error("Telegram 客户端未初始化");
   if (!target) throw new Error("无效的目标");
-  let id: any;
-  let entity: any;
+  let id: number | undefined;
+  let entity: Peer | null = null;
   try {
-    entity = target?.className
-      ? target
-      : ((await client?.getEntity(target)) as any);
+    entity = typeof target === "object" && target && "className" in target
+      ? (target as Peer)
+      : await client?.getChat(toPeerId(target) as string | number);
     if (!entity) throw new Error("无法获取 entity");
     id = entity.id;
     if (!id) throw new Error("无法获取 entity id");
-  } catch (e: any) {
-    console.error(e);
+  } catch (e: unknown) {
+    logger.error(e);
     if (throwErrorIfFailed)
       throw new Error(
-        `无法获取 ${target} 的 entity: ${e?.message || "未知错误"}`
+        `无法获取 ${target} 的 entity: ${getErrorMessage(e)}`
       );
   }
+  if (!entity) return { id: undefined, entity: null, display: String(target) };
   const displayParts: string[] = [];
 
-  if (entity?.title) displayParts.push(entity.title);
-  if (entity?.firstName) displayParts.push(entity.firstName);
-  if (entity?.lastName) displayParts.push(entity.lastName);
+  if ('title' in entity && entity.title) displayParts.push(entity.title);
+  if ('firstName' in entity && entity.firstName) displayParts.push(entity.firstName);
+  if ('lastName' in entity && entity.lastName) displayParts.push(entity.lastName);
   if (entity.username)
     displayParts.push(
       mention ? `@${htmlEscape(entity.username)}` : `<code>@${htmlEscape(entity.username)}</code>`
@@ -58,11 +91,11 @@ async function formatEntity(
 
   if (id) {
     displayParts.push(
-      entity instanceof Api.User
+      (entity as { _?: string })?._ === "user"
         ? `<a href="tg://user?id=${id}">${id}</a>`
         : `<a href="https://t.me/c/${id}">${id}</a>`
     );
-  } else if (!target?.className) {
+  } else if (typeof target !== "object") {
     displayParts.push(`<code>${target}</code>`);
   }
 
@@ -73,7 +106,7 @@ async function formatEntity(
   };
 }
 
-// HTML 转义（规范要求）
+
 // 获取命令前缀
 const prefixes = getPrefixes();
 const mainPrefix = prefixes[0];
@@ -122,7 +155,7 @@ interface BackupTask {
 
 // Initialize database (支持双模式)
 let sqliteDb: Database.Database | null = null;
-let lowdb: any = null;
+let lowdb: Low<ShiftDatabaseV2> | null = null;
 let useLowdb = false;
 
 // 尝试初始化数据库
@@ -158,7 +191,7 @@ async function initDatabase() {
       },
     };
     lowdb = await JSONFilePreset<ShiftDatabaseV2>(lowdbPath, defaultData);
-    console.log("[SHIFT] 使用 lowdb 数据库");
+    logger.info("[SHIFT] 使用 lowdb 数据库");
   } else if (sqliteDb) {
     // 初始化 SQLite 表
     sqliteDb.exec(`
@@ -181,23 +214,23 @@ async function initDatabase() {
     `);
 
     // 提示可以迁移
-    console.log("[SHIFT] 使用 SQLite 数据库（建议迁移到 lowdb）");
+    logger.info("[SHIFT] 使用 SQLite 数据库（建议迁移到 lowdb）");
   }
 }
 
 // 自动初始化
-initDatabase().catch(console.error);
+initDatabase().catch((e: unknown) => logger.error("error:", e));
 
 // SQLite 到 lowdb 迁移功能
 async function migrateToLowdb(): Promise<boolean> {
   if (!sqliteDb || useLowdb) return false;
 
   try {
-    console.log("[SHIFT] 开始迁移数据到 lowdb...");
+    logger.info("[SHIFT] 开始迁移数据到 lowdb...");
 
     // 读取 SQLite 数据
-    const rules = sqliteDb.prepare("SELECT * FROM shift_rules").all() as any[];
-    const stats = sqliteDb.prepare("SELECT * FROM shift_stats").all() as any[];
+    const rules = sqliteDb.prepare("SELECT * FROM shift_rules").all() as ShiftRuleRow[];
+    const stats = sqliteDb.prepare("SELECT * FROM shift_stats").all() as ShiftStatsRow[];
 
     // 转换规则
     const newRules: { [key: string]: ShiftRule } = {};
@@ -207,7 +240,7 @@ async function migrateToLowdb(): Promise<boolean> {
         options: JSON.parse(rule.options || "[]"),
         target_type: rule.target_type,
         paused: rule.paused === 1,
-        created_at: rule.created_at,
+        created_at: String(rule.created_at),
         filters: JSON.parse(rule.filters || "[]"),
       };
     }
@@ -249,12 +282,12 @@ async function migrateToLowdb(): Promise<boolean> {
     sqliteDb = null;
     useLowdb = true;
 
-    console.log(
+    logger.info(
       `[SHIFT] 成功迁移 ${rules.length} 条规则，备份至: ${backupPath}`
     );
     return true;
-  } catch (error) {
-    console.error("[SHIFT] 迁移失败:", error);
+  } catch (error: unknown) {
+    logger.error("[SHIFT] 迁移失败:", error);
     return false;
   }
 }
@@ -301,7 +334,7 @@ async function getShiftRule(sourceId: number): Promise<ShiftRule | null> {
       const stmt = sqliteDb.prepare(
         "SELECT * FROM shift_rules WHERE source_id = ?"
       );
-      const row = stmt.get(sourceId) as any;
+      const row = stmt.get(sourceId) as ShiftRuleRow | undefined;
 
       if (!row) {
         ruleCache.set(sourceId, { rule: null, timestamp: now });
@@ -313,7 +346,7 @@ async function getShiftRule(sourceId: number): Promise<ShiftRule | null> {
         options: JSON.parse(row.options || "[]"),
         target_type: row.target_type,
         paused: row.paused === 1,
-        created_at: row.created_at,
+        created_at: String(row.created_at),
         filters: JSON.parse(row.filters || "[]"),
       };
     }
@@ -322,8 +355,8 @@ async function getShiftRule(sourceId: number): Promise<ShiftRule | null> {
       ruleCache.set(sourceId, { rule, timestamp: now });
     }
     return rule;
-  } catch (error) {
-    console.error(`[SHIFT] Error getting rule for ${sourceId}:`, error);
+  } catch (error: unknown) {
+    logger.error(`[SHIFT] Error getting rule for ${sourceId}:`, error);
     return null;
   }
 }
@@ -334,7 +367,9 @@ function saveShiftRule(sourceId: number, rule: ShiftRule): boolean {
     if (useLowdb && lowdb) {
       // 保存到 lowdb
       lowdb.data.rules[String(sourceId)] = rule;
-      lowdb.write();
+      void lowdb.write().catch((error: unknown) => {
+        logger.error("[SHIFT] 保存规则失败:", error);
+      });
       ruleCache.set(sourceId, { rule, timestamp: Date.now() });
       return true;
     } else if (sqliteDb) {
@@ -359,8 +394,8 @@ function saveShiftRule(sourceId: number, rule: ShiftRule): boolean {
       return true;
     }
     return false;
-  } catch (error) {
-    console.error(`[SHIFT] Error saving rule:`, error);
+  } catch (error: unknown) {
+    logger.error(`[SHIFT] Error saving rule:`, error);
     return false;
   }
 }
@@ -371,7 +406,9 @@ function deleteShiftRule(sourceId: number): boolean {
     if (useLowdb && lowdb) {
       // 从 lowdb 删除
       delete lowdb.data.rules[String(sourceId)];
-      lowdb.write();
+      void lowdb.write().catch((error: unknown) => {
+        logger.error("[SHIFT] 删除规则失败:", error);
+      });
       ruleCache.delete(sourceId);
       return true;
     } else if (sqliteDb) {
@@ -384,8 +421,8 @@ function deleteShiftRule(sourceId: number): boolean {
       return true;
     }
     return false;
-  } catch (error) {
-    console.error(`[SHIFT] Error deleting rule:`, error);
+  } catch (error: unknown) {
+    logger.error(`[SHIFT] Error deleting rule:`, error);
     return false;
   }
 }
@@ -402,7 +439,7 @@ function getAllShiftRules(): Array<{ sourceId: number; rule: ShiftRule }> {
     } else if (sqliteDb) {
       // 从 SQLite 读取
       const stmt = sqliteDb.prepare("SELECT * FROM shift_rules");
-      const rows = stmt.all() as any[];
+      const rows = stmt.all() as ShiftRuleRow[];
 
       return rows.map((row) => ({
         sourceId: row.source_id,
@@ -411,20 +448,20 @@ function getAllShiftRules(): Array<{ sourceId: number; rule: ShiftRule }> {
           options: JSON.parse(row.options || "[]"),
           target_type: row.target_type,
           paused: row.paused === 1,
-          created_at: row.created_at,
+          created_at: String(row.created_at),
           filters: JSON.parse(row.filters || "[]"),
         },
       }));
     }
     return [];
-  } catch (error) {
-    console.error("[SHIFT] Error getting all rules:", error);
+  } catch (error: unknown) {
+    logger.error("[SHIFT] Error getting all rules:", error);
     return [];
   }
 }
 
 // Utility functions
-function getDisplayName(entity: any): string {
+function getDisplayName(entity: DisplayableEntity | null | undefined): string {
   if (!entity) return "未知实体";
   if (entity.username) return `@${htmlEscape(entity.username)}`;
   if (entity.firstName) return entity.firstName;
@@ -432,7 +469,7 @@ function getDisplayName(entity: any): string {
   return `ID: ${entity.id}`;
 }
 
-function extractIdString(id: any): string {
+function extractIdString(id: string | number | bigint | { value?: unknown } | null | undefined): string {
   if (id === undefined || id === null) return "";
   if (typeof id === "object") {
     if ("value" in id && id.value !== undefined && id.value !== null) {
@@ -448,7 +485,7 @@ function extractIdString(id: any): string {
   return String(id);
 }
 
-function ensureChannelId(id: any): number {
+function ensureChannelId(id: string | number | bigint | { value?: unknown } | null | undefined): number {
   const idStr = extractIdString(id).trim();
   if (!idStr) return Number.NaN;
   if (idStr.startsWith("-100")) return Number(idStr);
@@ -456,8 +493,8 @@ function ensureChannelId(id: any): number {
   return Number(`-100${normalized}`);
 }
 
-function normalizeChatId(entityOrId: any): number {
-  if (typeof entityOrId === "object" && entityOrId.id) {
+function normalizeChatId(entityOrId: { id?: string | number; className?: string; value?: unknown } | string | number | bigint | null | undefined): number {
+  if (typeof entityOrId === "object" && entityOrId !== null && entityOrId.id) {
     if (entityOrId.className === "Channel") {
       return ensureChannelId(entityOrId.id);
     }
@@ -477,7 +514,7 @@ function normalizeChatId(entityOrId: any): number {
   }
 }
 
-function getTargetTypeEmoji(entity: any): string {
+function getTargetTypeEmoji(entity: { className?: string; bot?: boolean; broadcast?: boolean } | null | undefined): string {
   if (!entity) return "❓";
   if (entity.className === "User") return entity.bot ? "🤖" : "👤";
   if (entity.className === "Channel") return entity.broadcast ? "📢" : "👥";
@@ -500,7 +537,7 @@ function parseIndices(
       } else {
         invalid.push(i.trim());
       }
-    } catch (error) {
+    } catch (_e: unknown) {
       invalid.push(i.trim());
     }
   }
@@ -508,7 +545,7 @@ function parseIndices(
   return { indices, invalid };
 }
 
-function getMediaType(message: any): string {
+function getMediaType(message: { photo?: unknown; document?: unknown; video?: unknown; sticker?: unknown; animation?: unknown; voice?: unknown; audio?: unknown }): string {
   if (message.photo) return "photo";
   if (message.document) return "document";
   if (message.video) return "video";
@@ -584,7 +621,7 @@ function cleanupGroupBuffers(): void {
 }
 
 function getGroupKey(message: any): string | null {
-  const gid = (message as any).groupedId;
+  const gid = (message as { groupedId?: string | number }).groupedId;
   const sid = getChatIdFromMessage(message);
   if (!gid || !sid) return null;
   const gidStr =
@@ -600,24 +637,26 @@ async function forwardGroupMessages(
   options?: { silent?: boolean; replyTo?: number }
 ): Promise<void> {
   try {
-    const fromEntity = await getEntityWithHash(client, fromChatId);
-    const toEntity = await getEntityWithHash(client, toChatId);
-    await client.invoke(
-      new Api.messages.ForwardMessages({
-        fromPeer: fromEntity,
-        id: messageIds,
-        toPeer: toEntity,
-        silent: options?.silent,
-        ...(options?.replyTo ? { topMsgId: options.replyTo } : {}),
-      })
-    );
-    console.log(
+    const [fromEntity, toEntity] = await Promise.all([
+      getEntityWithHash(client, fromChatId),
+      getEntityWithHash(client, toChatId),
+    ]);
+    const forwardParams = {
+      _: "messages.forwardMessages" as const,
+      fromPeer: fromEntity,
+      id: messageIds,
+      toPeer: toEntity,
+      silent: options?.silent,
+      ...(options?.replyTo ? { topMsgId: options.replyTo } : {}),
+    };
+    await client.call(forwardParams as unknown as Parameters<typeof client.call>[0]);
+    logger.info(
       `[SHIFT] 组转发成功: ${fromChatId} -> ${toChatId}, msgs=${messageIds.join(
         ","
       )}`
     );
-  } catch (error) {
-    console.error(
+  } catch (error: unknown) {
+    logger.error(
       `[SHIFT] 组转发失败: ${fromChatId} -> ${toChatId}, msgs=${messageIds.join(
         ","
       )}`,
@@ -675,11 +714,11 @@ function enqueueGroupMessage(
         if (first)
           updateStats(existed.sourceId, existed.targetId, getMediaType(first));
       } else {
-        console.log("[SHIFT] 组未触发类型过滤，跳过转发");
+        logger.info("[SHIFT] 组未触发类型过滤，跳过转发");
       }
-    } catch (e) {
+    } catch (e: unknown) {
       if (!isAbortError(e)) {
-        console.error("[SHIFT] 组转发执行失败", e);
+        logger.error("[SHIFT] 组转发执行失败", e);
       }
     }
   };
@@ -693,7 +732,7 @@ function enqueueGroupMessage(
       const task = context.runTask(callback, { label: "shift-group-forward" });
       task.catch((error) => {
         if (!isAbortError(error)) {
-          console.error("[SHIFT] 组转发执行失败", error);
+          logger.error("[SHIFT] 组转发执行失败", error);
         }
       });
     }, 1200, { label: "shift-group-buffer" });
@@ -710,24 +749,22 @@ async function resolveTarget(
   client: TelegramClient,
   targetInput: string,
   currentChatId: number
-): Promise<any> {
+): Promise<Chat | Peer> {
   if (
     targetInput.toLowerCase() === "me" ||
     targetInput.toLowerCase() === "here"
   ) {
-    return await client.getEntity(currentChatId);
+    return await client.getChat(currentChatId);
   }
 
   try {
     const numericId = parseInt(targetInput);
     if (!isNaN(numericId)) {
-      return await client.getEntity(numericId);
+      return await client.getChat(numericId);
     }
-  } catch (error) {
-    // Fall through to username
-  }
+  } catch (error: unknown) { logger.warn(`[shift] Fall through to username:`, error) }
 
-  return await client.getEntity(targetInput);
+  return await client.getChat(targetInput);
 }
 
 async function isCircularForward(
@@ -891,9 +928,9 @@ class BackupManager {
     const execute = async (signal?: AbortSignal) => {
       try {
         await this.executeBackup(taskId, options, signal);
-      } catch (error) {
+      } catch (error: unknown) {
         if (!isAbortError(error)) {
-          console.error(`[SHIFT] 备份任务 ${taskId} 失败:`, error);
+          logger.error(`[SHIFT] 备份任务 ${taskId} 失败:`, error);
           task.status = "failed";
         }
       } finally {
@@ -906,7 +943,7 @@ class BackupManager {
         (signal) => execute(signal),
         { label: `shift-backup:${taskId}` }
       );
-      backupPromise.catch(() => undefined);
+      backupPromise.catch((e) => logger.debug(`[shift] backup task ${taskId} error:`, e));
     } else {
       await execute();
     }
@@ -929,8 +966,8 @@ class BackupManager {
     try {
       throwIfAborted(signal);
       // 获取消息总数
-      const messages = await safeGetMessages(client, task.sourceId, { limit: 1 });
-      const totalCount = (messages as any).total || 0;
+      const messages = await (client as unknown as ClientWithGetMessages).getMessages(task.sourceId, { limit: 1, ids: undefined });
+      const totalCount = messages.total || 0;
       task.totalMessages = totalCount;
 
       if (task.reverse) {
@@ -942,10 +979,7 @@ class BackupManager {
 
         while (collecting) {
           throwIfAborted(signal);
-          const batch = await safeGetMessages(client, task.sourceId, {
-            limit: batchSize,
-            offsetId: collectOffset,
-          });
+          const batch = await (client as unknown as ClientWithGetMessages).getMessages(task.sourceId, { limit: batchSize, offset: collectOffset });
 
           if (batch.length === 0) {
             collecting = false;
@@ -980,9 +1014,10 @@ class BackupManager {
             await this.rateLimiter.throttle(signal);
             throwIfAborted(signal);
 
-            await client.forwardMessages(task.targetId, {
+            await client.forwardMessagesById({
+              toChatId: task.targetId,
               messages: [allIds[i]],
-              fromPeer: task.sourceId,
+              fromChatId: task.sourceId,
             });
 
             task.processedMessages++;
@@ -999,7 +1034,7 @@ class BackupManager {
               return;
             }
             task.failedMessages++;
-            const errorMessage = error instanceof Error ? error.message : String(error);
+            const errorMessage = error instanceof Error ? getErrorMessage(error) : String(error);
             if (errorMessage.includes("FLOOD_WAIT")) {
               const waitTime = parseInt(errorMessage.match(/\d+/)?.[0] || "60");
               this.rateLimiter.onFloodWait(waitTime);
@@ -1014,16 +1049,14 @@ class BackupManager {
 
         while (hasMore && task.status === "running") {
           throwIfAborted(signal);
-          const batch = await safeGetMessages(client, task.sourceId, {
-            limit: batchSize,
-            offsetId,
-          });
+          const batch = await (client as unknown as ClientWithGetMessages).getMessages(task.sourceId, { limit: batchSize, offset: offsetId });
 
           if (batch.length === 0) {
             hasMore = false;
             break;
           }
 
+          // 注意：消息转发必须按顺序执行以遵守速率限制，不能并行
           for (const message of batch) {
             if (task.status !== "running") {
               break;
@@ -1036,9 +1069,10 @@ class BackupManager {
               throwIfAborted(signal);
 
               // 转发消息
-              await client.forwardMessages(task.targetId, {
+              await client.forwardMessagesById({
+                toChatId: task.targetId,
                 messages: [message.id],
-                fromPeer: task.sourceId,
+                fromChatId: task.sourceId,
               });
 
               task.processedMessages++;
@@ -1060,7 +1094,7 @@ class BackupManager {
 
               task.failedMessages++;
 
-              const errorMessage = error instanceof Error ? error.message : String(error);
+              const errorMessage = error instanceof Error ? getErrorMessage(error) : String(error);
               // 处理限流错误
               if (errorMessage.includes("FLOOD_WAIT")) {
                 const waitTime = parseInt(
@@ -1100,7 +1134,7 @@ class BackupManager {
           failedMessages: task.failedMessages,
         });
       }
-    } catch (error) {
+    } catch (error: unknown) {
       if (isAbortError(error)) {
         task.status = "failed";
         return;
@@ -1130,7 +1164,7 @@ class BackupManager {
             (signal) => execute(signal),
             { label: `shift-backup-resume:${taskId}` }
           );
-          resumePromise.catch(() => undefined);
+          resumePromise.catch((e) => logger.debug(`[shift] backup resume task ${taskId} error:`, e));
         } else {
           await execute();
         }
@@ -1192,11 +1226,11 @@ async function exportRules(): Promise<string> {
 
 async function importRules(jsonData: string, merge = false): Promise<void> {
   // 兼容历史错误导出：若解析结果为字符串，则再次解析
-  let parsed: any = JSON.parse(jsonData);
+  let parsed: unknown = JSON.parse(jsonData);
   if (typeof parsed === "string") {
     try {
       parsed = JSON.parse(parsed);
-    } catch {}
+    } catch (e: unknown) { logger.warn('操作失败', e) }
   }
   const newRules = parsed as { [key: string]: ShiftRule };
 
@@ -1238,25 +1272,24 @@ class ShiftPlugin extends Plugin {
       sqliteDb = null;
     }
     if (lowdb?.write) {
-      void lowdb.write().catch(() => {});
+      void lowdb.write().catch(() => { /* DB write failed during cleanup, non-critical */ });
     }
     lowdb = null;
   }
 
   description: string = `智能转发助手 - 自动转发消息到指定目标\n\n${help_text}`;
-  cmdHandlers: Record<string, (msg: Api.Message) => Promise<void>> = {
+  cmdHandlers: Record<string, (msg: MessageContext) => Promise<void>> = {
     shift: async (msg) => {
       const client = await getGlobalClient();
       if (!client) {
         await msg.edit({
-          text: "❌ <b>客户端未初始化</b>",
-          parseMode: "html",
+          text: html`❌ <b>客户端未初始化</b>`
         });
         return;
       }
 
       // 标准参数解析模式
-      const lines = msg.message?.trim()?.split(/\r?\n/g) || [];
+      const lines = msg.text?.trim()?.split(/\r?\n/g) || [];
       const parts = lines?.[0]?.split(/\s+/) || [];
       const [, ...args] = parts; // 跳过命令本身
       const sub = (args[0] || "").toLowerCase();
@@ -1265,8 +1298,7 @@ class ShiftPlugin extends Plugin {
       if (!sub) {
         await msg.edit({
           text: HELP_TEXT,
-          parseMode: "html",
-          linkPreview: false,
+          disableWebPreview: true,
         });
         return;
       }
@@ -1275,8 +1307,7 @@ class ShiftPlugin extends Plugin {
       if (sub === "help" || sub === "h") {
         await msg.edit({
           text: HELP_TEXT,
-          parseMode: "html",
-          linkPreview: false,
+          disableWebPreview: true,
         });
         return;
       }
@@ -1287,12 +1318,10 @@ class ShiftPlugin extends Plugin {
           if (await migrateToLowdb()) {
             await msg.edit({
               text: `✅ <b>成功迁移到 lowdb 数据库</b>\n\n性能提升，功能增强！`,
-              parseMode: "html",
             });
           } else {
             await msg.edit({
               text: `❌ <b>迁移失败或无需迁移</b>`,
-              parseMode: "html",
             });
           }
           return;
@@ -1305,7 +1334,6 @@ class ShiftPlugin extends Plugin {
           const base64Data = Buffer.from(rulesJson, "utf-8").toString("base64");
           await msg.edit({
             text: `📤 <b>导出的规则配置：</b>\n\n<code>${htmlEscape(base64Data)}</code>\n\n💡 复制上述 Base64 编码数据用于导入`,
-            parseMode: "html",
           });
           return;
         }
@@ -1320,13 +1348,13 @@ class ShiftPlugin extends Plugin {
                 if (
                   rule &&
                   typeof rule === "object" &&
-                  (rule as any).target_id
+                  (rule as { target_id?: number | string }).target_id
                 ) {
                   validRules[sourceId] = rule as ShiftRule;
                 } else {
                   cleanedCount++;
                 }
-              } catch {
+              } catch (_e: unknown) {
                 cleanedCount++;
               }
             }
@@ -1336,7 +1364,6 @@ class ShiftPlugin extends Plugin {
 
           await msg.edit({
             text: `✅ <b>清理完成</b>\n\n已清理 ${cleanedCount} 个损坏规则`,
-            parseMode: "html",
           });
           return;
         }
@@ -1347,7 +1374,6 @@ class ShiftPlugin extends Plugin {
           if (!inputData) {
             await msg.edit({
               text: `❌ <b>请在第二行提供数据</b>\n\n<b>用法：</b>\n<code>${mainPrefix}shift import\n[Base64编码数据]</code>`,
-              parseMode: "html",
             });
             return;
           }
@@ -1360,7 +1386,7 @@ class ShiftPlugin extends Plugin {
               jsonData = Buffer.from(inputData, "base64").toString("utf-8");
               // 验证是否为有效JSON
               JSON.parse(jsonData);
-            } catch {
+            } catch (_e: unknown) {
               // 如果Base64解码失败，尝试直接作为JSON处理
               jsonData = inputData;
             }
@@ -1368,12 +1394,10 @@ class ShiftPlugin extends Plugin {
             await importRules(jsonData, false);
             await msg.edit({
               text: `✅ <b>成功导入规则配置</b>`,
-              parseMode: "html",
             });
-          } catch (error: any) {
+          } catch (_e: unknown) {
             await msg.edit({
               text: `❌ <b>导入失败</b>\n\n请检查配置数据格式是否正确`,
-              parseMode: "html",
             });
           }
           return;
@@ -1385,7 +1409,6 @@ class ShiftPlugin extends Plugin {
           if (params.length < 1) {
             await msg.edit({
               text: `❌ <b>参数不足</b>\n\n<b>用法：</b>\n<code>${mainPrefix}shift set [源] [目标] [选项...]</code>\n<code>${mainPrefix}shift set [目标] [选项...]</code> - 使用当前对话作为源`,
-              parseMode: "html",
             });
             return;
           }
@@ -1402,7 +1425,7 @@ class ShiftPlugin extends Plugin {
             sourceInput = params[0];
             targetInput = params[1];
             options = new Set(
-              params.slice(2).filter((opt) => AVAILABLE_OPTIONS.has(opt))
+              params.slice(2).filter((opt: string) => AVAILABLE_OPTIONS.has(opt))
             );
           }
           const [realTargetInput, ...rest] =
@@ -1417,35 +1440,33 @@ class ShiftPlugin extends Plugin {
           }
 
           // Resolve source
-          let source: any;
+          let source: Chat | Peer | undefined;
           try {
             if (
               sourceInput.toLowerCase() === "here" ||
               sourceInput.toLowerCase() === "me"
             ) {
-              const chatId = msg.chatId ? Number(msg.chatId.toString()) : 0;
-              source = await client.getEntity(chatId);
+              const chatId = msg.chat?.id ? Number(msg.chat.id) : 0;
+              source = await client.getChat(chatId);
             } else {
-              const chatId = msg.chatId ? Number(msg.chatId.toString()) : 0;
+              const chatId = msg.chat?.id ? Number(msg.chat.id) : 0;
               source = await resolveTarget(client, sourceInput, chatId);
             }
-          } catch (error: any) {
+          } catch (_e: unknown) {
             await msg.edit({
               text: `❌ <b>源对话无效</b>\n\n请检查频道/群组ID或用户名格式`,
-              parseMode: "html",
             });
             return;
           }
 
           // Resolve target
-          let target: any;
+          let target: Chat | Peer | undefined;
           try {
-            const chatId = msg.chatId ? Number(msg.chatId.toString()) : 0;
+            const chatId = msg.chat?.id ? Number(msg.chat.id) : 0;
             target = await resolveTarget(client, targetInput, chatId);
-          } catch (error: any) {
+          } catch (_e: unknown) {
             await msg.edit({
               text: `❌ <b>目标对话无效</b>\n\n请检查频道/群组ID或用户名格式`,
-              parseMode: "html",
             });
             return;
           }
@@ -1461,7 +1482,6 @@ class ShiftPlugin extends Plugin {
           if (isCircular) {
             await msg.edit({
               text: `❌ <b>循环转发检测</b>\n\n${htmlEscape(circularMsg)}`,
-              parseMode: "html",
             });
             return;
           }
@@ -1470,6 +1490,10 @@ class ShiftPlugin extends Plugin {
           let targetDisplay: string | undefined;
 
           if (useLowdb) {
+            if (!source || !target) {
+              await msg.edit({ text: `❌ 无法解析源或目标对话` });
+              return;
+            }
             try {
               const [formattedSource, formattedTarget] = await Promise.all([
                 formatEntity(source),
@@ -1477,15 +1501,15 @@ class ShiftPlugin extends Plugin {
               ]);
               sourceDisplay = formattedSource.display;
               targetDisplay = formattedTarget.display;
-            } catch (error) {
-              console.warn("[SHIFT] 无法格式化实体显示名称:", error);
+            } catch (error: unknown) {
+              logger.warn("[SHIFT] 无法格式化实体显示名称:", error);
             }
           }
 
           const rule: ShiftRule = {
             target_id: targetId,
             options: Array.from(options),
-            target_type: source.className === "User" ? "user" : "chat",
+            target_type: (source as { className?: string }).className === "User" ? "user" : "chat",
             paused: false,
             created_at: new Date().toISOString(),
             filters: [],
@@ -1493,22 +1517,20 @@ class ShiftPlugin extends Plugin {
 
           if (useLowdb) {
             rule.source_display =
-              sourceDisplay || htmlEscape(getDisplayName(source));
+              sourceDisplay || htmlEscape(getDisplayName(source as unknown as DisplayableEntity | null | undefined));
             rule.target_display =
-              targetDisplay || htmlEscape(getDisplayName(target));
+              targetDisplay || htmlEscape(getDisplayName(target as unknown as DisplayableEntity | null | undefined));
           }
 
           if (saveShiftRule(sourceId, rule)) {
             await msg.edit({
               text: `成功设置转发: ${
-                sourceDisplay || htmlEscape(getDisplayName(source))
-              } -> ${targetDisplay || htmlEscape(getDisplayName(target))}`,
-              parseMode: "html",
+                sourceDisplay || htmlEscape(getDisplayName(source as unknown as DisplayableEntity | null | undefined))
+              } -> ${targetDisplay || htmlEscape(getDisplayName(target as unknown as DisplayableEntity | null | undefined))}`,
             });
           } else {
             await msg.edit({
-              text: "❌ <b>保存转发规则失败</b>",
-              parseMode: "html",
+              text: html`❌ <b>保存转发规则失败</b>`
             });
           }
           return;
@@ -1520,7 +1542,6 @@ class ShiftPlugin extends Plugin {
           if (allRules.length === 0) {
             await msg.edit({
               text: `🚫 <b>暂无转发规则</b>\n\n💡 使用 <code>${mainPrefix}shift set</code> 命令创建新的转发规则`,
-              parseMode: "html",
             });
             return;
           }
@@ -1532,7 +1553,7 @@ class ShiftPlugin extends Plugin {
             const status = rule.paused ? "⏸️ 已暂停" : "▶️ 运行中";
             let handle_edited;
             try {
-              if (!msg.client) continue;
+              if (!(msg as { client?: unknown }).client) continue;
               let replyTo = undefined;
               const options = [];
               if (rule.options && rule.options.length > 0) {
@@ -1558,14 +1579,12 @@ class ShiftPlugin extends Plugin {
                 sourceDisplayHtml = rule.source_display;
                 targetDisplayHtml = rule.target_display;
               } else {
-                const sourceEntity = await msg.client.getEntity(
-                  Number(sourceId)
-                );
-                const targetEntity = await msg.client.getEntity(
-                  Number(rule.target_id)
-                );
-                sourceDisplayHtml = htmlEscape(getDisplayName(sourceEntity));
-                targetDisplayHtml = htmlEscape(getDisplayName(targetEntity));
+                const [sourceEntity, targetEntity] = await Promise.all([
+                  msg.client.getChat(Number(sourceId)),
+                  msg.client.getChat(Number(rule.target_id)),
+                ]);
+                sourceDisplayHtml = htmlEscape(getDisplayName(sourceEntity as unknown as DisplayableEntity | null | undefined));
+                targetDisplayHtml = htmlEscape(getDisplayName(targetEntity as unknown as DisplayableEntity | null | undefined));
               }
 
               output += `${i + 1}. ${status}\n`;
@@ -1584,12 +1603,12 @@ class ShiftPlugin extends Plugin {
                 output += `   🛡️ 过滤: ${rule.filters.length} 个关键词\n`;
               }
               output += "\n";
-            } catch (error) {
+            } catch (_e: unknown) {
               output += `${i + 1}. ⚠️ 规则损坏 (${sourceId})\n\n`;
             }
           }
 
-          await msg.edit({ text: output, parseMode: "html" });
+          await msg.edit({ text: output });
           return;
         }
 
@@ -1613,7 +1632,6 @@ class ShiftPlugin extends Plugin {
 
           await msg.edit({
             text: `✅ <b>成功删除 ${deletedCount} 条规则</b>`,
-            parseMode: "html",
           });
           return;
         }
@@ -1623,7 +1641,6 @@ class ShiftPlugin extends Plugin {
           if (args.length < 2) {
             await msg.edit({
               text: `❌ <b>参数不足</b>\n\n<b>用法：</b> <code>${mainPrefix}shift ${sub} [序号]</code>`,
-              parseMode: "html",
             });
             return;
           }
@@ -1644,7 +1661,6 @@ class ShiftPlugin extends Plugin {
           const actionLabel = htmlEscape(sub);
           await msg.edit({
             text: `✅ <b>成功${actionLabel} ${count} 条规则</b>`,
-            parseMode: "html",
           });
           return;
         }
@@ -1652,13 +1668,13 @@ class ShiftPlugin extends Plugin {
         // Stats command
         if (sub === "stats") {
           try {
-            let rows: any[] = [];
+            let rows: Array<{ stats_key: string; stats_data: string }> = [];
 
             if (useLowdb && lowdb) {
               // 从 lowdb 读取统计
               const stats = lowdb.data.stats;
               for (const [date, sources] of Object.entries(stats)) {
-                for (const [sourceId, data] of Object.entries(sources as any)) {
+                for (const [sourceId, data] of Object.entries(sources as Record<string, unknown>)) {
                   rows.push({
                     stats_key: `shift.stats.${sourceId}.${date}`,
                     stats_data: JSON.stringify(data),
@@ -1668,13 +1684,12 @@ class ShiftPlugin extends Plugin {
             } else if (sqliteDb) {
               // 从 SQLite 读取
               const stmt = sqliteDb.prepare("SELECT * FROM shift_stats");
-              rows = stmt.all() as any[];
+              rows = stmt.all() as ShiftStatsRow[];
             }
 
             if (rows.length === 0) {
               await msg.edit({
-                text: "📊 <b>暂无转发统计数据</b>",
-                parseMode: "html",
+                text: html`📊 <b>暂无转发统计数据</b>`
               });
               return;
             }
@@ -1700,46 +1715,50 @@ class ShiftPlugin extends Plugin {
                 const dailyTotal = dailyStats.total || 0;
                 channelStats[sourceId].total += dailyTotal;
                 channelStats[sourceId].dates[date] = dailyTotal;
-              } catch (error) {
+              } catch (_e: unknown) {
                 continue;
               }
             }
 
             let output = "📊 转发统计报告\n\n";
-            for (const [sourceId, stats] of Object.entries(channelStats)) {
-              try {
-                if (!msg.client) continue;
-                const sourceEntity = await msg.client.getEntity(
-                  parseInt(sourceId)
-                );
-                output += `📤 源: ${htmlEscape(
-                  getDisplayName(sourceEntity)
-                )}\n`;
-                output += `📈 总转发: ${stats.total} 条\n`;
 
-                const recentDates = Object.keys(stats.dates)
-                  .sort()
-                  .reverse()
-                  .slice(0, 7);
-                if (recentDates.length > 0) {
-                  output += "📅 最近7天:\n";
-                  for (const date of recentDates) {
-                    output += `  - ${date}: ${stats.dates[date]} 条\n`;
-                  }
+            // 并行获取所有源频道信息，加速统计报告生成
+            const entries = Object.entries(channelStats);
+            const clientRef = msg.client;
+            const resolvedNames = await Promise.all(
+              entries.map(async ([sourceId, stats]): Promise<{ sourceId: string; stats: typeof stats; name: string }> => {
+                try {
+                  if (!clientRef) return { sourceId, stats, name: '' };
+                  const sourceEntity = await clientRef.getChat(parseInt(sourceId));
+                  return { sourceId, stats, name: getDisplayName(sourceEntity as unknown as DisplayableEntity | null | undefined) };
+                } catch (e: unknown) {
+                  logger.warn('[shift] 获取源频道名称失败:', sourceId, e);
+                  return { sourceId, stats, name: '' };
                 }
-                output += "\n";
-              } catch (error) {
-                output += `📤 源: ID ${htmlEscape(
-                  String(sourceId)
-                )}\n📈 总转发: ${stats.total} 条\n\n`;
+              }),
+            );
+
+            for (const { sourceId, stats, name } of resolvedNames) {
+              output += `📤 源: ${htmlEscape(name || `ID ${sourceId}`)}\n`;
+              output += `📈 总转发: ${stats.total} 条\n`;
+
+              const recentDates = Object.keys(stats.dates)
+                .sort()
+                .reverse()
+                .slice(0, 7);
+              if (recentDates.length > 0) {
+                output += "📅 最近7天:\n";
+                for (const date of recentDates) {
+                  output += `  - ${date}: ${stats.dates[date]} 条\n`;
+                }
               }
+              output += "\n";
             }
 
-            await msg.edit({ text: output, parseMode: "html" });
-          } catch (error: any) {
+            await msg.edit({ text: output });
+          } catch (_e: unknown) {
             await msg.edit({
               text: `❌ <b>获取统计数据失败</b>\n\n请稍后重试或联系管理员`,
-              parseMode: "html",
             });
           }
           return;
@@ -1750,7 +1769,6 @@ class ShiftPlugin extends Plugin {
           if (args.length < 3) {
             await msg.edit({
               text: `❌ <b>参数不足</b>\n\n<b>用法：</b>\n<code>${mainPrefix}shift filter [序号] add/del/list [关键词...]</code>`,
-              parseMode: "html",
             });
             return;
           }
@@ -1765,7 +1783,6 @@ class ShiftPlugin extends Plugin {
           if (indices.length === 0) {
             await msg.edit({
               text: `❌ <b>无效的序号: ${htmlEscape(indicesStr)}</b>`,
-              parseMode: "html",
             });
             return;
           }
@@ -1776,13 +1793,13 @@ class ShiftPlugin extends Plugin {
             const filters = new Set(rule.filters);
 
             if (action === "add") {
-              keywords.forEach((keyword) => filters.add(keyword));
+              keywords.forEach((keyword: string) => filters.add(keyword));
               rule.filters = Array.from(filters);
               if (saveShiftRule(sourceId, rule)) {
                 updatedCount++;
               }
             } else if (action === "del") {
-              keywords.forEach((keyword) => filters.delete(keyword));
+              keywords.forEach((keyword: string) => filters.delete(keyword));
               rule.filters = Array.from(filters);
               if (saveShiftRule(sourceId, rule)) {
                 updatedCount++;
@@ -1794,7 +1811,6 @@ class ShiftPlugin extends Plugin {
                 text: `规则 ${index + 1} 的过滤词：\n${filterList
                   .map((f) => `• ${htmlEscape(String(f))}`)
                   .join("\n")}`,
-                parseMode: "html",
               });
               return;
             } else {
@@ -1802,7 +1818,6 @@ class ShiftPlugin extends Plugin {
                 text: `无效的操作: ${htmlEscape(
                   String(action)
                 )}，支持: add, del, list`,
-                parseMode: "html",
               });
               return;
             }
@@ -1811,7 +1826,6 @@ class ShiftPlugin extends Plugin {
           if (action === "add" || action === "del") {
             await msg.edit({
               text: `✅ <b>已为 ${updatedCount} 条规则更新过滤词</b>`,
-              parseMode: "html",
             });
           }
           return;
@@ -1821,7 +1835,6 @@ class ShiftPlugin extends Plugin {
           if (args.length < 3) {
             await msg.edit({
               text: `❌ <b>参数不足</b>\n\n<b>用法：</b>\n<code>${mainPrefix}shift whitelist [序号] enable/disable/add/del/list [正则...]</code>`,
-              parseMode: "html",
             });
             return;
           }
@@ -1836,7 +1849,6 @@ class ShiftPlugin extends Plugin {
           if (indices.length === 0) {
             await msg.edit({
               text: `❌ <b>无效的序号: ${htmlEscape(indicesStr)}</b>`,
-              parseMode: "html",
             });
             return;
           }
@@ -1863,7 +1875,7 @@ class ShiftPlugin extends Plugin {
                 rule.whitelistPatterns = [];
               }
               const whitelistSet = new Set(rule.whitelistPatterns);
-              patterns.forEach((pattern) => whitelistSet.add(pattern));
+              patterns.forEach((pattern: string) => whitelistSet.add(pattern));
               rule.whitelistPatterns = Array.from(whitelistSet);
               if (saveShiftRule(sourceId, rule)) {
                 updatedCount++;
@@ -1871,7 +1883,7 @@ class ShiftPlugin extends Plugin {
             } else if (action === "del") {
               if (rule.whitelistPatterns) {
                 const whitelistSet = new Set(rule.whitelistPatterns);
-                patterns.forEach((pattern) => whitelistSet.delete(pattern));
+                patterns.forEach((pattern: string) => whitelistSet.delete(pattern));
                 rule.whitelistPatterns = Array.from(whitelistSet);
                 if (saveShiftRule(sourceId, rule)) {
                   updatedCount++;
@@ -1887,7 +1899,6 @@ class ShiftPlugin extends Plugin {
                 text: `规则 ${index + 1} 的白名单配置：\n\n模式: ${mode}\n\n正则列表：\n${patternList
                   .map((p) => `• <code>${htmlEscape(String(p))}</code>`)
                   .join("\n")}`,
-                parseMode: "html",
               });
               return;
             } else {
@@ -1895,7 +1906,6 @@ class ShiftPlugin extends Plugin {
                 text: `无效的操作: ${htmlEscape(
                   String(action)
                 )}，支持: enable, disable, add, del, list`,
-                parseMode: "html",
               });
               return;
             }
@@ -1904,17 +1914,14 @@ class ShiftPlugin extends Plugin {
           if (action === "enable") {
             await msg.edit({
               text: `✅ <b>已为 ${updatedCount} 条规则启用白名单模式</b>`,
-              parseMode: "html",
             });
           } else if (action === "disable") {
             await msg.edit({
               text: `✅ <b>已为 ${updatedCount} 条规则禁用白名单模式</b>`,
-              parseMode: "html",
             });
           } else if (action === "add" || action === "del") {
             await msg.edit({
               text: `✅ <b>已为 ${updatedCount} 条规则更新白名单正则</b>`,
-              parseMode: "html",
             });
           }
           return;
@@ -1930,7 +1937,6 @@ class ShiftPlugin extends Plugin {
             if (!taskId) {
               await msg.edit({
                 text: `❌ <b>请提供任务ID</b>`,
-                parseMode: "html",
               });
               return;
             }
@@ -1939,7 +1945,6 @@ class ShiftPlugin extends Plugin {
             if (!task) {
               await msg.edit({
                 text: `❌ <b>未找到任务: ${htmlEscape(taskId)}</b>`,
-                parseMode: "html",
               });
               return;
             }
@@ -1959,7 +1964,6 @@ class ShiftPlugin extends Plugin {
                 `进度: ${progress}% (${task.processedMessages}/${task.totalMessages})\n` +
                 `失败: ${task.failedMessages} 条\n` +
                 `开始时间: ${task.startedAt}`,
-              parseMode: "html",
             });
             return;
           }
@@ -1970,7 +1974,6 @@ class ShiftPlugin extends Plugin {
             if (!taskId) {
               await msg.edit({
                 text: `❌ <b>请提供任务ID</b>`,
-                parseMode: "html",
               });
               return;
             }
@@ -1978,7 +1981,6 @@ class ShiftPlugin extends Plugin {
             await BackupManager.resumeBackup(taskId);
             await msg.edit({
               text: `✅ <b>已恢复备份任务: ${htmlEscape(taskId)}</b>`,
-              parseMode: "html",
             });
             return;
           }
@@ -1991,7 +1993,6 @@ class ShiftPlugin extends Plugin {
           if (filteredArgs.length < 3) {
             await msg.edit({
               text: `❌ <b>参数不足</b>\n\n<b>用法：</b> <code>${mainPrefix}shift backup [源] [目标] [--asc]</code>\n\n<b>--asc</b>：正序备份（旧→新），默认为倒序（新→旧）`,
-              parseMode: "html",
             });
             return;
           }
@@ -2007,13 +2008,14 @@ class ShiftPlugin extends Plugin {
               await msg.edit({ text: "客户端未初始化" });
               return;
             }
-            const chatId = msg.chatId ? Number(msg.chatId.toString()) : 0;
-            source = await resolveTarget(msg.client, sourceInput, chatId);
-            target = await resolveTarget(msg.client, targetInput, chatId);
-          } catch (error: any) {
+            const chatId = msg.chat?.id ? Number(msg.chat.id) : 0;
+            // Use the in-scope ClientAdapter (same runtime object as msg.client)
+            // so the type matches resolveTarget's ClientAdapter parameter.
+            source = await resolveTarget(client, sourceInput, chatId);
+            target = await resolveTarget(client, targetInput, chatId);
+          } catch (_e: unknown) {
             await msg.edit({
               text: `❌ <b>解析对话失败</b>\n\n请检查频道/群组ID格式是否正确`,
-              parseMode: "html",
             });
             return;
           }
@@ -2024,7 +2026,6 @@ class ShiftPlugin extends Plugin {
             text: `🔄 <b>开始备份</b>（${orderLabel}）\n\n从 ${htmlEscape(
               getDisplayName(source)
             )} 到 ${htmlEscape(getDisplayName(target))} 的历史消息...`,
-            parseMode: "html",
           });
 
           const sourceId = normalizeChatId(source);
@@ -2037,49 +2038,51 @@ class ShiftPlugin extends Plugin {
             reverse: hasAsc,
             onProgress: async (current, total) => {
               if (current % 50 === 0 && progressMsg) {
-                await progressMsg.edit({
+                await client.editMessage({
+                  chatId: progressMsg.chat.id,
+                  message: progressMsg.id,
                   text:
                     `🔄 <b>备份进行中...</b>\n\n` +
                     `进度: ${Math.round(
                       (current / total) * 100
                     )}% (${current}/${total})`,
-                  parseMode: "html",
                 });
               }
             },
             onComplete: async (stats) => {
               if (progressMsg) {
-                await progressMsg.edit({
+                await client.editMessage({
+                  chatId: progressMsg.chat.id,
+                  message: progressMsg.id,
                   text:
                     `✅ <b>备份完成！</b>\n\n` +
                     `共处理 ${stats.processedMessages} 条消息，失败 ${stats.failedMessages} 条\n` +
                     `任务ID: <code>${taskId}</code>`,
-                  parseMode: "html",
                 });
               }
             },
           });
 
           if (progressMsg) {
-            await progressMsg.edit({
+            await client.editMessage({
+              chatId: progressMsg.chat.id,
+              message: progressMsg.id,
               text: `✅ <b>备份任务已启动</b>\n\n任务ID: <code>${taskId}</code>\n使用 <code>${mainPrefix}shift backup status ${taskId}</code> 查看进度`,
-              parseMode: "html",
             });
           }
           return;
         }
-      } catch (error: any) {
-        console.error("[SHIFT] 命令执行失败:", error);
+      } catch (error: unknown) {
+        logger.error("[SHIFT] 命令执行失败:", error);
         await msg.edit({
           text: `❌ <b>命令执行失败</b>\n\n请检查命令格式或稍后重试`,
-          parseMode: "html",
         });
       }
     },
   };
   listenMessageHandlerIgnoreEdited: boolean = false;
   listenMessageHandler?:
-    | ((msg: Api.Message, options?: { isEdited?: boolean }) => Promise<void>)
+    | ((msg: MessageContext, options?: { isEdited?: boolean }) => Promise<void>)
     | undefined = shiftMessageListener;
 }
 
@@ -2108,18 +2111,20 @@ function updateStats(
 
       // 批量写入优化
       if (stats.total % 10 === 0) {
-        lowdb.write();
+        void lowdb.write().catch((error: unknown) => {
+          logger.error("[SHIFT] 保存统计失败:", error);
+        });
       }
     } else if (sqliteDb) {
       // 更新 SQLite 统计
       const stmt = sqliteDb.prepare(
         "SELECT stats_data FROM shift_stats WHERE stats_key = ?"
       );
-      const row = stmt.get(statsKey) as any;
+      const row = stmt.get(statsKey) as ShiftStatsRow | undefined;
 
-      let stats: any = { total: 0 };
+      let stats: Record<string, number> = { total: 0 };
       if (row) {
-        stats = JSON.parse(row.stats_data);
+        stats = JSON.parse(row.stats_data) as Record<string, number>;
       }
 
       stats.total = (stats.total || 0) + 1;
@@ -2132,8 +2137,8 @@ function updateStats(
 
       saveStmt.run(statsKey, JSON.stringify(stats));
     }
-  } catch (error) {
-    console.error(`[SHIFT] Error updating stats:`, error);
+  } catch (error: unknown) {
+    logger.error(`[SHIFT] Error updating stats:`, error);
   }
 }
 
@@ -2155,8 +2160,8 @@ async function isMessageFiltered(
       try {
         const regex = new RegExp(pattern, "i");
         return regex.test(text);
-      } catch (e) {
-        console.error(`[SHIFT] 无效的正则表达式: ${pattern}`, e);
+      } catch (e: unknown) {
+        logger.error(`[SHIFT] 无效的正则表达式: ${pattern}`, e);
         return false;
       }
     });
@@ -2171,29 +2176,11 @@ async function isMessageFiltered(
 
 // Get chat ID from message
 function getChatIdFromMessage(message: any, isEdited?: boolean): number | null {
-  if (
-    isEdited &&
-    message.peerId?.channelId &&
-    message.fwdFrom?.channelPost &&
-    message.fwdFrom?.fromId?.channelId
-  ) {
-    message.id = message.fwdFrom?.channelPost;
-    const channelId =
-      message.fwdFrom.fromId.channelId.value ||
-      message.fwdFrom.fromId.channelId;
-    return ensureChannelId(channelId);
-  }
   if (message.chatId) {
     return Number(message.chatId);
   }
-  if (message.peerId) {
-    if (message.peerId.channelId) {
-      return ensureChannelId(message.peerId.channelId);
-    } else if (message.peerId.chatId) {
-      return -Number(message.peerId.chatId);
-    } else if (message.peerId.userId) {
-      return Number(message.peerId.userId);
-    }
+  if (message.chat?.id) {
+    return Number(message.chat.id);
   }
 
   return null;
@@ -2206,10 +2193,10 @@ async function shiftForwardMessage(
   toChatId: number,
   messageId: number,
   depth: number = 0,
-  options?: any
+  options?: { silent?: boolean; replyTo?: number }
 ): Promise<void> {
   if (depth > 5) {
-    console.log(`[SHIFT] 转发深度超限: ${depth}`);
+    logger.info(`[SHIFT] 转发深度超限: ${depth}`);
     return;
   }
 
@@ -2221,7 +2208,7 @@ async function shiftForwardMessage(
       replyTo: options?.replyTo,
     });
 
-    console.log(
+    logger.info(
       `[SHIFT] 转发成功: ${fromChatId} -> ${toChatId}, msg=${messageId}, depth=${depth}`
     );
 
@@ -2241,8 +2228,8 @@ async function shiftForwardMessage(
         options
       );
     }
-  } catch (error) {
-    console.error(
+  } catch (error: unknown) {
+    logger.error(
       `[SHIFT] 转发失败: ${fromChatId} -> ${toChatId}, msg=${messageId}`,
       error
     );
@@ -2277,7 +2264,7 @@ async function handleIncomingMessage(
 
     // Check content protection
     if (message.chat.noforwards) {
-      console.log(
+      logger.info(
         `[SHIFT] 源聊天 ${
           rule.source_display || sourceId
         } 开启了内容保护，删除转发规则`
@@ -2288,7 +2275,7 @@ async function handleIncomingMessage(
 
     // Check message filtering
     if (await isMessageFiltered(message, sourceId)) {
-      console.log(`[SHIFT] 消息被过滤: ${rule.source_display || sourceId}`);
+      logger.info(`[SHIFT] 消息被过滤: ${rule.source_display || sourceId}`);
       return;
     }
 
@@ -2296,7 +2283,7 @@ async function handleIncomingMessage(
     const options = rule.options;
 
     if (isEdited && !(options && options.includes("handle_edited"))) {
-      console.log(`[SHIFT] 编辑消息被忽略: ${rule.source_display || sourceId}`);
+      logger.info(`[SHIFT] 编辑消息被忽略: ${rule.source_display || sourceId}`);
       return;
     }
 
@@ -2313,7 +2300,7 @@ async function handleIncomingMessage(
     }
     const messageType = getMediaType(message);
     if (messageTypes.length > 0 && !messageTypes.includes(messageType)) {
-      console.log(
+      logger.info(
         `[SHIFT] 消息类型不匹配: ${messageType} not in ${options}, ${
           rule.source_display || sourceId
         }`
@@ -2322,7 +2309,7 @@ async function handleIncomingMessage(
     }
 
     // Grouped album handling: buffer and forward whole group
-    const hasGroup = !!(message as any).groupedId;
+    const hasGroup = !!(message as { groupedId?: string | number }).groupedId;
     let replyTo = undefined as number | undefined;
     if (options && options.length > 0) {
       for (const option of options) {
@@ -2350,7 +2337,7 @@ async function handleIncomingMessage(
     }
 
     // Execute forwarding
-    console.log(
+    logger.info(
       `[SHIFT] 开始转发: ${rule.source_display || sourceId} -> ${
         rule.target_display || targetId
       }, msg=${message.id}`
@@ -2370,9 +2357,42 @@ async function handleIncomingMessage(
 
     // Update stats
     updateStats(sourceId, targetId, messageType);
-  } catch (error) {
-    console.error(`[SHIFT] 处理消息时出错: ${error}`);
+  } catch (error: unknown) {
+    logger.error(`[SHIFT] 处理消息时出错: ${error}`);
   }
 }
+
+
+  // Panel Settings Adapter
+  panelAdapter: PanelSettingsAdapter = {
+    id: "shift",
+    title: "排班",
+    description: "排班管理配置",
+    category: "插件配置",
+    icon: "📋",
+    getSchema: (): PanelSettingField[] => [
+      {
+            "key": "timezone",
+            "label": "时区",
+            "type": "string",
+            "default": "Asia/Shanghai"
+      },
+      {
+            "key": "reminderTime",
+            "label": "提醒时间",
+            "type": "string",
+            "default": "09:00"
+      }
+],
+    getValues: async (): Promise<Record<string, unknown>> => {
+      const db = await JSONFilePreset<any>(path.join(createDirectoryInAssets("shift"), "config.json"), {} as any);
+      return db.data as Record<string, unknown>;
+    },
+    setValues: async (patch: Record<string, unknown>): Promise<void> => {
+      const db = await JSONFilePreset<any>(path.join(createDirectoryInAssets("shift"), "config.json"), {} as any);
+      Object.assign(db.data, patch);
+      await db.write();
+    },
+  };
 
 export default new ShiftPlugin();

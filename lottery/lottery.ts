@@ -1,15 +1,14 @@
-import { Plugin } from "@utils/pluginBase";
+import { Plugin, type PanelSettingsAdapter, type PanelSettingField, type PanelFieldType } from "@utils/pluginBase";
 import { getGlobalClient, getCurrentGeneration } from "@utils/runtimeManager";
 import path from "path";
 import Database from "better-sqlite3";
 import { createDirectoryInAssets } from "@utils/pathHelpers";
 import { getEntityWithHash } from "@utils/entityHelpers";
-import { Api } from "teleproto/tl";
-import { TelegramClient } from "teleproto";
+import type { MessageContext } from "@mtcute/dispatcher";
+import type { TelegramClient, User } from "@mtcute/node";
+import { thtml as html } from "@mtcute/html-parser";
 import { getPrefixes } from "@utils/pluginManager";
-import bigInt from "big-integer";
-
-import { htmlEscape } from "@utils/htmlEscape";
+import { logger } from "@utils/logger";
 
 // Track pending setTimeout handles for safe cleanup on reload
 const pendingTimers = new Set<ReturnType<typeof setTimeout>>();
@@ -19,6 +18,15 @@ const prefixes = getPrefixes();
 const mainPrefix = prefixes[0];
 
 // HTML escape function
+function htmlEscape(text: string): string {
+  return text
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#x27;");
+}
+
 function codeTag(text: string | number): string {
   return `<code>${htmlEscape(String(text))}</code>`;
 }
@@ -35,6 +43,42 @@ enum PrizeStatus {
   EXPIRED = "expired"   // ❌ 已过期
 }
 
+// Database row interfaces
+interface PrizeWarehouseRow {
+  id: number;
+  warehouse_name: string;
+  prize_text: string;
+  stock_count: number;
+  order_index: number;
+  created_at: number;
+  next_order?: number;
+}
+
+interface LotteryConfigRow {
+  id: number;
+  chat_id: string;
+  title: string;
+  keyword: string;
+  max_participants: number;
+  winner_count: number;
+  mode: string;
+  distribution_mode: string;
+  claim_timeout: number;
+  delete_delay: number;
+  require_avatar: number | boolean;
+  require_username: number | boolean;
+  required_channel: string;
+  prize_warehouse: string;
+  allow_bots: number | boolean;
+  member_filter: string;
+  auto_draw_time: number;
+  created_at: number;
+  status: string;
+  creator_id: string;
+  unique_id: string;
+  message_id: string;
+}
+
 // Lottery mode enum
 enum LotteryMode {
   MANUAL = "manual",    // 手动开奖
@@ -47,12 +91,50 @@ enum DistributionMode {
   AUTO_SEND = "auto"    // 发奖者主动派奖
 }
 
+interface TableInfoRow {
+  name: string;
+}
+
+/** Aggregate row for warehouse prize counts */
+interface WarehouseSummaryRow {
+  warehouse_name: string;
+  prize_count: number;
+  total_stock: number;
+}
+
+/** Loticipant row from lottery_participants table */
+interface LotteryParticipantRow {
+  id: number;
+  lottery_id: number;
+  user_id: string;
+  username: string | null;
+  first_name: string | null;
+  last_name: string | null;
+  joined_at: number;
+}
+
+/** Winner row from lottery_winners table */
+interface LotteryWinnerRow {
+  id: number;
+  lottery_id: number;
+  user_id: string;
+  username: string | null;
+  first_name: string | null;
+  last_name: string | null;
+  prize_id: number | null;
+  prize_text: string | null;
+  status: string;
+  assigned_at: number;
+  claimed_at: number | null;
+  expires_at: number | null;
+}
+
 // Initialize enhanced database tables
 if (db) {
   // Ensure database schema is up to date
   try {
     // Check and migrate lottery_config table
-    const tableInfo = db.prepare("PRAGMA table_info(lottery_config)").all() as any[];
+    const tableInfo = db.prepare("PRAGMA table_info(lottery_config)").all() as TableInfoRow[];
     const hasWarehouseColumn = tableInfo.some(col => col.name === 'prize_warehouse');
     const hasMessageIdColumn = tableInfo.some(col => col.name === 'message_id');
     
@@ -62,9 +144,7 @@ if (db) {
     if (!hasMessageIdColumn) {
       db.exec(`ALTER TABLE lottery_config ADD COLUMN message_id TEXT`);
     }
-  } catch (error) {
-    // Table doesn't exist yet, will be created below
-  }
+  } catch (error: unknown) { logger.warn(`[lottery] Table doesn't exist yet, will be created below:`, error) }
 
   db.exec(`
     CREATE TABLE IF NOT EXISTS lottery_config (
@@ -138,6 +218,7 @@ if (db) {
   `);
 }
 
+
 // Prize warehouse management functions
 function createPrizeWarehouse(name: string): boolean {
   if (!db) return false;
@@ -168,7 +249,7 @@ function addPrizeToWarehouse(warehouseName: string, prizeText: string, stock: nu
   const existingPrize = db.prepare(`
     SELECT id, stock_count FROM prize_warehouse 
     WHERE warehouse_name = ? AND prize_text = ?
-  `).get(warehouseName, prizeText) as any;
+  `).get(warehouseName, prizeText) as PrizeWarehouseRow | undefined;
   
   if (existingPrize) {
     // Update existing prize stock
@@ -184,7 +265,7 @@ function addPrizeToWarehouse(warehouseName: string, prizeText: string, stock: nu
       SELECT COALESCE(MAX(order_index), 0) + 1 as next_order 
       FROM prize_warehouse WHERE warehouse_name = ?
     `);
-    const nextOrder = (maxOrderStmt.get(warehouseName) as any)?.next_order || 1;
+    const nextOrder = (maxOrderStmt.get(warehouseName) as PrizeWarehouseRow | undefined)?.next_order || 1;
     
     // Insert new prize
     const stmt = db.prepare(`
@@ -202,10 +283,10 @@ function getPrizeWarehouses(): string[] {
     SELECT DISTINCT warehouse_name FROM prize_warehouse 
     ORDER BY warehouse_name
   `);
-  return stmt.all().map((row: any) => row.warehouse_name);
+  return (stmt.all() as WarehouseSummaryRow[]).map((row) => row.warehouse_name);
 }
 
-function getAllWarehousesWithPrizes(): any[] {
+function getAllWarehousesWithPrizes(): WarehouseSummaryRow[] {
   if (!db) return [];
   
   const stmt = db.prepare(`
@@ -215,7 +296,7 @@ function getAllWarehousesWithPrizes(): any[] {
     GROUP BY warehouse_name 
     ORDER BY warehouse_name
   `);
-  return stmt.all();
+  return stmt.all() as unknown as WarehouseSummaryRow[];
 }
 
 function getWarehouseByNameOrIndex(identifier: string, warehouses: string[]): string | null {
@@ -233,7 +314,7 @@ function getWarehouseByNameOrIndex(identifier: string, warehouses: string[]): st
   return null;
 }
 
-function getWarehousePrizes(warehouseName: string): any[] {
+function getWarehousePrizes(warehouseName: string): PrizeWarehouseRow[] {
   if (!db) return [];
   
   const stmt = db.prepare(`
@@ -241,10 +322,10 @@ function getWarehousePrizes(warehouseName: string): any[] {
     WHERE warehouse_name = ? AND stock_count > 0 
     ORDER BY order_index
   `);
-  return stmt.all(warehouseName);
+  return stmt.all(warehouseName) as PrizeWarehouseRow[];
 }
 
-function getNextAvailablePrize(warehouseName: string): any | null {
+function getNextAvailablePrize(warehouseName: string): PrizeWarehouseRow | null {
   if (!db) return null;
   
   const stmt = db.prepare(`
@@ -253,7 +334,7 @@ function getNextAvailablePrize(warehouseName: string): any | null {
     ORDER BY order_index 
     LIMIT 1
   `);
-  return stmt.get(warehouseName) || null;
+  return (stmt.get(warehouseName) as PrizeWarehouseRow | undefined) || null;
 }
 
 function consumePrize(prizeId: number): boolean {
@@ -308,14 +389,36 @@ function deleteLotteryActivity(lotteryId: number): boolean {
     
     transaction();
     return true;
-  } catch (error) {
-    console.error("Failed to delete lottery activity:", error);
+  } catch (error: unknown) {
+    logger.error("Failed to delete lottery activity:", error);
     return false;
   }
 }
 
 // Enhanced lottery management functions
-function createLotteryConfig(config: any): number {
+/** Input for creating a new lottery */
+interface CreateLotteryInput {
+  chat_id: string;
+  title: string;
+  keyword: string;
+  max_participants: number;
+  winner_count: number;
+  mode: string;
+  distribution_mode: string;
+  claim_timeout: number;
+  delete_delay: number;
+  require_avatar: boolean | number;
+  require_username: boolean | number;
+  required_channel?: string | null;
+  prize_warehouse?: string;
+  allow_bots: boolean | number;
+  member_filter?: string | null;
+  auto_draw_time?: number | null;
+  creator_id: string;
+  unique_id: string;
+}
+
+function createLotteryConfig(config: CreateLotteryInput): number {
   if (!db) return 0;
   
   const stmt = db.prepare(`
@@ -339,7 +442,7 @@ function createLotteryConfig(config: any): number {
   return result.lastInsertRowid as number;
 }
 
-function getActiveLottery(chatId: string): any | null {
+function getActiveLottery(chatId: string): LotteryConfigRow | null {
   if (!db) return null;
   
   const stmt = db.prepare(`
@@ -347,10 +450,18 @@ function getActiveLottery(chatId: string): any | null {
     WHERE chat_id = ? AND status = 'active' 
     ORDER BY created_at DESC LIMIT 1
   `);
-  return stmt.get(chatId) as any;
+  return stmt.get(chatId) as LotteryConfigRow | null;
 }
 
-function addParticipantToLottery(lotteryId: number, participant: any): boolean {
+/** Input for adding a participant to a lottery */
+interface AddParticipantInput {
+  user_id: string | number;
+  username?: string | null;
+  first_name?: string | null;
+  last_name?: string | null;
+}
+
+function addParticipantToLottery(lotteryId: number, participant: AddParticipantInput): boolean {
   if (!db) return false;
   
   try {
@@ -387,37 +498,50 @@ function addParticipantToLottery(lotteryId: number, participant: any): boolean {
     
     transaction();
     return true;
-  } catch (error) {
-    console.error("Failed to add participant:", error);
+  } catch (error: unknown) {
+    logger.error("Failed to add participant:", error);
     return false;
   }
 }
 
-function getLotteryParticipants(lotteryId: number): any[] {
+function getLotteryParticipants(lotteryId: number): LotteryParticipantRow[] {
   if (!db) return [];
-  
+
   const stmt = db.prepare(`
-    SELECT * FROM lottery_participants 
+    SELECT * FROM lottery_participants
     WHERE lottery_id = ? ORDER BY joined_at
   `);
-  return stmt.all(lotteryId);
+  return stmt.all(lotteryId) as LotteryParticipantRow[];
 }
 
-function getLotteryWinners(lotteryId: number): any[] {
+function getLotteryWinners(lotteryId: number): LotteryWinnerRow[] {
   if (!db) return [];
-  
+
   const stmt = db.prepare(`
-    SELECT w.*, p.username, p.first_name, p.last_name 
+    SELECT w.*, p.username, p.first_name, p.last_name
     FROM lottery_winners w
     LEFT JOIN lottery_participants p ON w.user_id = p.user_id AND w.lottery_id = p.lottery_id
     WHERE w.lottery_id = ?
     ORDER BY w.assigned_at
   `);
-  return stmt.all(lotteryId);
+  return stmt.all(lotteryId) as LotteryWinnerRow[];
+}
+
+
+/** Minimal user info from Telegram */
+interface LotteryUser {
+  id?: number | string;
+  user_id?: string;
+  bot?: boolean;
+  username?: string | null;
+  first_name?: string | null;
+  last_name?: string | null;
+  firstName?: string;
+  lastName?: string;
 }
 
 // User validation functions
-async function validateUserConditions(client: TelegramClient, user: any, lottery: any, chatId: string): Promise<{ valid: boolean; reason?: string }> {
+async function validateUserConditions(client: TelegramClient, user: LotteryUser, lottery: LotteryConfigRow, chatId: string): Promise<{ valid: boolean; reason?: string }> {
   try {
     // Check if user is a bot
     if (!lottery.allow_bots && user.bot) {
@@ -427,8 +551,8 @@ async function validateUserConditions(client: TelegramClient, user: any, lottery
     // Check avatar requirement
     if (lottery.require_avatar) {
       const userId = user.id || user;
-      const userEntity = await getEntityWithHash(client, userId);
-      if (userEntity && "photo" in userEntity && !userEntity.photo) {
+      const userEntity = await getEntityWithHash(client, userId as number);
+      if (userEntity && typeof userEntity === "object" && "photo" in userEntity && !(userEntity as { photo?: unknown }).photo) {
         return { valid: false, reason: "需要设置头像才能参与抽奖" };
       }
     }
@@ -441,25 +565,26 @@ async function validateUserConditions(client: TelegramClient, user: any, lottery
     // Check channel subscription requirement
     if (lottery.required_channel) {
       try {
-        const userId = user.id || user;
-        const channelEntity = await client.getEntity(lottery.required_channel);
-        const participant = await client.invoke(
-          new Api.channels.GetParticipant({
-            channel: channelEntity,
-            participant: userId,
-          })
-        );
+        const rawUserId = user.id;
+        const userId = typeof rawUserId === 'number' ? rawUserId : (typeof rawUserId === 'string' ? Number(rawUserId) : 0);
+        if (!userId) {
+          return { valid: false, reason: "无法获取用户ID" };
+        }
+        const participant = await client.getChatMember({
+          chatId: lottery.required_channel ?? '',
+          userId,
+        });
         if (!participant) {
           return { valid: false, reason: `需要关注频道 ${lottery.required_channel} 才能参与抽奖` };
         }
-      } catch (error) {
+      } catch (_e: unknown) {
         return { valid: false, reason: `需要关注指定频道才能参与抽奖` };
       }
     }
 
     return { valid: true };
-  } catch (error) {
-    console.error("Error validating user conditions:", error);
+  } catch (error: unknown) {
+    logger.error("Error validating user conditions:", error);
     return { valid: true }; // Default to allow if validation fails
   }
 }
@@ -514,7 +639,7 @@ function expireOldClaims(): number {
 }
 
 // Enhanced prize distribution
-async function distributePrizes(client: TelegramClient, lottery: any, winners: any[]): Promise<void> {
+async function distributePrizes(client: TelegramClient, lottery: LotteryConfigRow, winners: LotteryUser[]): Promise<void> {
   if (!db) return;
   
   try {
@@ -547,7 +672,7 @@ async function distributePrizes(client: TelegramClient, lottery: any, winners: a
         );
         
         // Consume prize stock if from warehouse
-        if (prize) {
+        if (prize?.id) {
           consumePrize(prize.id);
         }
       }
@@ -560,19 +685,19 @@ async function distributePrizes(client: TelegramClient, lottery: any, winners: a
       for (const winner of winners) {
         const winnerRecord = getLotteryWinners(lottery.id).find(w => w.user_id === winner.user_id);
         if (winnerRecord) {
-          await sendPrizeToWinner(client, winner, winnerRecord.prize_text, lottery);
+          await sendPrizeToWinner(client, winner, winnerRecord.prize_text ?? '', lottery);
           await new Promise(resolve => setTimeout(resolve, 1000)); // Rate limiting
         }
       }
     }
-  } catch (error) {
-    console.error("Failed to distribute prizes:", error);
+  } catch (error: unknown) {
+    logger.error("Failed to distribute prizes:", error);
     throw error;
   }
 }
 
 // Send prize message to winner
-async function sendPrizeToWinner(client: TelegramClient, winner: any, prizeText: string, lottery: any): Promise<boolean> {
+async function sendPrizeToWinner(client: TelegramClient, winner: LotteryUser, prizeText: string, lottery: LotteryConfigRow): Promise<boolean> {
   try {
     const displayName = winner.username ? `@${winner.username}` : 
                        (winner.first_name || winner.last_name || `用户 ${winner.user_id}`);
@@ -588,10 +713,7 @@ async function sendPrizeToWinner(client: TelegramClient, winner: any, prizeText:
       `🎊 <b>感谢您的参与，祝您好运!</b>\n` +
       `💡 <b>提示:</b> 如有疑问请联系活动发起者`;
 
-    await client.sendMessage(winner.user_id, {
-      message: prizeMessage,
-      parseMode: "html",
-    });
+    await client.sendText(winner.user_id ?? winner.id ?? 0, html(prizeMessage));
 
     // Update status to sent
     const updateStmt = db.prepare(`
@@ -601,16 +723,16 @@ async function sendPrizeToWinner(client: TelegramClient, winner: any, prizeText:
     `);
     updateStmt.run(PrizeStatus.SENT, Date.now(), lottery.id, String(winner.user_id));
 
-    console.log(`Prize sent to user ${winner.user_id} (${displayName})`);
+    logger.info(`Prize sent to user ${winner.user_id} (${displayName})`);
     return true;
-  } catch (error) {
-    console.error(`Failed to send prize to user ${winner.user_id}:`, error);
+  } catch (error: unknown) {
+    logger.error(`Failed to send prize to user ${winner.user_id}:`, error);
     return false;
   }
 }
 
 // Format user line for display
-function formatUserLine(uid: number, userObj?: any): string {
+function formatUserLine(uid: number, userObj?: LotteryUser | null): string {
   let displayName = "";
   let username = "";
   
@@ -641,77 +763,33 @@ function formatUserLine(uid: number, userObj?: any): string {
 
 async function isUserAdmin(client: TelegramClient, chatId: string, userId: string): Promise<boolean> {
   try {
-    const chatEntity = await client.getEntity(chatId);
-    
-    // 检查是否为超级群或频道
-    if (chatEntity.className === 'Channel' || (chatEntity as any).megagroup) {
-      try {
-        const participant = await client.invoke(
-          new Api.channels.GetParticipant({
-            channel: chatEntity,
-            participant: userId,
-          })
-        );
-        
-        if (participant && participant.participant) {
-          const participantType = participant.participant.className;
-          return participantType === 'ChannelParticipantAdmin' || 
-                 participantType === 'ChannelParticipantCreator';
-        }
-      } catch (e) {
-        // 如果GetParticipant失败，可能是普通群组，尝试其他方法
-        console.warn("GetParticipant failed, trying alternative method:", e);
-      }
+    const member = await client.getChatMember({ chatId, userId });
+    if (member) {
+      return member.status === "admin" || member.status === "creator";
     }
-    
-    // 对于普通群组，尝试获取消息发送者的权限
-    try {
-      const chatAdmins = await client.invoke(
-        new Api.channels.GetParticipants({
-          channel: chatEntity,
-          filter: new Api.ChannelParticipantsAdmins(),
-          offset: 0,
-          limit: 200,
-          hash: bigInt(0)
-        })
-      );
-      
-      if (chatAdmins && (chatAdmins as any).participants) {
-        return (chatAdmins as any).participants.some((p: any) => 
-          String(p.userId || p.user_id) === String(userId)
-        );
-      }
-    } catch (e) {
-      // 如果仍然失败，返回false
-      console.warn("Alternative admin check failed:", e);
-    }
-    
     return false;
-  } catch (error) {
-    console.error("Error checking admin status:", error);
+  } catch (error: unknown) {
+    logger.error("Error checking admin status:", error);
     return false;
   }
 }
 
-async function performLotteryDraw(client: TelegramClient, lottery: any): Promise<void> {
+async function performLotteryDraw(client: TelegramClient, lottery: LotteryConfigRow): Promise<void> {
   try {
     // Delete original lottery message
     if (lottery.message_id) {
       try {
-        await client.deleteMessages(lottery.chat_id, [parseInt(lottery.message_id)], { revoke: true });
-        console.log(`[lottery] Deleted original lottery message ${lottery.message_id}`);
-      } catch (error) {
-        console.warn("Failed to delete original lottery message:", error);
+        await client.deleteMessagesById(lottery.chat_id, [parseInt(lottery.message_id)], { revoke: true });
+        logger.info(`[lottery] Deleted original lottery message ${lottery.message_id}`);
+      } catch (error: unknown) {
+        logger.warn("Failed to delete original lottery message:", error);
       }
     }
 
     const participants = getLotteryParticipants(lottery.id);
     
     if (participants.length === 0) {
-      await client.sendMessage(lottery.chat_id, {
-        message: `🎊 <b>开奖结果</b>\n\n🏆 <b>活动名称:</b> ${htmlEscape(lottery.title)}\n\n😅 <b>很遗憾，没有用户参与抽奖</b>\n🙏 感谢大家的关注!`,
-        parseMode: "html",
-      });
+      await client.sendText(lottery.chat_id, html(`🎊 <b>开奖结果</b>\n\n🏆 <b>活动名称:</b> ${htmlEscape(lottery.title)}\n\n😅 <b>很遗憾，没有用户参与抽奖</b>\n🙏 感谢大家的关注!`));
       
       // Mark lottery as completed
       const stmt = db.prepare(`UPDATE lottery_config SET status = 'completed' WHERE id = ?`);
@@ -779,54 +857,40 @@ async function performLotteryDraw(client: TelegramClient, lottery: any): Promise
       `⏰ <b>领奖时效:</b> ${Math.floor(lottery.claim_timeout / 3600)} 小时\n` +
       `🙏 感谢所有用户的参与!`;
 
-    const resultMsg = await client.sendMessage(lottery.chat_id, {
-      message: endText,
-      parseMode: "html",
-    });
+    const resultMsg = await client.sendText(lottery.chat_id, html(endText));
 
     // 不再自动置顶开奖结果，让用户自己决定是否置顶
-    console.log(`[lottery] Draw result sent, message ID: ${resultMsg.id}`);
+    logger.info(`[lottery] Draw result sent, message ID: ${resultMsg.id}`);
 
     // Mark lottery as completed
     const stmt = db.prepare(`UPDATE lottery_config SET status = 'completed' WHERE id = ?`);
     stmt.run(lottery.id);
     
     
-  } catch (error) {
-    console.error("Failed to perform lottery draw:", error);
-    await client.sendMessage(lottery.chat_id, {
-      message: `❌ <b>开奖失败</b>\n\n发生错误，请稍后重试。`,
-      parseMode: "html",
-    });
+  } catch (error: unknown) {
+    logger.error("Failed to perform lottery draw:", error);
+    await client.sendText(lottery.chat_id, html(`❌ <b>开奖失败</b>\n\n发生错误，请稍后重试。`));
   }
 }
 
+
 // Enhanced message listener for lottery participation
-async function handleEnhancedLotteryJoin(msg: any): Promise<void> {
-  if (!msg.message || !msg.senderId || !msg.client) return;
-  
-  let chatId: string;
-  try {
-    if (msg.chat?.id) {
-      chatId = String(msg.chat.id);
-    } else if (msg.peerId) {
-      chatId = String(msg.peerId);
-    } else if (msg.chatId) {
-      chatId = String(msg.chatId);
-    } else {
-      return;
-    }
-  } catch {
-    return;
-  }
+async function handleEnhancedLotteryJoin(msg: MessageContext): Promise<void> {
+  if (!msg.text || !msg.sender?.id || !msg.client) return;
+
+  // mtcute MessageContext exposes the chat under `msg.chat.id`; teleproto's
+  // `msg.peerId` / `msg.chatId` do not exist here.
+  const chatId = String(msg.chat?.id);
+  if (!chatId) return;
 
   const activeLottery = getActiveLottery(chatId);
-  if (!activeLottery || msg.message.trim() !== activeLottery.keyword) {
+  if (!activeLottery || msg.text.trim() !== activeLottery.keyword) {
     return;
   }
 
-  const sender = await msg.getSender();
-  if (!sender || sender.bot) {
+  // mtcute: use getCompleteSender() (teleproto's msg.getSender() is not available)
+  const sender = await msg.getCompleteSender();
+  if (!sender || (sender as User).isBot) {
     return;
   }
 
@@ -836,10 +900,7 @@ async function handleEnhancedLotteryJoin(msg: any): Promise<void> {
   
   if (alreadyParticipated) {
     try {
-      const replyMsg = await msg.reply({
-        message: `⚠️ <b>重复参与</b>\n\n您已参加过抽奖，请勿重复参加`,
-        parseMode: "html",
-      });
+      const replyMsg = await msg.replyText(html(`⚠️ <b>重复参与</b>\n\n您已参加过抽奖，请勿重复参加`));
       
       // Delete both messages after delay (generation-safe)
       const gen1 = getCurrentGeneration();
@@ -847,26 +908,26 @@ async function handleEnhancedLotteryJoin(msg: any): Promise<void> {
         pendingTimers.delete(t1);
         if (getCurrentGeneration() !== gen1) return;
         try {
-          await replyMsg.delete();
+          await msg.client.deleteMessagesById(replyMsg.chat.id, [replyMsg.id]);
           await msg.delete();
-        } catch (error) {
-          console.warn("Failed to delete duplicate participation messages:", error);
+        } catch (error: unknown) {
+          logger.warn("Failed to delete duplicate participation messages:", error);
         }
       }, activeLottery.delete_delay * 1000);
       pendingTimers.add(t1);
-    } catch (error) {
-      console.warn("Failed to handle duplicate participation:", error);
+    } catch (error: unknown) {
+      logger.warn("Failed to handle duplicate participation:", error);
     }
     return;
   }
 
   // Validate user conditions
-  const validation = await validateUserConditions(msg.client, sender, activeLottery, chatId);
+  const validation = await validateUserConditions(msg.client as TelegramClient, sender as unknown as LotteryUser, activeLottery, chatId);
   if (!validation.valid) {
     try {
       await msg.delete(); // Silently delete invalid participation
-    } catch (error) {
-      console.warn("Failed to delete invalid participation message:", error);
+    } catch (error: unknown) {
+      logger.warn("Failed to delete invalid participation message:", error);
     }
     return;
   }
@@ -875,8 +936,8 @@ async function handleEnhancedLotteryJoin(msg: any): Promise<void> {
   const userInfo = {
     user_id: String(sender.id || sender),
     username: sender.username || null,
-    first_name: sender.firstName || null,
-    last_name: sender.lastName || null
+    first_name: (sender as User).firstName || null,
+    last_name: (sender as User).lastName || null
   };
 
   const added = addParticipantToLottery(activeLottery.id, userInfo);
@@ -894,10 +955,7 @@ async function handleEnhancedLotteryJoin(msg: any): Promise<void> {
     `🍀 <b>祝你好运!</b>`;
 
   try {
-    const replyMsg = await msg.reply({
-      message: joinText,
-      parseMode: "html",
-    });
+    const replyMsg = await msg.replyText(html(joinText));
     
     // Delete messages after delay (generation-safe)
     const gen2 = getCurrentGeneration();
@@ -905,22 +963,23 @@ async function handleEnhancedLotteryJoin(msg: any): Promise<void> {
       pendingTimers.delete(t2);
       if (getCurrentGeneration() !== gen2) return;
       try {
-        await replyMsg.delete();
+        await msg.client.deleteMessagesById(replyMsg.chat.id, [replyMsg.id]);
         await msg.delete();
-      } catch (error) {
-        console.warn("Failed to delete participation messages:", error);
+      } catch (error: unknown) {
+        logger.warn("Failed to delete participation messages:", error);
       }
     }, activeLottery.delete_delay * 1000);
     pendingTimers.add(t2);
-  } catch (error) {
-    console.warn("Failed to send join confirmation:", error);
+  } catch (error: unknown) {
+    logger.warn("Failed to send join confirmation:", error);
   }
 
   // Auto-draw if max participants reached
   if (currentCount >= activeLottery.max_participants) {
-    await performLotteryDraw(msg.client, activeLottery);
+    await performLotteryDraw(msg.client as TelegramClient, activeLottery);
   }
 }
+
 
 // Help text with dynamic prefix
 const help_text = `🎰 <b>智能抽奖插件 - 完整功能指南</b>
@@ -1029,10 +1088,10 @@ const help_text = `🎰 <b>智能抽奖插件 - 完整功能指南</b>
 • 达到人数上限会立即自动开奖
 • 管理员可使用 <code>${mainPrefix}lottery draw</code> 提前手动开奖`;
 
-const lottery = async (msg: Api.Message) => {
+const lottery = async (msg: MessageContext) => {
   const client = await getGlobalClient();
   if (!client) {
-    await msg.edit({ text: "❌ 客户端未初始化", parseMode: "html" });
+    await msg.edit({ text: html("❌ 客户端未初始化") });
     return;
   }
 
@@ -1048,17 +1107,12 @@ const lottery = async (msg: Api.Message) => {
     try {
       if (msg.chat?.id) {
         chatId = String(msg.chat.id);
-      } else if (msg.peerId) {
-        chatId = String(msg.peerId);
-      } else if (msg.chatId) {
-        chatId = String(msg.chatId);
       } else {
         throw new Error("无法获取聊天ID");
       }
-    } catch (error) {
+    } catch (error: unknown) {
       await msg.edit({
-        text: `❌ <b>获取聊天ID失败:</b> ${htmlEscape(String(error))}`,
-        parseMode: "html"
+        text: html(`❌ <b>获取聊天ID失败:</b> ${htmlEscape(String(error))}`)
       });
       return;
     }
@@ -1066,8 +1120,9 @@ const lottery = async (msg: Api.Message) => {
     // 无参数时显示错误提示，不自动显示帮助
     if (!sub) {
       await msg.edit({
-        text: `❌ <b>请指定子命令</b>\n\n💡 使用 <code>${mainPrefix}lottery help</code> 查看完整帮助`,
-        parseMode: "html"
+        text: html(
+          `❌ <b>请指定子命令</b>\n\n💡 使用 <code>${mainPrefix}lottery help</code> 查看完整帮助`,
+        ),
       });
       return;
     }
@@ -1075,17 +1130,15 @@ const lottery = async (msg: Api.Message) => {
     // 明确请求帮助时才显示
     if (sub === "help" || sub === "h") {
       await msg.edit({
-        text: help_text,
-        parseMode: "html",
-        linkPreview: false,
+        text: html(help_text),
+        disableWebPreview: true,
       });
       return;
     }
 
     if (sub === "init" || sub === "initialize") {
       await msg.edit({
-        text: "🔄 <b>正在初始化数据库...</b>",
-        parseMode: "html"
+        text: html("🔄 <b>正在初始化数据库...</b>")
       });
 
       try {
@@ -1111,14 +1164,13 @@ const lottery = async (msg: Api.Message) => {
         `);
 
         await msg.edit({
-          text: "✅ <b>数据库初始化完成</b>\n\n已重建 lottery_winners 表结构，现在可以正常进行抽奖了。",
-          parseMode: "html"
+          text: html("✅ <b>数据库初始化完成</b>\n\n已重建 lottery_winners 表结构，现在可以正常进行抽奖了。")
         });
         return;
-      } catch (error: any) {
+      } catch (error: unknown) {
+        const errMsg = error instanceof Error ? error.message : String(error);
         await msg.edit({
-          text: `❌ <b>错误:</b> 数据库初始化失败 - ${htmlEscape(error.message || String(error))}`,
-          parseMode: "html"
+          text: html(`❌ <b>错误:</b> 数据库初始化失败 - ${htmlEscape(errMsg)}`)
         });
         return;
       }
@@ -1126,37 +1178,34 @@ const lottery = async (msg: Api.Message) => {
 
     // Create lottery
     if (sub === "create") {
-      await msg.edit({ text: "🔄 <b>处理中...</b>", parseMode: "html" });
+      await msg.edit({ text: html("🔄 <b>处理中...</b>") });
       // Allow "list" command in saved messages for viewing warehouses
       const isListCommand = args.length === 1 || (args.length === 2 && args[1].toLowerCase() === "list");
       
       // Check if in saved messages (forbidden for actual creation, but allow list)
-      const isSavedMessages = chatId === String(msg.senderId);
+      const isSavedMessages = chatId === String(msg.sender?.id);
       if (isSavedMessages && !isListCommand) {
         await msg.edit({
-          text: `❌ <b>错误:</b> 收藏夹中不能创建抽奖活动\n\n💡 请在群组中创建抽奖活动`,
-          parseMode: "html"
+          text: html(`❌ <b>错误:</b> 收藏夹中不能创建抽奖活动\n\n💡 请在群组中创建抽奖活动`)
         });
         return;
       }
       
       if (args.length < 2) {
         await msg.edit({
-          text: `❌ <b>参数不足</b>\n\n<b>用法:</b> <code>${mainPrefix}lottery create [标题] [关键词] [人数] [中奖数] [仓库名或序号]</code>\n\n💡 使用 <code>${mainPrefix}lottery create list</code> 查看可用仓库\n\n<b>示例:</b> <code>${mainPrefix}lottery create "新年抽奖" 抽奖 100 5 default</code>`,
-          parseMode: "html"
+          text: html(`❌ <b>参数不足</b>\n\n<b>用法:</b> <code>${mainPrefix}lottery create [标题] [关键词] [人数] [中奖数] [仓库名或序号]</code>\n\n💡 使用 <code>${mainPrefix}lottery create list</code> 查看可用仓库\n\n<b>示例:</b> <code>${mainPrefix}lottery create "新年抽奖" 抽奖 100 5 default</code>`)
         });
         return;
       }
 
       // Show warehouse list if no parameters or "list" parameter
       if (args.length === 1 || (args.length === 2 && args[1].toLowerCase() === "list")) {
-        await msg.edit({ text: "🔄 <b>获取仓库列表...</b>", parseMode: "html" });
+        await msg.edit({ text: html("🔄 <b>获取仓库列表...</b>") });
         const warehouses = getAllWarehousesWithPrizes();
         
         if (warehouses.length === 0) {
           await msg.edit({
-            text: `📦 <b>奖品仓库列表</b>\n\n暂无可用的奖品仓库\n\n💡 请先使用 <code>${mainPrefix}lottery prize create [仓库名]</code> 创建仓库并添加奖品`,
-            parseMode: "html"
+            text: html(`📦 <b>奖品仓库列表</b>\n\n暂无可用的奖品仓库\n\n💡 请先使用 <code>${mainPrefix}lottery prize create [仓库名]</code> 创建仓库并添加奖品`)
           });
           return;
         }
@@ -1166,21 +1215,19 @@ const lottery = async (msg: Api.Message) => {
         ).join("\n");
 
         await msg.edit({
-          text: `📦 <b>可用奖品仓库</b>\n\n${warehouseList}\n\n<b>创建抽奖用法:</b>\n<code>${mainPrefix}lottery create [标题] [关键词] [人数] [中奖数] [仓库名或序号]</code>\n\n<b>示例:</b>\n<code>${mainPrefix}lottery create "新年抽奖" 抽奖 100 5 1</code>\n<code>${mainPrefix}lottery create "新年抽奖" 抽奖 100 5 default</code>`,
-          parseMode: "html"
+          text: html(`📦 <b>可用奖品仓库</b>\n\n${warehouseList}\n\n<b>创建抽奖用法:</b>\n<code>${mainPrefix}lottery create [标题] [关键词] [人数] [中奖数] [仓库名或序号]</code>\n\n<b>示例:</b>\n<code>${mainPrefix}lottery create "新年抽奖" 抽奖 100 5 1</code>\n<code>${mainPrefix}lottery create "新年抽奖" 抽奖 100 5 default</code>`)
         });
         return;
       }
 
       if (args.length < 5) {
         await msg.edit({
-          text: `❌ <b>参数不足</b>\n\n<b>用法:</b> <code>${mainPrefix}lottery create [标题] [关键词] [人数] [中奖数] [仓库名或序号]</code>\n\n💡 使用 <code>${mainPrefix}lottery create list</code> 查看可用仓库\n\n<b>示例:</b> <code>${mainPrefix}lottery create "新年抽奖" 抽奖 100 5 default</code>`,
-          parseMode: "html"
+          text: html(`❌ <b>参数不足</b>\n\n<b>用法:</b> <code>${mainPrefix}lottery create [标题] [关键词] [人数] [中奖数] [仓库名或序号]</code>\n\n💡 使用 <code>${mainPrefix}lottery create list</code> 查看可用仓库\n\n<b>示例:</b> <code>${mainPrefix}lottery create "新年抽奖" 抽奖 100 5 default</code>`)
         });
         return;
       }
 
-      await msg.edit({ text: "🔄 <b>创建抽奖活动...</b>", parseMode: "html" });
+      await msg.edit({ text: html("🔄 <b>创建抽奖活动...</b>") });
 
       const title = args[1];
       const keyword = args[2];
@@ -1191,8 +1238,7 @@ const lottery = async (msg: Api.Message) => {
 
       if (isNaN(maxParticipants) || isNaN(winnerCount) || winnerCount > maxParticipants) {
         await msg.edit({
-          text: `❌ <b>错误:</b> 人数和中奖数必须是有效数字，且中奖数不能大于总人数`,
-          parseMode: "html"
+          text: html(`❌ <b>错误:</b> 人数和中奖数必须是有效数字，且中奖数不能大于总人数`)
         });
         return;
       }
@@ -1207,8 +1253,7 @@ const lottery = async (msg: Api.Message) => {
         ).join("\n");
         
         await msg.edit({
-          text: `❌ <b>错误:</b> 奖品仓库不存在\n\n可用仓库:\n${warehouseList}\n\n💡 请使用正确的仓库名称或序号`,
-          parseMode: "html"
+          text: html(`❌ <b>错误:</b> 奖品仓库不存在\n\n可用仓库:\n${warehouseList}\n\n💡 请使用正确的仓库名称或序号`)
         });
         return;
       }
@@ -1217,8 +1262,7 @@ const lottery = async (msg: Api.Message) => {
       const warehousePrizes = getWarehousePrizes(selectedWarehouse);
       if (warehousePrizes.length === 0) {
         await msg.edit({
-          text: `❌ <b>错误:</b> 仓库 ${codeTag(selectedWarehouse)} 中没有可用的奖品\n\n💡 请先添加奖品或选择其他仓库`,
-          parseMode: "html"
+          text: html(`❌ <b>错误:</b> 仓库 ${codeTag(selectedWarehouse)} 中没有可用的奖品\n\n💡 请先添加奖品或选择其他仓库`)
         });
         return;
       }
@@ -1226,8 +1270,7 @@ const lottery = async (msg: Api.Message) => {
       const existingLottery = getActiveLottery(chatId);
       if (existingLottery) {
         await msg.edit({
-          text: `❌ <b>错误:</b> 当前群组已有进行中的抽奖活动\n\n💡 请先使用 <code>${mainPrefix}lottery draw</code> 开奖或取消当前活动`,
-          parseMode: "html"
+          text: html(`❌ <b>错误:</b> 当前群组已有进行中的抽奖活动\n\n💡 请先使用 <code>${mainPrefix}lottery draw</code> 开奖或取消当前活动`)
         });
         return;
       }
@@ -1249,14 +1292,14 @@ const lottery = async (msg: Api.Message) => {
         allow_bots: false,
         member_filter: null,
         auto_draw_time: null,
-        creator_id: String(msg.senderId),
+        creator_id: String(msg.sender?.id),
         unique_id: uniqueId,
         prize_warehouse: selectedWarehouse
       };
 
       const lotteryId = createLotteryConfig(config);
       
-      await msg.edit({ text: "🔄 <b>发布抽奖活动...</b>", parseMode: "html" });
+      await msg.edit({ text: html("🔄 <b>发布抽奖活动...</b>") });
       
       const createText =
         `🎉 <b>抽奖活动已创建</b>\n\n` +
@@ -1269,10 +1312,7 @@ const lottery = async (msg: Api.Message) => {
         `🆔 <b>抽奖ID:</b> ${codeTag(uniqueId)}\n\n` +
         `💡 <b>提示:</b> 发送关键词即可参与抽奖`;
 
-      const sentMsg = await msg.client?.sendMessage(chatId, {
-        message: createText,
-        parseMode: "html",
-      });
+      const sentMsg = await msg.client?.sendText(chatId, html(createText));
 
       // Save message ID to database
       if (sentMsg) {
@@ -1280,14 +1320,14 @@ const lottery = async (msg: Api.Message) => {
         updateStmt.run(String(sentMsg.id), lotteryId);
         
         try {
-          await msg.client?.pinMessage(chatId, sentMsg.id, { notify: shouldNotify });
+          await msg.client?.pinMessage({ chatId, message: sentMsg.id, notify: shouldNotify });
           if (shouldNotify) {
-            console.log(`[lottery] Pinned lottery message with notification`);
+            logger.info(`[lottery] Pinned lottery message with notification`);
           } else {
-            console.log(`[lottery] Pinned lottery message silently`);
+            logger.info(`[lottery] Pinned lottery message silently`);
           }
-        } catch (error) {
-          console.warn("Failed to pin lottery message:", error);
+        } catch (error: unknown) {
+          logger.warn("Failed to pin lottery message:", error);
         }
       }
 
@@ -1297,31 +1337,28 @@ const lottery = async (msg: Api.Message) => {
 
     // Draw lottery
     if (sub === "draw") {
-      await msg.edit({ text: "🔄 <b>检查抽奖状态...</b>", parseMode: "html" });
+      await msg.edit({ text: html("🔄 <b>检查抽奖状态...</b>") });
       
       const activeLottery = getActiveLottery(chatId);
       if (!activeLottery) {
         await msg.edit({
-          text: `❌ <b>错误:</b> 当前群组没有进行中的抽奖活动`,
-          parseMode: "html"
+          text: html(`❌ <b>错误:</b> 当前群组没有进行中的抽奖活动`)
         });
         return;
       }
 
-      const isCreator = String(msg.senderId) === activeLottery.creator_id;
-      const isAdmin = await isUserAdmin(client, chatId, String(msg.senderId));
+      const isCreator = String(msg.sender?.id) === activeLottery.creator_id;
+      const isAdmin = await isUserAdmin(client, chatId, String(msg.sender?.id));
       
       if (!isCreator && !isAdmin) {
         await msg.edit({
-          text: `❌ <b>权限不足</b>\n\n只有抽奖创建者或群组管理员可以手动开奖`,
-          parseMode: "html"
+          text: html(`❌ <b>权限不足</b>\n\n只有抽奖创建者或群组管理员可以手动开奖`)
         });
         return;
       }
 
       await msg.edit({
-        text: `🔄 <b>开奖中...</b>\n\n正在为 "${htmlEscape(activeLottery.title)}" 进行开奖`,
-        parseMode: "html"
+        text: html(`🔄 <b>开奖中...</b>\n\n正在为 "${htmlEscape(activeLottery.title)}" 进行开奖`)
       });
 
       await performLotteryDraw(client, activeLottery);
@@ -1330,41 +1367,37 @@ const lottery = async (msg: Api.Message) => {
 
     // Force delete lottery
     if (sub === "delete" || sub === "cancel") {
-      await msg.edit({ text: "🔄 <b>检查权限...</b>", parseMode: "html" });
+      await msg.edit({ text: html("🔄 <b>检查权限...</b>") });
       
       const activeLottery = getActiveLottery(chatId);
       if (!activeLottery) {
         await msg.edit({
-          text: `❌ <b>错误:</b> 当前群组没有进行中的抽奖活动`,
-          parseMode: "html"
+          text: html(`❌ <b>错误:</b> 当前群组没有进行中的抽奖活动`)
         });
         return;
       }
 
-      const isCreator = String(msg.senderId) === activeLottery.creator_id;
-      const isAdmin = await isUserAdmin(client, chatId, String(msg.senderId));
+      const isCreator = String(msg.sender?.id) === activeLottery.creator_id;
+      const isAdmin = await isUserAdmin(client, chatId, String(msg.sender?.id));
       
       if (!isCreator && !isAdmin) {
         await msg.edit({
-          text: `❌ <b>权限不足</b>\n\n只有抽奖创建者或群组管理员可以删除活动`,
-          parseMode: "html"
+          text: html(`❌ <b>权限不足</b>\n\n只有抽奖创建者或群组管理员可以删除活动`)
         });
         return;
       }
 
-      await msg.edit({ text: "🔄 <b>删除抽奖活动...</b>", parseMode: "html" });
+      await msg.edit({ text: html("🔄 <b>删除抽奖活动...</b>") });
       
       const success = deleteLotteryActivity(activeLottery.id);
       
       if (success) {
         await msg.edit({
-          text: `✅ <b>删除成功</b>\n\n抽奖活动 "${htmlEscape(activeLottery.title)}" 已被强制删除\n\n📝 所有相关数据已清除`,
-          parseMode: "html"
+          text: html(`✅ <b>删除成功</b>\n\n抽奖活动 "${htmlEscape(activeLottery.title)}" 已被强制删除\n\n📝 所有相关数据已清除`)
         });
       } else {
         await msg.edit({
-          text: `❌ <b>错误:</b> 删除过程中发生错误，请稍后重试`,
-          parseMode: "html"
+          text: html(`❌ <b>错误:</b> 删除过程中发生错误，请稍后重试`)
         });
       }
       return;
@@ -1372,13 +1405,12 @@ const lottery = async (msg: Api.Message) => {
 
     // Status check
     if (sub === "status") {
-      await msg.edit({ text: "🔄 <b>获取状态...</b>", parseMode: "html" });
+      await msg.edit({ text: html("🔄 <b>获取状态...</b>") });
       
       const activeLottery = getActiveLottery(chatId);
       if (!activeLottery) {
         await msg.edit({
-          text: `📋 <b>抽奖状态</b>\n\n当前群组没有进行中的抽奖活动`,
-          parseMode: "html"
+          text: html(`📋 <b>抽奖状态</b>\n\n当前群组没有进行中的抽奖活动`)
         });
         return;
       }
@@ -1394,23 +1426,21 @@ const lottery = async (msg: Api.Message) => {
         `🆔 <b>抽奖ID:</b> ${codeTag(activeLottery.unique_id)}`;
 
       await msg.edit({
-        text: statusText,
-        parseMode: "html"
+        text: html(statusText)
       });
       return;
     }
 
     // Prize management (restricted to saved messages or configured admin chats)
     if (sub === "prize") {
-      await msg.edit({ text: "🔄 <b>验证权限...</b>", parseMode: "html" });
+      await msg.edit({ text: html("🔄 <b>验证权限...</b>") });
       
       // Check if in private chat (only allow prize management in private chats)
-      const isPrivateChat = chatId === String(msg.senderId);
+      const isPrivateChat = chatId === String(msg.sender?.id);
       
       if (!isPrivateChat) {
         await msg.edit({
-          text: `🔒 <b>权限限制</b>\n\n奖品仓库管理只能在私聊或收藏夹中进行\n\n💡 请私聊机器人或在收藏夹中使用此功能`,
-          parseMode: "html"
+          text: html(`🔒 <b>权限限制</b>\n\n奖品仓库管理只能在私聊或收藏夹中进行\n\n💡 请私聊机器人或在收藏夹中使用此功能`)
         });
         return;
       }
@@ -1420,19 +1450,17 @@ const lottery = async (msg: Api.Message) => {
       if (prizeCmd === "create") {
         const warehouseName = args[2] || "default";
         
-        await msg.edit({ text: "🔄 <b>创建仓库...</b>", parseMode: "html" });
+        await msg.edit({ text: html("🔄 <b>创建仓库...</b>") });
         
         const isCreated = createPrizeWarehouse(warehouseName);
         
         if (isCreated) {
           await msg.edit({
-            text: `✅ <b>奖品仓库已创建</b>\n\n仓库名称: ${codeTag(warehouseName)}`,
-            parseMode: "html"
+            text: html(`✅ <b>奖品仓库已创建</b>\n\n仓库名称: ${codeTag(warehouseName)}`)
           });
         } else {
           await msg.edit({
-            text: `⚠️ <b>仓库已存在</b>\n\n仓库 ${codeTag(warehouseName)} 已经存在，无需重复创建\n\n💡 可以使用 <code>${mainPrefix}lottery prize add ${warehouseName} [奖品内容] [数量]</code> 添加奖品`,
-            parseMode: "html"
+            text: html(`⚠️ <b>仓库已存在</b>\n\n仓库 ${codeTag(warehouseName)} 已经存在，无需重复创建\n\n💡 可以使用 <code>${mainPrefix}lottery prize add ${warehouseName} [奖品内容] [数量]</code> 添加奖品`)
           });
         }
         return;
@@ -1446,8 +1474,7 @@ const lottery = async (msg: Api.Message) => {
         
         if (!match) {
           await msg.edit({
-            text: `❌ <b>错误:</b> 参数格式错误\n\n<b>用法:</b> <code>${mainPrefix}lottery prize add [仓库名] [奖品内容] [数量]</code>`,
-            parseMode: "html"
+            text: html(`❌ <b>错误:</b> 参数格式错误\n\n<b>用法:</b> <code>${mainPrefix}lottery prize add [仓库名] [奖品内容] [数量]</code>`)
           });
           return;
         }
@@ -1456,12 +1483,11 @@ const lottery = async (msg: Api.Message) => {
         const prizeText = match[2];
         const stock = parseInt(match[3]) || 1;
 
-        await msg.edit({ text: "🔄 <b>添加奖品...</b>", parseMode: "html" });
+        await msg.edit({ text: html("🔄 <b>添加奖品...</b>") });
         
         addPrizeToWarehouse(warehouseName, prizeText, stock);
         await msg.edit({
-          text: `✅ <b>奖品已添加</b>\n\n仓库: ${codeTag(warehouseName)}\n奖品: ${htmlEscape(prizeText)}\n数量: ${stock}`,
-          parseMode: "html"
+          text: html(`✅ <b>奖品已添加</b>\n\n仓库: ${codeTag(warehouseName)}\n奖品: ${htmlEscape(prizeText)}\n数量: ${stock}`)
         });
         return;
       }
@@ -1469,14 +1495,13 @@ const lottery = async (msg: Api.Message) => {
       if (prizeCmd === "list") {
         const warehouseName = args[2] || "default";
         
-        await msg.edit({ text: "🔄 <b>获取奖品列表...</b>", parseMode: "html" });
+        await msg.edit({ text: html("🔄 <b>获取奖品列表...</b>") });
         
         const prizes = getWarehousePrizes(warehouseName);
         
         if (prizes.length === 0) {
           await msg.edit({
-            text: `📦 <b>奖品仓库</b>\n\n仓库 ${codeTag(warehouseName)} 暂无奖品`,
-            parseMode: "html"
+            text: html(`📦 <b>奖品仓库</b>\n\n仓库 ${codeTag(warehouseName)} 暂无奖品`)
           });
           return;
         }
@@ -1486,8 +1511,7 @@ const lottery = async (msg: Api.Message) => {
         ).join("\n");
 
         await msg.edit({
-          text: `📦 <b>奖品仓库: ${htmlEscape(warehouseName)}</b>\n\n${prizeList}`,
-          parseMode: "html"
+          text: html(`📦 <b>奖品仓库: ${htmlEscape(warehouseName)}</b>\n\n${prizeList}`)
         });
         return;
       }
@@ -1497,31 +1521,27 @@ const lottery = async (msg: Api.Message) => {
         
         if (!target) {
           await msg.edit({
-            text: `❌ <b>错误:</b> 参数不足\n\n<b>用法:</b>\n<code>${mainPrefix}lottery prize clear [仓库名]</code> - 清空指定仓库\n<code>${mainPrefix}lottery prize clear all</code> - 清空所有仓库`,
-            parseMode: "html"
+            text: html(`❌ <b>错误:</b> 参数不足\n\n<b>用法:</b>\n<code>${mainPrefix}lottery prize clear [仓库名]</code> - 清空指定仓库\n<code>${mainPrefix}lottery prize clear all</code> - 清空所有仓库`)
           });
           return;
         }
 
-        await msg.edit({ text: "🔄 <b>清空仓库...</b>", parseMode: "html" });
+        await msg.edit({ text: html("🔄 <b>清空仓库...</b>") });
         
         if (target.toLowerCase() === "all") {
           const deletedCount = clearAllWarehouses();
           await msg.edit({
-            text: `✅ <b>清空完成</b>\n\n已清空所有奖品仓库\n删除了 ${deletedCount} 个奖品`,
-            parseMode: "html"
+            text: html(`✅ <b>清空完成</b>\n\n已清空所有奖品仓库\n删除了 ${deletedCount} 个奖品`)
           });
         } else {
           const deletedCount = clearWarehouse(target);
           if (deletedCount > 0) {
             await msg.edit({
-              text: `✅ <b>清空完成</b>\n\n仓库 ${codeTag(target)} 已清空\n删除了 ${deletedCount} 个奖品`,
-              parseMode: "html"
+              text: html(`✅ <b>清空完成</b>\n\n仓库 ${codeTag(target)} 已清空\n删除了 ${deletedCount} 个奖品`)
             });
           } else {
             await msg.edit({
-              text: `❌ <b>错误:</b> 仓库 ${codeTag(target)} 不存在或已为空`,
-              parseMode: "html"
+              text: html(`❌ <b>错误:</b> 仓库 ${codeTag(target)} 不存在或已为空`)
             });
           }
         }
@@ -1531,13 +1551,12 @@ const lottery = async (msg: Api.Message) => {
 
     // Winners management
     if (sub === "winners") {
-      await msg.edit({ text: "🔄 <b>获取中奖名单...</b>", parseMode: "html" });
+      await msg.edit({ text: html("🔄 <b>获取中奖名单...</b>") });
       
       const activeLottery = getActiveLottery(chatId);
       if (!activeLottery) {
         await msg.edit({
-          text: `❌ <b>错误:</b> 当前群组没有抽奖活动`,
-          parseMode: "html"
+          text: html(`❌ <b>错误:</b> 当前群组没有抽奖活动`)
         });
         return;
       }
@@ -1545,8 +1564,7 @@ const lottery = async (msg: Api.Message) => {
       const winners = getLotteryWinners(activeLottery.id);
       if (winners.length === 0) {
         await msg.edit({
-          text: `🏆 <b>中奖名单</b>\n\n暂无中奖用户`,
-          parseMode: "html"
+          text: html(`🏆 <b>中奖名单</b>\n\n暂无中奖用户`)
         });
         return;
       }
@@ -1561,21 +1579,19 @@ const lottery = async (msg: Api.Message) => {
       }).join("\n");
 
       await msg.edit({
-        text: `🏆 <b>中奖名单</b>\n\n${winnerList}\n\n✅ 已发放 | ⏳ 待领取 | ❌ 已过期`,
-        parseMode: "html"
+        text: html(`🏆 <b>中奖名单</b>\n\n${winnerList}\n\n✅ 已发放 | ⏳ 待领取 | ❌ 已过期`)
       });
       return;
     }
 
     // Participants list
     if (sub === "list") {
-      await msg.edit({ text: "🔄 <b>获取参与名单...</b>", parseMode: "html" });
+      await msg.edit({ text: html("🔄 <b>获取参与名单...</b>") });
       
       const activeLottery = getActiveLottery(chatId);
       if (!activeLottery) {
         await msg.edit({
-          text: `❌ <b>错误:</b> 当前群组没有抽奖活动`,
-          parseMode: "html"
+          text: html(`❌ <b>错误:</b> 当前群组没有抽奖活动`)
         });
         return;
       }
@@ -1585,8 +1601,7 @@ const lottery = async (msg: Api.Message) => {
       
       if (currentCount === 0) {
         await msg.edit({
-          text: `👥 <b>参与名单</b>\n\n🎯 <b>活动:</b> ${htmlEscape(activeLottery.title)}\n📊 <b>进度:</b> ${currentCount}/${activeLottery.max_participants} 人\n\n暂无参与用户`,
-          parseMode: "html"
+          text: html(`👥 <b>参与名单</b>\n\n🎯 <b>活动:</b> ${htmlEscape(activeLottery.title)}\n📊 <b>进度:</b> ${currentCount}/${activeLottery.max_participants} 人\n\n暂无参与用户`)
         });
         return;
       }
@@ -1609,18 +1624,18 @@ const lottery = async (msg: Api.Message) => {
           const fileName = `参与名单_${activeLottery.title}_${new Date().toISOString().slice(0, 10)}.txt`;
           
           await msg.edit({
-            text: `👥 <b>参与名单</b>\n\n🎯 <b>活动:</b> ${htmlEscape(activeLottery.title)}\n📊 <b>进度:</b> ${currentCount}/${activeLottery.max_participants} 人\n\n📄 <b>参与用户过多，已生成文件发送</b>`,
-            parseMode: "html"
+            text: html(`👥 <b>参与名单</b>\n\n🎯 <b>活动:</b> ${htmlEscape(activeLottery.title)}\n📊 <b>进度:</b> ${currentCount}/${activeLottery.max_participants} 人\n\n📄 <b>参与用户过多，已生成文件发送</b>`)
           });
 
           // Send as file - use simpler approach
-          await msg.client?.sendMessage(chatId, {
+          await client.sendMedia(chatId, {
+            type: "document",
             file: txtContent,
-            message: `📋 <b>完整参与名单</b>\n\n🎯 活动: ${htmlEscape(activeLottery.title)}\n👥 总计: ${currentCount} 人`,
-            parseMode: "html"
+            fileName,
+            caption: html(`📋 <b>完整参与名单</b>\n\n🎯 活动: ${htmlEscape(activeLottery.title)}\n👥 总计: ${currentCount} 人`)
           });
-        } catch (error) {
-          console.error("Failed to send participants file:", error);
+        } catch (error: unknown) {
+          logger.error("Failed to send participants file:", error);
           // Fallback to truncated list
           const displayList = participants.slice(0, 30).map((p, index) => {
             const displayName = p.username ? `@${p.username}` : 
@@ -1629,15 +1644,13 @@ const lottery = async (msg: Api.Message) => {
           }).join("\n");
           
           await msg.edit({
-            text: `👥 <b>参与名单</b>\n\n🎯 <b>活动:</b> ${htmlEscape(activeLottery.title)}\n📊 <b>进度:</b> ${currentCount}/${activeLottery.max_participants} 人\n\n${displayList}\n\n... 还有 ${currentCount - 30} 人（文件发送失败，仅显示前30人）`,
-            parseMode: "html"
+            text: html(`👥 <b>参与名单</b>\n\n🎯 <b>活动:</b> ${htmlEscape(activeLottery.title)}\n📊 <b>进度:</b> ${currentCount}/${activeLottery.max_participants} 人\n\n${displayList}\n\n... 还有 ${currentCount - 30} 人（文件发送失败，仅显示前30人）`)
           });
         }
       } else {
         // Send as regular message
         await msg.edit({
-          text: `👥 <b>参与名单</b>\n\n🎯 <b>活动:</b> ${htmlEscape(activeLottery.title)}\n📊 <b>进度:</b> ${currentCount}/${activeLottery.max_participants} 人\n\n${fullList.split('\n').map(line => htmlEscape(line)).join('\n')}`,
-          parseMode: "html"
+          text: html(`👥 <b>参与名单</b>\n\n🎯 <b>活动:</b> ${htmlEscape(activeLottery.title)}\n📊 <b>进度:</b> ${currentCount}/${activeLottery.max_participants} 人\n\n${fullList.split('\n').map(line => htmlEscape(line)).join("\n")}`)
         });
       }
       return;
@@ -1647,19 +1660,17 @@ const lottery = async (msg: Api.Message) => {
     if (sub === "claim") {
       if (args.length < 2) {
         await msg.edit({
-          text: `❌ <b>错误:</b> 参数错误\n\n用法: <code>${mainPrefix}lottery claim [用户ID或@用户名]</code>`,
-          parseMode: "html"
+          text: html(`❌ <b>错误:</b> 参数错误\n\n用法: <code>${mainPrefix}lottery claim [用户ID或@用户名]</code>`)
         });
         return;
       }
 
-      await msg.edit({ text: "🔄 <b>查找用户...</b>", parseMode: "html" });
+      await msg.edit({ text: html("🔄 <b>查找用户...</b>") });
       
       const activeLottery = getActiveLottery(chatId);
       if (!activeLottery) {
         await msg.edit({
-          text: `❌ <b>错误:</b> 当前群组没有抽奖活动`,
-          parseMode: "html"
+          text: html(`❌ <b>错误:</b> 当前群组没有抽奖活动`)
         });
         return;
       }
@@ -1672,26 +1683,23 @@ const lottery = async (msg: Api.Message) => {
         const winner = winners.find(w => w.username === targetUserId);
         if (!winner) {
           await msg.edit({
-            text: `❌ <b>错误:</b> 未找到用户名为 ${htmlEscape(`@${targetUserId}`)} 的中奖用户`,
-            parseMode: "html"
+            text: html(`❌ <b>错误:</b> 未找到用户名为 @${htmlEscape(targetUserId)} 的中奖用户`)
           });
           return;
         }
         targetUserId = winner.user_id;
       }
 
-      await msg.edit({ text: "🔄 <b>更新状态...</b>", parseMode: "html" });
+      await msg.edit({ text: html("🔄 <b>更新状态...</b>") });
       
       const success = updateWinnerStatusByUser(activeLottery.id, targetUserId, PrizeStatus.SENT);
       if (success) {
         await msg.edit({
-          text: `✅ <b>操作成功</b>\n\n已将用户标记为已领奖`,
-          parseMode: "html"
+          text: html(`✅ <b>操作成功</b>\n\n已将用户标记为已领奖`)
         });
       } else {
         await msg.edit({
-          text: `❌ <b>错误:</b> 未找到该中奖用户或状态更新失败`,
-          parseMode: "html"
+          text: html(`❌ <b>错误:</b> 未找到该中奖用户或状态更新失败`)
         });
       }
       return;
@@ -1699,35 +1707,34 @@ const lottery = async (msg: Api.Message) => {
 
     // Process expired claims
     if (sub === "expire") {
-      await msg.edit({ text: "🔄 <b>处理过期奖品...</b>", parseMode: "html" });
+      await msg.edit({ text: html("🔄 <b>处理过期奖品...</b>") });
       
       const activeLottery = getActiveLottery(chatId);
       if (!activeLottery) {
         await msg.edit({
-          text: `❌ <b>错误:</b> 当前群组没有抽奖活动`,
-          parseMode: "html"
+          text: html(`❌ <b>错误:</b> 当前群组没有抽奖活动`)
         });
         return;
       }
 
       const expiredCount = expireOldClaims();
       await msg.edit({
-        text: `✅ <b>过期处理完成</b>\n\n已处理 ${expiredCount} 个过期未领奖品`,
-        parseMode: "html"
+        text: html(`✅ <b>过期处理完成</b>\n\n已处理 ${expiredCount} 个过期未领奖品`)
       });
       return;
     }
 
     await msg.edit({
-      text: `❌ <b>未知子命令:</b> <code>${htmlEscape(sub)}</code>\n\n💡 使用 <code>${mainPrefix}lottery help</code> 查看完整帮助`,
-      parseMode: "html"
+      text: html(
+        `❌ <b>未知子命令:</b> <code>${htmlEscape(sub)}</code>\n\n💡 使用 <code>${mainPrefix}lottery help</code> 查看完整帮助`,
+      ),
     });
 
-  } catch (error: any) {
-    console.error("[lottery] 插件执行失败:", error);
+  } catch (error: unknown) {
+    logger.error("[lottery] 插件执行失败:", error);
+    const errMsg = error instanceof Error ? error.message : String(error);
     await msg.edit({
-      text: `❌ <b>错误:</b> ${htmlEscape(error.message || String(error))}`,
-      parseMode: "html"
+      text: html(`❌ <b>错误:</b> ${htmlEscape(errMsg)}`)
     });
   }
 };
@@ -1741,19 +1748,64 @@ class LotteryPlugin extends Plugin {
     if (db) {
       try {
         db.close();
-      } catch {}
-      db = null as any;
+      } catch (e: unknown) { logger.warn('操作失败', e) }
+      db = null as unknown as typeof db;
     }
   }
 
   description: string = help_text;
   
-  cmdHandlers: Record<string, (msg: Api.Message) => Promise<void>> = {
+  cmdHandlers: Record<string, (msg: MessageContext) => Promise<void>> = {
     lottery,
   };
   
-  listenMessageHandler?: ((msg: Api.Message) => Promise<void>) | undefined =
-    handleEnhancedLotteryJoin;
+  listenMessageHandler?: ((msg: MessageContext) => Promise<void>) | undefined =
+    handleEnhancedLotteryJoin as unknown as (msg: MessageContext) => Promise<void>;
 }
+
+
+  // Panel Settings Adapter
+  panelAdapter: PanelSettingsAdapter = {
+    id: "lottery",
+    title: "抽奖",
+    description: "抽奖配置",
+    category: "插件配置",
+    icon: "🎰",
+    getSchema: (): PanelSettingField[] => [
+      {
+            "key": "minUsers",
+            "label": "最少参与人数",
+            "type": "number",
+            "min": 2,
+            "max": 100,
+            "default": 2
+      },
+      {
+            "key": "maxUsers",
+            "label": "最多参与人数",
+            "type": "number",
+            "min": 2,
+            "max": 1000,
+            "default": 100
+      },
+      {
+            "key": "timeout",
+            "label": "等待时间 (秒)",
+            "type": "number",
+            "min": 10,
+            "max": 600,
+            "default": 60
+      }
+],
+    getValues: async (): Promise<Record<string, unknown>> => {
+      const db = await JSONFilePreset<LotteryConfig>(path.join(createDirectoryInAssets("lottery"), "config.json"), {} as any);
+      return db.data as Record<string, unknown>;
+    },
+    setValues: async (patch: Record<string, unknown>): Promise<void> => {
+      const db = await JSONFilePreset<LotteryConfig>(path.join(createDirectoryInAssets("lottery"), "config.json"), {} as any);
+      Object.assign(db.data, patch);
+      await db.write();
+    },
+  };
 
 export default new LotteryPlugin();

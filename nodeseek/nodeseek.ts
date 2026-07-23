@@ -19,9 +19,10 @@
  *   多触发点抽签的折中方案。
  */
 
-import { Plugin } from "@utils/pluginBase";
-import { Api } from "teleproto";
-import { TelegramClient } from "teleproto";
+import { Plugin, type PanelSettingsAdapter, type PanelSettingField, type PanelFieldType } from "@utils/pluginBase";
+import type { MessageContext } from "@mtcute/dispatcher";
+import type { TelegramClient } from "@mtcute/node";
+import { thtml } from "@mtcute/html-parser";
 import { createDirectoryInAssets } from "@utils/pathHelpers";
 import { Low } from "lowdb";
 import { JSONFilePreset } from "lowdb/node";
@@ -85,6 +86,20 @@ type SignResult = {
   diag?: string; // 失败时的诊断信息：服务器标识 + 响应片段，用于区分 WAF 拦截 vs 真实业务错误
 };
 
+type AttendanceResponse = {
+  code?: number;
+  retcode?: number;
+  status?: number;
+  success?: boolean;
+  message?: string;
+  msg?: string;
+  reason?: string;
+};
+
+function getErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
 function looksLikeWafChallenge(serverHeader: string, bodyText: string): boolean {
   const s = (serverHeader || "").toLowerCase();
   const b = (bodyText || "").toLowerCase();
@@ -134,9 +149,13 @@ async function signInOnce(cookie: string): Promise<SignResult> {
       };
     }
 
-    let data: any = {};
+    let data: AttendanceResponse = {};
     try {
-      data = JSON.parse(rawBody);
+      const parsed: unknown = JSON.parse(rawBody);
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+        throw new Error("响应不是 JSON 对象");
+      }
+      data = parsed as AttendanceResponse;
     } catch {
       // 200 但响应不是合法 JSON：可能是 WAF 挑战页或网关错误
       const isWaf = looksLikeWafChallenge(serverHeader, rawBody);
@@ -168,8 +187,8 @@ async function signInOnce(cookie: string): Promise<SignResult> {
       msg: msg || `签到失败（业务码 ${typeof code === "number" ? code : "未知"}）`,
       diag: `server=${serverHeader || "未知"} | body片段: ${rawBody.replace(/\s+/g, " ").trim().slice(0, 200)}`,
     };
-  } catch (e: any) {
-    return { result: "error", msg: e?.message || "网络请求出错" };
+  } catch (error: unknown) {
+    return { result: "error", msg: getErrorMessage(error) || "网络请求出错" };
   }
 }
 
@@ -219,14 +238,14 @@ class NodeSeekPlugin extends Plugin {
   description = "NodeSeek 论坛每日签到，领取鸡腿";
 
   cmdHandlers = {
-    nodeseek: async (msg: Api.Message) => {
+    nodeseek: async (msg: MessageContext) => {
       const args = msg.text?.trim().split(/\s+/).slice(1) || [];
       const sub = (args[0] || "").toLowerCase();
       const db = await getDB();
 
       try {
         if (!sub || sub === "help") {
-          await msg.edit({ text: HELP_TEXT, parseMode: "html" });
+          await msg.edit({ text: thtml(HELP_TEXT) });
           return;
         }
 
@@ -234,8 +253,7 @@ class NodeSeekPlugin extends Plugin {
           const cookie = msg.text?.trim().split(/\s+/).slice(2).join(" ") || "";
           if (!cookie || cookie.length < 20) {
             await msg.edit({
-              text: "❌ 请提供有效的 Cookie，例如：\n<code>.nodeseek set ns_xxx=xxx; other=xxx</code>",
-              parseMode: "html",
+              text: thtml("❌ 请提供有效的 Cookie，例如：\n<code>.nodeseek set ns_xxx=xxx; other=xxx</code>"),
             });
             return;
           }
@@ -243,8 +261,7 @@ class NodeSeekPlugin extends Plugin {
           db.data.lastDoneDate = "";
           await db.write();
           await msg.edit({
-            text: "🍪 Cookie 已保存，可以用 <code>.nodeseek now</code> 测试签到了",
-            parseMode: "html",
+            text: thtml("🍪 Cookie 已保存，可以用 <code>.nodeseek now</code> 测试签到了"),
           });
           return;
         }
@@ -252,8 +269,7 @@ class NodeSeekPlugin extends Plugin {
         if (sub === "now") {
           if (!db.data.cookie) {
             await msg.edit({
-              text: "⚠️ 还没有设置 Cookie，先用 <code>.nodeseek set &lt;cookie&gt;</code> 设置",
-              parseMode: "html",
+              text: thtml("⚠️ 还没有设置 Cookie，先用 <code>.nodeseek set &lt;cookie&gt;</code> 设置"),
             });
             return;
           }
@@ -266,8 +282,7 @@ class NodeSeekPlugin extends Plugin {
           await db.write();
           const diagLine = info.diag ? `\n\n<code>${info.diag.replace(/</g, "&lt;").replace(/>/g, "&gt;")}</code>` : "";
           await msg.edit({
-            text: `${EMOJI[info.result]} <b>${TITLE[info.result]}</b>\n${info.msg}${diagLine}`,
-            parseMode: "html",
+            text: thtml(`${EMOJI[info.result]} <b>${TITLE[info.result]}</b>\n${info.msg}${diagLine}`),
           });
           return;
         }
@@ -287,8 +302,7 @@ class NodeSeekPlugin extends Plugin {
           const onOff = (args[1] || "").toLowerCase();
           if (onOff !== "on" && onOff !== "off") {
             await msg.edit({
-              text: "用法：<code>.nodeseek auto on</code> 或 <code>.nodeseek auto off</code>",
-              parseMode: "html",
+              text: thtml("用法：<code>.nodeseek auto on</code> 或 <code>.nodeseek auto off</code>"),
             });
             return;
           }
@@ -300,9 +314,9 @@ class NodeSeekPlugin extends Plugin {
           return;
         }
 
-        await msg.edit({ text: HELP_TEXT, parseMode: "html" });
-      } catch (error: any) {
-        await msg.edit({ text: `❌ 出错了: ${error?.message || error}` });
+        await msg.edit({ text: thtml(HELP_TEXT) });
+      } catch (error: unknown) {
+        await msg.edit({ text: `❌ 出错了: ${getErrorMessage(error)}` });
       }
     },
   };
@@ -332,9 +346,7 @@ class NodeSeekPlugin extends Plugin {
         await db.write();
 
         try {
-          await client.sendMessage("me", {
-            message: `${EMOJI[info.result]} NodeSeek ${TITLE[info.result]}\n${info.msg}`,
-          });
+          await client.sendText("me", `${EMOJI[info.result]} NodeSeek ${TITLE[info.result]}\n${info.msg}`);
         } catch (e) {
           // 发送通知失败不影响签到结果本身
         }
@@ -342,5 +354,53 @@ class NodeSeekPlugin extends Plugin {
     },
   };
 }
+
+
+  // Panel Settings Adapter
+  panelAdapter: PanelSettingsAdapter = {
+    id: "nodeseek",
+    title: "NodeSeek 通知",
+    description: "NodeSeek 论坛通知配置",
+    category: "插件配置",
+    icon: "📢",
+    getSchema: (): PanelSettingField[] => [
+      {
+            "key": "cookie",
+            "label": "Cookie",
+            "type": "password",
+            "secret": true
+      },
+      {
+            "key": "chatId",
+            "label": "推送 Chat ID",
+            "type": "string"
+      },
+      {
+            "key": "interval",
+            "label": "检查间隔 (分钟)",
+            "type": "number",
+            "min": 1,
+            "max": 1440,
+            "default": 5
+      },
+      {
+            "key": "maxItems",
+            "label": "最大推送条数",
+            "type": "number",
+            "min": 1,
+            "max": 20,
+            "default": 5
+      }
+],
+    getValues: async (): Promise<Record<string, unknown>> => {
+      const db = await JSONFilePreset<any>(path.join(createDirectoryInAssets("nodeseek"), "config.json"), {} as any);
+      return db.data as Record<string, unknown>;
+    },
+    setValues: async (patch: Record<string, unknown>): Promise<void> => {
+      const db = await JSONFilePreset<any>(path.join(createDirectoryInAssets("nodeseek"), "config.json"), {} as any);
+      Object.assign(db.data, patch);
+      await db.write();
+    },
+  };
 
 export default new NodeSeekPlugin();

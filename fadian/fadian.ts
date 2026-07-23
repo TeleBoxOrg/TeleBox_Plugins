@@ -1,13 +1,15 @@
-import { Plugin } from "@utils/pluginBase";
+import { Plugin, type PanelSettingsAdapter, type PanelSettingField, type PanelFieldType } from "@utils/pluginBase";
+import type { MessageContext } from "@mtcute/dispatcher";
+import { thtml as html } from "@mtcute/html-parser";
 import { getGlobalClient } from "@utils/runtimeManager";
 import { getPrefixes } from "@utils/pluginManager";
 import { createDirectoryInAssets } from "@utils/pathHelpers";
-import { Api } from "teleproto";
 import axios from "axios";
 import * as fs from "fs";
 import * as path from "path";
 import { safeGetReplyMessage } from "@utils/safeGetMessages";
-
+import { logger } from "@utils/logger";
+import { getErrorMessage } from "@utils/errorHelpers";
 import { htmlEscape } from "@utils/htmlEscape";
 
 const prefixes = getPrefixes();
@@ -45,7 +47,7 @@ function readJsonArray(file: string): string[] {
     const raw = fs.readFileSync(file, "utf-8");
     const data = JSON.parse(raw);
     return Array.isArray(data) ? data : [];
-  } catch {
+  } catch (_e: unknown) {
     return [];
   }
 }
@@ -62,8 +64,8 @@ async function downloadConfigFile(filename: string): Promise<void> {
 
     // 更新缓存
     configCache[filename] = Array.isArray(response.data) ? response.data : [];
-  } catch (error) {
-    console.error(`下载配置文件失败: ${filename}`, error);
+  } catch (error: unknown) {
+    logger.error(`下载配置文件失败: ${filename}`, error);
   }
 }
 
@@ -126,10 +128,10 @@ class FadianPlugin extends Plugin {
   description: string = `从远程配置随机生成发电语录\n\n${help_text}`;
 
   cmdHandlers = {
-    fadian: async (msg: Api.Message) => {
+    fadian: async (msg: MessageContext) => {
       const client = await getGlobalClient();
       if (!client) {
-        await msg.edit({ text: "❌ 客户端未初始化", parseMode: "html" });
+        await msg.edit({ text: html`❌ 客户端未初始化` });
         return;
       }
 
@@ -142,7 +144,7 @@ class FadianPlugin extends Plugin {
       try {
         // 无参数时显示帮助
         if (!sub) {
-          await msg.edit({ text: help_text, parseMode: "html" });
+          await msg.edit({ text: html(help_text) });
           return;
         }
 
@@ -154,7 +156,7 @@ class FadianPlugin extends Plugin {
             await this.showSubCommandHelp(subCmd, msg);
           } else {
             // 显示总帮助
-            await msg.edit({ text: help_text, parseMode: "html" });
+            await msg.edit({ text: html(help_text) });
           }
           return;
         }
@@ -183,7 +185,7 @@ class FadianPlugin extends Plugin {
             if (!targetName) {
               const replyMsg = await safeGetReplyMessage(msg);
               if (replyMsg) {
-                const sender = (await replyMsg.sender) as any;
+                const sender = replyMsg.sender as { firstName?: string; lastName?: string; username?: string; title?: string } | undefined;
                 if (sender) {
                   const firstName = sender.firstName || "";
                   const lastName = sender.lastName || "";
@@ -204,52 +206,46 @@ class FadianPlugin extends Plugin {
 
             if (!targetName) {
               await msg.edit({
-                text: `❌ <b>参数不足</b>\n\n💡 使用方法：\n1. <code>${mainPrefix}fadian fd &lt;名字&gt;</code>\n2. 回复某人消息后使用 <code>${mainPrefix}fadian fd</code>\n\n示例：<code>${mainPrefix}fadian fd 张三</code>`,
-                parseMode: "html",
+                text: html`❌ <b>参数不足</b>\n\n💡 使用方法：\n1. <code>${mainPrefix}fadian fd &lt;名字&gt;</code>\n2. 回复某人消息后使用 <code>${mainPrefix}fadian fd</code>\n\n示例：<code>${mainPrefix}fadian fd 张三</code>`,
               });
               return;
             }
 
             const name = filterInput(targetName);
-            await msg.edit({ text: "🔄 生成心理语录中...", parseMode: "html" });
+            await msg.edit({ text: html`🔄 生成心理语录中...` });
             const res = await getPopSentence(
               configFiles.psycho,
               ["<name>"],
               [htmlEscape(name)]
             );
             await msg.edit({
-              text: res ? htmlEscape(res) : "❌ 数据为空",
-              parseMode: "html",
+              text: res ? html(htmlEscape(res)) : html`❌ 数据为空`,
             });
             break;
           }
           case "tg": {
-            await msg.edit({ text: "🔄 生成TG语录中...", parseMode: "html" });
+            await msg.edit({ text: html`🔄 生成TG语录中...` });
             const res = await getPopSentence(configFiles.tg);
             await msg.edit({
-              text: res ? htmlEscape(res) : "❌ 数据为空",
-              parseMode: "html",
+              text: res ? html(htmlEscape(res)) : html`❌ 数据为空`,
             });
             break;
           }
           case "kfc": {
-            await msg.edit({ text: "🔄 生成KFC语录中...", parseMode: "html" });
+            await msg.edit({ text: html`🔄 生成KFC语录中...` });
             const res = await getPopSentence(configFiles.kfc);
             await msg.edit({
-              text: res ? htmlEscape(res) : "❌ 数据为空",
-              parseMode: "html",
+              text: res ? html(htmlEscape(res)) : html`❌ 数据为空`,
             });
             break;
           }
           case "wyy": {
             await msg.edit({
-              text: "🔄 生成网抑云语录中...",
-              parseMode: "html",
+              text: html`🔄 生成网抑云语录中...`,
             });
             const res = await getPopSentence(configFiles.wyy);
             await msg.edit({
-              text: res ? htmlEscape(res) : "❌ 数据为空",
-              parseMode: "html",
+              text: res ? html(htmlEscape(res)) : html`❌ 数据为空`,
             });
             break;
           }
@@ -258,58 +254,53 @@ class FadianPlugin extends Plugin {
             const b = filterInput((lines[2] || args[2] || "").trim());
             if (!a || !b) {
               await msg.edit({
-                text: `❌ <b>参数不足</b>\n\n💡 使用方法：\n1. <code>${mainPrefix}fadian cp 名字1 名字2</code>\n2. 或者：<code>${mainPrefix}fadian cp</code>\n第二行写第一个名字\n第三行写第二个名字`,
-                parseMode: "html",
+                text: html`❌ <b>参数不足</b>\n\n💡 使用方法：\n1. <code>${mainPrefix}fadian cp 名字1 名字2</code>\n2. 或者：<code>${mainPrefix}fadian cp</code>\n第二行写第一个名字\n第三行写第二个名字`,
               });
               return;
             }
-            await msg.edit({ text: "🔄 生成CP语录中...", parseMode: "html" });
+            await msg.edit({ text: html`🔄 生成CP语录中...` });
             const res = await getPopSentence(
               configFiles.cp,
               ["<name1>", "<name2>"],
               [htmlEscape(a), htmlEscape(b)]
             );
             await msg.edit({
-              text: res ? htmlEscape(res) : "❌ 数据为空",
-              parseMode: "html",
+              text: res ? html(htmlEscape(res)) : html`❌ 数据为空`,
             });
             break;
           }
           default:
             await msg.edit({
-              text: `❌ <b>未知子命令:</b> <code>${htmlEscape(
+              text: html`❌ <b>未知子命令:</b> <code>${htmlEscape(
                 sub
               )}</code>`,
-              parseMode: "html",
             });
         }
-      } catch (error: any) {
-        console.error("[fadian] 插件执行失败:", error);
+      } catch (error: unknown) {
+        logger.error("[fadian] 插件执行失败:", error);
+        const errMsg = getErrorMessage(error);
 
         // 处理特定错误类型
-        if (error.message?.includes("FLOOD_WAIT")) {
-          const waitTime = parseInt(error.message.match(/\d+/)?.[0] || "60");
+        if (errMsg.includes("FLOOD_WAIT")) {
+          const waitTime = parseInt(errMsg.match(/\d+/)?.[0] || "60");
           await msg.edit({
-            text: `⏳ <b>请求过于频繁</b>\n\n需要等待 ${waitTime} 秒后重试`,
-            parseMode: "html",
+            text: html`⏳ <b>请求过于频繁</b>\n\n需要等待 ${waitTime} 秒后重试`,
           });
           return;
         }
 
-        if (error.message?.includes("MESSAGE_TOO_LONG")) {
+        if (errMsg.includes("MESSAGE_TOO_LONG")) {
           await msg.edit({
-            text: "❌ <b>消息过长</b>\n\n请减少内容长度或使用文件发送",
-            parseMode: "html",
+            text: html`❌ <b>消息过长</b>\n\n请减少内容长度或使用文件发送`,
           });
           return;
         }
 
         // 通用错误处理
         await msg.edit({
-          text: `❌ <b>插件执行失败:</b> ${htmlEscape(
-            error.message || "未知错误"
+          text: html`❌ <b>插件执行失败:</b> ${htmlEscape(
+            errMsg || "未知错误"
           )}`,
-          parseMode: "html",
         });
       }
     },
@@ -317,7 +308,7 @@ class FadianPlugin extends Plugin {
 
   private async showSubCommandHelp(
     subCmd: string,
-    msg: Api.Message
+    msg: MessageContext
   ): Promise<void> {
     const helpTexts: { [key: string]: string } = {
       fd: `📖 <b>心理语录命令帮助</b>\n\n<code>${mainPrefix}fadian fd [名字]</code> - 生成心理语录\n\n<b>使用方式：</b>\n1. 直接指定名字：<code>${mainPrefix}fadian fd 张三</code>\n2. 回复消息后自动获取对方昵称：<code>${mainPrefix}fadian fd</code>`,
@@ -329,12 +320,12 @@ class FadianPlugin extends Plugin {
     };
 
     const helpText = helpTexts[subCmd] || help_text;
-    await msg.edit({ text: helpText, parseMode: "html" });
+    await msg.edit({ text: html(helpText) });
   }
 
-  private async clearCache(msg: Api.Message): Promise<void> {
+  private async clearCache(msg: MessageContext): Promise<void> {
     try {
-      await msg.edit({ text: "🔄 清理缓存中...", parseMode: "html" });
+      await msg.edit({ text: html`🔄 清理缓存中...` });
 
       // 清理本地缓存目录
       if (fs.existsSync(ASSET_PATH)) {
@@ -345,19 +336,51 @@ class FadianPlugin extends Plugin {
       lastUpdateCheck = 0;
 
       await msg.edit({
-        text: "🧹 已清理缓存，下次使用时将重新下载配置",
-        parseMode: "html",
+        text: html`🧹 已清理缓存，下次使用时将重新下载配置`,
       });
-    } catch (error: any) {
-      console.error("[fadian] 清理缓存失败:", error);
+    } catch (error: unknown) {
+      logger.error("[fadian] 清理缓存失败:", error);
       await msg.edit({
-        text: `❌ <b>清理缓存失败:</b> ${htmlEscape(
-          error?.message || "未知错误"
+        text: html`❌ <b>清理缓存失败:</b> ${htmlEscape(
+          getErrorMessage(error) || "未知错误"
         )}`,
-        parseMode: "html",
       });
     }
   }
 }
+
+
+  // Panel Settings Adapter
+  panelAdapter: PanelSettingsAdapter = {
+    id: "fadian",
+    title: "发电",
+    description: "粉丝发电配置",
+    category: "插件配置",
+    icon: "⚡",
+    getSchema: (): PanelSettingField[] => [
+      {
+            "key": "enabled",
+            "label": "启用",
+            "type": "boolean"
+      },
+      {
+            "key": "cooldown",
+            "label": "冷却时间 (分钟)",
+            "type": "number",
+            "min": 1,
+            "max": 1440,
+            "default": 60
+      }
+],
+    getValues: async (): Promise<Record<string, unknown>> => {
+      const db = await JSONFilePreset<any>(path.join(createDirectoryInAssets("fadian"), "config.json"), {} as any);
+      return db.data as Record<string, unknown>;
+    },
+    setValues: async (patch: Record<string, unknown>): Promise<void> => {
+      const db = await JSONFilePreset<any>(path.join(createDirectoryInAssets("fadian"), "config.json"), {} as any);
+      Object.assign(db.data, patch);
+      await db.write();
+    },
+  };
 
 export default new FadianPlugin();

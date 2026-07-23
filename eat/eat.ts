@@ -1,10 +1,15 @@
-import { Plugin } from "@utils/pluginBase";
+import { Plugin, type PanelSettingsAdapter, type PanelSettingField, type PanelFieldType } from "@utils/pluginBase";
 import sharp from "sharp";
 import axios from "axios";
-import { Api } from "teleproto";
-import { CustomFile } from "teleproto/client/uploads";
+import type { MessageContext } from "@mtcute/dispatcher";
+import type { Message, TelegramClient } from "@mtcute/node";
+import type { tl } from "@mtcute/core";
+import type { MtcuteInputUser } from "@utils/mtcuteTypes";
 import { getPrefixes } from "@utils/pluginManager";
 import { safeGetReplyMessage } from "@utils/safeGetMessages";
+import { getGlobalClient } from "@utils/runtimeManager";
+import { logger } from "@utils/logger";
+import type { UsersGetFullUserResult } from "@utils/clientInternals";
 
 const prefixes = getPrefixes();
 const mainPrefix = prefixes[0];
@@ -85,7 +90,7 @@ async function loadConfigResource(url: string, forceUpdate = false) {
       .replace("${branch}", branch);
 
     config = fullConfig.resources;
-    console.log(
+    logger.info(
       `配置加载成功，当前分支: ${branch}, 资源基础URL: ${resourceBaseUrl}`
     );
   };
@@ -100,10 +105,10 @@ async function loadConfigResource(url: string, forceUpdate = false) {
 }
 
 loadConfigResource(baseConfigURL).catch(() => {
-  console.log("初始配置加载失败，将在首次使用时重试");
+  logger.info("初始配置加载失败，将在首次使用时重试");
 });
 
-async function sendStickerList(msg: Api.Message) {
+async function sendStickerList(msg: MessageContext) {
   const stickerList = Object.keys(config)
     .sort((a, b) => a.localeCompare(b))
     .map((key) => `${key} - ${config[key].name}`)
@@ -159,14 +164,14 @@ async function iconMaskedFor(params: {
 
   const { width: iconWidth, height: iconHeight } = await iconSharp.metadata();
 
-  const left = Math.max(0, Math.floor((iconWidth - maskWidth) / 2));
-  const top = Math.max(0, Math.floor((iconHeight - maskHeight) / 2));
+  const left = Math.max(0, Math.floor((iconWidth! - maskWidth!) / 2));
+  const top = Math.max(0, Math.floor((iconHeight! - maskHeight!) / 2));
 
   let cropped = iconSharp.extract({
     left,
     top,
-    width: maskWidth,
-    height: maskHeight,
+    width: maskWidth!,
+    height: maskHeight!,
   });
 
   let iconMasked = await cropped
@@ -186,22 +191,44 @@ async function iconMaskedFor(params: {
   };
 }
 
-async function downloadProfilePhoto(msg: Api.Message): Promise<Buffer | null> {
+async function downloadProfilePhotoForId(client: TelegramClient, userId: number): Promise<Buffer | null> {
+  try {
+    const peer = await client.resolvePeer(userId) as unknown as { _: string; user_id?: number | string; access_hash?: number | string };
+    const fullUser = await client.call({
+      _: 'users.getFullUser',
+      id: peer as unknown as MtcuteInputUser,
+    }) as unknown as UsersGetFullUserResult;
+    const photo = fullUser?.full_user?.photo;
+    if (!photo || photo._ !== 'userProfilePhoto') return null;
+    const location: Record<string, unknown> = {
+      _: 'inputPeerPhotoFileLocation',
+      big: false,
+      peer: peer,
+      photoId: photo.photo_id,
+    };
+    const buffer = await client.downloadAsBuffer(location as unknown as Parameters<typeof client.downloadAsBuffer>[0]);
+    return Buffer.from(buffer);
+  } catch (err: unknown) {
+    logger.error("[eat] downloadProfilePhoto failed:", err);
+    return null;
+  }
+}
+
+async function downloadProfilePhoto(msg: MessageContext): Promise<Buffer | null> {
   const replied = await safeGetReplyMessage(msg);
-  const fromId = replied?.senderId;
-  if (!fromId) {
+  // Message.sender is a Peer object with id
+  const senderId = replied?.sender && 'id' in replied.sender ? (replied.sender as { id: number }).id : undefined;
+  if (!senderId) {
     await msg.edit({ text: "无法获取对方头像" });
     return null;
   }
 
-  const buf = (await msg.client?.downloadProfilePhoto(fromId, {
-    isBig: false,
-  })) as Buffer | undefined;
-  if (!buf) return null;
-  return buf;
+  const client = await getGlobalClient();
+  if (!client) return null;
+  return downloadProfilePhotoForId(client, senderId);
 }
 
-async function downloadMedia(msg: Api.Message): Promise<Buffer | null> {
+async function downloadMedia(msg: MessageContext): Promise<Buffer | null> {
   const replied = await safeGetReplyMessage(msg);
   if (!replied) {
     await msg.edit({ text: "请回复一条图片消息" });
@@ -211,28 +238,73 @@ async function downloadMedia(msg: Api.Message): Promise<Buffer | null> {
     await msg.edit({ text: "请回复一条图片消息" });
     return null;
   }
-  const mimeType = (replied.media as any).document?.mimeType;
-  const buf = (await msg.client?.downloadMedia(replied, {
-    thumb: ["video/webm"].includes(mimeType) ? 0 : 1,
-  })) as Buffer | undefined;
+  const client = await getGlobalClient();
+  if (!client) return null;
+  // downloadAsBuffer accepts FileDownloadLocation; Video/Document extend FileLocation
+  const media = replied.media;
+  const buf = await client.downloadAsBuffer(media as Parameters<typeof client.downloadAsBuffer>[0]) as Buffer | undefined;
   if (!buf) return null;
   return buf;
 }
 
 async function downloadAvatar(
-  msg: Api.Message,
+  msg: MessageContext,
   isEat2: Boolean
 ): Promise<Buffer | null> {
   return isEat2 ? await downloadMedia(msg) : await downloadProfilePhoto(msg);
 }
 
+async function sendRawSticker(params: {
+  client: TelegramClient;
+  peer: tl.TypeInputPeer;
+  buffer: Buffer;
+  width: number;
+  height: number;
+  name: string;
+  replyMsgId?: number;
+}) {
+  const { client, peer, buffer, width, height, name, replyMsgId } = params;
+
+  const uploaded = await client.uploadFile({
+    file: buffer,
+    fileName: "output.webp",
+    fileMime: "image/webp",
+  });
+
+  const callParams: Record<string, unknown> = {
+    _: "messages.sendMedia",
+    peer,
+    media: {
+      _: "inputMediaUploadedDocument",
+      file: uploaded,
+      mime_type: "image/webp",
+      attributes: [
+        { _: "documentAttributeSticker", alt: name, stickerset: { _: "inputStickerSetEmpty" } },
+        { _: "documentAttributeImageSize", w: width, h: height },
+        { _: "documentAttributeFilename", file_name: "output.webp" },
+      ],
+    } as unknown as tl.RawInputMediaUploadedDocument,
+    random_id: Math.floor(Math.random() * 2 ** 53),
+  };
+  if (replyMsgId) {
+    callParams.reply_to = { _: "inputReplyToMessage", reply_to_msg_id: replyMsgId };
+  }
+  await client.call(callParams as unknown as Parameters<typeof client.call>[0]);
+}
+
 async function compositeWithEntryConfig(parmas: {
   entry: EntryConfig;
-  msg: Api.Message;
+  msg: MessageContext;
   isEat2: boolean;
-  trigger?: Api.Message;
+  trigger?: MessageContext;
 }): Promise<void> {
   const { entry, msg, isEat2, trigger } = parmas;
+  const client = await getGlobalClient();
+  if (!client) return;
+  const [peer, repliedMsg] = await Promise.all([
+    client.resolvePeer(msg.chat.id),
+    safeGetReplyMessage(msg),
+  ]);
 
   const youAvatarBuffer = await downloadAvatar(msg, isEat2);
   if (!youAvatarBuffer) return;
@@ -269,28 +341,16 @@ async function compositeWithEntryConfig(parmas: {
       .webp({ lossless: true })
       .toBuffer();
 
-    const file = new CustomFile("output.webp", outBuffer.length, "", outBuffer);
     const { width = size, height = size } = await sharp(outBuffer).metadata();
 
-    const stickerAttr = new Api.DocumentAttributeSticker({
-      alt: entry.name,
-      stickerset: new Api.InputStickerSetEmpty(),
-    });
-
-    const imageSizeAttr = new Api.DocumentAttributeImageSize({
-      w: width,
-      h: height,
-    });
-
-    const filenameAttr = new Api.DocumentAttributeFilename({
-      fileName: "output.webp",
-    });
-
-    await msg.client?.sendFile(msg.peerId, {
-      file,
-      forceDocument: false,
-      attributes: [stickerAttr, imageSizeAttr, filenameAttr],
-      replyTo: await safeGetReplyMessage(msg),
+    await sendRawSticker({
+      client,
+      peer,
+      buffer: outBuffer,
+      width: width!,
+      height: height!,
+      name: entry.name,
+      replyMsgId: repliedMsg?.id,
     });
     return;
   }
@@ -307,14 +367,12 @@ async function compositeWithEntryConfig(parmas: {
   }
 
   if (entry.me) {
-    const meId = trigger?.fromId || msg.fromId;
+    const meId = trigger?.sender?.id || msg.sender?.id;
     if (!meId) {
       await msg.edit({ text: "无法获取自己的头像" });
       return;
     }
-    const meAvatarBuffer = (await msg.client?.downloadProfilePhoto(meId, {
-      isBig: false,
-    })) as Buffer | undefined;
+    const meAvatarBuffer = await downloadProfilePhotoForId(client, meId);
     if (!meAvatarBuffer) {
       await msg.edit({ text: "无法获取自己的头像" });
       return;
@@ -331,45 +389,32 @@ async function compositeWithEntryConfig(parmas: {
     .webp({ quality: 100 })
     .toBuffer();
 
-  const file = new CustomFile("output.webp", outBuffer.length, "", outBuffer);
   const { width = 512, height = 512 } = await sharp(outBuffer).metadata();
 
-  const stickerAttr = new Api.DocumentAttributeSticker({
-    alt: entry.name,
-    stickerset: new Api.InputStickerSetEmpty(),
-  });
-
-  const imageSizeAttr = new Api.DocumentAttributeImageSize({
-    w: width,
-    h: height,
-  });
-
-  const filenameAttr = new Api.DocumentAttributeFilename({
-    fileName: "output.webp",
-  });
-
-  await msg.client?.sendFile(msg.peerId, {
-    file,
-    forceDocument: false,
-    attributes: [stickerAttr, imageSizeAttr, filenameAttr],
-    replyTo: await safeGetReplyMessage(msg),
+  await sendRawSticker({
+    client,
+    peer,
+    buffer: outBuffer,
+    width: width!,
+    height: height!,
+    name: entry.name,
+    replyMsgId: repliedMsg?.id,
   });
 }
 
 async function sendSticker(params: {
   entry: EntryConfig;
-  msg: Api.Message;
-  trigger?: Api.Message;
+  msg: MessageContext;
+  trigger?: MessageContext;
   isEat2: boolean;
 }) {
   const { entry, msg, trigger, isEat2 } = params;
-  const cmd = msg.message.slice(1).split(" ")[0];
   await msg.edit({ text: `正在生成 ${entry.name} 表情包···` });
   await compositeWithEntryConfig({ entry, msg, isEat2, trigger });
   await msg.delete();
 }
 
-async function ensureConfigLoaded(msg?: Api.Message): Promise<void> {
+async function ensureConfigLoaded(msg?: MessageContext): Promise<void> {
   if (!config || Object.keys(config).length === 0) {
     if (msg) {
       await msg.edit({ text: "正在加载表情包配置..." });
@@ -379,7 +424,7 @@ async function ensureConfigLoaded(msg?: Api.Message): Promise<void> {
 }
 
 async function handleSetCommand(params: {
-  msg: Api.Message;
+  msg: MessageContext;
   url: string;
 }): Promise<void> {
   const { msg, url } = params;
@@ -397,14 +442,14 @@ async function handleSetCommand(params: {
 }
 
 const fn = async (
-  msg: Api.Message,
-  trigger?: Api.Message,
+  msg: MessageContext,
+  trigger?: MessageContext,
   isEat2: boolean = false
 ) => {
-  const [, ...args] = msg.message.split(" ");
+  const [, ...args] = (msg.text || "").split(" ");
 
-  if (!msg.isReply) {
-    if (args[0] == "set") {
+  if (!msg.replyToMessage) {
+    if (args[0] === "set") {
       let url = args[1] || baseConfigURL;
       await handleSetCommand({ msg, url });
       return;
@@ -417,7 +462,7 @@ const fn = async (
 
   await ensureConfigLoaded(msg);
 
-  if (args.length == 0) {
+  if (args.length === 0) {
     const entry = getRandomEntry();
     await sendSticker({ entry, msg, trigger, isEat2 });
   } else {
@@ -444,12 +489,7 @@ const help_text =
   `• eat set [url] - 强制更新配置（覆盖缓存）\n` +
   `• 回复消息 + eat &lt;名称&gt; - 发送指定表情包\n` +
   `• 回复消息 + eat - 随机发送表情包\n\n` +
-  `若想实现定时更新表情包配置, 可安装并使用 <code>${mainPrefix}tpm i acron</code>  
-每天2点自动更新 <code>eat</code> 的表情包配置(调用 <code>${mainPrefix}eat set</code> 命令)  
-
-<pre>${mainPrefix}acron cmd 0 0 2 * * * me 定时更新表情包  
-${mainPrefix}eat set</pre>  
-`;
+  `若想实现定时更新表情包配置, 可安装并使用 <code>${mainPrefix}tpm i acron</code>  \n每天2点自动更新 <code>eat</code> 的表情包配置(调用 <code>${mainPrefix}eat set</code> 命令)  \n\n<pre>${mainPrefix}acron cmd 0 0 2 * * * me 定时更新表情包  \n${mainPrefix}eat set</pre>  \n`;
 
 class EatPlugin extends Plugin {
 
@@ -459,14 +499,73 @@ class EatPlugin extends Plugin {
     assetBufferCache.clear();
   }
 
-  cmdHandlers: Record<string, (msg: Api.Message) => Promise<void>> = {
-    eat: async (msg, trigger?: Api.Message) => {
+  cmdHandlers: Record<string, (msg: MessageContext, trigger?: MessageContext) => Promise<void>> = {
+    eat: async (msg, trigger?: MessageContext) => {
       await fn(msg, trigger);
     },
-    eat2: async (msg: Api.Message, trigger?: Api.Message) => {
+    eat2: async (msg: MessageContext, trigger?: MessageContext) => {
       await fn(msg, trigger, true);
     },
   };
 }
+
+
+  // Panel Settings Adapter
+  panelAdapter: PanelSettingsAdapter = {
+    id: "eat",
+    title: "吃表情",
+    description: "吃表情配置",
+    category: "插件配置",
+    icon: "😋",
+    getSchema: (): PanelSettingField[] => [
+      {
+            "key": "x",
+            "label": "X 坐标偏移",
+            "type": "number",
+            "min": -100,
+            "max": 100,
+            "default": 0
+      },
+      {
+            "key": "y",
+            "label": "Y 坐标偏移",
+            "type": "number",
+            "min": -100,
+            "max": 100,
+            "default": 0
+      },
+      {
+            "key": "mask",
+            "label": "遮罩形状",
+            "type": "string",
+            "default": "circle"
+      },
+      {
+            "key": "brightness",
+            "label": "亮度",
+            "type": "number",
+            "min": 0,
+            "max": 200,
+            "default": 100
+      },
+      {
+            "key": "rotate",
+            "label": "旋转角度",
+            "type": "number",
+            "min": -360,
+            "max": 360,
+            "default": 0
+      }
+],
+    getValues: async (): Promise<Record<string, unknown>> => {
+      const db = await JSONFilePreset<RoleConfig>(path.join(createDirectoryInAssets("eat"), "config.json"), {} as any);
+      return db.data as Record<string, unknown>;
+    },
+    setValues: async (patch: Record<string, unknown>): Promise<void> => {
+      const db = await JSONFilePreset<RoleConfig>(path.join(createDirectoryInAssets("eat"), "config.json"), {} as any);
+      Object.assign(db.data, patch);
+      await db.write();
+    },
+  };
 
 export default new EatPlugin();
