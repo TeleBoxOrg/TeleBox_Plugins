@@ -1,5 +1,5 @@
 import axios from "axios";
-import { Plugin, type PanelSettingsAdapter, type PanelSettingField } from "@utils/pluginBase";
+import { Plugin, type PanelSettingsAdapter, type PanelSettingField, type PanelFieldType } from "@utils/pluginBase";
 import { getGlobalClient } from "@utils/runtimeManager";
 import { getPrefixes } from "@utils/pluginManager";
 import { createDirectoryInAssets, createDirectoryInTemp } from "@utils/pathHelpers";
@@ -642,121 +642,57 @@ class MusicHubPlugin extends Plugin {
 
   private rememberSessionMessage(session: SearchSession, message?: Message | MessageContext): void {
     if (!message) return;
-    // Prefer keeping MessageContext (has .edit). Plain Message from sendText has no .edit.
-    if (typeof (message as MessageContext).edit === "function") {
-      session.message = message as MessageContext;
-    } else if (session.message && Number(session.message.id) === Number(message.id)) {
-      // Keep existing MessageContext handle when the edit returns a plain Message
-    } else {
-      session.message = message as MessageContext;
-    }
+    session.message = message as MessageContext;
     if (message.id) session.messageId = Number(message.id);
-    const chatId =
-      (message as MessageContext).chat?.id ??
-      (message as any).chatId ??
-      (session.message as MessageContext | undefined)?.chat?.id;
-    if (chatId !== undefined && chatId !== null) {
-      (session as any).chatId = chatId;
-    }
   }
 
   private isSameMessage(a?: MessageContext, b?: MessageContext): boolean {
     return Boolean(a && b && a.id && b.id && Number(a.id) === Number(b.id));
   }
 
-  private async deleteQuietly(message?: MessageContext | Message): Promise<void> {
+  private async deleteQuietly(message?: MessageContext): Promise<void> {
     if (!message) return;
-    // Plain Message 没有 .delete；MessageContext 才有。先探测再调，避免 TypeError 噪音。
-    if (typeof (message as MessageContext).delete === "function") {
-      try {
-        await (message as MessageContext).delete({ revoke: true });
-        return;
-      } catch (e: unknown) {
-        logger.debug("[music_hub] MessageContext.delete failed:", e);
-      }
-    }
+    try {
+      await message.delete({ revoke: true });
+      return;
+    } catch (e: unknown) { logger.warn('[music_hub] delete message failed:', e) }
 
     try {
-      const client = await getGlobalClient();
+      const client = (await getGlobalClient());
       const id = Number(message.id);
-      const peer =
-        (message as MessageContext).chat?.id ??
-        (message as Message).chat?.id ??
-        (message as { chatId?: number | string }).chatId;
-      if (client && peer != null && Number.isFinite(id)) {
+      const peer = message.chat?.id;
+      if (client && peer && Number.isFinite(id)) {
         await client.deleteMessagesById(peer, [id], { revoke: true });
         return;
       }
-    } catch (e: unknown) {
-      logger.warn("[music_hub] delete message by id failed:", e);
-    }
+    } catch (e: unknown) { logger.warn('[music_hub] delete message by id failed:', e) }
+
+    try {
+      await message.delete();
+    } catch (e: unknown) { logger.warn('操作失败', e) }
   }
 
   private async sendTextMessage(
     sourceMsg: MessageContext,
     text: string,
-  ): Promise<Message | MessageContext | undefined> {
-    // Prefer replyText so the result is MessageContext with .edit (sendText returns plain Message)
-    if (typeof sourceMsg.replyText === "function") {
-      try {
-        return await sourceMsg.replyText(html(text), { disableWebPreview: true });
-      } catch (e: unknown) {
-        logger.debug("[music_hub] replyText failed, fallback sendText:", e);
-      }
-    }
-    const client = await getGlobalClient();
+  ): Promise<Message | undefined> {
+    const client = (await getGlobalClient());
     if (!client) return undefined;
-    return await client.sendText(sourceMsg.chat.id, html(text), {
-      disableWebPreview: true,
-    } as any);
+    return await client.sendText(sourceMsg.chat.id, text);
   }
 
   private async editOrReplaceMessage(
     sourceMsg: MessageContext,
-    targetMsg: MessageContext | Message | undefined,
+    targetMsg: MessageContext | undefined,
     text: string,
-  ): Promise<Message | MessageContext | undefined> {
-    const client = await getGlobalClient();
-    const messageId = targetMsg?.id != null ? Number(targetMsg.id) : undefined;
-    const chatId =
-      (targetMsg as MessageContext | undefined)?.chat?.id ??
-      (targetMsg as any)?.chatId ??
-      sourceMsg.chat?.id;
-
-    // 1) Prefer MessageContext.edit when available
-    if (targetMsg && typeof (targetMsg as MessageContext).edit === "function") {
+  ): Promise<Message | undefined> {
+    if (targetMsg) {
       try {
-        const edited = await (targetMsg as MessageContext).edit({
-          text: html(text),
-          disableWebPreview: true,
-        });
+        const edited = await targetMsg.edit({ text: html(text) });
         return edited || targetMsg;
       } catch (error: unknown) {
         if (isMessageNotModifiedError(error)) return targetMsg;
-        // fall through to client.editMessage — do NOT delete+resend on transient edit errors
-        logger.debug("[music_hub] MessageContext.edit failed, try editMessage:", error);
-      }
-    }
-
-    // 2) client.editMessage works for plain Message ids (sendText return value)
-    if (client && chatId != null && messageId != null && Number.isFinite(messageId)) {
-      try {
-        const edited = await client.editMessage({
-          chatId,
-          message: messageId,
-          text: html(text),
-          disableWebPreview: true,
-        });
-        // Preserve MessageContext handle if we still have one
-        if (targetMsg && typeof (targetMsg as MessageContext).edit === "function") {
-          return targetMsg;
-        }
-        return edited || targetMsg;
-      } catch (error: unknown) {
-        if (isMessageNotModifiedError(error)) return targetMsg;
-        logger.debug("[music_hub] editMessage failed, will send new:", error);
-        // Only as last resort send a new status message — never delete the old one
-        // (delete+resend floods the chat and loses reply context).
+        await this.deleteQuietly(targetMsg);
       }
     }
 
@@ -1236,7 +1172,7 @@ class MusicHubPlugin extends Plugin {
   }
 
   private async checkAllSources(msg: MessageContext): Promise<void> {
-    let statusMessage: Message | MessageContext | undefined = await this.editOrReplaceCommandMessage(
+    let statusMessage: Message | undefined = await this.editOrReplaceCommandMessage(
       msg,
       `🔍 <b>开始测活</b> ${codeTag(MUSIC_SOURCES.length)} 个音乐源...`
     );
@@ -1246,7 +1182,7 @@ class MusicHubPlugin extends Plugin {
       statusUpdateQueue = statusUpdateQueue
         .catch((e) => logger.debug('[music_hub] statusUpdateQueue error:', e))
         .then(async () => {
-          const updated = await this.editOrReplaceMessage(msg, statusMessage, text);
+          const updated = await this.editOrReplaceMessage(msg, statusMessage as MtcuteMessageContext | undefined, text);
           if (updated) statusMessage = updated;
         })
         .catch((e) => logger.debug('[music_hub] editOrReplaceMessage error:', e));
@@ -1447,82 +1383,68 @@ class MusicHubPlugin extends Plugin {
 
     await this.handleSearch(msg, config.defaultSource, args.join(" "));
   }
+}
+
 
   // Panel Settings Adapter
   panelAdapter: PanelSettingsAdapter = {
-    id: "music_hub",
-    title: "Music Hub 音乐",
-    description: "音乐搜索下载配置：默认音源、音质、结果数量、上传大小限制",
+    id: "music",
+    title: "音乐搜索",
+    description: "音乐搜索配置：默认音源、音质、搜索结果数",
     category: "插件配置",
     icon: "🎵",
     getSchema: (): PanelSettingField[] => [
       {
-        key: "defaultSource",
-        label: "默认音源",
-        type: "select",
-        options: [
-          { value: "auto", label: "自动 (auto)" },
-          { value: "netease", label: "网易云音乐" },
-          { value: "tencent", label: "QQ 音乐" },
-          { value: "kuwo", label: "酷我音乐" },
-          { value: "tidal", label: "TIDAL" },
-          { value: "qobuz", label: "Qobuz" },
-          { value: "joox", label: "JOOX" },
-          { value: "bilibili", label: "Bilibili" },
-          { value: "apple", label: "Apple Music" },
-          { value: "ytmusic", label: "YouTube Music" },
-          { value: "spotify", label: "Spotify" },
-        ],
-        default: "auto",
+            "key": "defaultSource",
+            "label": "默认音源",
+            "type": "select",
+            "options": [
+                  {
+                        "value": "auto",
+                        "label": "自动"
+                  },
+                  {
+                        "value": "qq",
+                        "label": "QQ音乐"
+                  },
+                  {
+                        "value": "netease",
+                        "label": "网易云"
+                  }
+            ]
       },
       {
-        key: "br",
-        label: "默认音质",
-        type: "select",
-        options: [
-          { value: "128", label: "128kbps (低)" },
-          { value: "320", label: "320kbps (标准)" },
-          { value: "999", label: "无损/最高 (999)" },
-        ],
-        default: "999",
+            "key": "br",
+            "label": "音质",
+            "type": "string",
+            "default": "999"
       },
       {
-        key: "maxResults",
-        label: "最大搜索结果数",
-        type: "number",
-        min: 5,
-        max: 100,
-        default: 30,
-        description: "单次搜索返回的最大结果数",
+            "key": "maxResults",
+            "label": "最大搜索结果",
+            "type": "number",
+            "min": 10,
+            "max": 100,
+            "default": 30
       },
       {
-        key: "maxUploadBytes",
-        label: "最大上传大小 (字节)",
-        type: "number",
-        min: 1024 * 1024,
-        max: 2 * 1024 * 1024 * 1024,
-        default: 100 * 1024 * 1024,
-        description: "Telegram 文件上传限制，默认 100MB",
-      },
-    ],
-    getValues: async () => {
-      const db = await JSONFilePreset<MusicHubConfig>(CONFIG_PATH, DEFAULT_CONFIG);
-      return {
-        defaultSource: db.data.defaultSource || "auto",
-        br: db.data.br || "999",
-        maxResults: db.data.maxResults ?? 30,
-        maxUploadBytes: db.data.maxUploadBytes ?? 100 * 1024 * 1024,
-      };
-    },
-    setValues: async (patch: Record<string, unknown>) => {
-      const db = await JSONFilePreset<MusicHubConfig>(CONFIG_PATH, DEFAULT_CONFIG);
-      const fields: (keyof MusicHubConfig)[] = ["defaultSource", "br", "maxResults", "maxUploadBytes"];
-      for (const f of fields) {
-        if (patch[f] !== undefined) (db.data as any)[f] = patch[f];
+            "key": "maxUploadBytes",
+            "label": "最大上传大小 (字节)",
+            "type": "number",
+            "min": 1048576,
+            "max": 1073741824,
+            "default": 104857600
       }
+],
+    getValues: async (): Promise<Record<string, unknown>> => {
+      const db = await JSONFilePreset<MusicHubConfig>(path.join(createDirectoryInAssets("music"), "config.json"), DEFAULT_CONFIG);
+      return db.data as Record<string, unknown>;
+    },
+    setValues: async (patch: Record<string, unknown>): Promise<void> => {
+      const db = await JSONFilePreset<MusicHubConfig>(path.join(createDirectoryInAssets("music"), "config.json"), DEFAULT_CONFIG);
+      Object.assign(db.data, patch);
       await db.write();
     },
   };
-}
 
 export default new MusicHubPlugin();
