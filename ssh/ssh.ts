@@ -1,4 +1,4 @@
-import { Plugin } from "@utils/pluginBase";
+import { Plugin , type PanelSettingsAdapter, type PanelSettingField } from "@utils/pluginBase";
 import { getGlobalClient } from "@utils/runtimeManager";
 import { getPrefixes } from "@utils/pluginManager";
 import { createDirectoryInTemp, resolvePluginAssetFile } from "@utils/pathHelpers";
@@ -330,6 +330,69 @@ class SSHPlugin extends Plugin {
     ssh: async (msg: Api.Message) => {
       await this.handleSSH(msg);
     }
+  // Panel Settings Adapter
+  panelAdapter: PanelSettingsAdapter = {
+    id: "ssh",
+    title: "SSH 管理",
+    description: "SSH 服务配置",
+    category: "插件配置",
+    icon: "🔐",
+    getSchema: (): PanelSettingField[] => [
+      {
+            "key": "ssh_target_chat",
+            "label": "目标聊天",
+            "type": "string",
+            "default": "me"
+      },
+      {
+            "key": "ssh_ssh_port",
+            "label": "SSH 端口",
+            "type": "number",
+            "min": 1,
+            "max": 65535,
+            "default": 22
+      },
+      {
+            "key": "ssh_password_auth",
+            "label": "密码认证",
+            "type": "select",
+            "options": [
+                  {
+                        "value": "yes",
+                        "label": "开启"
+                  },
+                  {
+                        "value": "no",
+                        "label": "关闭"
+                  }
+            ]
+      },
+      {
+            "key": "ssh_pubkey_auth",
+            "label": "公钥认证",
+            "type": "select",
+            "options": [
+                  {
+                        "value": "yes",
+                        "label": "开启"
+                  },
+                  {
+                        "value": "no",
+                        "label": "关闭"
+                  }
+            ]
+      }
+],
+    getValues: async (): Promise<Record<string, unknown>> => {
+      const db = await JSONFilePreset<any>(resolvePluginAssetFile({plugin:"ssh",fileName:"ssh_config.json",legacyDirs:["sshkey"],legacyFiles:[{dir:"sshkey",fileName:"sshkey_config.json"}]}), { ...DEFAULT_CONFIG });
+      return db.data as Record<string, unknown>;
+    },
+    setValues: async (patch: Record<string, unknown>): Promise<void> => {
+      const db = await JSONFilePreset<any>(resolvePluginAssetFile({plugin:"ssh",fileName:"ssh_config.json",legacyDirs:["sshkey"],legacyFiles:[{dir:"sshkey",fileName:"sshkey_config.json"}]}), { ...DEFAULT_CONFIG });
+      Object.assign(db.data, patch);
+      await db.write();
+    },
+  };
   };
 
   // 主命令处理器

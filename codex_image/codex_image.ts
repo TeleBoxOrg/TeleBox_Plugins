@@ -2,7 +2,7 @@ import axios from "axios";
 import path from "path";
 import type { Low } from "lowdb";
 import { JSONFilePreset } from "lowdb/node";
-import { Plugin } from "@utils/pluginBase";
+import { Plugin , type PanelSettingsAdapter, type PanelSettingField } from "@utils/pluginBase";
 import { getPrefixes } from "@utils/pluginManager";
 import { createDirectoryInAssets } from "@utils/pathHelpers";
 import { Api } from "teleproto";
@@ -484,6 +484,56 @@ class CodexImagePlugin extends Plugin {
 
   cmdHandlers: Record<string, (msg: Api.Message) => Promise<void>> = {
     cximg: handleCximg,
+  // Panel Settings Adapter
+  panelAdapter: PanelSettingsAdapter = {
+      id: "codex_image",
+      title: "Codex 图片生成",
+      description: "OpenAI Codex (gpt-image-2) 图片生成配置",
+      category: "插件配置",
+      icon: "🎨",
+      getSchema: (): PanelSettingField[] => [
+        {
+          key: "accessToken",
+          label: "Codex Access Token",
+          type: "password",
+          default: "",
+          description: "从 ~/.codex/auth.json 获取 access_token，或在 ChatGPT 网页端开发者工具中查找",
+        },
+        {
+          key: "model",
+          label: "模型",
+          type: "select",
+          options: [
+            { value: "gpt-5.4", label: "gpt-5.4 (默认)" },
+            { value: "gpt-image-1", label: "gpt-image-1" },
+          ],
+          default: "gpt-5.4",
+          description: "使用的图片生成模型",
+        },
+        {
+          key: "maxWaitMs",
+          label: "最大等待时间 (分钟)",
+          type: "number",
+          min: 1,
+          max: 30,
+          default: 10,
+          description: "等待生成完成的最长时间",
+        },
+      ],
+      getValues: async () => {
+        const token = await getStoredToken();
+        return {
+          accessToken: token,
+          model: CODEX_MODEL,
+          maxWaitMs: Math.round(CODEX_MAX_WAIT_MS / 60000),
+        };
+      },
+      setValues: async (patch: Record<string, unknown>) => {
+        if (typeof patch.accessToken === "string") {
+          await setStoredToken(patch.accessToken);
+        }
+      },
+    };
   };
 }
 

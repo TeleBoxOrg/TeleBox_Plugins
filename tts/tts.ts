@@ -2,7 +2,7 @@
  * Azure TTS Plugin - 微软语音合成
  * 使用 Azure Speech Service 将文本转换为语音
  */
-import { Plugin } from "@utils/pluginBase";
+import { Plugin, type PanelSettingsAdapter, type PanelSettingField } from "@utils/pluginBase";
 import { getPrefixes } from "@utils/pluginManager";
 import { Api } from "teleproto";
 import axios from "axios";
@@ -405,6 +405,99 @@ class TTSPlugin extends Plugin {
             }
         }
     };
+
+  // Panel Settings Adapter
+  panelAdapter: PanelSettingsAdapter = {
+    id: "tts",
+    title: "TTS 语音合成",
+    description: "微软 Azure TTS 配置：Key、Region、语音、风格、语速",
+    category: "插件配置",
+    icon: "🗣️",
+    getSchema: (): PanelSettingField[] => [
+      {
+        key: "key",
+        label: "Azure Speech Key",
+        type: "password",
+        secret: true,
+        description: "从 Azure Portal 获取",
+        required: true,
+      },
+      {
+        key: "region",
+        label: "Region 区域",
+        type: "select",
+        options: [
+          { value: "eastus", label: "East US (东部美国)" },
+          { value: "eastasia", label: "East Asia (东亚)" },
+          { value: "southeastasia", label: "Southeast Asia (东南亚)" },
+          { value: "northeurope", label: "North Europe (北欧)" },
+          { value: "westus2", label: "West US 2 (美国西部 2)" },
+          { value: "centralus", label: "Central US (美国中部)" },
+        ],
+        default: "eastus",
+        description: "Azure 语音服务区域",
+      },
+      {
+        key: "voice",
+        label: "语音角色",
+        type: "string",
+        placeholder: "zh-CN-XiaoxiaoNeural",
+        default: "zh-CN-XiaoxiaoNeural",
+        description: "如 zh-CN-XiaoxiaoNeural, zh-CN-YunyangNeural 等",
+      },
+      {
+        key: "style",
+        label: "语音风格",
+        type: "string",
+        placeholder: "cheerful / sad / chat / clear 等",
+        description: "需语音角色支持，如 Xiaoxiao 支持 cheerful, sad, angry, fearful 等",
+      },
+      {
+        key: "rate",
+        label: "语速",
+        type: "string",
+        placeholder: "1.0 (0.5~2.0)",
+        default: "1.0",
+        description: "0.5(慢) ~ 2.0(快)，默认 1.0",
+      },
+      {
+        key: "format",
+        label: "输出格式",
+        type: "select",
+        options: [
+          { value: "audio-48khz-192kbitrate-mono-mp3", label: "MP3 48kHz 192kbps (默认)" },
+          { value: "audio-24khz-160kbitrate-mono-mp3", label: "MP3 24kHz 160kbps" },
+          { value: "audio-16khz-128kbitrate-mono-mp3", label: "MP3 16kHz 128kbps" },
+          { value: "riff-48khz-16bit-mono-pcm", label: "WAV 48kHz 16bit PCM" },
+          { value: "riff-24khz-16bit-mono-pcm", label: "WAV 24kHz 16bit PCM" },
+          { value: "riff-16khz-16bit-mono-pcm", label: "WAV 16kHz 16bit PCM" },
+        ],
+        default: "audio-48khz-192kbitrate-mono-mp3",
+      },
+    ],
+    getValues: async () => {
+      const db = await getDB();
+      return {
+        key: db.data.key ? maskSecret(db.data.key) : "",
+        region: db.data.region || "eastus",
+        voice: db.data.voice || "zh-CN-XiaoxiaoNeural",
+        style: db.data.style || "",
+        rate: db.data.rate || "1.0",
+        format: db.data.format || "audio-48khz-192kbitrate-mono-mp3",
+      };
+    },
+    setValues: async (patch: Record<string, unknown>) => {
+      const db = await getDB();
+      Object.assign(db.data, patch);
+      await db.write();
+    },
+  };
+}
+
+function maskSecret(val: string, visibleChars = 4): string {
+  if (!val) return "(未配置)";
+  if (val.length <= visibleChars * 2) return "••••••••";
+  return `${val.slice(0, visibleChars)}••••••${val.slice(-visibleChars)}`;
 }
 
 export default new TTSPlugin();

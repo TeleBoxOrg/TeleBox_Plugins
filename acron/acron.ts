@@ -1,5 +1,5 @@
 import { getPrefixes } from "@utils/pluginManager";
-import { Plugin } from "@utils/pluginBase";
+import { Plugin, type PanelSettingsAdapter, type PanelSettingField } from "@utils/pluginBase";
 import { Api } from "teleproto";
 import { createDirectoryInAssets } from "@utils/pathHelpers";
 import { cronManager } from "@utils/cronManager";
@@ -1292,6 +1292,39 @@ class AcronPlugin extends Plugin {
       } catch (error: any) {
         await msg.edit({ text: `处理出错: ${error?.message || error}` });
       }
+    },
+  };
+  // Panel Settings Adapter
+  panelAdapter: PanelSettingsAdapter = {
+    id: "acron",
+    title: "定时任务",
+    description: "ACRON 定时任务配置",
+    category: "插件配置",
+    icon: "⏰",
+    getSchema: (): PanelSettingField[] => [
+      {
+            "key": "timezone",
+            "label": "时区",
+            "type": "string",
+            "default": "Asia/Shanghai"
+      },
+      {
+            "key": "maxRetries",
+            "label": "最大重试次数",
+            "type": "number",
+            "min": 0,
+            "max": 10,
+            "default": 3
+      }
+],
+    getValues: async (): Promise<Record<string, unknown>> => {
+      const db = await JSONFilePreset<any>(path.join(createDirectoryInAssets("acron"), "config.json"), {} as any);
+      return db.data as Record<string, unknown>;
+    },
+    setValues: async (patch: Record<string, unknown>): Promise<void> => {
+      const db = await JSONFilePreset<any>(path.join(createDirectoryInAssets("acron"), "config.json"), {} as any);
+      Object.assign(db.data, patch);
+      await db.write();
     },
   };
 }

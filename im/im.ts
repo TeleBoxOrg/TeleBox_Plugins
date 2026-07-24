@@ -1,5 +1,5 @@
 import { getPrefixes } from "@utils/pluginManager";
-import { Plugin } from "@utils/pluginBase";
+import { Plugin , type PanelSettingsAdapter, type PanelSettingField } from "@utils/pluginBase";
 import { getGlobalClient } from "@utils/runtimeManager";
 import { createDirectoryInAssets } from "@utils/pathHelpers";
 import { banUser } from "@utils/banUtils";
@@ -292,6 +292,45 @@ class ImageMonitorPlugin extends Plugin {
         await this.handleNewMessage({ message: msg } as NewMessageEvent);
       }
     }
+  // Panel Settings Adapter
+  panelAdapter: PanelSettingsAdapter = {
+    id: "im",
+    title: "图片监控",
+    description: "图片监控配置：启用、监控群组、默认操作",
+    category: "插件配置",
+    icon: "🖼️",
+    getSchema: (): PanelSettingField[] => [
+      {
+            "key": "enabled",
+            "label": "启用监控",
+            "type": "boolean"
+      },
+      {
+            "key": "defaultAction",
+            "label": "默认操作",
+            "type": "select",
+            "options": [
+                  {
+                        "value": "delete",
+                        "label": "删除"
+                  },
+                  {
+                        "value": "ban",
+                        "label": "封禁"
+                  }
+            ]
+      }
+],
+    getValues: async (): Promise<Record<string, unknown>> => {
+      const db = await JSONFilePreset<Config>(path.join(createDirectoryInAssets("image_monitor"), "config.json"), DEFAULT_CONFIG);
+      return db.data as Record<string, unknown>;
+    },
+    setValues: async (patch: Record<string, unknown>): Promise<void> => {
+      const db = await JSONFilePreset<Config>(path.join(createDirectoryInAssets("image_monitor"), "config.json"), DEFAULT_CONFIG);
+      Object.assign(db.data, patch);
+      await db.write();
+    },
+  };
   };
 
   // 不忽略编辑消息

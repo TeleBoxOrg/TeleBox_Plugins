@@ -1,5 +1,5 @@
 // 文件名: plugins/gif.ts
-import { Plugin } from "@utils/pluginBase";
+import { Plugin , type PanelSettingsAdapter, type PanelSettingField } from "@utils/pluginBase";
 import { getGlobalClient, getCurrentGeneration } from "@utils/runtimeManager";
 import { getPrefixes } from "@utils/pluginManager";
 import { createDirectoryInAssets } from "@utils/pathHelpers";
@@ -513,6 +513,81 @@ class GifStickerPlugin extends Plugin {
 
   cmdHandlers: Record<string, (msg: Api.Message) => Promise<void>> = {
     gif,
+  // Panel Settings Adapter
+  panelAdapter: PanelSettingsAdapter = {
+    id: "gif",
+    title: "GIF 转换",
+    description: "视频/GIF 转贴纸配置",
+    category: "插件配置",
+    icon: "🎞️",
+    getSchema: (): PanelSettingField[] => [
+      {
+            "key": "maxFileSize",
+            "label": "最大文件大小 (MB)",
+            "type": "number",
+            "min": 1,
+            "max": 50,
+            "default": 20
+      },
+      {
+            "key": "maxDuration",
+            "label": "最大时长 (秒)",
+            "type": "number",
+            "min": 1,
+            "max": 60,
+            "default": 10
+      },
+      {
+            "key": "maxWidth",
+            "label": "最大宽度",
+            "type": "number",
+            "min": 100,
+            "max": 1920,
+            "default": 512
+      },
+      {
+            "key": "maxHeight",
+            "label": "最大高度",
+            "type": "number",
+            "min": 100,
+            "max": 1920,
+            "default": 512
+      },
+      {
+            "key": "quality",
+            "label": "质量 (1-31)",
+            "type": "number",
+            "min": 1,
+            "max": 31,
+            "default": 15
+      },
+      {
+            "key": "autoAddToStickerPack",
+            "label": "自动加入贴纸包",
+            "type": "boolean"
+      },
+      {
+            "key": "defaultStickerPackName",
+            "label": "默认贴纸包名",
+            "type": "string"
+      },
+      {
+            "key": "defaultEmoji",
+            "label": "默认表情",
+            "type": "string",
+            "default": "😀"
+      }
+],
+    getValues: async (): Promise<Record<string, unknown>> => {
+      const db = await JSONFilePreset<GifConverterConfig>(path.join(createDirectoryInAssets("gif"), "config.json"), {} as any);
+      return db.data as Record<string, unknown>;
+    },
+    setValues: async (patch: Record<string, unknown>): Promise<void> => {
+      const db = await JSONFilePreset<GifConverterConfig>(path.join(createDirectoryInAssets("gif"), "config.json"), {} as any);
+      Object.assign(db.data, patch);
+      await db.write();
+    },
+  };
   };
 
   cleanup(): void {

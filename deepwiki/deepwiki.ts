@@ -1,4 +1,4 @@
-import { Plugin, type PluginRuntimeContext } from "@utils/pluginBase";
+import { Plugin, type PluginRuntimeContext , type PanelSettingsAdapter, type PanelSettingField } from "@utils/pluginBase";
 import { Api } from "teleproto";
 import { getPrefixes } from "@utils/pluginManager";
 import { JSONFilePreset } from "lowdb/node";
@@ -994,6 +994,41 @@ class DeepWikiPlugin extends Plugin {
         await MessageSender.sendOrEdit(original, this.formatError(err), "html");
       }
     },
+  // Panel Settings Adapter
+  panelAdapter: PanelSettingsAdapter = {
+    id: "deepwiki",
+    title: "DeepWiki",
+    description: "DeepWiki 配置",
+    category: "插件配置",
+    icon: "📚",
+    getSchema: (): PanelSettingField[] => [
+      {
+            "key": "apiKey",
+            "label": "API 密钥",
+            "type": "password",
+            "secret": true
+      },
+      {
+            "key": "baseUrl",
+            "label": "API 地址",
+            "type": "string"
+      },
+      {
+            "key": "defaultModel",
+            "label": "默认模型",
+            "type": "string"
+      }
+],
+    getValues: async (): Promise<Record<string, unknown>> => {
+      const db = await JSONFilePreset<any>(path.join(createDirectoryInAssets("deepwiki"), "config.json"), {} as any);
+      return db.data as Record<string, unknown>;
+    },
+    setValues: async (patch: Record<string, unknown>): Promise<void> => {
+      const db = await JSONFilePreset<any>(path.join(createDirectoryInAssets("deepwiki"), "config.json"), {} as any);
+      Object.assign(db.data, patch);
+      await db.write();
+    },
+  };
   };
 
   async onUnload(): Promise<void> {

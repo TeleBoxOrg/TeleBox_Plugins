@@ -1,4 +1,4 @@
-import { Plugin } from "@utils/pluginBase";
+import { Plugin , type PanelSettingsAdapter, type PanelSettingField } from "@utils/pluginBase";
 import { Api } from "teleproto/tl";
 import { CustomFile } from "teleproto/client/uploads";
 import { getGlobalClient } from "@utils/runtimeManager";
@@ -724,6 +724,50 @@ class ChannelSearchPlugin extends Plugin {
   cmdHandlers: Record<string, (msg: Api.Message) => Promise<void>> = {
     so,
     search: so,
+  // Panel Settings Adapter
+  panelAdapter: PanelSettingsAdapter = {
+    id: "search",
+    title: "频道搜索",
+    description: "频道搜索配置：默认频道、广告过滤",
+    category: "插件配置",
+    icon: "🔍",
+    getSchema: (): PanelSettingField[] => [
+      {
+            "key": "defaultChannel",
+            "label": "默认频道",
+            "type": "string"
+      },
+      {
+            "key": "adFilters",
+            "label": "广告过滤词列表",
+            "type": "json"
+      }
+],
+    getValues: async (): Promise<Record<string, unknown>> => {
+      const fs = await import("fs/promises");
+      const path = await import("path");
+      const CONFIG_FILE_PATH = path.join(process.cwd(), "temp", "channel_search_config.json");
+      try {
+        const data = await fs.readFile(CONFIG_FILE_PATH, "utf-8");
+        return JSON.parse(data) as Record<string, unknown>;
+      } catch {
+        return {};
+      }
+    },
+    setValues: async (patch: Record<string, unknown>): Promise<void> => {
+      const fs = await import("fs/promises");
+      const path = await import("path");
+      const CONFIG_FILE_PATH = path.join(process.cwd(), "temp", "channel_search_config.json");
+      let config: Record<string, unknown> = {};
+      try {
+        const data = await fs.readFile(CONFIG_FILE_PATH, "utf-8");
+        config = JSON.parse(data);
+      } catch {}
+      Object.assign(config, patch);
+      await fs.mkdir(path.dirname(CONFIG_FILE_PATH), { recursive: true });
+      await fs.writeFile(CONFIG_FILE_PATH, JSON.stringify(config, null, 2));
+    },
+  };
   };
 }
 

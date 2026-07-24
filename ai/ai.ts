@@ -1,4 +1,4 @@
-import { Plugin } from "@utils/pluginBase";
+import { Plugin, type PanelSettingsAdapter, type PanelSettingField } from "@utils/pluginBase";
 import { Api } from "teleproto";
 import { getPrefixes } from "@utils/pluginManager";
 import type { Low } from "lowdb";
@@ -5147,6 +5147,126 @@ class AIPlugin extends Plugin {
     const configManager = await this.configManagerPromise;
     await configManager.destroy();
   }
+
+  // Panel Settings Adapter
+  panelAdapter: PanelSettingsAdapter = {
+    id: "ai",
+    title: "AI 对话",
+    description: "AI 对话配置：提供商、超时、折叠",
+    category: "插件配置",
+    icon: "🧠",
+    getSchema: (): PanelSettingField[] => [
+      {
+        key: "currentChatTag",
+        label: "当前聊天Tag",
+        type: "string",
+      },
+      {
+        key: "currentChatModel",
+        label: "当前聊天模型",
+        type: "string",
+      },
+      {
+        key: "currentSearchTag",
+        label: "当前搜索Tag",
+        type: "string",
+      },
+      {
+        key: "currentSearchModel",
+        label: "当前搜索模型",
+        type: "string",
+      },
+      {
+        key: "currentImageTag",
+        label: "当前图片Tag",
+        type: "string",
+      },
+      {
+        key: "currentImageModel",
+        label: "当前图片模型",
+        type: "string",
+      },
+      {
+        key: "currentVideoTag",
+        label: "当前视频Tag",
+        type: "string",
+      },
+      {
+        key: "currentVideoModel",
+        label: "当前视频模型",
+        type: "string",
+      },
+      {
+        key: "imagePreview",
+        label: "图片预览",
+        type: "boolean",
+      },
+      {
+        key: "videoPreview",
+        label: "视频预览",
+        type: "boolean",
+      },
+      {
+        key: "videoAudio",
+        label: "视频音频",
+        type: "boolean",
+      },
+      {
+        key: "videoDuration",
+        label: "视频时长 (秒)",
+        type: "number",
+        min: 1,
+        max: 600,
+        default: 30,
+      },
+      {
+        key: "prompt",
+        label: "系统提示词",
+        type: "textarea",
+      },
+      {
+        key: "collapse",
+        label: "折叠输出",
+        type: "boolean",
+      },
+      {
+        key: "timeout",
+        label: "超时 (秒)",
+        type: "number",
+        min: 10,
+        max: 600,
+        default: 120,
+      },
+      {
+        key: "telegraphToken",
+        label: "Telegraph Token",
+        type: "password",
+        secret: true,
+      },
+      {
+        key: "telegraph.enabled",
+        label: "Telegraph 发布",
+        type: "boolean",
+      },
+      {
+        key: "telegraph.limit",
+        label: "Telegraph 长度限制",
+        type: "number",
+        min: 1000,
+        max: 50000,
+        default: 10000,
+      },
+    ],
+    getValues: async (): Promise<Record<string, unknown>> => {
+      const db = await JSONFilePreset<ProviderConfig>(path.join(createDirectoryInAssets("ai"), "config.json"), {} as any);
+      return db.data as Record<string, unknown>;
+    },
+    setValues: async (patch: Record<string, unknown>): Promise<void> => {
+      const db = await JSONFilePreset<ProviderConfig>(path.join(createDirectoryInAssets("ai"), "config.json"), {} as any);
+      Object.assign(db.data, patch);
+      await db.write();
+    },
+  };
 }
 
 export default new AIPlugin();

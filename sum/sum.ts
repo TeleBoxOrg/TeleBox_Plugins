@@ -1,5 +1,5 @@
 import { getPrefixes } from "@utils/pluginManager";
-import { Plugin } from "@utils/pluginBase";
+import { Plugin , type PanelSettingsAdapter, type PanelSettingField } from "@utils/pluginBase";
 import { Api } from "teleproto";
 import { createDirectoryInAssets } from "@utils/pathHelpers";
 import { cronManager } from "@utils/cronManager";
@@ -2111,6 +2111,68 @@ ${codeTag(db.data.aiConfig.default_prompt || DEFAULT_PROMPT)}`,
         await msg.edit({ text: `❌ 错误: ${e?.message || e}` });
       }
     },
+  // Panel Settings Adapter
+  panelAdapter: PanelSettingsAdapter = {
+    id: "sum",
+    title: "AI 摘要",
+    description: "AI 长文本摘要配置",
+    category: "插件配置",
+    icon: "📝",
+    getSchema: (): PanelSettingField[] => [
+      {
+            "key": "default_provider",
+            "label": "默认提供商",
+            "type": "string",
+            "placeholder": "如: openai"
+      },
+      {
+            "key": "default_prompt",
+            "label": "默认提示词",
+            "type": "textarea",
+            "placeholder": "总结以下内容"
+      },
+      {
+            "key": "default_timeout",
+            "label": "默认超时 (秒)",
+            "type": "number",
+            "min": 10,
+            "max": 300,
+            "default": 60
+      },
+      {
+            "key": "default_spoiler",
+            "label": "默认使用 Spoiler",
+            "type": "boolean",
+            "default": true
+      },
+      {
+            "key": "reply_mode",
+            "label": "回复模式",
+            "type": "boolean"
+      },
+      {
+            "key": "max_output_length",
+            "label": "最大输出长度",
+            "type": "number",
+            "min": 100,
+            "max": 50000
+      },
+      {
+            "key": "link_preview",
+            "label": "链接预览",
+            "type": "boolean"
+      }
+],
+    getValues: async (): Promise<Record<string, unknown>> => {
+      const db = await getDB();
+      return db.data.aiConfig as Record<string, unknown>;
+    },
+    setValues: async (patch: Record<string, unknown>): Promise<void> => {
+      const db = await getDB();
+      Object.assign(db.data.aiConfig, patch);
+      await db.write();
+    },
+  };
   };
 }
 

@@ -3,7 +3,7 @@
  * 把你打的字自动转为语音，每个对话独立开关
  * 服务商主备：主失败自动回退到备
  */
-import { Plugin } from "@utils/pluginBase";
+import { Plugin , type PanelSettingsAdapter, type PanelSettingField } from "@utils/pluginBase";
 import { getPrefixes } from "@utils/pluginManager";
 import { Api } from "teleproto";
 import axios from "axios";
@@ -1429,6 +1429,62 @@ class SayPlugin extends Plugin {
         // 进度提示：编辑当前消息的文字/caption
         const progress = async (t: string) => {
             try { await msg.edit({ text: t }); } catch { }
+  // Panel Settings Adapter
+  panelAdapter: PanelSettingsAdapter = {
+    id: "say",
+    title: "语音合成",
+    description: "文本转语音 TTS 配置",
+    category: "插件配置",
+    icon: "🔊",
+    getSchema: (): PanelSettingField[] => [
+      {
+            "key": "primary",
+            "label": "默认提供商",
+            "type": "select",
+            "options": [
+                  {
+                        "value": "mimo",
+                        "label": "MiMo"
+                  },
+                  {
+                        "value": "volc",
+                        "label": "火山引擎"
+                  },
+                  {
+                        "value": "fish",
+                        "label": "Fish Audio"
+                  }
+            ]
+      },
+      {
+            "key": "speed",
+            "label": "语速",
+            "type": "number",
+            "min": 0.5,
+            "max": 2.0,
+            "default": 1.0
+      },
+      {
+            "key": "style",
+            "label": "风格指令",
+            "type": "string"
+      },
+      {
+            "key": "translate",
+            "label": "追加译文",
+            "type": "boolean"
+      }
+],
+    getValues: async (): Promise<Record<string, unknown>> => {
+      const db = await JSONFilePreset<MimoConfig>(path.join(createDirectoryInAssets("say"), "config.json"), DEFAULT_CONFIG);
+      return db.data as Record<string, unknown>;
+    },
+    setValues: async (patch: Record<string, unknown>): Promise<void> => {
+      const db = await JSONFilePreset<MimoConfig>(path.join(createDirectoryInAssets("say"), "config.json"), DEFAULT_CONFIG);
+      Object.assign(db.data, patch);
+      await db.write();
+    },
+  };
         };
 
         const result = await synthesizeAndSend(msg.peerId, raw, cfg, progress, replyToId);

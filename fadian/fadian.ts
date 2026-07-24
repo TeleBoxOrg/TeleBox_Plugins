@@ -1,4 +1,4 @@
-import { Plugin } from "@utils/pluginBase";
+import { Plugin , type PanelSettingsAdapter, type PanelSettingField } from "@utils/pluginBase";
 import { getGlobalClient } from "@utils/runtimeManager";
 import { getPrefixes } from "@utils/pluginManager";
 import { createDirectoryInAssets } from "@utils/pathHelpers";
@@ -326,6 +326,38 @@ class FadianPlugin extends Plugin {
       wyy: `📖 <b>网抑云语录命令帮助</b>\n\n<code>${mainPrefix}fadian wyy</code> - 生成网易云音乐热评语录`,
       cp: `📖 <b>CP语录命令帮助</b>\n\n<code>${mainPrefix}fadian cp 名字1 名字2</code> - 生成两人CP语录\n或者：\n<code>${mainPrefix}fadian cp</code>\n第二行写第一个名字\n第三行写第二个名字`,
       clear: `📖 <b>清理缓存命令帮助</b>\n\n<code>${mainPrefix}fadian clear</code> - 清理本地缓存并重新下载配置文件`,
+  // Panel Settings Adapter
+  panelAdapter: PanelSettingsAdapter = {
+    id: "fadian",
+    title: "发电",
+    description: "粉丝发电配置",
+    category: "插件配置",
+    icon: "⚡",
+    getSchema: (): PanelSettingField[] => [
+      {
+            "key": "enabled",
+            "label": "启用",
+            "type": "boolean"
+      },
+      {
+            "key": "cooldown",
+            "label": "冷却时间 (分钟)",
+            "type": "number",
+            "min": 1,
+            "max": 1440,
+            "default": 60
+      }
+],
+    getValues: async (): Promise<Record<string, unknown>> => {
+      const db = await JSONFilePreset<any>(path.join(createDirectoryInAssets("fadian"), "config.json"), {} as any);
+      return db.data as Record<string, unknown>;
+    },
+    setValues: async (patch: Record<string, unknown>): Promise<void> => {
+      const db = await JSONFilePreset<any>(path.join(createDirectoryInAssets("fadian"), "config.json"), {} as any);
+      Object.assign(db.data, patch);
+      await db.write();
+    },
+  };
     };
 
     const helpText = helpTexts[subCmd] || help_text;

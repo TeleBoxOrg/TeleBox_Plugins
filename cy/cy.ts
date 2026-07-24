@@ -1,4 +1,4 @@
-import { Plugin } from "@utils/pluginBase";
+import { Plugin , type PanelSettingsAdapter, type PanelSettingField } from "@utils/pluginBase";
 import { getPrefixes } from "@utils/pluginManager";
 import { getGlobalClient } from "@utils/runtimeManager";
 import { safeGetMessages } from "@utils/safeGetMessages";
@@ -500,6 +500,48 @@ class CyPlugin extends Plugin {
       }
       await msg.safeDelete?.({ revoke: true } as any);
     },
+  // Panel Settings Adapter
+  panelAdapter: PanelSettingsAdapter = {
+    id: "cy",
+    title: "词云定时",
+    description: "词云定时任务配置",
+    category: "插件配置",
+    icon: "☁️",
+    getSchema: (): PanelSettingField[] => [
+      {
+            "key": "enabled",
+            "label": "启用定时",
+            "type": "boolean"
+      },
+      {
+            "key": "target",
+            "label": "目标群组/频道",
+            "type": "string"
+      },
+      {
+            "key": "times",
+            "label": "执行时间列表",
+            "type": "json"
+      },
+      {
+            "key": "limit",
+            "label": "词数限制",
+            "type": "number",
+            "min": 50,
+            "max": 2000,
+            "default": 500
+      }
+],
+    getValues: async (): Promise<Record<string, unknown>> => {
+      const db = await JSONFilePreset<CyScheduleConfig>(path.join(__dirname, "cy_schedule.json"), DEFAULT_SCHEDULE);
+      return db.data as Record<string, unknown>;
+    },
+    setValues: async (patch: Record<string, unknown>): Promise<void> => {
+      const db = await JSONFilePreset<CyScheduleConfig>(path.join(__dirname, "cy_schedule.json"), DEFAULT_SCHEDULE);
+      Object.assign(db.data, patch);
+      await db.write();
+    },
+  };
   };
 }
 

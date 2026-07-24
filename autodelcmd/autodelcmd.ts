@@ -1,6 +1,6 @@
 //@ts-nocheck
 import { Api } from "teleproto";
-import { Plugin } from "@utils/pluginBase";
+import { Plugin , type PanelSettingsAdapter, type PanelSettingField } from "@utils/pluginBase";
 import { getGlobalClient } from "@utils/runtimeManager";
 import { getPrefixes } from "@utils/pluginManager";
 import { AliasDB } from "@utils/aliasDB";
@@ -1168,6 +1168,30 @@ class AutoDeletePlugin extends Plugin {
     } catch (error) {
       console.error("[autodelcmd] listenMessageHandler 错误:", error);
     }
+  // Panel Settings Adapter
+  panelAdapter: PanelSettingsAdapter = {
+    id: "autodelcmd",
+    title: "自动删除命令",
+    description: "自动删除命令消息配置",
+    category: "插件配置",
+    icon: "🗑️",
+    getSchema: (): PanelSettingField[] => [
+      {
+            "key": "enabled",
+            "label": "启用自动删除",
+            "type": "boolean"
+      }
+],
+    getValues: async (): Promise<Record<string, unknown>> => {
+      const db = await JSONFilePreset<AutoDeleteConfig>(path.join(createDirectoryInAssets("autodelcmd"), "config.json"), {} as any);
+      return db.data as Record<string, unknown>;
+    },
+    setValues: async (patch: Record<string, unknown>): Promise<void> => {
+      const db = await JSONFilePreset<AutoDeleteConfig>(path.join(createDirectoryInAssets("autodelcmd"), "config.json"), {} as any);
+      Object.assign(db.data, patch);
+      await db.write();
+    },
+  };
   };
 }
 

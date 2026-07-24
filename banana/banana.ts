@@ -2,7 +2,7 @@ import axios from "axios";
 import path from "path";
 import type { Low } from "lowdb";
 import { JSONFilePreset } from "lowdb/node";
-import { Plugin } from "@utils/pluginBase";
+import { Plugin , type PanelSettingsAdapter, type PanelSettingField } from "@utils/pluginBase";
 import { getPrefixes } from "@utils/pluginManager";
 import { Api } from "teleproto";
 import { CustomFile } from "teleproto/client/uploads.js";
@@ -503,6 +503,39 @@ class BananaPlugin extends Plugin {
   description: string = `Nano-Banana 图像编辑插件\n\n${help_text}`;
   cmdHandlers: Record<string, (msg: Api.Message) => Promise<void>> = {
     banana: handleBananaCommand,
+  // Panel Settings Adapter
+  panelAdapter: PanelSettingsAdapter = {
+    id: "banana",
+    title: "香蕉贴纸",
+    description: "香蕉贴纸 API 配置",
+    category: "插件配置",
+    icon: "🍌",
+    getSchema: (): PanelSettingField[] => [
+      {
+            "key": "apiKey",
+            "label": "API 密钥",
+            "type": "password",
+            "secret": true
+      },
+      {
+            "key": "maxBytes",
+            "label": "最大文件大小 (字节)",
+            "type": "number",
+            "min": 1024,
+            "max": 52428800,
+            "default": 10485760
+      }
+],
+    getValues: async (): Promise<Record<string, unknown>> => {
+      const db = await JSONFilePreset<BananaConfig>(path.join(createDirectoryInAssets("banana"), "config.json"), {} as any);
+      return db.data as Record<string, unknown>;
+    },
+    setValues: async (patch: Record<string, unknown>): Promise<void> => {
+      const db = await JSONFilePreset<BananaConfig>(path.join(createDirectoryInAssets("banana"), "config.json"), {} as any);
+      Object.assign(db.data, patch);
+      await db.write();
+    },
+  };
   };
 }
 

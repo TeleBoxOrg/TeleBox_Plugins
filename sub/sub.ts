@@ -1,4 +1,4 @@
-import { Plugin } from "@utils/pluginBase";
+import { Plugin , type PanelSettingsAdapter, type PanelSettingField } from "@utils/pluginBase";
 import { getGlobalClient } from "@utils/runtimeManager";
 import { getPrefixes } from "@utils/pluginManager";
 import { createDirectoryInTemp } from "@utils/pathHelpers";
@@ -551,6 +551,36 @@ echo "后端: http://\$IP:3001/\$SECRET"`;
         await msg.edit({ text: `❌ ${error.message || error}`.slice(0, 3500) });
       }
     },
+  // Panel Settings Adapter
+  panelAdapter: PanelSettingsAdapter = {
+    id: "sub",
+    title: "SubStore",
+    description: "SubStore 订阅管理配置",
+    category: "插件配置",
+    icon: "📦",
+    getSchema: (): PanelSettingField[] => [
+      {
+            "key": "url",
+            "label": "面板地址",
+            "type": "string"
+      },
+      {
+            "key": "token",
+            "label": "Token",
+            "type": "password",
+            "secret": true
+      }
+],
+    getValues: async (): Promise<Record<string, unknown>> => {
+      const db = await JSONFilePreset<any>(path.join(createDirectoryInAssets("sub"), "config.json"), {} as any);
+      return db.data as Record<string, unknown>;
+    },
+    setValues: async (patch: Record<string, unknown>): Promise<void> => {
+      const db = await JSONFilePreset<any>(path.join(createDirectoryInAssets("sub"), "config.json"), {} as any);
+      Object.assign(db.data, patch);
+      await db.write();
+    },
+  };
   };
 }
 

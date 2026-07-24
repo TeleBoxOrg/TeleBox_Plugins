@@ -1,5 +1,5 @@
 //@ts-nocheck
-import { Plugin } from "@utils/pluginBase";
+import { Plugin , type PanelSettingsAdapter, type PanelSettingField } from "@utils/pluginBase";
 import { Api } from "teleproto";
 import { getPrefixes } from "@utils/pluginManager";
 import { sleep } from "teleproto/Helpers";
@@ -527,6 +527,63 @@ class ParseHubPlugin extends Plugin {
         await msg.delete();
       } catch {}
     },
+  // Panel Settings Adapter
+  panelAdapter: PanelSettingsAdapter = {
+    id: "parsehub",
+    title: "ParseHub 解析",
+    description: "链接解析插件状态：初始化状态、忽略消息 ID",
+    category: "插件配置",
+    icon: "🔗",
+    getSchema: (): PanelSettingField[] => [
+      {
+        key: "initialized",
+        label: "已初始化",
+        type: "boolean",
+        default: false,
+        description: "是否已完成首次启动初始化",
+      },
+      {
+        key: "ignoredUpToId",
+        label: "忽略消息 ID",
+        type: "number",
+        min: 0,
+        default: 0,
+        description: "启动时忽略的最大消息 ID (避免处理历史消息)",
+      },
+      {
+        key: "resetState",
+        label: "重置状态",
+        type: "boolean",
+        default: false,
+        description: "开启后保存将清空状态文件 (需手动关闭)",
+      },
+    ],
+    getValues: async () => {
+      const state = readState();
+      return {
+        initialized: state.initialized,
+        ignoredUpToId: state.ignoredUpToId || 0,
+        resetState: false,
+      };
+    },
+    setValues: async (patch: Record<string, unknown>) => {
+      if (patch.resetState === true) {
+        try {
+          fs.unlinkSync(STATE_PATH);
+          logger.info("[parsehub] State file reset via panel");
+        } catch { }
+        return;
+      }
+
+      const state: InitState = {
+        initialized: Boolean(patch.initialized ?? initState.initialized),
+        ignoredUpToId: (Number(patch.ignoredUpToId ?? initState.ignoredUpToId) || 0) || 0,
+      };
+      writeState(state);
+      initState = state;
+      ignoredUpToId = state.ignoredUpToId || 0;
+    },
+  };
   };
 }
 

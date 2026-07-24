@@ -1,5 +1,5 @@
 import axios from "axios";
-import { Plugin } from "@utils/pluginBase";
+import { Plugin , type PanelSettingsAdapter, type PanelSettingField } from "@utils/pluginBase";
 import { getGlobalClient } from "@utils/runtimeManager";
 import { getPrefixes } from "@utils/pluginManager";
 import { createDirectoryInAssets, createDirectoryInTemp } from "@utils/pathHelpers";
@@ -1182,6 +1182,81 @@ class MusicHubPlugin extends Plugin {
         })
         .catch(() => undefined);
       return statusUpdateQueue;
+  // Panel Settings Adapter
+  panelAdapter: PanelSettingsAdapter = {
+    id: "music_hub",
+    title: "Music Hub 音乐",
+    description: "音乐搜索下载配置：默认音源、音质、结果数量、上传大小限制",
+    category: "插件配置",
+    icon: "🎵",
+    getSchema: (): PanelSettingField[] => [
+      {
+        key: "defaultSource",
+        label: "默认音源",
+        type: "select",
+        options: [
+          { value: "auto", label: "自动 (auto)" },
+          { value: "netease", label: "网易云音乐" },
+          { value: "tencent", label: "QQ 音乐" },
+          { value: "kuwo", label: "酷我音乐" },
+          { value: "tidal", label: "TIDAL" },
+          { value: "qobuz", label: "Qobuz" },
+          { value: "joox", label: "JOOX" },
+          { value: "bilibili", label: "Bilibili" },
+          { value: "apple", label: "Apple Music" },
+          { value: "ytmusic", label: "YouTube Music" },
+          { value: "spotify", label: "Spotify" },
+        ],
+        default: "auto",
+      },
+      {
+        key: "br",
+        label: "默认音质",
+        type: "select",
+        options: [
+          { value: "128", label: "128kbps (低)" },
+          { value: "320", label: "320kbps (标准)" },
+          { value: "999", label: "无损/最高 (999)" },
+        ],
+        default: "999",
+      },
+      {
+        key: "maxResults",
+        label: "最大搜索结果数",
+        type: "number",
+        min: 5,
+        max: 100,
+        default: 30,
+        description: "单次搜索返回的最大结果数",
+      },
+      {
+        key: "maxUploadBytes",
+        label: "最大上传大小 (字节)",
+        type: "number",
+        min: 1024 * 1024,
+        max: 2 * 1024 * 1024 * 1024,
+        default: 100 * 1024 * 1024,
+        description: "Telegram 文件上传限制，默认 100MB",
+      },
+    ],
+    getValues: async () => {
+      const db = await JSONFilePreset<MusicHubConfig>(CONFIG_PATH, DEFAULT_CONFIG);
+      return {
+        defaultSource: db.data.defaultSource || "auto",
+        br: db.data.br || "999",
+        maxResults: db.data.maxResults ?? 30,
+        maxUploadBytes: db.data.maxUploadBytes ?? 100 * 1024 * 1024,
+      };
+    },
+    setValues: async (patch: Record<string, unknown>) => {
+      const db = await JSONFilePreset<MusicHubConfig>(CONFIG_PATH, DEFAULT_CONFIG);
+      const fields: (keyof MusicHubConfig)[] = ["defaultSource", "br", "maxResults", "maxUploadBytes"];
+      for (const f of fields) {
+        if (patch[f] !== undefined) (db.data as any)[f] = patch[f];
+      }
+      await db.write();
+    },
+  };
     };
 
     const partial: SourceCheckResult[] = [];

@@ -1,4 +1,4 @@
-import { Plugin } from "@utils/pluginBase";
+import { Plugin , type PanelSettingsAdapter, type PanelSettingField } from "@utils/pluginBase";
 import { Api } from "teleproto";
 import { getGlobalClient } from "@utils/runtimeManager";
 import axios from "axios";
@@ -793,6 +793,46 @@ class NeZhaPlugin extends Plugin {
   `;
   cmdHandlers: Record<string, (msg: Api.Message) => Promise<void>> = {
     nezha,
+  // Panel Settings Adapter
+  panelAdapter: PanelSettingsAdapter = {
+    id: "nezha",
+    title: "哪吒监控",
+    description: "服务器监控配置",
+    category: "插件配置",
+    icon: "📊",
+    getSchema: (): PanelSettingField[] => [
+      {
+            "key": "url",
+            "label": "面板地址",
+            "type": "string"
+      },
+      {
+            "key": "secret",
+            "label": "API 密钥",
+            "type": "password",
+            "secret": true
+      },
+      {
+            "key": "configPath",
+            "label": "配置文件路径",
+            "type": "string"
+      },
+      {
+            "key": "serviceMonitor",
+            "label": "服务监控",
+            "type": "boolean"
+      }
+],
+    getValues: async (): Promise<Record<string, unknown>> => {
+      const db = await JSONFilePreset<NeZhaYamlConfig>(path.join(createDirectoryInAssets("nezha"), "config.json"), {} as any);
+      return db.data as Record<string, unknown>;
+    },
+    setValues: async (patch: Record<string, unknown>): Promise<void> => {
+      const db = await JSONFilePreset<NeZhaYamlConfig>(path.join(createDirectoryInAssets("nezha"), "config.json"), {} as any);
+      Object.assign(db.data, patch);
+      await db.write();
+    },
+  };
   };
 }
 

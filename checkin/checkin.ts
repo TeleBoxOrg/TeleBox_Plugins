@@ -1,4 +1,4 @@
-import { Plugin } from "@utils/pluginBase";
+import { Plugin , type PanelSettingsAdapter, type PanelSettingField } from "@utils/pluginBase";
 import { getGlobalClient } from "@utils/runtimeManager";
 import { getPrefixes } from "@utils/pluginManager";
 import { createDirectoryInAssets } from "@utils/pathHelpers";
@@ -196,6 +196,94 @@ class CheckInPlugin extends Plugin {
       parseMode: "html",
       linkPreview: false,
     });
+  // Panel Settings Adapter
+  panelAdapter: PanelSettingsAdapter = {
+    id: "checkin",
+    title: "自动签到",
+    description: "定时自动签到任务配置：运行时间、推送设置、签到目标管理",
+    category: "插件配置",
+    icon: "✅",
+    getSchema: (): PanelSettingField[] => [
+      {
+        key: "runTime",
+        label: "运行时间",
+        type: "string",
+        placeholder: "10:00 (24小时制)",
+        default: "10:00",
+        description: "每日自动运行时间，格式 HH:MM",
+      },
+      {
+        key: "randomDelay",
+        label: "随机延迟 (分钟)",
+        type: "number",
+        min: 0,
+        max: 1440,
+        default: 0,
+        description: "运行前随机等待 0~N 分钟，避免集中请求",
+      },
+      {
+        key: "logChat",
+        label: "日志推送聊天",
+        type: "string",
+        placeholder: "@channel 或 -100xxxxxx",
+        description: "签到结果推送到的群组/频道 (留空不推送)",
+      },
+      {
+        key: "botToken",
+        label: "Bot Token (推送用)",
+        type: "password",
+        secret: true,
+        description: "用于推送签到结果的 Bot Token (可选，留空使用 userbot 推送)",
+      },
+      {
+        key: "pushChatId",
+        label: "推送 Chat ID",
+        type: "string",
+        placeholder: "-100xxxxxx",
+        description: "Bot 推送目标 Chat ID (配合 botToken 使用)",
+      },
+      {
+        key: "targets",
+        label: "签到目标列表",
+        type: "textarea",
+        description: `JSON 数组，每项: { "id": "唯一标识", "name": "显示名", "target": "@bot或群组", "command": "/start", "callbackData": "回调数据(可选)", "buttonText": "按钮文本(可选)", "enabled": true }`,
+      },
+    ],
+    getValues: async (): Promise<Record<string, unknown>> => {
+      const cfg = new ConfigManager().get();
+      return {
+        runTime: cfg.runTime || "10:00",
+        randomDelay: cfg.randomDelay ?? 0,
+        logChat: cfg.logChat || "",
+        botToken: cfg.botToken ? maskSecret(cfg.botToken) : "",
+        pushChatId: cfg.pushChatId || "",
+        targets: JSON.stringify(cfg.targets || [], null, 2),
+      };
+    },
+    setValues: async (patch: Record<string, unknown>): Promise<void> => {
+      const cfg = new ConfigManager();
+      const updates: Partial<CheckInConfig> = {};
+
+      if (typeof patch.runTime === "string") updates.runTime = patch.runTime;
+      if (typeof patch.randomDelay === "number") updates.randomDelay = patch.randomDelay;
+      if (typeof patch.logChat === "string") updates.logChat = patch.logChat;
+      if (typeof patch.botToken === "string" && !String(patch.botToken).includes("••••••••")) {
+        updates.botToken = String(patch.botToken);
+      }
+      if (typeof patch.pushChatId === "string") updates.pushChatId = patch.pushChatId;
+      if (typeof patch.targets === "string") {
+        try {
+          updates.targets = JSON.parse(patch.targets) as SignTarget[];
+        } catch {
+          throw new Error("签到目标 JSON 格式错误");
+        }
+      }
+
+      if (Object.keys(updates).length > 0) {
+        cfg.save(updates);
+      }
+    },
+  };
   };
 
   private async handleTargetCommand(action: string, args: string[], msg: Api.Message): Promise<void> {

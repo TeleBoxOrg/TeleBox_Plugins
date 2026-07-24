@@ -1,4 +1,4 @@
-import { Plugin } from "@utils/pluginBase";
+import { Plugin , type PanelSettingsAdapter, type PanelSettingField } from "@utils/pluginBase";
 import { getGlobalClient } from "@utils/runtimeManager";
 import { getPrefixes } from "@utils/pluginManager";
 import { createDirectoryInAssets } from "@utils/pathHelpers";
@@ -528,6 +528,33 @@ class WhoisPlugin extends Plugin {
               domain,
               rawData: whoisData,
               queryTime: new Date().toISOString()
+  // Panel Settings Adapter
+  panelAdapter: PanelSettingsAdapter = {
+    id: "whois",
+    title: "Whois 查询",
+    description: "域名 Whois 查询配置",
+    category: "插件配置",
+    icon: "🔎",
+    getSchema: (): PanelSettingField[] => [
+      {
+            "key": "timeout",
+            "label": "超时 (秒)",
+            "type": "number",
+            "min": 5,
+            "max": 60,
+            "default": 15
+      }
+],
+    getValues: async (): Promise<Record<string, unknown>> => {
+      const db = await JSONFilePreset<any>(path.join(createDirectoryInAssets("whois"), "config.json"), {} as any);
+      return db.data as Record<string, unknown>;
+    },
+    setValues: async (patch: Record<string, unknown>): Promise<void> => {
+      const db = await JSONFilePreset<any>(path.join(createDirectoryInAssets("whois"), "config.json"), {} as any);
+      Object.assign(db.data, patch);
+      await db.write();
+    },
+  };
             };
             await this.saveWhoisRecord(record);
           } else {

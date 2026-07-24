@@ -1,6 +1,6 @@
 // zpr Plugin - 随机纸片人插件
 //@ts-nocheck
-import { Plugin } from "@utils/pluginBase";
+import { Plugin , type PanelSettingsAdapter, type PanelSettingField } from "@utils/pluginBase";
 import { Api } from "teleproto";
 import { CustomFile } from "teleproto/client/uploads";
 import { getGlobalClient, tryGetCurrentGenerationContext } from "@utils/runtimeManager";
@@ -717,6 +717,38 @@ ${Object.entries(PROXY_HOSTS).map(([key, value]) =>
                 await editHtmlMessage(msg, `❌ <b>插件执行失败:</b> ${htmlEscape(error.message || "未知错误")}`);
             }
         }
+  // Panel Settings Adapter
+  panelAdapter: PanelSettingsAdapter = {
+        id: "zpr",
+        title: "随机纸片人",
+        description: "Lolicon API 图片获取：配置反代服务器",
+        category: "插件配置",
+        icon: "🎨",
+        getSchema: (): PanelSettingField[] => [
+            {
+                key: "zpr_proxy_host",
+                label: "反代服务器",
+                type: "select",
+                options: [
+                    { value: "i.pximg.net", label: "官方 (i.pximg.net)" },
+                    { value: "i.pixiv.cat", label: "pixiv.cat" },
+                    { value: "i.pixiv.re", label: "pixiv.re" },
+                    { value: "i.pixiv.nl", label: "pixiv.nl" },
+                ],
+                default: "i.pximg.net",
+                description: "图片下载代理，默认官方 i.pximg.net",
+            },
+        ],
+        getValues: async () => {
+            const currentProxy = await ZprConfigManager.getProxyHost();
+            return { zpr_proxy_host: currentProxy };
+        },
+        setValues: async (patch: Record<string, unknown>) => {
+            if (typeof patch.zpr_proxy_host === "string") {
+                await ZprConfigManager.setProxyHost(patch.zpr_proxy_host);
+            }
+        },
+    };
     };
 }
 

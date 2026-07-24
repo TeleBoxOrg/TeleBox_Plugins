@@ -3,7 +3,7 @@
  * 引用某用户/频道的消息，回复 ${mainPrefix}uai zj/fx 进行总结/分析
  * 支持消息折叠显示，保持AI回答中的HTML格式
  */
-import { Plugin } from "@utils/pluginBase";
+import { Plugin , type PanelSettingsAdapter, type PanelSettingField } from "@utils/pluginBase";
 import { getPrefixes } from "@utils/pluginManager";
 import { Api } from "teleproto";
 import axios from "axios";
@@ -634,6 +634,44 @@ class UAIPlugin extends Plugin {
                 await msg.edit({ text: `❌ 错误: ${htmlEscape(err.message || String(err))}`, parseMode: "html" });
             }
         }
+  // Panel Settings Adapter
+  panelAdapter: PanelSettingsAdapter = {
+    id: "uai",
+    title: "UAI 对话",
+    description: "UAI 对话配置：提供者、预设提示词、超时",
+    category: "插件配置",
+    icon: "🤖",
+    getSchema: (): PanelSettingField[] => [
+      {
+            "key": "default_provider",
+            "label": "默认提供商",
+            "type": "string",
+            "placeholder": "如: openai"
+      },
+      {
+            "key": "timeout",
+            "label": "超时 (秒)",
+            "type": "number",
+            "min": 10,
+            "max": 300,
+            "default": 60
+      },
+      {
+            "key": "collapse",
+            "label": "折叠输出",
+            "type": "boolean"
+      }
+],
+    getValues: async (): Promise<Record<string, unknown>> => {
+      const db = await JSONFilePreset<UAIConfig>(path.join(createDirectoryInAssets("uai"), "config.json"), DEFAULT_CONFIG);
+      return db.data as Record<string, unknown>;
+    },
+    setValues: async (patch: Record<string, unknown>): Promise<void> => {
+      const db = await JSONFilePreset<UAIConfig>(path.join(createDirectoryInAssets("uai"), "config.json"), DEFAULT_CONFIG);
+      Object.assign(db.data, patch);
+      await db.write();
+    },
+  };
     };
 }
 

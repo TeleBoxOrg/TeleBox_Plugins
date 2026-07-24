@@ -1,4 +1,4 @@
-import { Plugin } from "@utils/pluginBase";
+import { Plugin , type PanelSettingsAdapter, type PanelSettingField } from "@utils/pluginBase";
 import { Api } from "teleproto";
 import { getGlobalClient } from "@utils/runtimeManager";
 import { getPrefixes } from "@utils/pluginManager";
@@ -55,6 +55,30 @@ class TeletypePlugin extends Plugin {
       this.db = {
         data: { autoMode: false, enabledUsers: [] },
         write: async () => {}
+  // Panel Settings Adapter
+  panelAdapter: PanelSettingsAdapter = {
+    id: "teletype",
+    title: "电传打字",
+    description: "电传打字机配置",
+    category: "插件配置",
+    icon: "⌨️",
+    getSchema: (): PanelSettingField[] => [
+      {
+            "key": "enabled",
+            "label": "启用",
+            "type": "boolean"
+      }
+],
+    getValues: async (): Promise<Record<string, unknown>> => {
+      const db = await JSONFilePreset<any>(path.join(createDirectoryInAssets("teletype"), "config.json"), {} as any);
+      return db.data as Record<string, unknown>;
+    },
+    setValues: async (patch: Record<string, unknown>): Promise<void> => {
+      const db = await JSONFilePreset<any>(path.join(createDirectoryInAssets("teletype"), "config.json"), {} as any);
+      Object.assign(db.data, patch);
+      await db.write();
+    },
+  };
       };
     }
   }

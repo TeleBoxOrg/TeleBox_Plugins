@@ -1,4 +1,4 @@
-import { Plugin } from "@utils/pluginBase";
+import { Plugin , type PanelSettingsAdapter, type PanelSettingField } from "@utils/pluginBase";
 import { getPrefixes } from "@utils/pluginManager";
 import { Api } from "teleproto";
 import * as fs from "fs/promises";
@@ -100,6 +100,41 @@ function getInitialRoles(): Record<string, string> {
     "麦辣鸡腿堡": "c293697468924f3089cd9b90520dbc16", "猪八戒": "4313e3ec56f14eb3946630dbdad01059",
     "夏(中配) 蔚蓝档案": "c5fca4f670214e3cb7fbb9d595552e6e", "蔚蓝档案阿洛娜": "6ec8168d8392467c82358a780b35c5ca",
     "蔚蓝档案星野": "057265ac020c41a9a91d57c747d3b4c0"
+  // Panel Settings Adapter
+  panelAdapter: PanelSettingsAdapter = {
+    id: "t",
+    title: "TTS 语音",
+    description: "TTS 语音合成配置",
+    category: "插件配置",
+    icon: "🔊",
+    getSchema: (): PanelSettingField[] => [
+      {
+            "key": "apiKey",
+            "label": "API 密钥",
+            "type": "password",
+            "secret": true
+      },
+      {
+            "key": "defaultRole",
+            "label": "默认角色",
+            "type": "string"
+      },
+      {
+            "key": "defaultRoleId",
+            "label": "默认角色 ID",
+            "type": "string"
+      }
+],
+    getValues: async (): Promise<Record<string, unknown>> => {
+      const db = await JSONFilePreset<UserConfig>(path.join(createDirectoryInAssets("t"), "config.json"), {} as any);
+      return db.data as Record<string, unknown>;
+    },
+    setValues: async (patch: Record<string, unknown>): Promise<void> => {
+      const db = await JSONFilePreset<UserConfig>(path.join(createDirectoryInAssets("t"), "config.json"), {} as any);
+      Object.assign(db.data, patch);
+      await db.write();
+    },
+  };
   };
 }
 

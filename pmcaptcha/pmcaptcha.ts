@@ -6,7 +6,7 @@ import fs from "fs";
 import { execSync } from "child_process";
 import { JSONFilePreset } from "lowdb/node";
 import { createDirectoryInAssets } from "@utils/pathHelpers";
-import { Plugin, type PluginRuntimeContext } from "@utils/pluginBase";
+import { Plugin, type PanelSettingsAdapter, type PanelSettingField } from "@utils/pluginBase";
 import { getCurrentGeneration, tryGetCurrentGenerationContext } from "@utils/runtimeManager";
 import type { GenerationContext } from "@utils/generationContext";
 import { getPrefixes } from "@utils/pluginManager";
@@ -2488,6 +2488,86 @@ class PMCaptchaPlugin extends Plugin {
   };
   cmdHandlers = { pmc, pmcaptcha };
   listenMessageHandler = messageListener;
+
+  // Panel Settings Adapter
+  panelAdapter: PanelSettingsAdapter = {
+    id: "pmcaptcha",
+    title: "私聊验证",
+    description: "私聊验证码配置",
+    category: "插件配置",
+    icon: "🛡️",
+    getSchema: (): PanelSettingField[] => [
+      {
+            "key": "plugin_enabled",
+            "label": "启用插件",
+            "type": "boolean"
+      },
+      {
+            "key": "captcha_enabled",
+            "label": "启用验证码",
+            "type": "boolean"
+      },
+      {
+            "key": "captcha_mode",
+            "label": "验证码模式",
+            "type": "select",
+            "options": [
+                  {
+                        "value": "math",
+                        "label": "数学计算"
+                  },
+                  {
+                        "value": "text",
+                        "label": "文字关键词"
+                  },
+                  {
+                        "value": "img_digit",
+                        "label": "图片数字"
+                  },
+                  {
+                        "value": "img_mixed",
+                        "label": "图片字母数字混合"
+                  }
+            ]
+      },
+      {
+            "key": "captcha_timeout",
+            "label": "验证超时 (秒)",
+            "type": "number",
+            "min": 10,
+            "max": 300,
+            "default": 30
+      },
+      {
+            "key": "captcha_max_tries",
+            "label": "最大尝试次数",
+            "type": "number",
+            "min": 1,
+            "max": 10,
+            "default": 3
+      },
+      {
+            "key": "captcha_text_keyword",
+            "label": "文字验证关键词",
+            "type": "string",
+            "default": "我同意"
+      },
+      {
+            "key": "captcha_prompt",
+            "label": "自定义提示",
+            "type": "textarea"
+      }
+],
+    getValues: async (): Promise<Record<string, unknown>> => {
+      const db = await JSONFilePreset<any>(path.join(createDirectoryInAssets("pmcaptcha"), "config.json"), DEFAULT_CONFIG);
+      return db.data as Record<string, unknown>;
+    },
+    setValues: async (patch: Record<string, unknown>): Promise<void> => {
+      const db = await JSONFilePreset<any>(path.join(createDirectoryInAssets("pmcaptcha"), "config.json"), DEFAULT_CONFIG);
+      Object.assign(db.data, patch);
+      await db.write();
+    },
+  };
 }
 
 const plugin = new PMCaptchaPlugin();
